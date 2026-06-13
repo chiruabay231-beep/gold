@@ -1,0 +1,2 @@
+# gold
+BTC trading terminal
