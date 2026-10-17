@@ -95,6 +95,22 @@ public struct CSVParser {
         return Self.normalize(candles)
     }
 
+    /// Decodes file bytes as text. MetaTrader exports UTF-16 with a byte-order
+    /// mark, most other tools UTF-8.
+    public static func decodeText(_ data: Data) -> String? {
+        let bytes = [UInt8](data.prefix(3))
+        if bytes.starts(with: [0xFF, 0xFE]) {
+            return String(data: data, encoding: .utf16LittleEndian).map { $0.replacingOccurrences(of: "\u{FEFF}", with: "") }
+        }
+        if bytes.starts(with: [0xFE, 0xFF]) {
+            return String(data: data, encoding: .utf16BigEndian).map { $0.replacingOccurrences(of: "\u{FEFF}", with: "") }
+        }
+        if let text = String(data: data, encoding: .utf8) {
+            return text.replacingOccurrences(of: "\u{FEFF}", with: "")
+        }
+        return String(data: data, encoding: .isoLatin1)
+    }
+
     /// Sorts by time and drops duplicated timestamps (keeping the last one).
     public static func normalize(_ candles: [Candle]) -> [Candle] {
         var byTime: [Date: Candle] = [:]

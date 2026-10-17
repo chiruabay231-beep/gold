@@ -24,6 +24,15 @@ final class DataTests: XCTestCase {
         XCTAssertEqual(candles[1].volume, 1200)
     }
 
+    func testDecodeUTF16() throws {
+        let csv = "<DATE>\t<TIME>\t<OPEN>\t<HIGH>\t<LOW>\t<CLOSE>\n2024.01.02\t00:00\t1\t2\t0.5\t1.5\n"
+        var data = Data([0xFF, 0xFE])
+        data.append(csv.data(using: .utf16LittleEndian)!)
+        let text = try XCTUnwrap(CSVParser.decodeText(data))
+        XCTAssertEqual(try CSVParser().parse(text).first?.close, 1.5)
+        XCTAssertEqual(CSVParser.decodeText(Data("\u{FEFF}a,b".utf8)), "a,b")
+    }
+
     func testHeaderlessUnixMillis() throws {
         let csv = "1704153600000;100;110;90;105\n1704157200000;105;115;95;110\n"
         let candles = try CSVParser().parse(csv)

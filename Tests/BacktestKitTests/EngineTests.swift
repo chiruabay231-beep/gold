@@ -92,6 +92,17 @@ final class EngineTests: XCTestCase {
         XCTAssertTrue(shorts.trades.isEmpty)
     }
 
+    func testTradingStartIgnoresEarlierSignals() {
+        let data = makeData(closes: [10, 10, 11, 12, 13, 14, 15])
+        let signals = StrategySignals(longEntry: [1, 0, 0, 1, 0, 0, 0])
+        let result = BacktestEngine.run(signals: signals, data: data, config: noCost, tradingStart: 2)
+        XCTAssertEqual(result.trades.count, 1)
+        XCTAssertEqual(result.trades[0].entryIndex, 4)
+        XCTAssertEqual(result.startIndex, 2)
+        XCTAssertEqual(result.equity.count, 5)
+        XCTAssertEqual(result.metrics.buyAndHoldPercent, 100 * (15.0 / 11 - 1), accuracy: 1e-9)
+    }
+
     func testMetrics() {
         let data = makeData([(10, 10, 10, 10), (10, 10, 10, 10), (12, 12, 12, 12), (12, 12, 12, 12), (11, 11, 11, 11), (11, 11, 11, 11)])
         let signals = StrategySignals(longEntry: [1, 0, 1, 0, 0, 0], longExit: [0, 1, 0, 0, 0, 0])

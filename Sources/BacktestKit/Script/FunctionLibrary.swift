@@ -131,7 +131,10 @@ public struct ScriptFunction {
 
 /// The set of functions a script can call. Start from `.standard` and
 /// `register` your own native (Swift) indicators on a copy.
-public final class FunctionLibrary {
+///
+/// Marked `@unchecked Sendable` so a finished library can be handed to a
+/// background task; don't register functions while it is in use elsewhere.
+public final class FunctionLibrary: @unchecked Sendable {
     private var functions: [String: ScriptFunction]
 
     public init(_ functions: [ScriptFunction] = []) {

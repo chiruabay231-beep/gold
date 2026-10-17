@@ -72,6 +72,7 @@ public enum Optimizer {
     }
 
     /// Runs every combination (up to `maxRuns`) and returns them best first.
+    /// Stops early, returning what it has, when the current task is cancelled.
     /// Combinations that fail (e.g. a length of 0) are skipped. `minTrades`
     /// discards results based on too few trades to mean anything.
     public static func run(strategy: StrategyDefinition,
@@ -82,13 +83,16 @@ public enum Optimizer {
                            objective: Objective = .netProfit,
                            minTrades: Int = 1,
                            maxRuns: Int = 1000,
+                           tradingStart: Int = 0,
                            progress: ((Double) -> Void)? = nil) -> [Run] {
         let combos = Array(combinations(ranges).prefix(maxRuns))
         var runs: [Run] = []
         for (index, values) in combos.enumerated() {
+            if Task.isCancelled { break }
             progress?(Double(index) / Double(max(1, combos.count)))
             guard let result = try? BacktestEngine.run(strategy: strategy, data: data, config: config,
-                                                       library: library, parameterValues: values),
+                                                       library: library, parameterValues: values,
+                                                       tradingStart: tradingStart),
                   result.metrics.totalTrades >= minTrades
             else { continue }
             runs.append(Run(id: index, values: values, metrics: result.metrics, score: objective.score(result.metrics)))

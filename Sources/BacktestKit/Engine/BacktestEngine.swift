@@ -1,9 +1,12 @@
 import Foundation
 
-public struct BacktestResult {
+public struct BacktestResult: Sendable {
     public var config: BacktestConfig
     public var trades: [Trade]
-    /// Mark-to-market equity at every bar's close.
+    /// First bar where trading was allowed. `equity` and `drawdown` start
+    /// here; trade indices refer to the full data set.
+    public var startIndex: Int
+    /// Mark-to-market equity at every bar's close from `startIndex` on.
     public var equity: Series
     /// Drawdown from the running equity peak at every bar, in percent (≤ 0).
     public var drawdown: Series
@@ -28,10 +31,11 @@ public enum BacktestEngine {
                            data: PriceData,
                            config: BacktestConfig = BacktestConfig(),
                            library: FunctionLibrary = .standard,
-                           parameterValues: [String: Double] = [:]) throws -> BacktestResult {
+                           parameterValues: [String: Double] = [:],
+                           tradingStart: Int = 0) throws -> BacktestResult {
         let context = EvaluationContext(data: data, library: library, timeZone: config.timeZone)
         let signals = try strategy.signals(context: context, values: parameterValues)
-        return run(signals: signals, data: data, config: config)
+        return run(signals: signals, data: data, config: config, tradingStart: tradingStart)
     }
 
     private struct Position {
@@ -50,8 +54,12 @@ public enum BacktestEngine {
         case reverse(TradeDirection, signalIndex: Int)
     }
 
-    public static func run(signals: StrategySignals, data: PriceData, config: BacktestConfig) -> BacktestResult {
+    /// Bars before `tradingStart` are only used to warm up indicators; no
+    /// signal before it is acted on and metrics cover the rest.
+    public static func run(signals: StrategySignals, data: PriceData, config: BacktestConfig,
+                           tradingStart: Int = 0) -> BacktestResult {
         let n = data.count
+        let start = min(max(0, tradingStart), max(0, n - 1))
         var balance = config.initialCapital
         var position: Position?
         var pending: Order?
@@ -153,7 +161,7 @@ public enum BacktestEngine {
             }
 
             // 3. Signals at this bar's close, executed on the next bar.
-            if i < n - 1 {
+            if i < n - 1, i >= start {
                 let wantLong = config.allowLong && flag(signals.longEntry, i)
                 let wantShort = config.allowShort && flag(signals.shortEntry, i)
                 if let p = position {
@@ -188,9 +196,11 @@ public enum BacktestEngine {
             equity[n - 1] = balance
         }
 
-        let drawdown = Self.drawdown(equity)
-        let metrics = BacktestMetrics(trades: trades, equity: equity, drawdown: drawdown, data: data, config: config)
-        return BacktestResult(config: config, trades: trades, equity: equity, drawdown: drawdown,
+        let tradedEquity = n > 0 ? Array(equity[start...]) : []
+        let tradedData = n > 0 && start > 0 ? data.slice(start..<n) : data
+        let drawdown = Self.drawdown(tradedEquity)
+        let metrics = BacktestMetrics(trades: trades, equity: tradedEquity, drawdown: drawdown, data: tradedData, config: config)
+        return BacktestResult(config: config, trades: trades, startIndex: start, equity: tradedEquity, drawdown: drawdown,
                               metrics: metrics, plots: signals.plots, warnings: warnings.sorted())
     }
 

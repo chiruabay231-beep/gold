@@ -1,2 +1,168 @@
-# gold
-BTC trading terminal
+# Gold Backtest — app iOS backtest & chỉ báo tự phát triển
+
+App iOS (SwiftUI) để chạy backtest chiến lược giao dịch (XAUUSD, BTC, …) và tự
+viết thêm chỉ báo ngay trên điện thoại, không cần build lại app.
+
+```
+├── Package.swift            # BacktestKit — lõi backtest (Swift thuần, có unit test)
+├── Sources/BacktestKit/
+│   ├── Data/                # Đọc CSV (MT4/MT5/Exness, TradingView), tải nến Binance
+│   ├── Script/              # Ngôn ngữ script cho chỉ báo & chiến lược
+│   ├── Indicators/          # Hàm TA, chỉ báo tự tạo, chỉ báo native viết bằng Swift
+│   ├── Strategy/            # Định nghĩa chiến lược + mẫu
+│   └── Engine/              # Engine backtest, thống kê, tối ưu tham số
+├── Tests/BacktestKitTests/
+└── App/                     # App iOS (SwiftUI + Swift Charts), project tạo bằng XcodeGen
+```
+
+## Chạy app
+
+Yêu cầu: macOS, Xcode 15 trở lên, iOS 17 trở lên.
+
+```bash
+brew install xcodegen
+cd App
+xcodegen generate
+open GoldBacktest.xcodeproj
+```
+
+Trong Xcode: chọn target **GoldBacktest** → *Signing & Capabilities* → chọn Team
+(Apple ID miễn phí cũng được), cắm iPhone và bấm Run.
+
+Chạy test phần lõi (macOS hoặc Linux):
+
+```bash
+swift test
+```
+
+## Tính năng
+
+**Dữ liệu**
+- Nhập CSV xuất từ MT5/Exness (kể cả file UTF-16, cột `<DATE>` `<TIME>` riêng),
+  TradingView, Binance… Tự nhận dấu phân cách `,` `;` tab và nhiều định dạng thời gian.
+- Tải nến từ Binance (BTCUSDT, ETHUSDT, PAXGUSDT — token vàng bám XAUUSD…), tối đa 50.000 nến.
+- Dữ liệu mẫu giả lập để thử ngay khi chưa có dữ liệu.
+- Xem biểu đồ nến, bật/tắt chỉ báo, xuất lại CSV.
+
+**Chỉ báo tự phát triển**
+- Viết bằng script ngay trong app, có xem trước trực tiếp trên biểu đồ khi gõ.
+- Có tham số (`length`, `mult`…), vẽ nhiều đường (`plot`), đường ngang (`hline`).
+- Mỗi chỉ báo thành một hàm: gọi lại được trong chỉ báo khác và trong chiến lược.
+- Hiển thị trên giá hoặc trong khung riêng.
+
+**Chiến lược & backtest**
+- Chiến lược là một script gán `long_entry`, `long_exit`, `short_entry`, `short_exit`,
+  và tuỳ chọn `long_stop`, `long_target`, `short_stop`, `short_target` (giá SL/TP).
+- Tín hiệu tính ở giá đóng cửa, khớp lệnh ở giá mở nến kế tiếp (không nhìn trước tương lai).
+- SL/TP kiểm tra trong nến bằng high/low; nếu chạm cả hai trong một nến thì tính SL trước
+  (thận trọng); nhảy giá qua mức SL/TP thì khớp ở giá mở.
+- Khối lượng: % vốn, số lượng cố định (VD 100 oz = 1 lot vàng), số tiền cố định,
+  hoặc **% rủi ro theo khoảng cách SL**.
+- Phí % / phí cố định mỗi chiều, trượt giá/spread, cho phép Mua/Bán riêng.
+- Múi giờ cho `hour`, `session()`, `daily_high()`… (mặc định UTC, có giờ Việt Nam).
+- Giới hạn khoảng ngày; dữ liệu trước ngày bắt đầu vẫn dùng để "làm nóng" chỉ báo.
+- Kết quả: lợi nhuận, tỉ lệ thắng, profit factor, max drawdown, Sharpe, Sortino, CAGR,
+  so với mua & giữ, R trung bình, đường vốn, drawdown, biểu đồ có đánh dấu từng lệnh,
+  danh sách lệnh và xuất CSV.
+- **Tối ưu tham số** (grid search) theo lợi nhuận, profit factor, Sharpe, tỉ lệ thắng
+  hoặc lợi nhuận/drawdown.
+
+## Ngôn ngữ script
+
+```
+// Chú thích bằng // hoặc #
+fast = ema(close, 12)          // gán biến
+slow = ema(close, 26)
+diff = fast - slow
+plot(diff, "MACD")             // vẽ đường
+hline(0)                       // đường ngang
+```
+
+| Cú pháp | Ý nghĩa |
+|---|---|
+| `open high low close volume hl2 hlc3 ohlc4` | Giá của nến |
+| `bar_index time year month dayofmonth dayofweek hour minute` | Chỉ số nến & thời gian |
+| `x[1]`, `x[n]` | Giá trị của `x` cách đây 1 / n nến |
+| `+ - * / % ^` | Số học |
+| `> < >= <= == !=` | So sánh (đúng = 1, sai = 0) |
+| `and or not` (`&& \|\| !`) | Logic |
+| `cond ? a : b` | Điều kiện |
+| `ta.ema(...)`, `math.abs(...)` | Tiền tố kiểu Pine được chấp nhận |
+
+Hàm có sẵn (xem đủ trong app: *Chỉ báo → Hàm & biến có sẵn*):
+
+- Trung bình: `sma ema rma wma hma vwma kama`
+- Dao động: `rsi macd macd_signal macd_hist stoch cci roc mom`
+- Biến động: `tr atr bb_upper bb_mid bb_lower kc_upper kc_lower stdev variance zscore`
+- Xu hướng: `adx plus_di minus_di highest lowest pivothigh pivotlow`
+- Khối lượng: `obv vwap`
+- Tín hiệu: `crossover crossunder cross rising falling barssince valuewhen change`
+- Phiên: `session(start, end)` `newday daily_high daily_low`
+- Toán: `abs sqrt log exp pow round floor ceil sign min max avg clamp nz na iff sum cum`
+- Native (Swift): `supertrend supertrend_dir fvg_bull fvg_bear swing_high swing_low`
+
+### Ví dụ chỉ báo: dải biến động theo ATR
+
+Tên hàm `atr_band`, tham số `length = 20`, `mult = 2`, hiển thị *Trên giá*.
+
+```
+mid = ema(close, length)
+band = mult * atr(length)
+plot(mid, "Giữa")
+plot(mid + band, "Trên")
+plot(mid - band, "Dưới")
+```
+
+Gọi lại trong chiến lược: `atr_band(20, 2)` trả về đường đầu tiên (`mid`).
+
+### Ví dụ chiến lược: ICT killzone + phá đỉnh ngày trước (giờ VN)
+
+Đặt múi giờ backtest là *Việt Nam (UTC+7)*.
+
+```
+in_kz = session(14, 17) or session(19, 22)
+long_entry  = in_kz and crossover(close, daily_high())
+short_entry = in_kz and crossunder(close, daily_low())
+long_stop   = lowest(low, 5)
+long_target = close + 2 * (close - lowest(low, 5))
+short_stop  = highest(high, 5)
+short_target = close - 2 * (highest(high, 5) - close)
+long_exit  = session(23, 24)
+short_exit = session(23, 24)
+```
+
+## Viết chỉ báo bằng Swift (native)
+
+Script tính theo cả chuỗi dữ liệu (vectorised) nên rất nhanh nhưng không có
+biến "nhớ trạng thái" giữa các nến. Logic kiểu trailing stop, máy trạng thái,
+theo dõi order block… nên viết bằng Swift trong
+[`Sources/BacktestKit/Indicators/NativeIndicators.swift`](Sources/BacktestKit/Indicators/NativeIndicators.swift):
+
+```swift
+public static var myIndicator: ScriptFunction {
+    ScriptFunction("my_indicator", [.source(), .length(default: 14)],
+                   category: category, summary: "Mô tả ngắn") { args in
+        let source = args.series(0)       // series (số được nhân thành chuỗi)
+        let length = try args.length(1)   // hằng số >= 1
+        let d = args.data                 // open/high/low/close/volume/time
+        var out = Series(repeating: .nan, count: args.count)
+        var state = 0.0
+        for i in stride(from: length, to: args.count, by: 1) {
+            state = max(state, d.high[i]) // trạng thái giữ qua từng nến
+            out[i] = source[i] - state
+        }
+        return .series(out)
+    }
+}
+```
+
+Thêm nó vào `NativeIndicators.all` là dùng được trong mọi script: `my_indicator(close, 20)`.
+Hàm `TA.*` trong [`TA.swift`](Sources/BacktestKit/Indicators/TA.swift) có thể dùng lại.
+
+## Lưu ý
+
+- Kết quả backtest không đảm bảo lợi nhuận tương lai. Luôn kiểm tra lại bộ tham số
+  tối ưu trên khoảng thời gian khác (out-of-sample) để tránh overfitting.
+- Spread/trượt giá thực tế của XAUUSD thay đổi theo phiên và tin tức; nên đặt chi phí
+  thận trọng.
+- Dữ liệu được lưu trong thư mục Application Support của app trên máy.

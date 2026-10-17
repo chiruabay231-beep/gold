@@ -18,7 +18,7 @@ import Foundation
 ///     let source = args.series(0)        // series argument (numbers are broadcast)
 ///     let length = try args.length(1)    // constant >= 1
 ///     var out = Series(repeating: .nan, count: args.count)
-///     for i in length..<args.count { out[i] = source[i] - source[i - length] }
+///     for i in stride(from: length, to: args.count, by: 1) { out[i] = source[i] - source[i - length] }
 ///     return .series(out)
 /// }
 /// ```

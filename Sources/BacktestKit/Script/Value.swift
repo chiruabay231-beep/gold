@@ -50,7 +50,7 @@ public enum Value: Equatable {
 }
 
 /// A line produced by `plot()` / `hline()` in a script.
-public struct Plot: Equatable {
+public struct Plot: Equatable, Sendable {
     public var title: String
     public var values: Series
     public var isHorizontalLine: Bool
