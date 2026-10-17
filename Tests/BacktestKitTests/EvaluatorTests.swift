@@ -108,7 +108,8 @@ final class EvaluatorTests: XCTestCase {
             let plots = try indicator.compute(context: EvaluationContext(data: sample, library: library))
             XCTAssertFalse(plots.isEmpty, indicator.name)
         }
-        for strategy in Samples.strategies {
+        // ICT setups are intraday and are covered on 15-minute data in ICTTests.
+        for strategy in Samples.strategies where !strategy.name.hasPrefix("ICT") {
             try strategy.validate()
             let result = try BacktestEngine.run(strategy: strategy, data: sample,
                                                 config: BacktestConfig(timeZoneIdentifier: "Asia/Ho_Chi_Minh"),

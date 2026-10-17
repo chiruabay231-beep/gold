@@ -119,6 +119,15 @@ struct ScriptGuideView: View {
                 killzone = session(14, 17) or session(19.5, 22)
                 long_entry = killzone and crossover(close, daily_high())
                 """)
+                GuideSection(title: "ICT", text: """
+                Nhóm hàm ICT tính giờ theo New York và tự đổi EDT/EST, nên không phụ thuộc múi giờ backtest. Killzone: `kz_asia()`, `kz_london()`, `kz_ny_am()`, `silver_bullet()`. Mức giá: `asia_high()`, `asia_low()`, `ny_midnight_open()`, `prev_week_high()`. Cấu trúc (tham số left, right của swing): `structure()`, `mss_bull()`, `bos_bear()`, `sweep_ssl()`, `equilibrium()`. PD array: `bull_fvg_top()`, `bull_fvg_ce()`, `bear_ob_bottom()`… Dùng dữ liệu M1–M15.
+                """, code: """
+                // Judas swing: quét đáy phiên Á rồi MSS tăng trong London/NY AM
+                kz = kz_london() or kz_ny_am()
+                long_entry = kz and barssince(low < asia_low()) <= 30 and mss_bull(3, 3)
+                long_stop = lowest(low, 30)
+                long_target = close + 2 * (close - long_stop)
+                """)
                 GuideSection(title: "Chỉ báo viết bằng Swift", text: """
                 Logic phức tạp, có trạng thái theo từng nến (trailing stop, order block…) nên viết bằng Swift trong `NativeIndicators.swift` rồi gọi từ script như hàm bình thường. Xem README.
                 """, code: nil)

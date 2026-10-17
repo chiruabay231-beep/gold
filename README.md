@@ -133,6 +133,28 @@ Hàm có sẵn (xem đủ trong app: *Chỉ báo → Hàm & biến có sẵn*):
 - Toán: `abs sqrt log exp pow round floor ceil sign min max avg clamp nz na iff sum cum`
 - Native (Swift): `supertrend supertrend_dir fvg_bull fvg_bear swing_high swing_low`
 
+### ICT
+
+Bộ hàm ICT tính giờ theo **New York** (tự đổi EDT/EST), không phụ thuộc múi giờ backtest.
+Nên dùng dữ liệu M1–M15.
+
+| Nhóm | Hàm |
+|---|---|
+| Killzone | `kz_asia()` `kz_london()` `kz_ny_am()` `kz_london_close()` `silver_bullet_london()` `silver_bullet()` `silver_bullet_pm()` `ny_session(start, end)` |
+| Mức giá | `asia_high()` `asia_low()` `ny_midnight_open()` `prev_week_high()` `prev_week_low()` `daily_high()` `daily_low()` |
+| Cấu trúc `(left, right)` | `structure` (1/−1) `bos_bull` `bos_bear` `mss_bull` `mss_bear` `sweep_ssl` `sweep_bsl` `dr_high` `dr_low` `equilibrium` |
+| PD array | `bull_fvg_top/bottom/ce(min_size)` `bear_fvg_top/bottom/ce` `bull_ob_top/bottom(left, right, lookback)` `bear_ob_top/bottom` |
+
+- FVG tăng: `high(n1) < low(n3)`, vùng `[high(n1), low(n3)]`, mất hiệu lực khi bị lấp hết.
+- Swing được xác nhận sau `right` nến (đúng thời điểm có thể biết khi chạy thật).
+- MSS = phá swing ngược cấu trúc hiện tại; BOS = phá swing nói chung; sweep = râu vượt swing nhưng đóng cửa quay lại.
+
+Chỉ báo mẫu: *ICT Killzones, ICT Levels, ICT Fair Value Gaps, ICT Dealing Range, ICT Order Blocks,
+ICT Market Structure*. Chiến lược mẫu: *ICT Silver Bullet, ICT Judas Swing (quét Asia + MSS),
+ICT FVG trong Discount/Premium*. Đã cài app từ trước: *Chỉ báo → Khôi phục chỉ báo & chiến lược mẫu*.
+
+Chưa có: SMT divergence (cần dữ liệu 2 mã cùng lúc).
+
 ### Ví dụ chỉ báo: dải biến động theo ATR
 
 Tên hàm `atr_band`, tham số `length = 20`, `mult = 2`, hiển thị *Trên giá*.

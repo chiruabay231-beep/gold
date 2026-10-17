@@ -167,10 +167,11 @@ public final class FunctionLibrary: @unchecked Sendable {
         FunctionLibrary(Array(functions.values))
     }
 
-    /// Built-in functions plus the native example indicators.
+    /// Built-in functions plus the native example indicators and the ICT toolkit.
     public static var standard: FunctionLibrary {
         let library = FunctionLibrary(StandardFunctions.all)
         for function in NativeIndicators.all { library.register(function) }
+        for function in ICTFunctions.all { library.register(function) }
         return library
     }
 }

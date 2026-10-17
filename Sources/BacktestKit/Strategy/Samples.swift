@@ -59,6 +59,74 @@ public enum Samples {
                 plot(daily_low(), "PDL")
                 """,
                 placement: .overlay),
+        ] + ictIndicators
+    }
+
+    /// ICT toolkit: sessions, key levels, PD arrays and market structure.
+    public static var ictIndicators: [CustomIndicator] {
+        [
+            CustomIndicator(
+                name: "ict_killzones", title: "ICT Killzones",
+                summary: "Asia = 1, London = 2, NY AM = 3, Silver Bullet = 4 (giờ New York, tự đổi EDT/EST)",
+                script: """
+                plot(kz_asia(), "Asia")
+                plot(kz_london() * 2, "London")
+                plot(kz_ny_am() * 3, "NY AM")
+                plot(max(silver_bullet(), silver_bullet_london()) * 4, "Silver Bullet")
+                """,
+                placement: .pane),
+            CustomIndicator(
+                name: "ict_levels", title: "ICT Levels (Asia, PDH/PDL, Midnight Open)",
+                summary: "Thanh khoản phiên Á, đỉnh/đáy ngày trước, giá mở 00:00 NY. PDH/PDL theo múi giờ backtest.",
+                script: """
+                plot(asia_high(), "Asia High")
+                plot(asia_low(), "Asia Low")
+                plot(daily_high(), "PDH")
+                plot(daily_low(), "PDL")
+                plot(ny_midnight_open(), "Midnight Open")
+                """,
+                placement: .overlay),
+            CustomIndicator(
+                name: "ict_fvg", title: "ICT Fair Value Gaps",
+                summary: "FVG tăng/giảm gần nhất chưa bị lấp hết",
+                parameters: [ScriptParameter(name: "min_size", defaultValue: 0, minValue: 0, maxValue: 20, step: 0.1)],
+                script: """
+                plot(bull_fvg_top(min_size), "FVG tăng - trên")
+                plot(bull_fvg_bottom(min_size), "FVG tăng - dưới")
+                plot(bear_fvg_top(min_size), "FVG giảm - trên")
+                plot(bear_fvg_bottom(min_size), "FVG giảm - dưới")
+                """,
+                placement: .overlay),
+            CustomIndicator(
+                name: "ict_dealing_range", title: "ICT Dealing Range",
+                summary: "Đỉnh/đáy swing gần nhất và Equilibrium: trên EQ = premium, dưới EQ = discount",
+                parameters: [ScriptParameter(name: "swing", defaultValue: 10, minValue: 2, maxValue: 50, step: 1)],
+                script: """
+                plot(dr_high(swing, swing), "Đỉnh range (BSL)")
+                plot(equilibrium(swing, swing), "Equilibrium")
+                plot(dr_low(swing, swing), "Đáy range (SSL)")
+                """,
+                placement: .overlay),
+            CustomIndicator(
+                name: "ict_order_blocks", title: "ICT Order Blocks",
+                parameters: [ScriptParameter(name: "swing", defaultValue: 5, minValue: 2, maxValue: 30, step: 1)],
+                script: """
+                plot(bull_ob_top(swing, swing), "OB tăng - trên")
+                plot(bull_ob_bottom(swing, swing), "OB tăng - dưới")
+                plot(bear_ob_top(swing, swing), "OB giảm - trên")
+                plot(bear_ob_bottom(swing, swing), "OB giảm - dưới")
+                """,
+                placement: .overlay),
+            CustomIndicator(
+                name: "ict_structure", title: "ICT Market Structure",
+                summary: "1 = cấu trúc tăng, −1 = giảm; cột MSS đánh dấu điểm đổi cấu trúc",
+                parameters: [ScriptParameter(name: "swing", defaultValue: 5, minValue: 2, maxValue: 30, step: 1)],
+                script: """
+                plot(structure(swing, swing), "Cấu trúc")
+                plot(mss_bull(swing, swing) * 0.5 - mss_bear(swing, swing) * 0.5, "MSS")
+                hline(0)
+                """,
+                placement: .pane),
         ]
     }
 
@@ -137,6 +205,94 @@ public enum Samples {
 
                 plot(pdh, "PDH")
                 plot(pdl, "PDL")
+                """),
+        ] + ictStrategies
+    }
+
+    /// ICT setups. Sessions use New York time (EDT/EST handled), so they work
+    /// whatever time zone the backtest is set to. Use M1–M15 data.
+    public static var ictStrategies: [StrategyDefinition] {
+        [
+            StrategyDefinition(
+                name: "ICT Silver Bullet",
+                summary: "Trong giờ Silver Bullet (03–04, 10–11, 14–15 NY), giá hồi vào FVG theo hướng cấu trúc. SL dưới/trên swing gần nhất, TP theo RR, chỉ vào khi RR ≥ 2.",
+                parameters: [ScriptParameter(name: "swing", defaultValue: 5, minValue: 2, maxValue: 20, step: 1),
+                             ScriptParameter(name: "rr", defaultValue: 2, minValue: 1, maxValue: 5, step: 0.5),
+                             ScriptParameter(name: "min_fvg", defaultValue: 0, minValue: 0, maxValue: 5, step: 0.1)],
+                script: """
+                sb = silver_bullet() or silver_bullet_london() or silver_bullet_pm()
+                bias = structure(swing, swing)
+
+                // Giá hồi vào FVG còn hiệu lực
+                in_bull_fvg = low <= bull_fvg_top(min_fvg) and close >= bull_fvg_bottom(min_fvg)
+                in_bear_fvg = high >= bear_fvg_bottom(min_fvg) and close <= bear_fvg_top(min_fvg)
+
+                long_stop    = lowest(low, swing * 2)
+                long_target  = close + rr * (close - long_stop)
+                short_stop   = highest(high, swing * 2)
+                short_target = close - rr * (short_stop - close)
+
+                long_entry  = sb and bias == 1 and in_bull_fvg
+                short_entry = sb and bias == -1 and in_bear_fvg
+
+                // Đóng lệnh còn lại trước phiên Á
+                long_exit  = ny_session(16, 20)
+                short_exit = ny_session(16, 20)
+
+                plot(bull_fvg_top(min_fvg), "FVG tăng")
+                plot(bear_fvg_bottom(min_fvg), "FVG giảm")
+                """),
+            StrategyDefinition(
+                name: "ICT Judas Swing (quét Asia + MSS)",
+                summary: "Trong London/NY AM killzone: giá quét đáy (đỉnh) phiên Á rồi có MSS ngược lại → vào theo hướng MSS. SL ở đáy/đỉnh vừa quét, TP theo RR.",
+                parameters: [ScriptParameter(name: "swing", defaultValue: 3, minValue: 2, maxValue: 10, step: 1),
+                             ScriptParameter(name: "window", defaultValue: 30, minValue: 5, maxValue: 120, step: 5),
+                             ScriptParameter(name: "rr", defaultValue: 2, minValue: 1, maxValue: 5, step: 0.5)],
+                script: """
+                kz = kz_london() or kz_ny_am()
+
+                // Thanh khoản phiên Á bị quét trong 'window' nến gần nhất
+                ssl_taken = barssince(low < asia_low()) <= window
+                bsl_taken = barssince(high > asia_high()) <= window
+
+                long_stop    = lowest(low, window)
+                long_target  = close + rr * (close - long_stop)
+                short_stop   = highest(high, window)
+                short_target = close - rr * (short_stop - close)
+
+                long_entry  = kz and ssl_taken and mss_bull(swing, swing)
+                short_entry = kz and bsl_taken and mss_bear(swing, swing)
+
+                long_exit  = ny_session(16, 20)
+                short_exit = ny_session(16, 20)
+
+                plot(asia_high(), "Asia High")
+                plot(asia_low(), "Asia Low")
+                """),
+            StrategyDefinition(
+                name: "ICT FVG trong Discount/Premium",
+                summary: "Cấu trúc tăng + giá ở vùng discount (dưới EQ) + hồi vào FVG tăng trong killzone → mua, TP tại đỉnh range (BSL). Ngược lại cho bán. Chỉ vào khi RR ≥ min_rr.",
+                parameters: [ScriptParameter(name: "swing", defaultValue: 10, minValue: 3, maxValue: 30, step: 1),
+                             ScriptParameter(name: "min_rr", defaultValue: 2, minValue: 1, maxValue: 5, step: 0.5)],
+                script: """
+                trend = structure(swing, swing)
+                eq = equilibrium(swing, swing)
+                kz = kz_london() or kz_ny_am()
+
+                long_stop    = dr_low(swing, swing)
+                long_target  = dr_high(swing, swing)
+                short_stop   = dr_high(swing, swing)
+                short_target = dr_low(swing, swing)
+
+                long_rr  = (long_target - close) / (close - long_stop)
+                short_rr = (close - short_target) / (short_stop - close)
+
+                long_entry = kz and trend == 1 and close < eq and long_rr >= min_rr and low <= bull_fvg_top() and close >= bull_fvg_bottom()
+                short_entry = kz and trend == -1 and close > eq and short_rr >= min_rr and high >= bear_fvg_bottom() and close <= bear_fvg_top()
+
+                plot(dr_high(swing, swing), "Đỉnh range")
+                plot(eq, "Equilibrium")
+                plot(dr_low(swing, swing), "Đáy range")
                 """),
         ]
     }
