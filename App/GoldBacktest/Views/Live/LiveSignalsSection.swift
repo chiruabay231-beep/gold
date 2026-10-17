@@ -26,7 +26,7 @@ struct LiveSignalsSection: View {
             if let error = market.strategyError {
                 ErrorText(message: error)
             } else if market.strategyID != nil, market.signals.isEmpty {
-                Text("Chưa có tín hiệu trên \(market.closedCandles.count) nến gần nhất. Tín hiệu mới sẽ được báo khi nến đóng.")
+                Text("Chưa có tín hiệu trên \(market.scannedBarCount) nến gần nhất. Tín hiệu mới sẽ được báo khi nến đóng.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

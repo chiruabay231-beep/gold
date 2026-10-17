@@ -41,6 +41,9 @@ final class LiveMarket {
     private(set) var plots: [Plot] = []
     private(set) var strategyError: String?
     private(set) var latestAlert: LiveSignal?
+    /// Closed bars in the last scan. Views use this instead of `candles` so
+    /// they don't redraw on every price tick.
+    private(set) var scannedBarCount = 0
 
     @ObservationIgnored private weak var store: AppStore?
     @ObservationIgnored private var task: Task<Void, Never>?
@@ -188,6 +191,7 @@ final class LiveMarket {
             return
         }
         let closed = closedCandles
+        scannedBarCount = closed.count
         guard closed.count > 10 else { return }
         do {
             let scan = try LiveSignalScanner.scan(strategy: strategy, candles: closed, config: store.config,

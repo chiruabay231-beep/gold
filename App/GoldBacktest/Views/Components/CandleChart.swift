@@ -62,6 +62,9 @@ struct CandleChart: View {
     var showVolume = true
     /// Bar length in seconds; shows a countdown to the close of the last bar.
     var countdownInterval: TimeInterval?
+    /// Pan/zoom/crosshair gestures. Off for charts inside scrolling lists,
+    /// where they would compete with the list for touches.
+    var interactive = true
     @Binding var viewport: ChartViewport
 
     private enum DragMode { case pan, axis, crosshair }
@@ -93,6 +96,8 @@ struct CandleChart: View {
             }
             .background(BinanceTheme.background)
             .contentShape(Rectangle())
+            .modifier(ChartGestures(enabled: interactive) { content in
+                content
             .simultaneousGesture(dragGesture(layout: layout))
             .simultaneousGesture(zoomGesture)
             .simultaneousGesture(crosshairGesture)
@@ -104,6 +109,7 @@ struct CandleChart: View {
                 // The release of a long press also ends as a tap; keep that crosshair.
                 guard value.location.x < layout.axisX, Date().timeIntervalSince(pressEndedAt) > 0.3 else { return }
                 crosshair = crosshair == nil ? value.location : nil
+            })
             })
         }
         .onChange(of: candles.count) { oldCount, newCount in
@@ -535,7 +541,24 @@ extension ChartMarker {
     }
 }
 
+/// Applies the chart's gestures only when enabled.
+private struct ChartGestures<Gestured: View>: ViewModifier {
+    let enabled: Bool
+    let apply: (AnyView) -> Gestured
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            apply(AnyView(content))
+        } else {
+            content
+        }
+    }
+}
+
 /// A candle chart with a button that opens it full screen (with rotation).
+/// When `interactive` is false (charts inside lists), tapping the chart
+/// opens it full screen, where all gestures work.
 struct ExpandableCandleChart: View {
     var title: String
     let candles: [Candle]
@@ -543,12 +566,20 @@ struct ExpandableCandleChart: View {
     var markers: [ChartMarker] = []
     var showVolume = true
     var countdownInterval: TimeInterval?
+    var interactive = true
     @Binding var viewport: ChartViewport
 
     @State private var fullScreen = false
 
     var body: some View {
-        chart
+        chart(interactive: interactive)
+            .overlay {
+                if !interactive {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture { fullScreen = true }
+                }
+            }
             .overlay(alignment: .topTrailing) {
                 Button {
                     fullScreen = true
@@ -560,13 +591,13 @@ struct ExpandableCandleChart: View {
                 }
             }
             .fullScreenCover(isPresented: $fullScreen) {
-                FullScreenChart(title: title, onClose: { fullScreen = false }) { chart }
+                FullScreenChart(title: title, onClose: { fullScreen = false }) { chart(interactive: true) }
             }
     }
 
-    private var chart: CandleChart {
+    private func chart(interactive: Bool) -> CandleChart {
         CandleChart(candles: candles, overlays: overlays, markers: markers, showVolume: showVolume,
-                    countdownInterval: countdownInterval, viewport: $viewport)
+                    countdownInterval: countdownInterval, interactive: interactive, viewport: $viewport)
     }
 }
 

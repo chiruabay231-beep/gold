@@ -57,7 +57,7 @@ struct IndicatorEditorView: View {
                     if let data = previewData {
                         if indicator.placement == .overlay {
                             ExpandableCandleChart(title: indicator.title, candles: data.candles,
-                                                  overlays: rendered.overlays, showVolume: false, viewport: $viewport)
+                                                  overlays: rendered.overlays, showVolume: false, interactive: false, viewport: $viewport)
                                 .frame(height: 280)
                                 .listRowInsets(EdgeInsets())
                             ChartLegend(lines: rendered.overlays)

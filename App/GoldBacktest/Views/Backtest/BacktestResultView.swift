@@ -38,11 +38,11 @@ struct BacktestResultView: View {
                 card("Biểu đồ giá & lệnh") {
                     ExpandableCandleChart(title: "\(run.strategy.name) · \(run.datasetName)",
                                           candles: run.data.candles, overlays: lines,
-                                          markers: ChartMarker.from(trades: result.trades), viewport: $viewport)
+                                          markers: ChartMarker.from(trades: result.trades), interactive: false, viewport: $viewport)
                         .frame(height: 380)
                         .clipShape(.rect(cornerRadius: 8))
                     ChartLegend(lines: lines)
-                    Text("Kéo ngang: xem lịch sử · chụm: phóng to · kéo trục giá: giãn dọc (chạm đúp để tự động) · giữ hoặc chạm: crosshair · ⤢: toàn màn hình")
+                    Text("Chạm vào biểu đồ để mở toàn màn hình: kéo ngang, chụm phóng to, kéo trục giá, giữ để xem OHLC")
                         .font(.caption2).foregroundStyle(.secondary)
                 }
 
