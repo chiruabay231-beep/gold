@@ -29,6 +29,14 @@ open GoldBacktest.xcodeproj
 Trong Xcode: chọn target **GoldBacktest** → *Signing & Capabilities* → chọn Team
 (Apple ID miễn phí cũng được), cắm iPhone và bấm Run.
 
+Đưa file CSV vào app trên Simulator (app đang chạy), rồi mở tab *Dữ liệu* — file được tự nhập:
+
+```bash
+cp ~/Downloads/XAUUSD_H1.csv "$(xcrun simctl get_app_container booted com.gold.backtest data)/Documents/"
+```
+
+Trên iPhone thật: dùng app *Tệp* → *Trên iPhone* → *GoldBacktest* để chép file vào.
+
 Chạy test phần lõi (macOS hoặc Linux):
 
 ```bash

@@ -14,7 +14,7 @@ struct DatasetListView: View {
                 ContentUnavailableView {
                     Label("Chưa có dữ liệu", systemImage: "tray")
                 } description: {
-                    Text("Nhập file CSV xuất từ MT5/Exness, TradingView, hoặc tải nến từ Binance.")
+                    Text("Nhập file CSV xuất từ MT5/Exness, TradingView, hoặc tải nến từ Binance. File .csv chép vào thư mục Documents của app sẽ được tự nhập khi mở tab này.")
                 } actions: {
                     Button("Nhập CSV") { showingImporter = true }
                     Button("Thêm dữ liệu mẫu") { store.addSampleDataset() }
@@ -38,6 +38,9 @@ struct DatasetListView: View {
                 Menu {
                     Button { showingImporter = true } label: {
                         Label("Nhập file CSV", systemImage: "doc.text")
+                    }
+                    Button { importFromDocuments(reportEmpty: true) } label: {
+                        Label("Nhập CSV trong thư mục app", systemImage: "folder")
                     }
                     Button { showingBinance = true } label: {
                         Label("Tải từ Binance", systemImage: "arrow.down.circle")
@@ -66,10 +69,27 @@ struct DatasetListView: View {
         .sheet(isPresented: $showingBinance) {
             BinanceDownloadView()
         }
+        .task { importFromDocuments(reportEmpty: false) }
+    }
+
+    /// Imports every CSV placed in the app's Documents folder (via Finder,
+    /// the Files app or `xcrun simctl`), then moves it to "Đã nhập".
+    @MainActor
+    private func importFromDocuments(reportEmpty: Bool) {
+        guard !importing else { return }
+        let fileManager = FileManager.default
+        let documents = fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let files = (try? fileManager.contentsOfDirectory(at: documents, includingPropertiesForKeys: nil)) ?? []
+        let csvFiles = files.filter { ["csv", "tsv", "txt"].contains($0.pathExtension.lowercased()) }
+        guard !csvFiles.isEmpty else {
+            if reportEmpty { store.lastError = "Không có file .csv nào trong thư mục Documents của app." }
+            return
+        }
+        importFiles(csvFiles, moveTo: documents.appendingPathComponent("Đã nhập", isDirectory: true))
     }
 
     @MainActor
-    private func importFiles(_ urls: [URL]) {
+    private func importFiles(_ urls: [URL], moveTo archive: URL? = nil) {
         importing = true
         Task {
             for url in urls {
@@ -83,6 +103,13 @@ struct DatasetListView: View {
                         return try CSVParser().parse(text)
                     }.value
                     try store.addDataset(name: name, symbol: Self.guessSymbol(name), source: .csv, candles: candles)
+                    if let archive {
+                        let fileManager = FileManager.default
+                        let destination = archive.appendingPathComponent(url.lastPathComponent)
+                        try? fileManager.createDirectory(at: archive, withIntermediateDirectories: true)
+                        try? fileManager.removeItem(at: destination)
+                        try? fileManager.moveItem(at: url, to: destination)
+                    }
                 } catch {
                     store.lastError = "\(url.lastPathComponent): \(error.localizedDescription)"
                 }
