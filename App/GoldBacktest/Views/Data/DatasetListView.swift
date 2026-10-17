@@ -10,6 +10,7 @@ struct DatasetListView: View {
 
     var body: some View {
         List {
+            LiveSignalsSection()
             if store.datasets.isEmpty {
                 ContentUnavailableView {
                     Label("Chưa có dữ liệu", systemImage: "tray")
@@ -20,13 +21,15 @@ struct DatasetListView: View {
                     Button("Thêm dữ liệu mẫu") { store.addSampleDataset() }
                 }
             }
-            ForEach(store.datasets) { dataset in
-                NavigationLink(value: dataset.id) {
-                    DatasetRow(dataset: dataset)
+            Section("Bộ dữ liệu") {
+                ForEach(store.datasets) { dataset in
+                    NavigationLink(value: dataset.id) {
+                        DatasetRow(dataset: dataset)
+                    }
                 }
-            }
-            .onDelete { offsets in
-                for index in offsets { store.deleteDataset(store.datasets[index].id) }
+                .onDelete { offsets in
+                    for index in offsets { store.deleteDataset(store.datasets[index].id) }
+                }
             }
         }
         .navigationTitle("Dữ liệu")

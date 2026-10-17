@@ -4,17 +4,23 @@ struct RootView: View {
     @Environment(AppStore.self) private var store
 
     var body: some View {
-        TabView {
+        @Bindable var store = store
+        TabView(selection: $store.selectedTab) {
             NavigationStack { LiveView() }
                 .tabItem { Label("Live", systemImage: "waveform.path.ecg.rectangle") }
+                .tag(AppTab.live)
             NavigationStack { DatasetListView() }
                 .tabItem { Label("Dữ liệu", systemImage: "chart.bar.xaxis") }
+                .tag(AppTab.data)
             NavigationStack { IndicatorListView() }
                 .tabItem { Label("Chỉ báo", systemImage: "function") }
+                .tag(AppTab.indicators)
             NavigationStack { StrategyListView() }
                 .tabItem { Label("Chiến lược", systemImage: "list.bullet.rectangle") }
+                .tag(AppTab.strategies)
             NavigationStack { BacktestView() }
                 .tabItem { Label("Backtest", systemImage: "play.circle") }
+                .tag(AppTab.backtest)
         }
         .alert("Lỗi", isPresented: Binding(
             get: { store.lastError != nil },

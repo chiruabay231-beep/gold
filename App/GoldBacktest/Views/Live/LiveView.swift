@@ -23,8 +23,7 @@ struct LiveView: View {
                                   countdownInterval: market.interval.seconds, viewport: $viewport)
                 .frame(maxHeight: .infinity)
                 .layoutPriority(1)
-            strategyBar
-            signalList
+            latestSignalBar
         }
         .background(BinanceTheme.panel.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
@@ -193,57 +192,51 @@ struct LiveView: View {
         }
     }
 
-    // MARK: - Strategy & signals
+    // MARK: - Latest signal
 
-    private var strategyBar: some View {
-        @Bindable var market = market
-        return HStack(spacing: 10) {
-            Image(systemName: "bolt.fill").foregroundColor(BinanceTheme.yellow)
-            Picker("Chiến lược", selection: Binding(get: { market.strategyID }, set: { market.track(strategy: $0) })) {
-                Text("Không theo dõi").tag(UUID?.none)
-                ForEach(store.strategies) { strategy in
-                    Text(strategy.name).tag(Optional(strategy.id))
+    /// One line with the newest signal; the full list and the strategy
+    /// picker live in the Data tab.
+    private var latestSignalBar: some View {
+        let strategy = store.strategies.first { $0.id == market.strategyID }
+        let latest = market.signals.last
+        return Button {
+            store.selectedTab = .data
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "bolt.fill").foregroundColor(BinanceTheme.yellow)
+                if let strategy {
+                    Text(strategy.name)
+                        .foregroundColor(BinanceTheme.text)
+                        .lineLimit(1)
+                    if let error = market.strategyError {
+                        Text(error).foregroundColor(BinanceTheme.down).lineLimit(1)
+                    } else if let latest {
+                        let decimals = CandleChart.decimals(for: latest.price)
+                        Text(latest.kind.label)
+                            .fontWeight(.bold)
+                            .foregroundColor(LiveSignalRow.color(for: latest.kind))
+                        Text(CandleChart.format(latest.price, decimals))
+                            .foregroundColor(BinanceTheme.primaryText)
+                        Text(latest.time.formatted(.dateTime.hour().minute()))
+                            .foregroundColor(BinanceTheme.text)
+                    } else {
+                        Text("Chưa có tín hiệu").foregroundColor(BinanceTheme.text)
+                    }
+                } else {
+                    Text("Chọn chiến lược để nhận tín hiệu").foregroundColor(BinanceTheme.text)
                 }
-            }
-            .tint(BinanceTheme.primaryText)
-            Spacer()
-            Toggle(isOn: $market.notificationsEnabled) {
+                Spacer(minLength: 4)
                 Image(systemName: market.notificationsEnabled ? "bell.fill" : "bell.slash")
                     .foregroundColor(BinanceTheme.text)
+                Image(systemName: "chevron.right")
+                    .foregroundColor(BinanceTheme.text)
             }
-            .toggleStyle(.button)
-            .onChange(of: market.notificationsEnabled) { _, enabled in
-                if enabled { LiveMarket.requestNotificationPermission() }
-            }
+            .font(.system(size: 12).monospacedDigit())
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(BinanceTheme.background)
         }
-        .font(.system(size: 13))
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(BinanceTheme.background)
-    }
-
-    private var signalList: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                if let error = market.strategyError {
-                    Text(error)
-                        .font(.system(size: 12))
-                        .foregroundColor(BinanceTheme.down)
-                        .padding(14)
-                } else if market.strategyID != nil, market.signals.isEmpty {
-                    Text("Chưa có tín hiệu trên \(market.closedCandles.count) nến gần nhất. Tín hiệu mới sẽ được báo khi nến đóng.")
-                        .font(.system(size: 12))
-                        .foregroundColor(BinanceTheme.text)
-                        .padding(14)
-                }
-                ForEach(market.signals.reversed().prefix(30)) { signal in
-                    SignalRow(signal: signal, isLatest: signal.id == market.latestAlert?.id)
-                    Divider().overlay(BinanceTheme.grid)
-                }
-            }
-        }
-        .frame(height: 150)
-        .background(BinanceTheme.panel)
+        .buttonStyle(.plain)
     }
 
     // MARK: - Helpers
@@ -277,47 +270,5 @@ struct LiveView: View {
         case 1e3...: return String(format: "%.2fK", value / 1e3)
         default: return String(format: "%.2f", value)
         }
-    }
-}
-
-private struct SignalRow: View {
-    let signal: LiveSignal
-    let isLatest: Bool
-
-    private var color: Color {
-        switch signal.kind {
-        case .longEntry: return BinanceTheme.up
-        case .shortEntry: return BinanceTheme.down
-        case .longExit, .shortExit: return BinanceTheme.text
-        }
-    }
-
-    var body: some View {
-        let decimals = CandleChart.decimals(for: signal.price)
-        HStack(spacing: 10) {
-            Text(signal.kind.label)
-                .font(.system(size: 11, weight: .bold))
-                .foregroundColor(color)
-                .frame(width: 64, alignment: .leading)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(signal.time.formatted(.dateTime.day(.twoDigits).month(.twoDigits).hour().minute()))
-                    .foregroundColor(BinanceTheme.text)
-                Text(CandleChart.format(signal.price, decimals))
-                    .foregroundColor(BinanceTheme.primaryText)
-            }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 2) {
-                if let stop = signal.stop {
-                    Text("SL \(CandleChart.format(stop, decimals))").foregroundColor(BinanceTheme.down)
-                }
-                if let target = signal.target {
-                    Text("TP \(CandleChart.format(target, decimals))").foregroundColor(BinanceTheme.up)
-                }
-            }
-        }
-        .font(.system(size: 11).monospacedDigit())
-        .padding(.horizontal, 14)
-        .padding(.vertical, 7)
-        .background(isLatest ? BinanceTheme.yellow.opacity(0.08) : .clear)
     }
 }

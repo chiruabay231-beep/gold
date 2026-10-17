@@ -2,6 +2,10 @@ import Foundation
 import Observation
 import BacktestKit
 
+enum AppTab: Hashable {
+    case live, data, indicators, strategies, backtest
+}
+
 /// App-wide state: datasets, custom indicators, strategies and the last
 /// backtest settings. Everything is persisted as files in Application Support.
 @Observable
@@ -11,6 +15,8 @@ final class AppStore {
     var strategies: [StrategyDefinition] = []
     var config = BacktestConfig()
     var lastError: String?
+    /// Selected tab, so screens can send the user to another tab.
+    var selectedTab: AppTab = .live
 
     @ObservationIgnored private var candleCache: [UUID: PriceData] = [:]
     @ObservationIgnored private let directory: URL
