@@ -17,6 +17,8 @@ jobs:
   ios-build:
     name: iOS app build (macOS)
     runs-on: macos-15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: Install XcodeGen
@@ -24,14 +26,41 @@ jobs:
       - name: Generate Xcode project
         working-directory: App
         run: xcodegen generate
-      - name: Build for iOS Simulator
+      - name: Build unsigned app for iPhone
         working-directory: App
         run: |
           set -o pipefail
           xcodebuild build \
             -project GoldBacktest.xcodeproj \
             -scheme GoldBacktest \
-            -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' \
-            CODE_SIGNING_ALLOWED=NO | tee build.log | grep -E "error:|warning:|BUILD" || true
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            | tee build.log | grep -E "error:|warning:|BUILD" || true
           grep -q "BUILD SUCCEEDED" build.log
+      # SideStore / AltStore re-sign this IPA with the user's own Apple ID.
+      - name: Package IPA
+        working-directory: App
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/GoldBacktest.app Payload/
+          zip -qry GoldBacktest.ipa Payload
+          ls -la GoldBacktest.ipa
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GoldBacktest-ipa
+          path: App/GoldBacktest.ipa
+      - name: Publish IPA as the "latest" release
+        if: github.event_name != 'pull_request'
+        working-directory: App
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest GoldBacktest.ipa \
+            --target "$GITHUB_SHA" \
+            --title "Gold Backtest (bản mới nhất)" \
+            --notes "Bản build tự động từ commit $GITHUB_SHA. Tải GoldBacktest.ipa trên iPhone rồi mở bằng SideStore." \
+            --prerelease
