@@ -26,16 +26,40 @@ xcodegen generate
 open GoldBacktest.xcodeproj
 ```
 
-Trong Xcode: chọn target **GoldBacktest** → *Signing & Capabilities* → chọn Team
-(Apple ID miễn phí cũng được), cắm iPhone và bấm Run.
+### Cài lên iPhone thật
 
-Đưa file CSV vào app trên Simulator (app đang chạy), rồi mở tab *Dữ liệu* — file được tự nhập:
+1. Xcode → *Settings… → Accounts* → **+** → đăng nhập Apple ID.
+2. Cắm iPhone, mở khoá, bấm *Tin cậy* máy tính này. Bật *Cài đặt → Quyền riêng tư & Bảo mật →
+   Chế độ nhà phát triển* (iPhone khởi động lại).
+3. Xcode: target **GoldBacktest** → *Signing & Capabilities* → **Team** = Apple ID của bạn,
+   **Bundle Identifier** đổi thành tên riêng, ví dụ `com.andy.goldbacktest`.
+4. Lưu lại để lần sau không phải chọn lại: `./save-signing.sh`
+5. Chọn iPhone ở thanh trên của Xcode → bấm ▶︎. Lần đầu trên iPhone vào *Cài đặt → Cài đặt chung →
+   Quản lý VPN & thiết bị* → tin cậy Apple ID của bạn.
+
+Với Apple ID miễn phí, app chạy được 7 ngày, sau đó cắm máy và bấm ▶︎ lại.
+
+### Cập nhật khi có code mới
+
+```bash
+cd gold/App
+./update.sh
+```
+
+Rồi bấm ▶︎ trong Xcode.
+
+### Đưa dữ liệu vào app
+
+Mọi file `.csv` trong thư mục Documents của app được tự nhập khi mở tab *Dữ liệu*.
+
+Simulator (app đang chạy; đổi `com.gold.backtest` nếu bạn dùng Bundle ID khác):
 
 ```bash
 cp ~/Downloads/XAUUSD_H1.csv "$(xcrun simctl get_app_container booted com.gold.backtest data)/Documents/"
 ```
 
-Trên iPhone thật: dùng app *Tệp* → *Trên iPhone* → *GoldBacktest* để chép file vào.
+iPhone thật: cắm vào Mac → Finder → chọn iPhone → tab *Tệp* → kéo file CSV thả vào *GoldBacktest*.
+Hoặc AirDrop / iCloud Drive rồi trong app chọn *+ → Nhập file CSV*.
 
 Chạy test phần lõi (macOS hoặc Linux):
 

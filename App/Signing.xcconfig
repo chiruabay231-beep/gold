@@ -1,0 +1,8 @@
+// Default signing settings. Your own Team and Bundle ID go in
+// Signing.local.xcconfig (created by ./save-signing.sh, not committed),
+// which overrides the values below.
+PRODUCT_BUNDLE_IDENTIFIER = com.gold.backtest
+DEVELOPMENT_TEAM =
+CODE_SIGN_STYLE = Automatic
+
+#include? "Signing.local.xcconfig"
