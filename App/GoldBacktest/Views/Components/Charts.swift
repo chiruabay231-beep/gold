@@ -16,7 +16,7 @@ enum ChartPalette {
 
     static func color(_ index: Int) -> Color { colors[index % colors.count] }
 
-    static func lines(from plots: [Plot], offset: Int = 0) -> [ChartLine] {
+    static func lines(from plots: [BacktestKit.Plot], offset: Int = 0) -> [ChartLine] {
         plots.enumerated().map { index, plot in
             ChartLine(title: plot.title, values: plot.values, color: color(index + offset), isHorizontal: plot.isHorizontalLine)
         }
