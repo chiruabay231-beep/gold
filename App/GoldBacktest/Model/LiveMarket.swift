@@ -1,0 +1,242 @@
+import Foundation
+import Observation
+import UIKit
+import UserNotifications
+import BacktestKit
+
+/// Live candles from Binance (REST history + WebSocket updates) and the
+/// signals a chosen strategy gives on each closed bar.
+@MainActor
+@Observable
+final class LiveMarket {
+    enum Status: Equatable {
+        case idle
+        case loading
+        case live
+        case reconnecting(String)
+
+        var label: String {
+            switch self {
+            case .idle: return "Tạm dừng"
+            case .loading: return "Đang tải…"
+            case .live: return "Live"
+            case .reconnecting(let reason): return "Mất kết nối: \(reason)"
+            }
+        }
+    }
+
+    static let popularSymbols = ["BTCUSDT", "ETHUSDT", "PAXGUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
+    static let intervals: [BinanceClient.Interval] = [.m1, .m5, .m15, .h1, .h4, .d1]
+
+    private(set) var symbol = "PAXGUSDT"
+    private(set) var interval: BinanceClient.Interval = .m15
+    private(set) var buffer = LiveCandleBuffer(maxCount: 2000)
+    private(set) var ticker: Ticker24h?
+    private(set) var status: Status = .idle
+
+    /// Strategy whose signals are tracked; nil = none. Change it with `track(strategy:)`.
+    private(set) var strategyID: UUID?
+    var notificationsEnabled = true
+    private(set) var signals: [LiveSignal] = []
+    private(set) var plots: [Plot] = []
+    private(set) var strategyError: String?
+    private(set) var latestAlert: LiveSignal?
+
+    @ObservationIgnored private weak var store: AppStore?
+    @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var socket: URLSessionWebSocketTask?
+    @ObservationIgnored private var lastBarClosed = false
+    @ObservationIgnored private var alertedSignalIDs: Set<String> = []
+
+    var candles: [Candle] { buffer.candles }
+
+    /// Candles whose bar has finished; strategies only ever see these.
+    var closedCandles: [Candle] {
+        lastBarClosed ? buffer.candles : Array(buffer.candles.dropLast())
+    }
+
+    // MARK: - Lifecycle
+
+    func start(store: AppStore) {
+        self.store = store
+        guard task == nil else { return }
+        task = Task { [weak self] in await self?.run() }
+    }
+
+    func stop() {
+        task?.cancel()
+        task = nil
+        socket?.cancel(with: .goingAway, reason: nil)
+        socket = nil
+        status = .idle
+    }
+
+    func select(symbol: String? = nil, interval: BinanceClient.Interval? = nil) {
+        let newSymbol = symbol?.uppercased().trimmingCharacters(in: .whitespaces) ?? self.symbol
+        let newInterval = interval ?? self.interval
+        guard newSymbol != self.symbol || newInterval != self.interval, !newSymbol.isEmpty else { return }
+        self.symbol = newSymbol
+        self.interval = newInterval
+        buffer = LiveCandleBuffer(maxCount: 2000)
+        ticker = nil
+        signals = []
+        plots = []
+        alertedSignalIDs = []
+        let store = self.store
+        stop()
+        if let store { start(store: store) }
+    }
+
+    private func run() async {
+        var failures = 0
+        while !Task.isCancelled {
+            status = .loading
+            do {
+                let symbol = self.symbol, interval = self.interval
+                let history = try await BinanceClient.withFallback {
+                    try await $0.fetchCandles(symbol: symbol, interval: interval, count: 1000)
+                }
+                guard !Task.isCancelled else { return }
+                buffer = LiveCandleBuffer(candles: history, maxCount: 2000)
+                lastBarClosed = false
+                ticker = try? await BinanceClient.withFallback { try await $0.fetchTicker(symbol: symbol) }
+                rescan(alert: false)
+                failures = 0
+                try await stream()
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled else { return }
+                failures += 1
+                status = .reconnecting(error.localizedDescription)
+            }
+            // Back off 2, 4, 8 … up to 30 seconds before reconnecting.
+            let delay = min(30, pow(2, Double(min(failures, 5))))
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        }
+    }
+
+    /// Reads the WebSocket until it fails, trying each stream host in turn.
+    private func stream() async throws {
+        var lastError: Error = URLError(.cannotConnectToHost)
+        for host in BinanceClient.streamHosts {
+            let url = BinanceStreamEvent.url(host: host, symbol: symbol, interval: interval)
+            let socket = URLSession.shared.webSocketTask(with: url)
+            self.socket = socket
+            socket.resume()
+            var received = false
+            do {
+                while !Task.isCancelled {
+                    let message = try await socket.receive()
+                    if !received {
+                        received = true
+                        status = .live
+                    }
+                    let data: Data
+                    switch message {
+                    case .data(let d): data = d
+                    case .string(let text): data = Data(text.utf8)
+                    @unknown default: continue
+                    }
+                    if let event = BinanceStreamEvent.parse(data) { handle(event) }
+                }
+                throw CancellationError()
+            } catch {
+                socket.cancel(with: .goingAway, reason: nil)
+                if error is CancellationError || Task.isCancelled { throw CancellationError() }
+                lastError = error
+                // A host that delivered data and then dropped: reload history before retrying.
+                if received { throw error }
+            }
+        }
+        throw lastError
+    }
+
+    private func handle(_ event: BinanceStreamEvent) {
+        switch event {
+        case .kline(let eventSymbol, let candle, let isClosed):
+            guard eventSymbol.uppercased() == symbol else { return }
+            let update = buffer.apply(candle)
+            if update == .appended { lastBarClosed = false }
+            if update != .ignored, isClosed {
+                lastBarClosed = true
+                rescan(alert: true)
+            }
+            if var t = ticker {
+                t.lastPrice = candle.close
+                ticker = t
+            }
+        case .ticker(let t):
+            if t.symbol.uppercased() == symbol { ticker = t }
+        }
+    }
+
+    // MARK: - Signals
+
+    func track(strategy id: UUID?) {
+        guard id != strategyID else { return }
+        strategyID = id
+        alertedSignalIDs = []
+        rescan(alert: false)
+    }
+
+    func rescan(alert: Bool) {
+        guard let store, let id = strategyID, let strategy = store.strategies.first(where: { $0.id == id }) else {
+            signals = []
+            plots = []
+            strategyError = nil
+            return
+        }
+        let closed = closedCandles
+        guard closed.count > 10 else { return }
+        do {
+            let scan = try LiveSignalScanner.scan(strategy: strategy, candles: closed, config: store.config,
+                                                  library: store.library)
+            signals = scan.signals
+            // Pad plots with NaN for the bar that is still forming.
+            let extra = buffer.candles.count - closed.count
+            plots = scan.plots.map { plot in
+                var p = plot
+                p.values += Series(repeating: .nan, count: max(0, extra))
+                return p
+            }
+            strategyError = nil
+            let fresh = scan.signals.filter { $0.barIndex == closed.count - 1 && !alertedSignalIDs.contains($0.id) }
+            alertedSignalIDs.formUnion(scan.signals.map(\.id))
+            if alert, let signal = fresh.first(where: \.kind.isEntry) ?? fresh.first {
+                latestAlert = signal
+                announce(signal, strategy: strategy.name)
+            }
+        } catch {
+            strategyError = error.localizedDescription
+        }
+    }
+
+    private func announce(_ signal: LiveSignal, strategy: String) {
+        UINotificationFeedbackGenerator().notificationOccurred(signal.kind.isEntry ? .success : .warning)
+        guard notificationsEnabled else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "\(symbol) · \(signal.kind.label)"
+        var body = "\(strategy) · giá \(CandleChart.format(signal.price, CandleChart.decimals(for: signal.price)))"
+        if let stop = signal.stop { body += " · SL \(CandleChart.format(stop, CandleChart.decimals(for: stop)))" }
+        if let target = signal.target { body += " · TP \(CandleChart.format(target, CandleChart.decimals(for: target)))" }
+        content.body = body
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: signal.id, content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    static func requestNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
+    }
+}
+
+/// Shows notifications as banners while the app is open.
+final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = NotificationDelegate()
+
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+                                withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound, .list])
+    }
+}

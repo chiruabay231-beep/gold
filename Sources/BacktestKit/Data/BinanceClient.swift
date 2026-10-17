@@ -43,6 +43,38 @@ public struct BinanceClient {
     public var baseURL: URL
     public var session: URLSession
 
+    /// Main API first, then the public market-data mirror, which is reachable
+    /// from some networks where api.binance.com is blocked.
+    public static let restHosts = [URL(string: "https://api.binance.com")!,
+                                   URL(string: "https://data-api.binance.vision")!]
+    public static let streamHosts = [URL(string: "wss://stream.binance.com:9443")!,
+                                     URL(string: "wss://data-stream.binance.vision")!]
+
+    /// Runs `operation` against each REST host in turn until one succeeds.
+    public static func withFallback<T>(_ operation: (BinanceClient) async throws -> T) async throws -> T {
+        var lastError: Error = ClientError.malformed
+        for host in restHosts {
+            do {
+                return try await operation(BinanceClient(baseURL: host))
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
+    /// 24-hour statistics for the header of the live screen.
+    public func fetchTicker(symbol: String) async throws -> Ticker24h {
+        var components = URLComponents(url: baseURL.appendingPathComponent("api/v3/ticker/24hr"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "symbol", value: symbol.uppercased())]
+        let (data, response) = try await load(URLRequest(url: components.url!))
+        if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
+            throw ClientError.http(http.statusCode, String(data: data, encoding: .utf8) ?? "")
+        }
+        guard let ticker = Ticker24h(restJSON: data) else { throw ClientError.malformed }
+        return ticker
+    }
+
     public init(baseURL: URL = URL(string: "https://api.binance.com")!, session: URLSession = .shared) {
         self.baseURL = baseURL
         self.session = session

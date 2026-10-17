@@ -5,6 +5,8 @@ struct RootView: View {
 
     var body: some View {
         TabView {
+            NavigationStack { LiveView() }
+                .tabItem { Label("Live", systemImage: "waveform.path.ecg.rectangle") }
             NavigationStack { DatasetListView() }
                 .tabItem { Label("Dữ liệu", systemImage: "chart.bar.xaxis") }
             NavigationStack { IndicatorListView() }

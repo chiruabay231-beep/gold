@@ -39,7 +39,7 @@ struct DatasetDetailView: View {
     @Environment(AppStore.self) private var store
 
     @State private var data: PriceData?
-    @State private var window = ChartWindow(total: 0)
+    @State private var viewport = ChartViewport()
     @State private var selected: Set<UUID> = []
     @State private var rendered = IndicatorRenderer()
     @State private var name = ""
@@ -52,17 +52,19 @@ struct DatasetDetailView: View {
         List {
             if let data {
                 Section {
-                    PriceChartView(data: data, lines: rendered.overlays, range: window.range)
-                        .frame(height: 300)
+                    CandleChart(candles: data.candles, overlays: rendered.overlays, viewport: $viewport)
+                        .frame(height: 360)
+                        .listRowInsets(EdgeInsets())
                     ChartLegend(lines: rendered.overlays)
                     ForEach(rendered.panes) { pane in
                         VStack(alignment: .leading, spacing: 2) {
                             Text(pane.title).font(.caption.bold())
-                            PaneChartView(times: data.time, lines: pane.lines, range: window.range)
+                            PaneChartView(times: data.time, lines: pane.lines, range: viewport.range(total: data.count))
                                 .frame(height: 110)
                         }
                     }
-                    ChartWindowControls(window: $window, total: data.count)
+                    Text("Kéo ngang để xem lịch sử · chụm 2 ngón để phóng to · giữ để xem OHLC")
+                        .font(.caption2).foregroundStyle(.secondary)
                     ForEach(rendered.errors, id: \.self) { ErrorText(message: $0) }
                 }
                 Section("Chỉ báo trên biểu đồ") {
@@ -124,7 +126,7 @@ struct DatasetDetailView: View {
         do {
             let loaded = try store.priceData(for: datasetID)
             data = loaded
-            window = ChartWindow(total: loaded.count)
+            viewport = ChartViewport()
             render()
             let fileName = (dataset?.name ?? "data").replacingOccurrences(of: "/", with: "-")
             exportURL = try await Task.detached(priority: .utility) {

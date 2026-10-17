@@ -4,12 +4,11 @@ import BacktestKit
 struct BacktestResultView: View {
     let run: BacktestRun
 
-    @State private var window: ChartWindow
+    @State private var viewport = ChartViewport()
     @State private var focusedTrade: Trade?
 
     init(run: BacktestRun) {
         self.run = run
-        _window = State(initialValue: ChartWindow(total: run.data.count))
     }
 
     private var result: BacktestResult { run.result }
@@ -37,10 +36,13 @@ struct BacktestResultView: View {
                 }
 
                 card("Biểu đồ giá & lệnh") {
-                    PriceChartView(data: run.data, lines: lines, trades: result.trades, range: window.range)
-                        .frame(height: 300)
+                    CandleChart(candles: run.data.candles, overlays: lines,
+                                markers: ChartMarker.from(trades: result.trades), viewport: $viewport)
+                        .frame(height: 380)
+                        .clipShape(.rect(cornerRadius: 8))
                     ChartLegend(lines: lines)
-                    ChartWindowControls(window: $window, total: run.data.count)
+                    Text("Kéo ngang để xem lịch sử · chụm 2 ngón để phóng to · giữ để xem OHLC · chọn lệnh trong danh sách để nhảy tới")
+                        .font(.caption2).foregroundStyle(.secondary)
                 }
 
                 NavigationLink {
@@ -92,9 +94,10 @@ struct BacktestResultView: View {
     }
 
     private func focus(on trade: Trade) {
-        let length = window.length
-        let center = (trade.entryIndex + trade.exitIndex) / 2
-        window.end = min(run.data.count, max(length, center + length / 2))
+        // Centre the trade on screen.
+        let center = Double(trade.entryIndex + trade.exitIndex) / 2
+        let end = center + viewport.visibleCount / 2
+        viewport.rightOffset = max(0, Double(run.data.count) + viewport.rightPadding - end)
     }
 
     private var tradesCSV: String {

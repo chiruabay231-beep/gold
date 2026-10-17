@@ -69,6 +69,14 @@ swift test
 
 ## Tính năng
 
+**Live (Binance)**
+- Nến realtime qua WebSocket của Binance (BTC, ETH, PAXG… hoặc nhập mã bất kỳ), khung 1m → 1D,
+  thông tin 24h, tự kết nối lại, tự dùng máy chủ dự phòng `binance.vision` nếu bị chặn.
+- Biểu đồ nến kiểu Binance: nền tối, MA(7/25/99), volume, trục giá bên phải, đường giá hiện tại;
+  kéo để xem lịch sử, chụm để phóng to, giữ để hiện crosshair + OHLC.
+- Chọn một chiến lược để theo dõi: mỗi khi đóng nến app chạy chiến lược, đánh dấu B/S trên biểu đồ,
+  liệt kê tín hiệu kèm SL/TP và gửi thông báo. Chỉ chạy khi app đang mở (giới hạn của iOS).
+
 **Dữ liệu**
 - Nhập CSV xuất từ MT5/Exness (kể cả file UTF-16, cột `<DATE>` `<TIME>` riêng),
   TradingView, Binance… Tự nhận dấu phân cách `,` `;` tab và nhiều định dạng thời gian.

@@ -8,7 +8,7 @@ struct IndicatorEditorView: View {
     @State private var indicator: CustomIndicator
     @State private var previewDataset: UUID?
     @State private var previewData: PriceData?
-    @State private var window = ChartWindow(total: 0)
+    @State private var viewport = ChartViewport()
     @State private var rendered = IndicatorRenderer()
     @State private var saveError: String?
 
@@ -56,17 +56,17 @@ struct IndicatorEditorView: View {
                     DatasetPicker(datasets: store.datasets, selection: $previewDataset)
                     if let data = previewData {
                         if indicator.placement == .overlay {
-                            PriceChartView(data: data, lines: rendered.overlays, range: window.range)
-                                .frame(height: 240)
+                            CandleChart(candles: data.candles, overlays: rendered.overlays, showVolume: false, viewport: $viewport)
+                                .frame(height: 280)
+                                .listRowInsets(EdgeInsets())
                             ChartLegend(lines: rendered.overlays)
                         } else {
                             ForEach(rendered.panes) { pane in
-                                PaneChartView(times: data.time, lines: pane.lines, range: window.range)
+                                PaneChartView(times: data.time, lines: pane.lines, range: viewport.range(total: data.count))
                                     .frame(height: 160)
                                 ChartLegend(lines: pane.lines)
                             }
                         }
-                        ChartWindowControls(window: $window, total: data.count)
                     }
                     ForEach(rendered.errors, id: \.self) { ErrorText(message: $0) }
                 }
@@ -105,7 +105,7 @@ struct IndicatorEditorView: View {
             return
         }
         previewData = data
-        window = ChartWindow(total: data.count)
+        viewport = ChartViewport()
         renderPreview()
     }
 

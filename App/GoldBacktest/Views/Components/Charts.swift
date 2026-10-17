@@ -23,54 +23,6 @@ enum ChartPalette {
     }
 }
 
-/// Which bars are visible: the `length` bars ending just before `end`.
-struct ChartWindow: Equatable {
-    var length: Int
-    var end: Int
-
-    init(total: Int, length: Int = 150) {
-        self.length = min(max(total, 1), length)
-        end = total
-    }
-
-    var range: Range<Int> { max(0, end - length)..<max(end, 0) }
-}
-
-struct ChartWindowControls: View {
-    @Binding var window: ChartWindow
-    let total: Int
-
-    var body: some View {
-        VStack(spacing: 4) {
-            if total > 30 {
-                HStack {
-                    Text("Số nến \(window.length)")
-                        .frame(width: 96, alignment: .leading)
-                    Slider(value: Binding(
-                        get: { Double(window.length) },
-                        set: { newValue in
-                            window.length = Int(newValue)
-                            window.end = min(total, max(window.end, window.length))
-                        }),
-                        in: 30...Double(max(31, min(total, 800))), step: 10)
-                }
-            }
-            if total > window.length {
-                HStack {
-                    Text("Vị trí")
-                        .frame(width: 96, alignment: .leading)
-                    Slider(value: Binding(
-                        get: { Double(window.end) },
-                        set: { window.end = Int($0) }),
-                        in: Double(window.length)...Double(total), step: 1)
-                }
-            }
-        }
-        .font(.caption)
-        .foregroundStyle(.secondary)
-    }
-}
-
 struct ChartLegend: View {
     let lines: [ChartLine]
 
@@ -88,36 +40,6 @@ struct ChartLegend: View {
                 .font(.caption2)
             }
         }
-    }
-}
-
-// MARK: - Price chart
-
-struct CandleMarks: ChartContent {
-    let data: PriceData
-    let indices: [Int]
-
-    var body: some ChartContent {
-        ForEach(indices, id: \.self) { i in
-            let color: Color = data.close[i] >= data.open[i] ? .green : .red
-            RuleMark(x: .value("Nến", i),
-                     yStart: .value("Thấp", data.low[i]),
-                     yEnd: .value("Cao", data.high[i]))
-                .lineStyle(StrokeStyle(lineWidth: 1))
-                .foregroundStyle(color)
-            RectangleMark(x: .value("Nến", i),
-                          yStart: .value("Mở", data.open[i]),
-                          yEnd: .value("Đóng", bodyEnd(i)),
-                          width: .ratio(0.7))
-                .foregroundStyle(color)
-        }
-    }
-
-    private func bodyEnd(_ i: Int) -> Double {
-        let open = data.open[i]
-        let close = data.close[i]
-        if open != close { return close }
-        return close + max(abs(close) * 0.00005, 1e-9)
     }
 }
 
@@ -142,89 +64,12 @@ struct LineMarks: ChartContent {
     }
 }
 
-struct TradeMarks: ChartContent {
-    let trades: [Trade]
-
-    var body: some ChartContent {
-        ForEach(trades) { trade in
-            let color: Color = trade.direction == .long ? .green : .red
-            LineMark(x: .value("Nến", trade.entryIndex),
-                     y: .value("Giá", trade.entryPrice),
-                     series: .value("Lệnh", "trade-\(trade.id)"))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                .foregroundStyle(trade.isWin ? Color.green : Color.red)
-            LineMark(x: .value("Nến", trade.exitIndex),
-                     y: .value("Giá", trade.exitPrice),
-                     series: .value("Lệnh", "trade-\(trade.id)"))
-                .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                .foregroundStyle(trade.isWin ? Color.green : Color.red)
-            PointMark(x: .value("Nến", trade.entryIndex), y: .value("Giá", trade.entryPrice))
-                .symbol(.triangle)
-                .symbolSize(70)
-                .foregroundStyle(color)
-            PointMark(x: .value("Nến", trade.exitIndex), y: .value("Giá", trade.exitPrice))
-                .symbol(.cross)
-                .symbolSize(50)
-                .foregroundStyle(Color.primary)
-        }
-    }
-}
-
-struct PriceChartView: View {
-    let data: PriceData
-    var lines: [ChartLine] = []
-    var trades: [Trade] = []
-    let range: Range<Int>
-
-    var body: some View {
-        let indices = Array(range)
-        let visibleTrades = trades.filter { $0.exitIndex >= range.lowerBound && $0.entryIndex < range.upperBound }
-        let domain = yDomain(indices)
-        Chart {
-            CandleMarks(data: data, indices: indices)
-            ForEach(lines) { line in
-                LineMarks(line: line, indices: indices)
-            }
-            TradeMarks(trades: visibleTrades)
-        }
-        .chartXScale(domain: xDomain)
-        .chartYScale(domain: domain)
-        .chartXAxis { indexDateAxis(data.time) }
-        .chartLegend(.hidden)
-    }
-
-    private var xDomain: ClosedRange<Int> {
-        let lower = range.lowerBound
-        let upper = max(lower + 1, range.upperBound - 1)
-        return lower...upper
-    }
-
-    private func yDomain(_ indices: [Int]) -> ClosedRange<Double> {
-        var lo = Double.infinity
-        var hi = -Double.infinity
-        for i in indices {
-            lo = min(lo, data.low[i])
-            hi = max(hi, data.high[i])
-        }
-        for line in lines where !line.isHorizontal {
-            for i in indices where !line.values[i].isNaN {
-                // Ignore lines far away from price (e.g. a 0/1 flag plotted by mistake).
-                let value = line.values[i]
-                if value > lo * 0.5, value < hi * 1.5 {
-                    lo = min(lo, value)
-                    hi = max(hi, value)
-                }
-            }
-        }
-        return Self.padded(lo, hi)
-    }
-
-    static func padded(_ lo: Double, _ hi: Double) -> ClosedRange<Double> {
-        guard lo.isFinite, hi.isFinite else { return 0...1 }
-        if lo == hi { return (lo - 1)...(hi + 1) }
-        let pad = (hi - lo) * 0.04
-        return (lo - pad)...(hi + pad)
-    }
+/// Price domain with 4% padding; never empty.
+func paddedDomain(_ lo: Double, _ hi: Double) -> ClosedRange<Double> {
+    guard lo.isFinite, hi.isFinite else { return 0...1 }
+    if lo == hi { return (lo - 1)...(hi + 1) }
+    let pad = (hi - lo) * 0.04
+    return (lo - pad)...(hi + pad)
 }
 
 /// X axis for index-based charts, labelled with the bar's date.
@@ -269,7 +114,7 @@ struct PaneChartView: View {
                 hi = max(hi, value)
             }
         }
-        return PriceChartView.padded(lo, hi)
+        return paddedDomain(lo, hi)
     }
 }
 
@@ -297,7 +142,7 @@ struct SeriesChartView: View {
                 .foregroundStyle(color)
                 .lineStyle(StrokeStyle(lineWidth: 1.5))
         }
-        .chartYScale(domain: PriceChartView.padded(lo, hi))
+        .chartYScale(domain: paddedDomain(lo, hi))
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 4)) { _ in
                 AxisGridLine()
