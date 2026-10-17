@@ -17,6 +17,10 @@ final class AppStore {
     var lastError: String?
     /// Selected tab, so screens can send the user to another tab.
     var selectedTab: AppTab = .live
+    /// Chart drawings per symbol key (e.g. "BINANCE:PAXGUSDT").
+    private(set) var drawings: [String: [Drawing]] = [:]
+
+    @ObservationIgnored private var drawingUndo: [String: [[Drawing]]] = [:]
 
     @ObservationIgnored private var candleCache: [UUID: PriceData] = [:]
     @ObservationIgnored private let directory: URL
@@ -38,6 +42,46 @@ final class AppStore {
 
     func saveConfig() {
         save(config, to: "config.json")
+    }
+
+    // MARK: - Drawings
+
+    func drawings(for key: String) -> [Drawing] { drawings[key] ?? [] }
+
+    func addDrawing(_ drawing: Drawing, key: String) {
+        mutateDrawings(key) { $0.append(drawing) }
+    }
+
+    func updateDrawing(_ drawing: Drawing, key: String) {
+        mutateDrawings(key) { list in
+            if let index = list.firstIndex(where: { $0.id == drawing.id }) { list[index] = drawing }
+        }
+    }
+
+    func removeDrawing(_ id: UUID, key: String) {
+        mutateDrawings(key) { $0.removeAll { $0.id == id } }
+    }
+
+    func clearDrawings(key: String) {
+        mutateDrawings(key) { $0.removeAll() }
+    }
+
+    var canUndoDrawing: Bool { drawingUndo.values.contains { !$0.isEmpty } }
+
+    func undoDrawing(key: String) {
+        guard var history = drawingUndo[key], let previous = history.popLast() else { return }
+        drawingUndo[key] = history
+        drawings[key] = previous
+        save(drawings, to: "drawings.json")
+    }
+
+    private func mutateDrawings(_ key: String, _ change: (inout [Drawing]) -> Void) {
+        var list = drawings[key] ?? []
+        drawingUndo[key, default: []].append(list)
+        if drawingUndo[key]!.count > 50 { drawingUndo[key]!.removeFirst() }
+        change(&list)
+        drawings[key] = list
+        save(drawings, to: "drawings.json")
     }
 
     // MARK: - Datasets
@@ -159,6 +203,7 @@ final class AppStore {
         indicators = read("indicators.json") ?? []
         strategies = read("strategies.json") ?? []
         if let saved: BacktestConfig = read("config.json") { config = saved }
+        drawings = read("drawings.json") ?? [:]
         if isFirstLaunch {
             indicators = Samples.indicators
             strategies = Samples.strategies

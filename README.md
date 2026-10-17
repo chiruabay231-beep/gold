@@ -77,6 +77,14 @@ swift test
 - Chọn một chiến lược để theo dõi: mỗi khi đóng nến app chạy chiến lược, đánh dấu B/S trên biểu đồ,
   liệt kê tín hiệu kèm SL/TP và gửi thông báo. Chỉ chạy khi app đang mở (giới hạn của iOS).
 
+**Live kiểu TradingView**
+- Giao diện sáng kiểu TradingView (đổi sang tối kiểu Binance ở menu ⋯), thanh dưới: mã · khung ·
+  ✏️ vẽ · ƒ chỉ báo · ⋯ · hoàn tác · toàn màn hình.
+- Công cụ vẽ: đường ngang, tia ngang, đường dọc, đường xu hướng, hộp vùng giá, vị thế Long/Short
+  (SL/TP + RR chỉnh được), chữ. Chạm để chọn, kéo để di chuyển, đổi màu, xoá, hoàn tác; lưu theo mã.
+- Lớp ICT: Midnight Open, AM Open (09:30 NY), Prev Day High/Low, Asian/London High/Low với nhãn trên
+  trục giá; hộp killzone Asia/London/NY AM; hộp ICT macro (08:50–09:10 NY…) kèm giờ địa phương.
+
 **Dữ liệu**
 - Nhập CSV xuất từ MT5/Exness (kể cả file UTF-16, cột `<DATE>` `<TIME>` riêng),
   TradingView, Binance… Tự nhận dấu phân cách `,` `;` tab và nhiều định dạng thời gian.

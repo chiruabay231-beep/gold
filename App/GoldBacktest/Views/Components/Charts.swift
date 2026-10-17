@@ -9,6 +9,8 @@ struct ChartLine: Identifiable {
     var values: Series
     var color: Color
     var isHorizontal = false
+    /// Show the line's latest value and title on the price axis (TradingView style).
+    var axisLabel = false
 }
 
 enum ChartPalette {

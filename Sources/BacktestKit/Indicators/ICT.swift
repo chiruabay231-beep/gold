@@ -56,6 +56,13 @@ public enum ICT {
         public static let silverBulletLondon = (3.0, 4.0)
         public static let silverBulletAM = (10.0, 11.0)
         public static let silverBulletPM = (14.0, 15.0)
+        /// ICT "macro" windows (NY time): 02:33–03:00, 04:03–04:30, 08:50–09:10,
+        /// 09:50–10:10, 10:50–11:10, 11:50–12:10, 13:10–13:40, 15:15–15:45.
+        public static let macros: [(Double, Double)] = [
+            (2 + 33.0 / 60, 3), (4 + 3.0 / 60, 4.5), (8 + 50.0 / 60, 9 + 10.0 / 60),
+            (9 + 50.0 / 60, 10 + 10.0 / 60), (10 + 50.0 / 60, 11 + 10.0 / 60),
+            (11 + 50.0 / 60, 12 + 10.0 / 60), (13 + 10.0 / 60, 13 + 40.0 / 60), (15.25, 15.75),
+        ]
     }
 
     /// Open of the first bar at or after New York midnight, held all day.
@@ -74,8 +81,14 @@ public enum ICT {
 
     /// High/low of the most recently *completed* Asia session (20:00–00:00 NY).
     public static func asiaRange(high: Series, low: Series, clock: NewYorkClock) -> Range {
+        sessionRange(high: high, low: low, clock: clock, start: Session.asia.0, end: Session.asia.1)
+    }
+
+    /// High/low of the most recently completed session `[start, end)` (NY hours),
+    /// held from the end of that session until the next one ends.
+    public static func sessionRange(high: Series, low: Series, clock: NewYorkClock, start: Double, end: Double) -> Range {
         let n = high.count
-        let inSession = clock.session(Session.asia.0, Session.asia.1)
+        let inSession = clock.session(start, end)
         var outHigh = Series(repeating: .nan, count: n)
         var outLow = Series(repeating: .nan, count: n)
         var completedHigh = Double.nan, completedLow = Double.nan
@@ -99,6 +112,59 @@ public enum ICT {
             outLow[i] = completedLow
         }
         return Range(high: outHigh, low: outLow)
+    }
+
+    /// Open of the first bar at or after `hour` (NY) each New York day, held
+    /// until the next day's. `openAt(hour: 9.5)` is the 09:30 equity open.
+    public static func openAt(open: Series, clock: NewYorkClock, hour: Double) -> Series {
+        var level = Double.nan
+        var day = Int.min
+        return open.indices.map { i in
+            if clock.day[i] != day, clock.hour[i] >= hour {
+                day = clock.day[i]
+                level = open[i]
+            }
+            return level
+        }
+    }
+
+    /// High/low of the previous New York calendar day.
+    public static func previousDay(high: Series, low: Series, clock: NewYorkClock) -> Range {
+        let n = high.count
+        var outHigh = Series(repeating: .nan, count: n)
+        var outLow = Series(repeating: .nan, count: n)
+        var previousHigh = Double.nan, previousLow = Double.nan
+        var runningHigh = -Double.infinity, runningLow = Double.infinity
+        for i in 0..<n {
+            if i > 0, clock.day[i] != clock.day[i - 1] {
+                previousHigh = runningHigh
+                previousLow = runningLow
+                runningHigh = -.infinity
+                runningLow = .infinity
+            }
+            runningHigh = max(runningHigh, high[i])
+            runningLow = min(runningLow, low[i])
+            outHigh[i] = previousHigh
+            outLow[i] = previousLow
+        }
+        return Range(high: outHigh, low: outLow)
+    }
+
+    /// Contiguous runs of bars inside `[start, end)` NY hours, as closed index ranges.
+    public static func sessionWindows(clock: NewYorkClock, start: Double, end: Double) -> [ClosedRange<Int>] {
+        let inSession = clock.session(start, end)
+        var windows: [ClosedRange<Int>] = []
+        var first: Int?
+        for i in inSession.indices {
+            if inSession[i] == 1 {
+                if first == nil { first = i }
+            } else if let f = first {
+                windows.append(f...(i - 1))
+                first = nil
+            }
+        }
+        if let f = first { windows.append(f...(inSession.count - 1)) }
+        return windows
     }
 
     /// High/low of the previous New York week.
@@ -344,6 +410,23 @@ public enum ICTFunctions {
             },
             ScriptFunction("asia_low", [], category: category, summary: "Đáy phiên Á gần nhất đã kết thúc (thanh khoản SSL)") { args in
                 .series(ICT.asiaRange(high: args.data.high, low: args.data.low, clock: clock(args)).low)
+            },
+            ScriptFunction("london_high", [], category: category, summary: "Đỉnh phiên London gần nhất đã kết thúc (02:00–05:00 NY)") { args in
+                .series(ICT.sessionRange(high: args.data.high, low: args.data.low, clock: clock(args),
+                                         start: ICT.Session.london.0, end: ICT.Session.london.1).high)
+            },
+            ScriptFunction("london_low", [], category: category, summary: "Đáy phiên London gần nhất đã kết thúc (02:00–05:00 NY)") { args in
+                .series(ICT.sessionRange(high: args.data.high, low: args.data.low, clock: clock(args),
+                                         start: ICT.Session.london.0, end: ICT.Session.london.1).low)
+            },
+            ScriptFunction("am_open", [], category: category, summary: "Giá mở cửa 09:30 New York (mở cửa chứng khoán Mỹ), giữ cả ngày") { args in
+                .series(ICT.openAt(open: args.data.open, clock: clock(args), hour: 9.5))
+            },
+            ScriptFunction("ny_pdh", [], category: category, summary: "Đỉnh ngày hôm trước theo ngày New York") { args in
+                .series(ICT.previousDay(high: args.data.high, low: args.data.low, clock: clock(args)).high)
+            },
+            ScriptFunction("ny_pdl", [], category: category, summary: "Đáy ngày hôm trước theo ngày New York") { args in
+                .series(ICT.previousDay(high: args.data.high, low: args.data.low, clock: clock(args)).low)
             },
             ScriptFunction("prev_week_high", [], category: category, summary: "Đỉnh tuần trước (PWH, theo giờ New York)") { args in
                 .series(ICT.previousWeek(high: args.data.high, low: args.data.low, clock: clock(args)).high)

@@ -1,31 +1,47 @@
 import SwiftUI
 import BacktestKit
 
-/// Binance-style live chart with strategy signals.
+/// Live chart laid out like TradingView's mobile app: symbol header with a
+/// layer legend, chart with drawing tools and ICT layers, bottom tool bar.
 struct LiveView: View {
     @Environment(AppStore.self) private var store
     @Environment(LiveMarket.self) private var market
     @Environment(\.scenePhase) private var scenePhase
 
+    @AppStorage("live.theme") private var themeName = "tradingView"
+    @AppStorage("live.showMA") private var showMA = false
+    @AppStorage("live.showStrategyPlots") private var showStrategyPlots = true
+    @AppStorage("live.ictLevels") private var showICTLevels = true
+    @AppStorage("live.killzones") private var showKillzones = true
+    @AppStorage("live.macros") private var showMacros = true
+    @AppStorage("live.volume") private var showVolume = true
+    @AppStorage("live.highLow") private var showHighLow = true
+
     @State private var viewport = ChartViewport()
-    @State private var showMA = true
-    @State private var showStrategyPlots = true
     @State private var customSymbol = ""
     @State private var askingSymbol = false
+    @State private var showDrawingBar = false
+    @State private var activeTool: DrawingTool?
+    @State private var selectedDrawingID: UUID?
+    @State private var editingTextDrawing: Drawing?
+    @State private var drawingText = ""
+    @State private var legendExpanded = true
+    @State private var fullScreen = false
+    @State private var confirmClear = false
+    @State private var layerCache = ICTLayerCache()
+
+    private var theme: ChartTheme { themeName == "binance" ? .binance : .tradingView }
+    private var drawingKey: String { "BINANCE:\(market.symbol)" }
+    private var drawings: [Drawing] { store.drawings(for: drawingKey) }
 
     var body: some View {
         VStack(spacing: 0) {
-            topBar
-            priceHeader
-            intervalBar
-            ExpandableCandleChart(title: "\(Self.displayName(market.symbol)) · \(Self.label(market.interval))",
-                                  candles: market.candles, overlays: overlays, markers: markers,
-                                  countdownInterval: market.interval.seconds, viewport: $viewport)
-                .frame(maxHeight: .infinity)
-                .layoutPriority(1)
+            header
+            chartPanel
             latestSignalBar
+            bottomBar
         }
-        .background(BinanceTheme.panel.ignoresSafeArea())
+        .background(theme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             market.start(store: store)
@@ -46,131 +62,182 @@ struct LiveView: View {
             Button("Huỷ", role: .cancel) {}
             Button("Mở") { open(symbol: customSymbol) }
         }
+        .alert("Nhãn / ghi chú", isPresented: Binding(get: { editingTextDrawing != nil },
+                                                      set: { if !$0 { editingTextDrawing = nil } })) {
+            TextField("VD: Vùng OB H4", text: $drawingText)
+            Button("Huỷ", role: .cancel) { editingTextDrawing = nil }
+            Button("Lưu") { saveText() }
+        }
+        .confirmationDialog("Xoá tất cả hình vẽ của \(Self.displayName(market.symbol))?", isPresented: $confirmClear,
+                            titleVisibility: .visible) {
+            Button("Xoá tất cả", role: .destructive) {
+                store.clearDrawings(key: drawingKey)
+                selectedDrawingID = nil
+            }
+        }
+        .fullScreenCover(isPresented: $fullScreen) {
+            FullScreenChart(title: "\(Self.displayName(market.symbol)) · \(Self.label(market.interval))", theme: theme,
+                            onClose: { fullScreen = false }) {
+                chartPanel
+            }
+        }
     }
 
-    // MARK: - Header
+    // MARK: - Header (TradingView style)
 
-    private var topBar: some View {
-        HStack(spacing: 10) {
-            Menu {
-                ForEach(LiveMarket.popularSymbols, id: \.self) { symbol in
-                    Button(Self.displayName(symbol)) { open(symbol: symbol) }
-                }
-                Button("Nhập mã khác…") {
-                    customSymbol = ""
-                    askingSymbol = true
-                }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(Self.displayName(market.symbol))
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(BinanceTheme.primaryText)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundColor(BinanceTheme.text)
+    private var header: some View {
+        let last = market.ticker?.lastPrice ?? market.candles.last?.close ?? 0
+        let changePct = market.ticker?.changePercent ?? 0
+        let changeAbs = last - last / (1 + changePct / 100)
+        let decimals = CandleChart.decimals(for: last)
+        let changeColor = changePct >= 0 ? theme.up : theme.down
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(LinearGradient(colors: [BinanceTheme.yellow, .orange], startPoint: .top, endPoint: .bottom))
+                    .frame(width: 22, height: 22)
+                    .overlay(Text(String(market.symbol.prefix(1))).font(.system(size: 11, weight: .bold)).foregroundColor(.white))
+                Text(Self.displayName(market.symbol))
+                    .font(.system(size: 19, weight: .semibold))
+                    .foregroundColor(theme.primaryText)
+                    .lineLimit(1)
+                statusDot
+                Spacer()
+            }
+            HStack(spacing: 8) {
+                Text(CandleChart.format(last, decimals))
+                    .foregroundColor(theme.primaryText)
+                    .contentTransition(.numericText())
+                Text(String(format: "%+.\(decimals)f (%+.2f%%)", changeAbs, changePct))
+                    .foregroundColor(changeColor)
+                if case .reconnecting(let reason) = market.status {
+                    Text(reason).foregroundColor(theme.down).lineLimit(1)
                 }
             }
-            if let change = market.ticker?.changePercent {
-                Text(String(format: "%+.2f%%", change))
-                    .font(.system(size: 12, weight: .semibold))
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background((change >= 0 ? BinanceTheme.up : BinanceTheme.down).opacity(0.15), in: .rect(cornerRadius: 4))
-                    .foregroundColor(change >= 0 ? BinanceTheme.up : BinanceTheme.down)
-            }
-            Spacer()
-            statusBadge
+            .font(.system(size: 14).monospacedDigit())
+            legend
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
-        .padding(.bottom, 4)
+        .padding(.bottom, 2)
     }
 
-    private var statusBadge: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(market.status == .live ? BinanceTheme.up : (market.status == .loading ? BinanceTheme.yellow : BinanceTheme.down))
-                .frame(width: 7, height: 7)
-            Text(market.status == .live ? "Live" : (market.status == .loading ? "Đang tải" : "Offline"))
-                .font(.system(size: 11))
-                .foregroundColor(BinanceTheme.text)
+    private var statusDot: some View {
+        Circle()
+            .fill(market.status == .live ? theme.up : (market.status == .loading ? BinanceTheme.yellow : theme.down))
+            .frame(width: 7, height: 7)
+    }
+
+    private var activeLayerNames: [String] {
+        var names: [String] = []
+        if showICTLevels { names.append("ICT Levels (Midnight, AM Open, PDH/PDL, Asia, London)") }
+        if showKillzones || showMacros { names.append("ICT Sessions" + (showMacros ? " + Macros" : "")) }
+        if showMA { names.append("MA 7 / 25 / 99") }
+        if showStrategyPlots, let strategy = store.strategies.first(where: { $0.id == market.strategyID }) {
+            names.append(strategy.name)
         }
+        return names
     }
 
-    private var priceHeader: some View {
-        let last = market.ticker?.lastPrice ?? market.candles.last?.close ?? 0
-        let change = market.ticker?.changePercent ?? 0
-        let decimals = CandleChart.decimals(for: last)
-        return HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(CandleChart.format(last, decimals))
-                    .font(.system(size: 30, weight: .semibold).monospacedDigit())
-                    .foregroundColor(change >= 0 ? BinanceTheme.up : BinanceTheme.down)
-                    .contentTransition(.numericText())
-                if case .reconnecting(let reason) = market.status {
-                    Text(reason)
-                        .font(.system(size: 10))
-                        .foregroundColor(BinanceTheme.down)
+    private var legend: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if legendExpanded {
+                ForEach(activeLayerNames, id: \.self) { name in
+                    Text(name)
+                        .font(.system(size: 12))
+                        .foregroundColor(theme.primaryText)
                         .lineLimit(1)
                 }
             }
-            Spacer()
-            VStack(alignment: .trailing, spacing: 3) {
-                stat("24h High", market.ticker.map { CandleChart.format($0.high, decimals) })
-                stat("24h Low", market.ticker.map { CandleChart.format($0.low, decimals) })
-                stat("24h Vol(USDT)", market.ticker.map { Self.compact($0.quoteVolume) })
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { legendExpanded.toggle() }
+            } label: {
+                Image(systemName: legendExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(theme.text)
+                    .frame(width: 30, height: 20)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.grid, lineWidth: 1))
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.bottom, 6)
     }
 
-    private func stat(_ title: String, _ value: String?) -> some View {
-        HStack(spacing: 6) {
-            Text(title).foregroundColor(BinanceTheme.text)
-            Text(value ?? "–").foregroundColor(BinanceTheme.primaryText)
-                .frame(minWidth: 70, alignment: .trailing)
+    // MARK: - Chart
+
+    private var chartPanel: some View {
+        let layers = layerCache.layers(
+            candles: market.candles, barInterval: market.interval.seconds,
+            options: ICTLayers.Options(levels: showICTLevels, killzones: showKillzones, macros: showMacros))
+        return ZStack(alignment: .trailing) {
+            CandleChart(candles: market.candles,
+                        overlays: overlays + layers.0,
+                        markers: markers,
+                        showVolume: showVolume,
+                        countdownInterval: market.interval.seconds,
+                        theme: theme,
+                        sessionBoxes: layers.1,
+                        showHighLowLabels: showHighLow,
+                        drawings: drawings,
+                        drawingTool: activeTool,
+                        selectedDrawingID: selectedDrawingID,
+                        onDrawingCreated: { drawing in drawingCreated(drawing) },
+                        onDrawingChanged: { drawing in store.updateDrawing(drawing, key: drawingKey) },
+                        onSelectDrawing: { id in selectedDrawingID = id },
+                        viewport: $viewport)
+            if showDrawingBar {
+                DrawingToolbar(activeTool: $activeTool, theme: theme) {
+                    showDrawingBar = false
+                    activeTool = nil
+                }
+                .padding(.trailing, 74)
+            }
         }
-        .font(.system(size: 11).monospacedDigit())
-    }
-
-    private var intervalBar: some View {
-        HStack(spacing: 14) {
-            ForEach(LiveMarket.intervals, id: \.self) { interval in
-                Button {
-                    viewport = ChartViewport()
-                    market.select(interval: interval)
-                } label: {
-                    VStack(spacing: 3) {
-                        Text(Self.label(interval))
-                            .font(.system(size: 13, weight: market.interval == interval ? .semibold : .regular))
-                            .foregroundColor(market.interval == interval ? BinanceTheme.primaryText : BinanceTheme.text)
-                        Rectangle()
-                            .fill(market.interval == interval ? BinanceTheme.yellow : .clear)
-                            .frame(width: 14, height: 2)
-                    }
+        .overlay(alignment: .top) {
+            VStack(spacing: 8) {
+                if let tool = activeTool {
+                    Text("\(tool.title): \(tool.hint)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(theme.accent, in: Capsule())
+                }
+                if let drawing = selectedDrawing {
+                    DrawingActionsBar(drawing: drawing, theme: theme,
+                                      onChange: { changed in store.updateDrawing(changed, key: drawingKey) },
+                                      onEditText: {
+                                          drawingText = drawing.text
+                                          editingTextDrawing = drawing
+                                      },
+                                      onDelete: {
+                                          store.removeDrawing(drawing.id, key: drawingKey)
+                                          selectedDrawingID = nil
+                                      })
                 }
             }
-            Spacer()
-            Menu {
-                Toggle("MA(7, 25, 99)", isOn: $showMA)
-                Toggle("Đường của chiến lược", isOn: $showStrategyPlots)
-            } label: {
-                Image(systemName: "slider.horizontal.3")
-                    .foregroundColor(BinanceTheme.text)
-            }
+            .padding(.top, 8)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .background(BinanceTheme.panel)
     }
 
-    // MARK: - Chart data
+    private var selectedDrawing: Drawing? {
+        guard let id = selectedDrawingID else { return nil }
+        return drawings.first { $0.id == id }
+    }
+
+    private func drawingCreated(_ drawing: Drawing) {
+        if drawing.tool == .text {
+            drawingText = ""
+            editingTextDrawing = drawing
+        } else {
+            store.addDrawing(drawing, key: drawingKey)
+            selectedDrawingID = drawing.id
+        }
+        activeTool = nil
+    }
 
     private var overlays: [ChartLine] {
         var lines: [ChartLine] = []
         if showMA {
-            let closes = market.candles.map(\.close)
+            let closes = market.candles.map { $0.close }
             for (index, length) in [7, 25, 99].enumerated() {
                 lines.append(ChartLine(title: "MA(\(length))", values: TA.sma(closes, length),
                                        color: BinanceTheme.maColors[index]))
@@ -206,45 +273,175 @@ struct LiveView: View {
                 Image(systemName: "bolt.fill").foregroundColor(BinanceTheme.yellow)
                 if let strategy {
                     Text(strategy.name)
-                        .foregroundColor(BinanceTheme.text)
+                        .foregroundColor(theme.text)
                         .lineLimit(1)
                     if let error = market.strategyError {
-                        Text(error).foregroundColor(BinanceTheme.down).lineLimit(1)
+                        Text(error).foregroundColor(theme.down).lineLimit(1)
                     } else if let latest {
-                        let decimals = CandleChart.decimals(for: latest.price)
                         Text(latest.kind.label)
                             .fontWeight(.bold)
                             .foregroundColor(LiveSignalRow.color(for: latest.kind))
-                        Text(CandleChart.format(latest.price, decimals))
-                            .foregroundColor(BinanceTheme.primaryText)
+                        Text(CandleChart.format(latest.price, CandleChart.decimals(for: latest.price)))
+                            .foregroundColor(theme.primaryText)
                         Text(latest.time.formatted(.dateTime.hour().minute()))
-                            .foregroundColor(BinanceTheme.text)
+                            .foregroundColor(theme.text)
                     } else {
-                        Text("Chưa có tín hiệu").foregroundColor(BinanceTheme.text)
+                        Text("Chưa có tín hiệu").foregroundColor(theme.text)
                     }
                 } else {
-                    Text("Chọn chiến lược để nhận tín hiệu").foregroundColor(BinanceTheme.text)
+                    Text("Chọn chiến lược để nhận tín hiệu").foregroundColor(theme.text)
                 }
                 Spacer(minLength: 4)
                 Image(systemName: market.notificationsEnabled ? "bell.fill" : "bell.slash")
-                    .foregroundColor(BinanceTheme.text)
+                    .foregroundColor(theme.text)
                 Image(systemName: "chevron.right")
-                    .foregroundColor(BinanceTheme.text)
+                    .foregroundColor(theme.text)
             }
             .font(.system(size: 12).monospacedDigit())
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(BinanceTheme.background)
+            .padding(.vertical, 8)
+            .background(theme.panel)
         }
         .buttonStyle(.plain)
     }
 
+    // MARK: - Bottom tool bar
+
+    private var bottomBar: some View {
+        HStack(spacing: 0) {
+            symbolMenu
+            intervalMenu
+            Spacer(minLength: 4)
+            toolbarButton("pencil.tip", active: showDrawingBar) {
+                showDrawingBar.toggle()
+                if !showDrawingBar { activeTool = nil }
+            }
+            indicatorMenu
+            moreMenu
+            toolbarButton("arrow.uturn.backward", active: false) {
+                store.undoDrawing(key: drawingKey)
+                selectedDrawingID = nil
+            }
+            toolbarButton("arrow.up.left.and.arrow.down.right", active: false) {
+                fullScreen = true
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(theme.background)
+        .overlay(alignment: .top) { Rectangle().fill(theme.grid).frame(height: 1) }
+    }
+
+    private var symbolMenu: some View {
+        Menu {
+            ForEach(LiveMarket.popularSymbols, id: \.self) { symbol in
+                Button(Self.displayName(symbol)) { open(symbol: symbol) }
+            }
+            Button("Nhập mã khác…") {
+                customSymbol = ""
+                askingSymbol = true
+            }
+        } label: {
+            Text(market.symbol)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(theme.primaryText)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                .frame(maxWidth: 110, alignment: .leading)
+        }
+    }
+
+    private var intervalMenu: some View {
+        Menu {
+            ForEach(LiveMarket.intervals, id: \.self) { interval in
+                Button {
+                    viewport = ChartViewport()
+                    market.select(interval: interval)
+                } label: {
+                    if interval == market.interval {
+                        Label(Self.label(interval), systemImage: "checkmark")
+                    } else {
+                        Text(Self.label(interval))
+                    }
+                }
+            }
+        } label: {
+            Text(Self.label(market.interval))
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(theme.primaryText)
+                .frame(width: 44)
+        }
+    }
+
+    private var indicatorMenu: some View {
+        Menu {
+            Section("ICT") {
+                Toggle("Mức giá (Midnight, AM Open, PDH/PDL…)", isOn: $showICTLevels)
+                Toggle("Killzone (Asia, London, NY AM)", isOn: $showKillzones)
+                Toggle("ICT Macros (khung ≤ 15m)", isOn: $showMacros)
+            }
+            Section("Khác") {
+                Toggle("MA 7 / 25 / 99", isOn: $showMA)
+                Toggle("Đường của chiến lược", isOn: $showStrategyPlots)
+                Toggle("Khối lượng", isOn: $showVolume)
+                Toggle("Nhãn Cao / Thấp", isOn: $showHighLow)
+            }
+        } label: {
+            toolbarIcon("function", active: false)
+        }
+    }
+
+    private var moreMenu: some View {
+        Menu {
+            Picker("Giao diện", selection: $themeName) {
+                Text("TradingView (sáng)").tag("tradingView")
+                Text("Binance (tối)").tag("binance")
+            }
+            Button {
+                viewport.manualPriceRange = nil
+            } label: {
+                Label("Tự động căn thang giá", systemImage: "arrow.up.and.down")
+            }
+            Button(role: .destructive) {
+                confirmClear = true
+            } label: {
+                Label("Xoá tất cả hình vẽ", systemImage: "trash")
+            }
+        } label: {
+            toolbarIcon("ellipsis", active: false)
+        }
+    }
+
+    private func toolbarIcon(_ systemName: String, active: Bool) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 18, weight: .regular))
+            .foregroundColor(active ? theme.accent : theme.primaryText)
+            .frame(width: 42, height: 36)
+    }
+
+    private func toolbarButton(_ systemName: String, active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) { toolbarIcon(systemName, active: active) }
+    }
+
     // MARK: - Helpers
+
+    private func saveText() {
+        guard var drawing = editingTextDrawing else { return }
+        drawing.text = drawingText
+        if store.drawings(for: drawingKey).contains(where: { $0.id == drawing.id }) {
+            store.updateDrawing(drawing, key: drawingKey)
+        } else {
+            store.addDrawing(drawing, key: drawingKey)
+        }
+        selectedDrawingID = drawing.id
+        editingTextDrawing = nil
+    }
 
     private func open(symbol: String) {
         let cleaned = symbol.uppercased().filter { $0.isLetter || $0.isNumber }
         guard !cleaned.isEmpty else { return }
         viewport = ChartViewport()
+        selectedDrawingID = nil
         market.select(symbol: cleaned)
     }
 

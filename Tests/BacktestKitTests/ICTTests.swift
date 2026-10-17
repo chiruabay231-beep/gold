@@ -44,10 +44,44 @@ final class ICTTests: XCTestCase {
         XCTAssertTrue(range.high[5].isNaN)          // session still running
         XCTAssertEqual(range.high[6], 15)           // completed at 00:00 NY
         XCTAssertEqual(range.low[9], 3)
-        let open = ICT.midnightOpen(open: candles.map(\.open), clock: clock)
+        let open = ICT.midnightOpen(open: candles.map { $0.open }, clock: clock)
         XCTAssertEqual(open[5], 100)                // 23:00 NY: still the first day's level
         XCTAssertEqual(open[6], 106)                // 00:00 NY bar opens the new day
         XCTAssertEqual(open[9], 106)
+    }
+
+    func testSessionLevelsAndWindows() {
+        // 1-minute bars from 08:45 NY (12:45 UTC, EDT) for 30 minutes.
+        let start = date("2024-07-01T12:45:00Z")
+        let candles: [Candle] = (0..<30).map { (i: Int) -> Candle in
+            let base = Double(100 + i)
+            return Candle(time: start.addingTimeInterval(Double(i) * 60), open: base,
+                          high: base + 1, low: base - 1, close: base)
+        }
+        let clock = ICT.NewYorkClock(time: candles.map(\.time))
+        // Macro 08:50–09:10 -> bars 5...24.
+        XCTAssertEqual(ICT.sessionWindows(clock: clock, start: 8 + 50.0 / 60, end: 9 + 10.0 / 60), [5...24])
+        // 09:00 open is bar 15's open.
+        let open9 = ICT.openAt(open: candles.map { $0.open }, clock: clock, hour: 9)
+        XCTAssertTrue(open9[14].isNaN)
+        XCTAssertEqual(open9[15], 115)
+        XCTAssertEqual(open9[29], 115)
+        // Session range completes when the window ends.
+        let range = ICT.sessionRange(high: candles.map { $0.high }, low: candles.map { $0.low }, clock: clock,
+                                     start: 8 + 50.0 / 60, end: 9 + 10.0 / 60)
+        XCTAssertTrue(range.high[24].isNaN)
+        XCTAssertEqual(range.high[25], 125)
+        XCTAssertEqual(range.low[25], 104)
+    }
+
+    func testPreviousNewYorkDay() {
+        // Bars at 23:00 and 01:00 NY on consecutive days (EDT).
+        let times = ["2024-07-02T03:00:00Z", "2024-07-02T05:00:00Z", "2024-07-02T06:00:00Z"].map(date)
+        let clock = ICT.NewYorkClock(time: times)
+        let r = ICT.previousDay(high: [10, 20, 30], low: [5, 15, 25], clock: clock)
+        XCTAssertTrue(r.high[0].isNaN)
+        XCTAssertEqual(r.high[1], 10)       // 01:00 NY next day sees the previous day's 10
+        XCTAssertEqual(r.low[2], 5)
     }
 
     func testStructureBreaksShiftsAndSweeps() {
@@ -118,7 +152,8 @@ final class ICTTests: XCTestCase {
         let library = FunctionLibrary.standard
         for script in ["structure(5, 5)", "mss_bull(3, 3)", "sweep_ssl()", "equilibrium()", "bull_fvg_top()",
                        "bear_fvg_ce(0.5)", "bull_ob_bottom(5, 5, 20)", "asia_high()", "ny_midnight_open()",
-                       "prev_week_low()", "kz_ny_am() or silver_bullet_pm()"] {
+                       "prev_week_low()", "kz_ny_am() or silver_bullet_pm()", "london_high()",
+                       "am_open()", "ny_pdh()", "ny_pdl()"] {
             let s = try evaluate(script, data, library: library)
             XCTAssertEqual(s.count, data.count, script)
         }
