@@ -52,7 +52,8 @@ struct DatasetDetailView: View {
         List {
             if let data {
                 Section {
-                    CandleChart(candles: data.candles, overlays: rendered.overlays, viewport: $viewport)
+                    ExpandableCandleChart(title: dataset?.name ?? "", candles: data.candles,
+                                          overlays: rendered.overlays, viewport: $viewport)
                         .frame(height: 360)
                         .listRowInsets(EdgeInsets())
                     ChartLegend(lines: rendered.overlays)
@@ -63,7 +64,7 @@ struct DatasetDetailView: View {
                                 .frame(height: 110)
                         }
                     }
-                    Text("Kéo ngang để xem lịch sử · chụm 2 ngón để phóng to · giữ để xem OHLC")
+                    Text("Kéo ngang: xem lịch sử · chụm: phóng to · kéo trục giá: giãn dọc (chạm đúp để tự động) · giữ hoặc chạm: crosshair · ⤢: toàn màn hình")
                         .font(.caption2).foregroundStyle(.secondary)
                     ForEach(rendered.errors, id: \.self) { ErrorText(message: $0) }
                 }

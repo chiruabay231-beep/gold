@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import BacktestKit
 
 /// Colours of Binance's dark chart theme.
@@ -24,6 +25,8 @@ struct ChartViewport: Equatable {
     var rightOffset: Double = 0
     /// Empty space after the last candle, in bars.
     var rightPadding: Double = 3
+    /// Fixed price range set by dragging the price axis; nil = auto-fit.
+    var manualPriceRange: ClosedRange<Double>?
 
     func bounds(total: Int) -> (start: Double, end: Double) {
         let end = Double(total) - rightOffset + rightPadding
@@ -57,11 +60,18 @@ struct CandleChart: View {
     var overlays: [ChartLine] = []
     var markers: [ChartMarker] = []
     var showVolume = true
+    /// Bar length in seconds; shows a countdown to the close of the last bar.
+    var countdownInterval: TimeInterval?
     @Binding var viewport: ChartViewport
 
-    @State private var panStartOffset: Double?
+    private enum DragMode { case pan, axis, crosshair }
+
+    @State private var dragMode: DragMode?
+    @State private var panStartOffset: Double = 0
+    @State private var dragStartRange: ClosedRange<Double>?
     @State private var zoomStartCount: Double?
     @State private var crosshair: CGPoint?
+    @State private var pressEndedAt = Date.distantPast
 
     private let axisWidth: CGFloat = 62
     private let timeAxisHeight: CGFloat = 18
@@ -72,8 +82,10 @@ struct CandleChart: View {
             let layout = Layout(size: geometry.size, axisWidth: axisWidth, timeAxisHeight: timeAxisHeight,
                                 headerHeight: headerHeight, showVolume: showVolume)
             ZStack(alignment: .topLeading) {
-                Canvas { context, _ in
-                    draw(in: &context, layout: layout)
+                TimelineView(.periodic(from: .now, by: countdownInterval == nil ? 3600 : 1)) { timeline in
+                    Canvas { context, _ in
+                        draw(in: &context, layout: layout, now: timeline.date)
+                    }
                 }
                 header(layout: layout)
                     .padding(.horizontal, 6)
@@ -81,9 +93,18 @@ struct CandleChart: View {
             }
             .background(BinanceTheme.background)
             .contentShape(Rectangle())
-            .simultaneousGesture(panGesture(layout: layout))
+            .simultaneousGesture(dragGesture(layout: layout))
             .simultaneousGesture(zoomGesture)
             .simultaneousGesture(crosshairGesture)
+            .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { value in
+                // Double tap on the price axis: back to auto-fit.
+                if value.location.x > layout.axisX { viewport.manualPriceRange = nil }
+            })
+            .simultaneousGesture(SpatialTapGesture().onEnded { value in
+                // The release of a long press also ends as a tap; keep that crosshair.
+                guard value.location.x < layout.axisX, Date().timeIntervalSince(pressEndedAt) > 0.3 else { return }
+                crosshair = crosshair == nil ? value.location : nil
+            })
         }
         .onChange(of: candles.count) { oldCount, newCount in
             // Keep the same bars on screen when scrolled back and a new bar arrives.
@@ -150,6 +171,9 @@ struct CandleChart: View {
                 }
             }
         }
+        if let manual = viewport.manualPriceRange {
+            return Scale(start: start, barWidth: barWidth, low: manual.lowerBound, high: manual.upperBound, plot: layout.plot)
+        }
         if !low.isFinite || !high.isFinite { low = 0; high = 1 }
         if low == high { low -= 1; high += 1 }
         let pad = (high - low) * 0.08
@@ -158,7 +182,7 @@ struct CandleChart: View {
 
     // MARK: - Drawing
 
-    private func draw(in context: inout GraphicsContext, layout: Layout) {
+    private func draw(in context: inout GraphicsContext, layout: Layout, now: Date) {
         guard !candles.isEmpty else { return }
         let s = scale(layout: layout)
         let range = viewport.range(total: candles.count)
@@ -283,11 +307,17 @@ struct CandleChart: View {
                 path.addLine(to: CGPoint(x: layout.axisX, y: y))
                 context.stroke(path, with: .color(color.opacity(0.8)), style: StrokeStyle(lineWidth: 0.8, dash: [2, 2]))
             }
-            let labelY = min(max(y, layout.plot.minY + 8), layout.plot.maxY - 8)
-            let box = CGRect(x: layout.axisX + 1, y: labelY - 8, width: axisWidth - 2, height: 16)
+            let countdown = countdownInterval.map { Self.countdown(until: last.time.addingTimeInterval($0), now: now) }
+            let boxHeight: CGFloat = countdown == nil ? 16 : 28
+            let labelY = min(max(y, layout.plot.minY + boxHeight / 2), layout.plot.maxY - boxHeight / 2)
+            let box = CGRect(x: layout.axisX + 1, y: labelY - 8, width: axisWidth - 2, height: boxHeight)
             context.fill(Path(roundedRect: box, cornerRadius: 2), with: .color(color))
             context.draw(Text(Self.format(last.close, decimals)).font(.system(size: 10, weight: .semibold)).foregroundColor(.white),
-                         at: CGPoint(x: box.midX, y: box.midY), anchor: .center)
+                         at: CGPoint(x: box.midX, y: box.minY + 8), anchor: .center)
+            if let countdown {
+                context.draw(Text(countdown).font(.system(size: 10).monospacedDigit()).foregroundColor(.white.opacity(0.9)),
+                             at: CGPoint(x: box.midX, y: box.minY + 20), anchor: .center)
+            }
         }
 
         // Crosshair.
@@ -368,18 +398,59 @@ struct CandleChart: View {
 
     // MARK: - Gestures
 
-    private func panGesture(layout: Layout) -> some Gesture {
-        DragGesture(minimumDistance: 6)
+    /// One drag gesture for everything: on the price axis it stretches the
+    /// price scale, with the crosshair shown it moves the crosshair, otherwise
+    /// it scrolls (and, once the price scale is manual, moves prices too).
+    private func dragGesture(layout: Layout) -> some Gesture {
+        DragGesture(minimumDistance: 4)
             .onChanged { value in
-                guard crosshair == nil else { return }
-                // Leave mostly vertical drags to the enclosing scroll view.
-                guard abs(value.translation.width) > abs(value.translation.height) || panStartOffset != nil else { return }
-                if panStartOffset == nil { panStartOffset = viewport.rightOffset }
-                let barWidth = layout.plot.width / CGFloat(max(viewport.visibleCount, 1))
-                let offset = (panStartOffset ?? 0) + Double(value.translation.width / barWidth)
-                viewport.rightOffset = min(max(offset, 0), Double(max(candles.count - 10, 0)))
+                if dragMode == nil {
+                    let range = currentPriceRange(layout: layout)
+                    if value.startLocation.x > layout.axisX {
+                        dragMode = .axis
+                        dragStartRange = range
+                    } else if crosshair != nil {
+                        dragMode = .crosshair
+                    } else if abs(value.translation.width) > abs(value.translation.height) || viewport.manualPriceRange != nil {
+                        dragMode = .pan
+                        panStartOffset = viewport.rightOffset
+                        dragStartRange = viewport.manualPriceRange
+                    } else {
+                        return   // mostly vertical: leave it to the enclosing scroll view
+                    }
+                }
+                switch dragMode {
+                case .axis:
+                    guard let range = dragStartRange else { return }
+                    // Drag down = wider range (smaller candles), drag up = taller candles.
+                    let factor = pow(2, Double(value.translation.height / 120))
+                    let mid = (range.lowerBound + range.upperBound) / 2
+                    let half = max((range.upperBound - range.lowerBound) / 2 * factor, 1e-9)
+                    viewport.manualPriceRange = (mid - half)...(mid + half)
+                case .crosshair:
+                    crosshair = value.location
+                case .pan:
+                    let barWidth = layout.plot.width / CGFloat(max(viewport.visibleCount, 1))
+                    let offset = panStartOffset + Double(value.translation.width / barWidth)
+                    viewport.rightOffset = min(max(offset, 0), Double(max(candles.count - 10, 0)))
+                    if let range = dragStartRange {
+                        let pricePerPoint = (range.upperBound - range.lowerBound) / Double(max(layout.plot.height, 1))
+                        let shift = Double(value.translation.height) * pricePerPoint
+                        viewport.manualPriceRange = (range.lowerBound + shift)...(range.upperBound + shift)
+                    }
+                case nil:
+                    break
+                }
             }
-            .onEnded { _ in panStartOffset = nil }
+            .onEnded { _ in
+                dragMode = nil
+                dragStartRange = nil
+            }
+    }
+
+    private func currentPriceRange(layout: Layout) -> ClosedRange<Double> {
+        let s = scale(layout: layout)
+        return s.low...s.high
     }
 
     private var zoomGesture: some Gesture {
@@ -400,10 +471,22 @@ struct CandleChart: View {
                     crosshair = drag.location
                 }
             }
-            .onEnded { _ in crosshair = nil }
+            .onEnded { _ in pressEndedAt = Date() }
     }
 
     // MARK: - Formatting
+
+    /// Time left until `close`, like Binance: "mm:ss", "hh:mm:ss" or "1d 04:12".
+    static func countdown(until close: Date, now: Date) -> String {
+        let seconds = max(0, Int(close.timeIntervalSince(now)))
+        let days = seconds / 86_400
+        let hours = (seconds % 86_400) / 3600
+        let minutes = (seconds % 3600) / 60
+        let secs = seconds % 60
+        if days > 0 { return String(format: "%dd %02d:%02d", days, hours, minutes) }
+        if hours > 0 { return String(format: "%02d:%02d:%02d", hours, minutes, secs) }
+        return String(format: "%02d:%02d", minutes, secs)
+    }
 
     static func decimals(for price: Double) -> Int {
         switch abs(price) {
@@ -449,5 +532,84 @@ extension ChartMarker {
                          linkTo: (trade.exitIndex, trade.exitPrice, trade.isWin)),
              ChartMarker(index: trade.exitIndex, price: trade.exitPrice, kind: .exit)]
         }
+    }
+}
+
+/// A candle chart with a button that opens it full screen (with rotation).
+struct ExpandableCandleChart: View {
+    var title: String
+    let candles: [Candle]
+    var overlays: [ChartLine] = []
+    var markers: [ChartMarker] = []
+    var showVolume = true
+    var countdownInterval: TimeInterval?
+    @Binding var viewport: ChartViewport
+
+    @State private var fullScreen = false
+
+    var body: some View {
+        chart
+            .overlay(alignment: .topTrailing) {
+                Button {
+                    fullScreen = true
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(BinanceTheme.text)
+                        .frame(width: 34, height: 30)
+                }
+            }
+            .fullScreenCover(isPresented: $fullScreen) {
+                FullScreenChart(title: title, onClose: { fullScreen = false }) { chart }
+            }
+    }
+
+    private var chart: CandleChart {
+        CandleChart(candles: candles, overlays: overlays, markers: markers, showVolume: showVolume,
+                    countdownInterval: countdownInterval, viewport: $viewport)
+    }
+}
+
+struct FullScreenChart<Content: View>: View {
+    let title: String
+    let onClose: () -> Void
+    @ViewBuilder let content: () -> Content
+
+    @State private var landscape = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 16) {
+                Text(title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(BinanceTheme.primaryText)
+                    .lineLimit(1)
+                Spacer()
+                Button {
+                    landscape.toggle()
+                    Self.rotate(landscape ? .landscapeRight : .portrait)
+                } label: {
+                    Image(systemName: "rotate.right")
+                }
+                Button {
+                    Self.rotate(.portrait)
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+            }
+            .font(.system(size: 16, weight: .semibold))
+            .foregroundColor(BinanceTheme.text)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            content()
+        }
+        .background(BinanceTheme.background.ignoresSafeArea())
+        .statusBarHidden(landscape)
+    }
+
+    static func rotate(_ orientation: UIInterfaceOrientationMask) {
+        guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
+        scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation)) { _ in }
     }
 }

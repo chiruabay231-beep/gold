@@ -18,7 +18,9 @@ struct LiveView: View {
             topBar
             priceHeader
             intervalBar
-            CandleChart(candles: market.candles, overlays: overlays, markers: markers, viewport: $viewport)
+            ExpandableCandleChart(title: "\(Self.displayName(market.symbol)) · \(Self.label(market.interval))",
+                                  candles: market.candles, overlays: overlays, markers: markers,
+                                  countdownInterval: market.interval.seconds, viewport: $viewport)
                 .frame(maxHeight: .infinity)
                 .layoutPriority(1)
             strategyBar
