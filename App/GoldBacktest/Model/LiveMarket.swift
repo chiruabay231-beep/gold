@@ -401,6 +401,8 @@ final class LiveMarket {
 
     /// Receives the closed bars each time a bar closes; drives trade management.
     @ObservationIgnored var onBarClose: (@MainActor (String, [Candle]) -> Void)?
+    /// Receives the new signals of the tracked strategy on each closed bar (the bot).
+    @ObservationIgnored var onSignals: (@MainActor ([LiveSignal], String) -> Void)?
 
     func rescan(alert: Bool) {
         if alert { onBarClose?(symbolKey, closedCandles) }
@@ -427,6 +429,7 @@ final class LiveMarket {
             strategyError = nil
             let fresh = scan.signals.filter { $0.barIndex == closed.count - 1 && !alertedSignalIDs.contains($0.id) }
             alertedSignalIDs.formUnion(scan.signals.map(\.id))
+            if alert, !fresh.isEmpty { onSignals?(fresh, symbolKey) }
             if alert, let signal = fresh.first(where: \.kind.isEntry) ?? fresh.first {
                 latestAlert = signal
                 announce(signal, strategy: strategy.name)

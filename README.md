@@ -149,6 +149,12 @@ swift test
 - Tin vàng 2 ngày gần nhất (Google News, tiếng Anh hoặc tiếng Việt), chạm để đọc.
 - Biểu đồ Live: EMA 200 (thay MA 7/25/99).
 
+**Bot (tab Backtest → nút Bot)**
+- Chọn một chiến lược (code script như khi Backtest) và bấm Chạy bot: mỗi khi một nến đóng trên biểu đồ Live,
+  tín hiệu long_entry / short_entry mới được vào lệnh demo với SL/TP từ long_stop / long_target…,
+  long_exit / short_exit đóng lệnh; tuỳ chọn chỉ Mua / chỉ Bán, đảo lệnh, khối lượng cố định hoặc theo % rủi ro.
+- Nhật ký bot ghi từng lệnh; chú thích biểu đồ Live hiện "🤖 Bot: tên chiến lược" khi đang chạy.
+
 **Dữ liệu**
 - Nhập CSV xuất từ MT5/Exness (kể cả file UTF-16, cột `<DATE>` `<TIME>` riêng),
   TradingView, Binance… Tự nhận dấu phân cách `,` `;` tab và nhiều định dạng thời gian.

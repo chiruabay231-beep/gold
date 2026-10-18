@@ -8,6 +8,7 @@ struct LiveView: View {
     @Environment(AppStore.self) private var store
     @Environment(LiveMarket.self) private var market
     @Environment(PaperTrader.self) private var trader
+    @Environment(BotController.self) private var bot
     @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("live.theme") private var themeName = "tradingView"
@@ -75,8 +76,8 @@ struct LiveView: View {
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = keepAwake
             market.start(store: store)
-            // Live strategy signals are not used on this screen any more.
-            market.track(strategy: nil)
+            // Strategy signals only run while the bot is on.
+            market.track(strategy: bot.isRunning ? bot.strategyID : nil)
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -249,6 +250,9 @@ struct LiveView: View {
         var names: [String] = []
         if showKillzonePivots { names.append(Self.killzonePivotsName) }
         if showEMA200 { names.append("EMA 200") }
+        if bot.isRunning, let strategy = store.strategies.first(where: { $0.id == bot.strategyID }) {
+            names.append("🤖 Bot: \(strategy.name)")
+        }
         return names
     }
 

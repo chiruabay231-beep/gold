@@ -161,6 +161,9 @@ struct BacktestView: View {
             ToolbarItem(placement: .primaryAction) {
                 NavigationLink { StrategyListView() } label: { Label("Chiến lược", systemImage: "list.bullet.rectangle") }
             }
+            ToolbarItem(placement: .topBarLeading) {
+                NavigationLink { BotView() } label: { Label("Bot", systemImage: "cpu") }
+            }
         }
         .navigationDestination(item: $run) { run in
             BacktestResultView(run: run)
