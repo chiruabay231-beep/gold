@@ -139,6 +139,11 @@ struct ChartPriceLine {
     var draggable = true
     /// Horizontal position of the drag handle, as a fraction of the plot width.
     var handleFraction: CGFloat = 0.5
+    /// Running profit shown in a coloured pill after the label (green up, red down).
+    var value = ""
+    var valueColor: Color?
+    /// Bar where the order was filled; drawn as a dot on the line.
+    var markerIndex: Int?
 }
 
 /// A vertical line at a bar (timestamps).
@@ -615,8 +620,23 @@ struct CandleChart: View {
             path.move(to: CGPoint(x: 0, y: y))
             path.addLine(to: CGPoint(x: layout.axisX, y: y))
             context.stroke(path, with: .color(line.color), style: StrokeStyle(lineWidth: 1.2, dash: line.dash))
-            context.draw(Text(line.label).font(.system(size: 11, weight: .medium)).foregroundColor(line.color),
-                         at: CGPoint(x: 6, y: y - 9), anchor: .leading)
+            let label = context.resolve(Text(line.label).font(.system(size: 11, weight: .semibold)).foregroundColor(line.color))
+            let labelSize = label.measure(in: CGSize(width: 400, height: 40))
+            context.draw(label, at: CGPoint(x: 6, y: y - 9), anchor: .leading)
+            if !line.value.isEmpty {
+                let valueColor = line.valueColor ?? line.color
+                let text = context.resolve(Text(line.value).font(.system(size: 11, weight: .bold).monospacedDigit()).foregroundColor(.white))
+                let size = text.measure(in: CGSize(width: 400, height: 40))
+                let pill = CGRect(x: 6 + labelSize.width + 6, y: y - 9 - size.height / 2 - 2, width: size.width + 10, height: size.height + 4)
+                context.fill(Path(roundedRect: pill, cornerRadius: 4), with: .color(valueColor))
+                context.draw(text, at: CGPoint(x: pill.midX, y: pill.midY), anchor: .center)
+            }
+            if let index = line.markerIndex, range.contains(index) {
+                // Entry point on the candle where the order filled.
+                let dot = CGRect(x: s.x(index) - 5, y: y - 5, width: 10, height: 10)
+                context.fill(Path(ellipseIn: dot), with: .color(line.color))
+                context.stroke(Path(ellipseIn: dot), with: .color(.white), lineWidth: 1.5)
+            }
             if line.draggable {
                 let center = CGPoint(x: layout.plot.width * line.handleFraction, y: y)
                 let handle = CGRect(x: center.x - 7, y: center.y - 7, width: 14, height: 14)

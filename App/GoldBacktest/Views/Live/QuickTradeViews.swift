@@ -1,68 +1,74 @@
 import SwiftUI
 import BacktestKit
 
-/// One-click SELL | lot | BUY panel for the top right of the live chart,
+/// One-click SELL | lot | BUY panel for the top right of the live screen,
 /// like MT5's one-click trading.
 struct QuickTradePanel: View {
     let price: Double
     let decimals: Int
     @Binding var lots: Double
-    let limitActive: Bool
     var onSell: () -> Void
     var onBuy: () -> Void
-    var onLimit: () -> Void
 
     @State private var showLots = false
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            HStack(spacing: 0) {
-                sideButton("SELL", color: Color(red: 0.949, green: 0.212, blue: 0.271), action: onSell)
-                Button { showLots = true } label: {
-                    Text(Self.lotText(lots))
-                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                        .foregroundColor(.primary)
-                        .frame(width: 48, height: 40)
-                        .background(Color(.systemBackground))
-                }
-                .popover(isPresented: $showLots) {
-                    LotPicker(lots: $lots).presentationCompactAdaptation(.popover)
-                }
-                sideButton("BUY", color: Color(red: 0.161, green: 0.384, blue: 1.0), action: onBuy)
+        HStack(spacing: 0) {
+            sideButton("SELL", color: Color(red: 0.949, green: 0.212, blue: 0.271), action: onSell)
+            Button { showLots = true } label: {
+                Text(Self.lotText(lots))
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .foregroundColor(.primary)
+                    .frame(width: 40, height: 34)
+                    .background(Color(.systemBackground))
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.gray.opacity(0.3), lineWidth: 1))
-            .shadow(color: .black.opacity(0.12), radius: 4, y: 1)
-
-            Button(action: onLimit) {
-                Label("Lệnh Limit", systemImage: limitActive ? "xmark" : "arrow.up.arrow.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 5)
-                    .background(limitActive ? Color.blue : Color(.systemBackground), in: Capsule())
-                    .foregroundColor(limitActive ? .white : .blue)
-                    .overlay(Capsule().stroke(Color.blue.opacity(0.5), lineWidth: 1))
+            .popover(isPresented: $showLots) {
+                LotPicker(lots: $lots).presentationCompactAdaptation(.popover)
             }
+            sideButton("BUY", color: Color(red: 0.161, green: 0.384, blue: 1.0), action: onBuy)
         }
+        .clipShape(RoundedRectangle(cornerRadius: 7))
+        .overlay(RoundedRectangle(cornerRadius: 7).stroke(Color.gray.opacity(0.3), lineWidth: 1))
+        .shadow(color: .black.opacity(0.1), radius: 3, y: 1)
+        .fixedSize()
     }
 
     private func sideButton(_ title: String, color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 0) {
-                Text(title).font(.system(size: 9, weight: .bold))
+                Text(title).font(.system(size: 8, weight: .bold))
                 Text(CandleChart.format(price, decimals))
-                    .font(.system(size: 12, weight: .bold).monospacedDigit())
+                    .font(.system(size: 11, weight: .bold).monospacedDigit())
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
             }
             .foregroundColor(.white)
-            .frame(width: 78, height: 40)
+            .frame(width: 62, height: 34)
             .background(color)
         }
         .disabled(price <= 0 || lots <= 0)
     }
 
     static func lotText(_ lots: Double) -> String { String(format: "%.2f", lots) }
+}
+
+/// Starts or cancels a limit order placed by dragging its line.
+struct LimitToggleButton: View {
+    let active: Bool
+    var action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Label("Lệnh Limit", systemImage: active ? "xmark" : "arrow.up.arrow.down")
+                .font(.system(size: 11, weight: .semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(active ? Color.blue : Color(.systemBackground), in: Capsule())
+                .foregroundColor(active ? .white : .blue)
+                .overlay(Capsule().stroke(Color.blue.opacity(0.5), lineWidth: 1))
+        }
+        .fixedSize()
+    }
 }
 
 /// Lot size picker like MT5: presets, quick increments and a stepper.

@@ -171,14 +171,21 @@ struct LiveView: View {
                     .frame(width: 22, height: 22)
                     .overlay(Text(String(market.symbol.prefix(1))).font(.system(size: 11, weight: .bold)).foregroundColor(.white))
                 Text(Self.displayName(market.symbol))
-                    .font(.system(size: 19, weight: .semibold))
+                    .font(.system(size: 18, weight: .semibold))
                     .foregroundColor(theme.primaryText)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 Text(market.source.title)
-                    .font(.system(size: 12))
+                    .font(.system(size: 11))
                     .foregroundColor(theme.text)
+                    .lineLimit(1)
+                    .layoutPriority(-1)
                 statusDot
-                Spacer()
+                Spacer(minLength: 6)
+                // One-click trading in the top right corner, like MT5.
+                QuickTradePanel(price: currentPrice, decimals: currentDecimals, lots: $defaultLots,
+                                onSell: { trader.sell(symbol: market.symbolKey, lots: defaultLots, price: currentPrice, stop: nil, target: nil) },
+                                onBuy: { trader.buy(symbol: market.symbolKey, lots: defaultLots, price: currentPrice, stop: nil, target: nil) })
             }
             HStack(spacing: 8) {
                 Text(CandleChart.format(last, decimals))
@@ -186,17 +193,14 @@ struct LiveView: View {
                     .contentTransition(.numericText())
                 Text(String(format: "%+.\(decimals)f (%+.2f%%)", changeAbs, changePct))
                     .foregroundColor(changeColor)
-                if let profit = demoProfit {
-                    Text(String(format: "Demo %+.2f$", profit))
-                        .foregroundColor(profit >= 0 ? theme.up : theme.down)
-                        .onTapGesture { showTradePanel = true }
-                }
                 if market.needsOandaToken {
                     Button("Nhập token OANDA") { showOandaSettings = true }
                         .foregroundColor(theme.accent)
                 } else if case .reconnecting(let reason) = market.status {
                     Text(reason).foregroundColor(theme.down).lineLimit(1)
                 }
+                Spacer(minLength: 4)
+                LimitToggleButton(active: limitDraft != nil) { toggleLimitDraft() }
             }
             .font(.system(size: 14).monospacedDigit())
             legend
@@ -326,18 +330,9 @@ struct LiveView: View {
                                    decimals: priceDecimals ?? CandleChart.decimals(for: market.candles.last?.close ?? 1),
                                    theme: theme)
                     .padding(.trailing, 72)
-                    .padding(.top, 104)
+                    .padding(.top, 40)
                     .allowsHitTesting(false)
             }
-        }
-        .overlay(alignment: .topTrailing) {
-            QuickTradePanel(price: currentPrice, decimals: currentDecimals, lots: $defaultLots,
-                            limitActive: limitDraft != nil,
-                            onSell: { trader.sell(symbol: market.symbolKey, lots: defaultLots, price: currentPrice, stop: nil, target: nil) },
-                            onBuy: { trader.buy(symbol: market.symbolKey, lots: defaultLots, price: currentPrice, stop: nil, target: nil) },
-                            onLimit: { toggleLimitDraft() })
-                .padding(.trailing, 72)
-                .padding(.top, 36)
         }
         .overlay(alignment: .bottom) {
             if let draft = limitDraft {
@@ -392,13 +387,6 @@ struct LiveView: View {
     private var currentPrice: Double { market.ticker?.lastPrice ?? market.candles.last?.close ?? 0 }
     private var currentDecimals: Int { priceDecimals ?? CandleChart.decimals(for: currentPrice) }
 
-    /// Open profit of demo positions on the symbol on screen.
-    private var demoProfit: Double? {
-        let positions = trader.account.positions.filter { $0.symbol == market.symbolKey }
-        guard !positions.isEmpty, let price = trader.price(market.symbolKey) else { return nil }
-        return positions.reduce(0) { $0 + $1.profit(at: price) }
-    }
-
     private var demoOrderTitle: String {
         guard let drawing = demoOrderDrawing, let levels = drawing.positionLevels else { return "" }
         let side = drawing.tool == .longPosition ? "MUA" : "BÁN"
@@ -451,6 +439,16 @@ struct LiveView: View {
         limitDraft = nil
     }
 
+    /// Green when moving from `entry` to `price` makes money, red when it loses.
+    private func moneyColor(side: PaperAccount.Side, entry: Double, price: Double) -> Color {
+        (price - entry) * side.sign >= 0 ? theme.up : theme.down
+    }
+
+    /// Bar on which a position was opened, for its entry marker.
+    private func openIndex(_ time: Date) -> Int? {
+        market.candles.lastIndex { $0.time <= time }
+    }
+
     /// Money made or lost if price moves from `entry` to `price`.
     private func money(side: PaperAccount.Side, lots: Double, entry: Double, price: Double) -> String {
         let value = (price - entry) * side.sign * lots * PaperAccount.contractSize(for: market.symbolKey)
@@ -476,19 +474,21 @@ struct LiveView: View {
                                             dash: [5, 3]))
             }
             lines.append(ChartPriceLine(id: id + "|entry", price: p.entryPrice, color: blue,
-                                        label: "\(p.side == .long ? "BUY" : "SELL") \(QuickTradePanel.lotText(p.lots))  \(String(format: "%+.2f USD", profit))",
-                                        handleFraction: 0.42))
+                                        label: "\(p.side == .long ? "BUY" : "SELL") \(QuickTradePanel.lotText(p.lots))",
+                                        handleFraction: 0.42,
+                                        value: String(format: "%+.2f USD", profit), valueColor: profit >= 0 ? green : red,
+                                        markerIndex: openIndex(p.openTime)))
             if let stop = p.stop {
                 let price = value(id + "|sl", stop)
-                lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red,
-                                            label: "SL \(money(side: p.side, lots: p.lots, entry: p.entryPrice, price: price))",
-                                            handleFraction: 0.42))
+                lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red, label: "SL", handleFraction: 0.42,
+                                            value: money(side: p.side, lots: p.lots, entry: p.entryPrice, price: price),
+                                            valueColor: moneyColor(side: p.side, entry: p.entryPrice, price: price)))
             }
             if let target = p.target {
                 let price = value(id + "|tp", target)
-                lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green,
-                                            label: "TP \(money(side: p.side, lots: p.lots, entry: p.entryPrice, price: price))",
-                                            handleFraction: 0.42))
+                lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green, label: "TP", handleFraction: 0.42,
+                                            value: money(side: p.side, lots: p.lots, entry: p.entryPrice, price: price),
+                                            valueColor: moneyColor(side: p.side, entry: p.entryPrice, price: price)))
             }
         }
 
@@ -502,14 +502,16 @@ struct LiveView: View {
             if let stop = o.stop {
                 let price = value(id + "|sl", stop + (entry - o.entry))
                 lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red,
-                                            label: "SL \(money(side: o.side, lots: o.lots, entry: entry, price: price))",
-                                            dash: [5, 3], handleFraction: 0.55))
+                                            label: "SL", dash: [5, 3], handleFraction: 0.55,
+                                            value: money(side: o.side, lots: o.lots, entry: entry, price: price),
+                                            valueColor: moneyColor(side: o.side, entry: entry, price: price)))
             }
             if let target = o.target {
                 let price = value(id + "|tp", target + (entry - o.entry))
                 lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green,
-                                            label: "TP \(money(side: o.side, lots: o.lots, entry: entry, price: price))",
-                                            dash: [5, 3], handleFraction: 0.55))
+                                            label: "TP", dash: [5, 3], handleFraction: 0.55,
+                                            value: money(side: o.side, lots: o.lots, entry: entry, price: price),
+                                            valueColor: moneyColor(side: o.side, entry: entry, price: price)))
             }
         }
 
@@ -522,14 +524,16 @@ struct LiveView: View {
             if let stop = draft.stop(price: currentPrice) {
                 let price = value("draft|sl", stop)
                 lines.append(ChartPriceLine(id: "draft|sl", price: price, color: red,
-                                            label: "SL \(money(side: side, lots: defaultLots, entry: draft.entry, price: price))",
-                                            dash: [5, 3], handleFraction: 0.68))
+                                            label: "SL", dash: [5, 3], handleFraction: 0.68,
+                                            value: money(side: side, lots: defaultLots, entry: draft.entry, price: price),
+                                            valueColor: moneyColor(side: side, entry: draft.entry, price: price)))
             }
             if let target = draft.target(price: currentPrice) {
                 let price = value("draft|tp", target)
                 lines.append(ChartPriceLine(id: "draft|tp", price: price, color: green,
-                                            label: "TP \(money(side: side, lots: defaultLots, entry: draft.entry, price: price))",
-                                            dash: [5, 3], handleFraction: 0.68))
+                                            label: "TP", dash: [5, 3], handleFraction: 0.68,
+                                            value: money(side: side, lots: defaultLots, entry: draft.entry, price: price),
+                                            valueColor: moneyColor(side: side, entry: draft.entry, price: price)))
             }
         }
         return lines
