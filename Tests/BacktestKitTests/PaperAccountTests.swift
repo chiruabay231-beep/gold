@@ -53,4 +53,16 @@ final class PaperAccountTests: XCTestCase {
         XCTAssertEqual(PaperAccount.contractSize(for: "EUR_USD"), 100_000)
         XCTAssertEqual(PaperAccount.contractSize(for: "BTCUSDT"), 1)
     }
+
+    func testModifyPendingFlipsTrigger() {
+        var account = PaperAccount()
+        let order = account.placePending(symbol: "XAUUSDT", side: .short, lots: 0.1, entry: 4010, stop: 4020, target: 3990,
+                                         currentPrice: 4000, time: t)
+        XCTAssertTrue(order.triggersAbove)   // sell limit above the market
+        account.modifyPending(orderID: order.id, entry: 3995, stop: 4005, target: 3980, currentPrice: 4000)
+        XCTAssertEqual(account.pending.first?.triggersAbove, false)   // now a sell stop
+        XCTAssertEqual(account.pending.first?.stop, 4005)
+        XCTAssertTrue(account.process(symbol: "XAUUSDT", price: 3996, time: t).isEmpty)
+        XCTAssertEqual(account.process(symbol: "XAUUSDT", price: 3994, time: t).count, 1)
+    }
 }

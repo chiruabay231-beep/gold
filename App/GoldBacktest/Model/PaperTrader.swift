@@ -96,6 +96,11 @@ final class PaperTrader {
         save()
     }
 
+    func modifyPending(_ order: PaperAccount.PendingOrder, entry: Double, stop: Double?, target: Double?, currentPrice: Double) {
+        account.modifyPending(orderID: order.id, entry: entry, stop: stop, target: target, currentPrice: currentPrice)
+        save()
+    }
+
     func reset(balance: Double) {
         account = PaperAccount(startingBalance: balance)
         lastEvent = nil

@@ -130,6 +130,16 @@ public struct PaperAccount: Codable, Hashable, Sendable {
         positions[index].target = target
     }
 
+    /// Moves a pending order; whether it waits for price to rise or fall is
+    /// decided again from `currentPrice`.
+    public mutating func modifyPending(orderID: UUID, entry: Double, stop: Double?, target: Double?, currentPrice: Double) {
+        guard let index = pending.firstIndex(where: { $0.id == orderID }) else { return }
+        pending[index].entry = entry
+        pending[index].stop = stop
+        pending[index].target = target
+        pending[index].triggersAbove = entry > currentPrice
+    }
+
     /// Applies a new price of `symbol`: fills pending orders, then closes
     /// positions whose stop or target was reached (at the stop/target price).
     public mutating func process(symbol: String, price: Double, time: Date) -> [Event] {

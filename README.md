@@ -121,7 +121,11 @@ swift test
   lệnh đang mở, lệnh chờ, lịch sử. Lệnh khớp theo giá realtime đang xem (không qua sàn).
 - Vẽ Vị thế Long/Short → chọn → ✈︎ "Vào lệnh demo": đặt lệnh chờ tại giá vào (hoặc vào ngay) với SL/TP
   của hình vẽ; số lot tính từ vốn và % rủi ro trong Cài đặt biểu đồ.
-- Đường giá vào / SL / TP của lệnh demo hiện trên biểu đồ.
+- Góc trên phải biểu đồ: nút SELL | lot | BUY (một chạm, như MT5), bảng chọn lot, nút "Lệnh Limit".
+- Lệnh Limit: kéo đường lệnh lên trên giá → Sell Limit, xuống dưới giá → Buy Limit; bật SL/TP rồi kéo
+  từng đường; bấm nút "Buy/Sell Limit" ở dưới để đặt.
+- Kéo tay trên biểu đồ: SL/TP của lệnh đang mở, giá vào và SL/TP của lệnh chờ; kéo từ đường giá vào
+  của lệnh đang mở ra phía lỗ → đặt SL, phía lời → đặt TP. Nhãn hiện số tiền lãi/lỗ (USD).
 - Cảnh báo giọng nói (⋯ → Cảnh báo giọng nói): "Target fill" khi chạm TP, "Stop loss fill" khi chạm SL,
   "Order filled" khi lệnh chờ khớp, đọc tín hiệu MUA/BÁN của chiến lược; đổi câu, giọng Anh/Việt.
 - "Chạy nền" giữ app hoạt động khi khoá màn hình (phát âm thanh im lặng) để vẫn nghe cảnh báo; tốn pin.

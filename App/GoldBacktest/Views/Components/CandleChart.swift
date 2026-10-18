@@ -128,6 +128,19 @@ struct ChartSegment {
     var label = ""
 }
 
+/// A full-width price line that can be dragged up and down (order entry,
+/// stop loss, take profit), like MT5's trade levels.
+struct ChartPriceLine {
+    var id: String
+    var price: Double
+    var color: Color
+    var label: String
+    var dash: [CGFloat] = []
+    var draggable = true
+    /// Horizontal position of the drag handle, as a fraction of the plot width.
+    var handleFraction: CGFloat = 0.5
+}
+
 /// A vertical line at a bar (timestamps).
 struct ChartVerticalLine {
     var index: Int
@@ -162,6 +175,9 @@ struct CandleChart: View {
     var segments: [ChartSegment] = []
     var verticalLines: [ChartVerticalLine] = []
     var notes: [ChartNote] = []
+    var priceLines: [ChartPriceLine] = []
+    /// A price line was dragged to a price; `true` when the finger lifts.
+    var onPriceLineDrag: ((String, Double, Bool) -> Void)?
     /// Labels for the visible high and low on the price axis.
     var showHighLowLabels = false
     var drawings: [Drawing] = []
@@ -186,7 +202,7 @@ struct CandleChart: View {
     var positionSizing: PositionSizing?
     @Binding var viewport: ChartViewport
 
-    private enum DragMode { case pan, axis, crosshair, moveDrawing, moveHandle, create }
+    private enum DragMode { case pan, axis, crosshair, moveDrawing, moveHandle, create, priceLine }
 
     @State private var dragMode: DragMode?
     @State private var panStartOffset: Double = 0
@@ -203,6 +219,8 @@ struct CandleChart: View {
     @State private var guidePoint: CGPoint?
     /// Handle of the selected drawing being dragged (2 = position target).
     @State private var handleIndex: Int?
+    /// Price line being dragged and its latest price.
+    @State private var draggedLine: (id: String, price: Double)?
 
     private let axisWidth: CGFloat = 66
     private let timeAxisHeight: CGFloat = 18
@@ -589,6 +607,26 @@ struct CandleChart: View {
                                         textColor: theme.primaryText))
         }
 
+        // Trade levels: full-width lines with a handle, a label and a price on the axis.
+        for line in priceLines {
+            let y = s.y(line.price)
+            guard y >= layout.plot.minY - 1, y <= layout.plot.maxY + 1 else { continue }
+            var path = Path()
+            path.move(to: CGPoint(x: 0, y: y))
+            path.addLine(to: CGPoint(x: layout.axisX, y: y))
+            context.stroke(path, with: .color(line.color), style: StrokeStyle(lineWidth: 1.2, dash: line.dash))
+            context.draw(Text(line.label).font(.system(size: 11, weight: .medium)).foregroundColor(line.color),
+                         at: CGPoint(x: 6, y: y - 9), anchor: .leading)
+            if line.draggable {
+                let center = CGPoint(x: layout.plot.width * line.handleFraction, y: y)
+                let handle = CGRect(x: center.x - 7, y: center.y - 7, width: 14, height: 14)
+                context.fill(Path(ellipseIn: handle), with: .color(theme.background))
+                context.stroke(Path(ellipseIn: handle), with: .color(line.color), lineWidth: 2.5)
+            }
+            axisLabels.append(AxisLabel(price: line.price, text: Self.format(line.price, decimals), tag: "",
+                                        color: line.color, textColor: .white))
+        }
+
         // Axis labels, nudged apart so they don't overlap.
         let placed = Self.spread(axisLabels.map { (label: $0, y: s.y($0.price)) }, minGap: 17,
                                  bounds: (layout.plot.minY + 8)...(layout.plot.maxY - 8))
@@ -960,6 +998,14 @@ struct CandleChart: View {
         return nil
     }
 
+    /// The draggable price line nearest to `location`, within a finger's reach.
+    private func hitPriceLine(at location: CGPoint, layout: Layout) -> ChartPriceLine? {
+        let s = scale(layout: layout)
+        return priceLines
+            .filter { $0.draggable && abs(s.y($0.price) - location.y) < 16 }
+            .min { abs(s.y($0.price) - location.y) < abs(s.y($1.price) - location.y) }
+    }
+
     /// Index of the selected drawing's handle under `location`.
     private func hitHandle(at location: CGPoint, layout: Layout) -> (Drawing, Int)? {
         guard let id = selectedDrawingID, let d = drawings.first(where: { $0.id == id }) else { return nil }
@@ -1096,6 +1142,10 @@ struct CandleChart: View {
                     if value.startLocation.x > layout.axisX {
                         dragMode = .axis
                         dragStartRange = range
+                    } else if drawingTool == nil, let line = hitPriceLine(at: value.startLocation, layout: layout) {
+                        dragMode = .priceLine
+                        draggedLine = (line.id, line.price)
+                        crosshair = nil
                     } else if drawingTool != nil {
                         dragMode = .create
                         crosshair = nil
@@ -1135,6 +1185,11 @@ struct CandleChart: View {
                         ChartPoint(time: time(forIndex: index(for: p.time) + barShift), price: p.price + priceShift)
                     }
                     movingPreview = moved
+                case .priceLine:
+                    guard let line = draggedLine else { return }
+                    let price = scale(layout: layout).price(atY: value.location.y)
+                    draggedLine = (line.id, price)
+                    onPriceLineDrag?(line.id, price, false)
                 case .create:
                     guard let tool = drawingTool else { return }
                     let end = chartPoint(at: value.location, layout: layout)
@@ -1169,6 +1224,10 @@ struct CandleChart: View {
                 if dragMode == .moveDrawing || dragMode == .moveHandle, let moved = movingPreview {
                     onDrawingChanged?(moved)
                 }
+                if dragMode == .priceLine, let line = draggedLine {
+                    onPriceLineDrag?(line.id, line.price, true)
+                }
+                draggedLine = nil
                 if dragMode == .create, let created = creatingPreview {
                     pendingPoints = []
                     onDrawingCreated?(created)
@@ -1202,7 +1261,7 @@ struct CandleChart: View {
         LongPressGesture(minimumDuration: 0.3)
             .sequenced(before: DragGesture(minimumDistance: 0))
             .onChanged { value in
-                if drawingTool == nil, dragMode != .moveHandle, dragMode != .moveDrawing,
+                if drawingTool == nil, dragMode != .moveHandle, dragMode != .moveDrawing, dragMode != .priceLine,
                    case .second(true, let drag?) = value {
                     crosshair = drag.location
                 }

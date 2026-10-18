@@ -33,6 +33,10 @@ struct LiveView: View {
     @State private var showVoiceSettings = false
     /// Position drawing waiting for confirmation before it becomes a demo order.
     @State private var demoOrderDrawing: Drawing?
+    /// Limit order being placed by dragging its line on the chart.
+    @State private var limitDraft: LimitDraft?
+    /// Prices of trade lines while they are being dragged.
+    @State private var lineOverrides: [String: Double] = [:]
     @AppStorage("trade.lots") private var defaultLots = 0.01
     @AppStorage(VoiceSettings.backgroundKey) private var runInBackground = false
     @AppStorage(VoiceSettings.keepAwakeKey) private var keepAwake = false
@@ -280,9 +284,11 @@ struct LiveView: View {
                         countdownInterval: market.interval.seconds,
                         theme: theme,
                         sessionBoxes: layer.boxes,
-                        segments: layer.segments + tradeSegments,
+                        segments: layer.segments,
                         verticalLines: layer.verticalLines,
                         notes: layer.notes,
+                        priceLines: tradeLines,
+                        onPriceLineDrag: { id, price, ended in tradeLineDragged(id: id, price: price, ended: ended) },
                         showHighLowLabels: showHighLow,
                         drawings: hideDrawings ? [] : drawings,
                         drawingTool: activeTool,
@@ -320,8 +326,29 @@ struct LiveView: View {
                                    decimals: priceDecimals ?? CandleChart.decimals(for: market.candles.last?.close ?? 1),
                                    theme: theme)
                     .padding(.trailing, 72)
-                    .padding(.top, 40)
+                    .padding(.top, 104)
                     .allowsHitTesting(false)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            QuickTradePanel(price: currentPrice, decimals: currentDecimals, lots: $defaultLots,
+                            limitActive: limitDraft != nil,
+                            onSell: { trader.sell(symbol: market.symbolKey, lots: defaultLots, price: currentPrice, stop: nil, target: nil) },
+                            onBuy: { trader.buy(symbol: market.symbolKey, lots: defaultLots, price: currentPrice, stop: nil, target: nil) },
+                            onLimit: { toggleLimitDraft() })
+                .padding(.trailing, 72)
+                .padding(.top, 36)
+        }
+        .overlay(alignment: .bottom) {
+            if let draft = limitDraft {
+                let side = draft.side(price: currentPrice)
+                LimitOrderBar(title: "\(side == .long ? "Buy" : "Sell") Limit \(QuickTradePanel.lotText(defaultLots))",
+                              isBuy: side == .long, hasStop: draft.stopDistance != nil, hasTarget: draft.targetDistance != nil,
+                              onSend: { sendLimitDraft() },
+                              onToggleStop: { limitDraft?.stopDistance = draft.stopDistance == nil ? defaultDistance * 3 : nil },
+                              onToggleTarget: { limitDraft?.targetDistance = draft.targetDistance == nil ? defaultDistance * 6 : nil },
+                              onCancel: { limitDraft = nil })
+                    .padding(.bottom, 24)
             }
         }
         .overlay(alignment: .top) {
@@ -401,31 +428,171 @@ struct LiveView: View {
         demoOrderDrawing = nil
     }
 
-    /// Entry, stop and target lines of demo orders on this symbol.
-    private var tradeSegments: [ChartSegment] {
+    /// Typical bar range, used to place a new limit order and its SL/TP.
+    private var defaultDistance: Double {
+        let recent = market.candles.suffix(20)
+        let average = recent.isEmpty ? 0 : recent.reduce(0) { $0 + ($1.high - $1.low) } / Double(recent.count)
+        return average > 0 ? average : max(currentPrice * 0.001, 1e-6)
+    }
+
+    private func toggleLimitDraft() {
+        if limitDraft != nil {
+            limitDraft = nil
+        } else if currentPrice > 0 {
+            limitDraft = LimitDraft(entry: currentPrice - defaultDistance * 3, stopDistance: defaultDistance * 3,
+                                    targetDistance: defaultDistance * 6)
+        }
+    }
+
+    private func sendLimitDraft() {
+        guard let draft = limitDraft, currentPrice > 0 else { return }
+        trader.placePending(symbol: market.symbolKey, side: draft.side(price: currentPrice), lots: defaultLots, entry: draft.entry,
+                            stop: draft.stop(price: currentPrice), target: draft.target(price: currentPrice), currentPrice: currentPrice)
+        limitDraft = nil
+    }
+
+    /// Money made or lost if price moves from `entry` to `price`.
+    private func money(side: PaperAccount.Side, lots: Double, entry: Double, price: Double) -> String {
+        let value = (price - entry) * side.sign * lots * PaperAccount.contractSize(for: market.symbolKey)
+        return String(format: "%+.2f USD", value)
+    }
+
+    /// Draggable trade lines (MT5 style): positions with their SL/TP, pending
+    /// orders and the limit order being placed.
+    private var tradeLines: [ChartPriceLine] {
         let key = market.symbolKey
-        let candles = market.candles
-        guard !candles.isEmpty else { return [] }
-        func start(_ time: Date) -> Double { Double(candles.lastIndex { $0.time <= time } ?? 0) }
-        var result: [ChartSegment] = []
-        func addLevels(from: Double, stop: Double?, target: Double?) {
-            if let stop { result.append(ChartSegment(start: from, end: nil, price: stop, color: theme.down, dash: [5, 3], label: "SL")) }
-            if let target { result.append(ChartSegment(start: from, end: nil, price: target, color: theme.up, dash: [5, 3], label: "TP")) }
-        }
+        let red = theme.down, green = theme.up, blue = Color(red: 0.161, green: 0.384, blue: 1.0)
+        func value(_ id: String, _ price: Double) -> Double { lineOverrides[id] ?? price }
+        var lines: [ChartPriceLine] = []
+
         for p in trader.account.positions where p.symbol == key {
-            let from = start(p.openTime)
+            let id = "pos|\(p.id.uuidString)"
             let profit = trader.price(key).map { p.profit(at: $0) } ?? 0
-            let label = "\(p.side == .long ? "BUY" : "SELL") \(PaperTrader.lots(p.lots))  \(String(format: "%+.2f$", profit))"
-            result.append(ChartSegment(start: from, end: nil, price: p.entryPrice, color: theme.accent, width: 1.5, label: label))
-            addLevels(from: from, stop: p.stop, target: p.target)
+            if let dragged = lineOverrides[id + "|entry"] {
+                // Dragging away from the entry sets a new SL or TP.
+                let isProfit = (dragged - p.entryPrice) * p.side.sign > 0
+                lines.append(ChartPriceLine(id: id + "|entry", price: dragged, color: isProfit ? green : red,
+                                            label: "\(isProfit ? "TP" : "SL") \(money(side: p.side, lots: p.lots, entry: p.entryPrice, price: dragged))",
+                                            dash: [5, 3]))
+            }
+            lines.append(ChartPriceLine(id: id + "|entry", price: p.entryPrice, color: blue,
+                                        label: "\(p.side == .long ? "BUY" : "SELL") \(QuickTradePanel.lotText(p.lots))  \(String(format: "%+.2f USD", profit))",
+                                        handleFraction: 0.42))
+            if let stop = p.stop {
+                let price = value(id + "|sl", stop)
+                lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red,
+                                            label: "SL \(money(side: p.side, lots: p.lots, entry: p.entryPrice, price: price))",
+                                            handleFraction: 0.42))
+            }
+            if let target = p.target {
+                let price = value(id + "|tp", target)
+                lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green,
+                                            label: "TP \(money(side: p.side, lots: p.lots, entry: p.entryPrice, price: price))",
+                                            handleFraction: 0.42))
+            }
         }
+
         for o in trader.account.pending where o.symbol == key {
-            let from = start(o.createdAt)
-            let label = "\(o.side == .long ? "BUY" : "SELL") \(o.triggersAbove == (o.side == .long) ? "STOP" : "LIMIT") \(PaperTrader.lots(o.lots))"
-            result.append(ChartSegment(start: from, end: nil, price: o.entry, color: theme.accent, dash: [2, 3], label: label))
-            addLevels(from: from, stop: o.stop, target: o.target)
+            let id = "ord|\(o.id.uuidString)"
+            let entry = value(id + "|entry", o.entry)
+            let kind = (entry > currentPrice) == (o.side == .long) ? "STOP" : "LIMIT"
+            lines.append(ChartPriceLine(id: id + "|entry", price: entry, color: blue,
+                                        label: "\(o.side == .long ? "BUY" : "SELL") \(kind) \(QuickTradePanel.lotText(o.lots))",
+                                        handleFraction: 0.55))
+            if let stop = o.stop {
+                let price = value(id + "|sl", stop + (entry - o.entry))
+                lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red,
+                                            label: "SL \(money(side: o.side, lots: o.lots, entry: entry, price: price))",
+                                            dash: [5, 3], handleFraction: 0.55))
+            }
+            if let target = o.target {
+                let price = value(id + "|tp", target + (entry - o.entry))
+                lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green,
+                                            label: "TP \(money(side: o.side, lots: o.lots, entry: entry, price: price))",
+                                            dash: [5, 3], handleFraction: 0.55))
+            }
         }
-        return result
+
+        if var draft = limitDraft {
+            draft.entry = value("draft|entry", draft.entry)
+            let side = draft.side(price: currentPrice)
+            lines.append(ChartPriceLine(id: "draft|entry", price: draft.entry, color: side == .long ? blue : red,
+                                        label: "\(side == .long ? "BUY" : "SELL") LIMIT \(QuickTradePanel.lotText(defaultLots))",
+                                        handleFraction: 0.68))
+            if let stop = draft.stop(price: currentPrice) {
+                let price = value("draft|sl", stop)
+                lines.append(ChartPriceLine(id: "draft|sl", price: price, color: red,
+                                            label: "SL \(money(side: side, lots: defaultLots, entry: draft.entry, price: price))",
+                                            dash: [5, 3], handleFraction: 0.68))
+            }
+            if let target = draft.target(price: currentPrice) {
+                let price = value("draft|tp", target)
+                lines.append(ChartPriceLine(id: "draft|tp", price: price, color: green,
+                                            label: "TP \(money(side: side, lots: defaultLots, entry: draft.entry, price: price))",
+                                            dash: [5, 3], handleFraction: 0.68))
+            }
+        }
+        return lines
+    }
+
+    /// Applies a dragged trade line: moves SL/TP, pending entries or the limit draft.
+    private func tradeLineDragged(id: String, price: Double, ended: Bool) {
+        guard ended else {
+            lineOverrides[id] = price
+            return
+        }
+        lineOverrides[id] = nil
+        let parts = id.split(separator: "|").map(String.init)
+        guard parts.count >= 2 else { return }
+        let field = parts.last ?? ""
+        let rejected = { UINotificationFeedbackGenerator().notificationOccurred(.error) }
+
+        switch parts[0] {
+        case "draft":
+            guard var draft = limitDraft else { return }
+            switch field {
+            case "entry": draft.entry = price
+            case "sl": draft.stopDistance = abs(price - draft.entry)
+            case "tp": draft.targetDistance = abs(price - draft.entry)
+            default: break
+            }
+            limitDraft = draft
+        case "pos":
+            guard let p = trader.account.positions.first(where: { $0.id.uuidString == parts[1] }) else { return }
+            let now = trader.price(market.symbolKey) ?? currentPrice
+            // SL must stay on the losing side of the current price, TP on the winning side.
+            let lossSide = (price - now) * p.side.sign < 0
+            switch field {
+            case "sl":
+                if lossSide { trader.modify(p, stop: price, target: p.target) } else { rejected() }
+            case "tp":
+                if !lossSide { trader.modify(p, stop: p.stop, target: price) } else { rejected() }
+            case "entry":
+                if lossSide { trader.modify(p, stop: price, target: p.target) } else { trader.modify(p, stop: p.stop, target: price) }
+            default: break
+            }
+        case "ord":
+            guard let o = trader.account.pending.first(where: { $0.id.uuidString == parts[1] }) else { return }
+            var entry = o.entry, stop = o.stop, target = o.target
+            switch field {
+            case "entry":
+                // SL and TP move with the entry.
+                let shift = price - o.entry
+                entry = price
+                stop = stop.map { $0 + shift }
+                target = target.map { $0 + shift }
+            case "sl":
+                guard (price - o.entry) * o.side.sign < 0 else { return rejected() }
+                stop = price
+            case "tp":
+                guard (price - o.entry) * o.side.sign > 0 else { return rejected() }
+                target = price
+            default: break
+            }
+            trader.modifyPending(o, entry: entry, stop: stop, target: target, currentPrice: currentPrice)
+        default:
+            break
+        }
     }
 
     private var positionSizing: PositionSizing? {
