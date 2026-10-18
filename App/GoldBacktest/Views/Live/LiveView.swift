@@ -171,15 +171,8 @@ struct LiveView: View {
         let changeColor = changePct >= 0 ? theme.up : theme.down
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
-                Circle()
-                    .fill(LinearGradient(colors: [BinanceTheme.yellow, .orange], startPoint: .top, endPoint: .bottom))
-                    .frame(width: 22, height: 22)
-                    .overlay(Text(String(market.symbol.prefix(1))).font(.system(size: 11, weight: .bold)).foregroundColor(.white))
-                Text(Self.displayName(market.symbol))
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundColor(theme.primaryText)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
+                // Tap the symbol to switch market.
+                symbolMenu
                 Text(market.source.title)
                     .font(.system(size: 11))
                     .foregroundColor(theme.text)
@@ -780,7 +773,6 @@ struct LiveView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 0) {
-            symbolMenu
             Spacer(minLength: 4)
             toolbarButton("backward.end.alt", active: replay.isActive) { toggleReplay() }
             toolbarButton("pencil.tip", active: showDrawingBar) {
@@ -830,12 +822,20 @@ struct LiveView: View {
                 }
             }
         } label: {
-            Text(market.symbol.replacingOccurrences(of: "_", with: ""))
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundColor(theme.primaryText)
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                .frame(maxWidth: 110, alignment: .leading)
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(LinearGradient(colors: [BinanceTheme.yellow, .orange], startPoint: .top, endPoint: .bottom))
+                    .frame(width: 22, height: 22)
+                    .overlay(Text(String(market.symbol.prefix(1))).font(.system(size: 11, weight: .bold)).foregroundColor(.white))
+                Text(Self.displayName(market.symbol))
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundColor(theme.primaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(theme.text)
+            }
         }
     }
 
