@@ -421,6 +421,9 @@ class Mt5Broker:
             raise RuntimeError("Đây là tài khoản THẬT: sửa config.json → mt5.allow_real_account = true nếu chắc chắn")
         if not info.trade_allowed:
             raise RuntimeError("Tài khoản MT5 không cho phép giao dịch (đang dùng mật khẩu investor?)")
+        terminal = self.mt5.terminal_info()
+        if terminal is not None and not terminal.trade_allowed:
+            raise RuntimeError("Bật nút Algo Trading trong MT5 trên VPS")
 
     def mode(self):
         info = self.mt5.account_info()

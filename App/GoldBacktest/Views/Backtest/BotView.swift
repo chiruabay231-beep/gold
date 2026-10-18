@@ -32,6 +32,14 @@ struct BotView: View {
                 Text("Bot dùng đúng code chiến lược như khi Backtest: long_entry / short_entry để vào lệnh, long_exit / short_exit để thoát, long_stop / long_target / short_stop / short_target cho SL và TP.")
             }
 
+            Section {
+                NavigationLink { RemoteBotView() } label: {
+                    Label("Bot trên VPS (chạy 24/7)", systemImage: "server.rack")
+                }
+            } footer: {
+                Text("Bot trong app chỉ chạy khi app mở. Trên VPS, bot chạy cả khi tắt điện thoại và bật/tắt được từ đây.")
+            }
+
             Section("Chạy trên") {
                 LabeledContent("Mã", value: LiveView.displayName(market.symbol))
                 LabeledContent("Khung", value: LiveView.label(market.interval))

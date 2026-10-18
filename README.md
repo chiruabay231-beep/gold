@@ -154,6 +154,10 @@ swift test
   tín hiệu long_entry / short_entry mới được vào lệnh demo với SL/TP từ long_stop / long_target…,
   long_exit / short_exit đóng lệnh; tuỳ chọn chỉ Mua / chỉ Bán, đảo lệnh, khối lượng cố định hoặc theo % rủi ro.
 - Nhật ký bot ghi từng lệnh; chú thích biểu đồ Live hiện "🤖 Bot: tên chiến lược" khi đang chạy.
+- **Bot trên VPS (chạy 24/7)**: cùng code chiến lược chạy trên VPS Windows (`botkit.exe` + `bot-server/`),
+  bật/tắt, xem lệnh, đóng lệnh và nhật ký ngay trong app; báo lệnh qua Telegram.
+  Giai đoạn 1 giá Binance + tài khoản demo trên VPS, giai đoạn 2 giá và lệnh MT5 Exness.
+  Cài đặt một lệnh: xem [docs/VPS.md](docs/VPS.md).
 
 **Dữ liệu**
 - Nhập CSV xuất từ MT5/Exness (kể cả file UTF-16, cột `<DATE>` `<TIME>` riêng),
