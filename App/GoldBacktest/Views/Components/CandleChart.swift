@@ -143,6 +143,15 @@ struct CandleChart: View {
     var candleStyle: CandleStyle = .candles
     /// Snap new drawing points to the open, high, low or close of the bar.
     var magnet = false
+    /// Custom body/border/wick colours; nil = the theme's up/down colours.
+    var candleColors: CandleColors?
+    /// Fixed number of decimals for prices; nil = automatic.
+    var priceDecimals: Int?
+    var timeZone: TimeZone = .current
+    /// When true no drawing can be moved.
+    var drawingsLocked = false
+    /// Shows the lot size on long/short position drawings.
+    var positionSizing: PositionSizing?
     @Binding var viewport: ChartViewport
 
     private enum DragMode { case pan, axis, crosshair, moveDrawing, moveHandle, create }
@@ -350,7 +359,7 @@ struct CandleChart: View {
         let s = scale(layout: layout)
         let range = viewport.range(total: candles.count)
         let ticks = priceTicks(low: s.low, high: s.high, count: 6)
-        let decimals = Self.decimals(for: s.high)
+        let decimals = priceDecimals ?? Self.decimals(for: s.high)
 
         // Grid and price axis.
         for tick in ticks {
@@ -364,7 +373,8 @@ struct CandleChart: View {
                          at: CGPoint(x: layout.axisX + 5, y: y), anchor: .leading)
         }
         let timeStep = max(1, Int(Double(range.count) / 4))
-        let timeFormat = Self.timeFormat(for: candles)
+        var timeFormat = Self.timeFormat(for: candles)
+        timeFormat.timeZone = timeZone
         for i in range where (i - range.lowerBound) % timeStep == timeStep / 2 {
             let x = s.x(i)
             var line = Path()
@@ -566,7 +576,9 @@ struct CandleChart: View {
             context.fill(Path(roundedRect: priceBox, cornerRadius: 2), with: .color(theme.crosshairLabel))
             context.draw(Text(Self.format(s.price(atY: y), decimals)).font(.system(size: 10)).foregroundColor(.white),
                          at: CGPoint(x: priceBox.midX, y: priceBox.midY), anchor: .center)
-            let timeText = candles[index].time.formatted(.dateTime.year(.twoDigits).month(.twoDigits).day(.twoDigits).hour().minute())
+            var crosshairFormat = Date.FormatStyle.dateTime.year(.twoDigits).month(.twoDigits).day(.twoDigits).hour().minute()
+            crosshairFormat.timeZone = timeZone
+            let timeText = candles[index].time.formatted(crosshairFormat)
             let timeBox = CGRect(x: x - 52, y: layout.timeAxis.minY + 1, width: 104, height: 16)
             context.fill(Path(roundedRect: timeBox, cornerRadius: 2), with: .color(theme.crosshairLabel))
             context.draw(Text(timeText).font(.system(size: 10)).foregroundColor(.white),
@@ -597,7 +609,7 @@ struct CandleChart: View {
                              decimals: Int, selected: Bool, axisLabels: inout [AxisLabel]) {
         let color = d.color
         let width = CGFloat(d.lineWidth) + (selected ? 0.8 : 0)
-        let stroke = StrokeStyle(lineWidth: width, lineCap: .round, dash: d.dashed ? [6, 4] : [])
+        let stroke = StrokeStyle(lineWidth: width, lineCap: d.lineStyle == .dotted ? .round : .butt, dash: d.lineStyle.dash)
         let points = d.points.map { CGPoint(x: s.x(index(for: $0.time)), y: s.y($0.price)) }
         guard let p0 = points.first else { return }
         func label(_ text: String, at point: CGPoint, anchor: UnitPoint = .leading, color labelColor: Color? = nil) {
@@ -707,6 +719,10 @@ struct CandleChart: View {
             let targetText = "TP \(Self.format(levels.target, decimals)) (+\(Self.format(reward, decimals))) · RR \(String(format: "%.1f", d.riskReward))"
             let stopText = "SL \(Self.format(levels.stop, decimals)) (−\(Self.format(risk, decimals)))"
             label(targetText, at: CGPoint(x: left + 4, y: targetY + (targetY < entryY ? 8 : -8)), color: theme.up)
+            if let lots = positionSizing?.lots(entry: levels.entry, stop: levels.stop) {
+                label("Lot \(String(format: lots < 1 ? "%.2f" : "%.1f", lots))", at: CGPoint(x: left + 4, y: entryY - 8),
+                      color: theme.primaryText)
+            }
             label(stopText, at: CGPoint(x: left + 4, y: stopY + (stopY < entryY ? 8 : -8)), color: theme.down)
             label("Vào \(Self.format(levels.entry, decimals))", at: CGPoint(x: right - 4, y: entryY - 8), anchor: .trailing,
                   color: theme.primaryText)
@@ -749,10 +765,17 @@ struct CandleChart: View {
             context.stroke(path, with: .color(theme.accent), style: StrokeStyle(lineWidth: 1.6, lineJoin: .round))
             return
         }
+        let colors = candleColors ?? CandleColors.standard(for: theme)
+        let upBody = colors.upBody.color, downBody = colors.downBody.color
+        let upBorder = colors.upBorder.color, downBorder = colors.downBorder.color
+        let upWick = colors.upWick.color, downWick = colors.downWick.color
         for i in range {
             let c = candles[i]
-            let isUp = c.close >= c.open
-            let color = isUp ? theme.up : theme.down
+            let reference = colors.colorByPreviousClose && i > 0 ? candles[i - 1].close : c.open
+            let isUp = c.close >= reference
+            let color = isUp ? upBody : downBody
+            let wickColor = isUp ? upWick : downWick
+            let borderColor = isUp ? upBorder : downBorder
             let x = snap(s.x(i))
             let highY = s.y(c.high), lowY = s.y(c.low)
             let top = s.y(max(c.open, c.close)), bottom = s.y(min(c.open, c.close))
@@ -769,27 +792,33 @@ struct CandleChart: View {
                 continue
             }
             // Upper and lower wick as separate segments so hollow bodies stay empty.
-            var wick = Path()
-            wick.move(to: CGPoint(x: x, y: highY))
-            wick.addLine(to: CGPoint(x: x, y: top))
-            wick.move(to: CGPoint(x: x, y: bottom))
-            wick.addLine(to: CGPoint(x: x, y: lowY))
-            context.stroke(wick, with: .color(color), lineWidth: wickWidth)
+            if colors.showWick {
+                var wick = Path()
+                wick.move(to: CGPoint(x: x, y: highY))
+                wick.addLine(to: CGPoint(x: x, y: top))
+                wick.move(to: CGPoint(x: x, y: bottom))
+                wick.addLine(to: CGPoint(x: x, y: lowY))
+                context.stroke(wick, with: .color(wickColor), lineWidth: wickWidth)
+            }
             // Very narrow bars are just the high–low line, like TradingView when zoomed out.
             guard s.barWidth >= 2.5 else {
                 var line = Path()
                 line.move(to: CGPoint(x: x, y: top))
                 line.addLine(to: CGPoint(x: x, y: max(bottom, top + pixel)))
-                context.stroke(line, with: .color(color), lineWidth: wickWidth)
+                context.stroke(line, with: .color(colors.showBody ? color : borderColor), lineWidth: wickWidth)
                 continue
             }
             let body = CGRect(x: x - bodyWidth / 2, y: snap(top), width: bodyWidth,
                               height: max(pixel * 2, snap(bottom) - snap(top)))
-            if candleStyle == .hollow && isUp {
+            let hollow = candleStyle == .hollow && isUp
+            if hollow {
                 context.fill(Path(body), with: .color(theme.background))
-                context.stroke(Path(body.insetBy(dx: pixel / 2, dy: pixel / 2)), with: .color(color), lineWidth: 1)
-            } else {
+            } else if colors.showBody {
                 context.fill(Path(body), with: .color(color))
+            }
+            if colors.showBorder || hollow {
+                context.stroke(Path(body.insetBy(dx: 0.5, dy: 0.5)),
+                               with: .color(colors.showBorder ? borderColor : color), lineWidth: 1)
             }
         }
     }
@@ -929,7 +958,7 @@ struct CandleChart: View {
     private func header(layout: Layout) -> some View {
         if let index = crosshairIndex(layout: layout) ?? (candles.isEmpty ? nil : candles.count - 1) {
             let c = candles[index]
-            let decimals = Self.decimals(for: c.close)
+            let decimals = priceDecimals ?? Self.decimals(for: c.close)
             let change = c.open == 0 ? 0 : (c.close - c.open) / c.open * 100
             let color = c.close >= c.open ? theme.up : theme.down
             VStack(alignment: .leading, spacing: 2) {
@@ -1002,11 +1031,12 @@ struct CandleChart: View {
                     } else if drawingTool != nil {
                         dragMode = .create
                         crosshair = nil
-                    } else if let hit = hitHandle(at: value.startLocation, layout: layout) {
+                    } else if !drawingsLocked, let hit = hitHandle(at: value.startLocation, layout: layout), !hit.0.locked {
                         dragMode = .moveHandle
                         movingOriginal = hit.0
                         handleIndex = hit.1
-                    } else if let id = selectedDrawingID, let hit = hitDrawing(at: value.startLocation, layout: layout), hit.id == id {
+                    } else if !drawingsLocked, let id = selectedDrawingID, let hit = hitDrawing(at: value.startLocation, layout: layout),
+                              hit.id == id, !hit.locked {
                         dragMode = .moveDrawing
                         movingOriginal = hit
                     } else if crosshair != nil {

@@ -1,56 +1,112 @@
 import SwiftUI
 
-/// Floating vertical tool bar, like TradingView's drawing panel.
+/// Drawing panel on the left of the chart, grouped like TradingView's:
+/// each category opens a list of its tools, then magnet, stay in drawing
+/// mode, lock all, hide all and remove all.
 struct DrawingToolbar: View {
     @Binding var activeTool: DrawingTool?
     /// Snap points to the bar's open/high/low/close.
     @Binding var magnet: Bool
     /// Stay on the tool after placing a drawing.
     @Binding var keepTool: Bool
+    @Binding var lockAll: Bool
     @Binding var hideDrawings: Bool
     let theme: ChartTheme
+    var onRemoveAll: () -> Void
     var onClose: () -> Void
 
-    private static let groups: [[DrawingTool]] = [
-        [.trendLine, .trendRay, .horizontalLine, .horizontalRay, .verticalLine],
-        [.fibRetracement, .rectangle, .priceRange],
-        [.longPosition, .shortPosition, .text],
+    struct Group: Identifiable {
+        var id: String { title }
+        var title: String
+        var tools: [DrawingTool]
+    }
+
+    static let groups: [Group] = [
+        Group(title: "Đường", tools: [.trendLine, .trendRay, .horizontalLine, .horizontalRay, .verticalLine]),
+        Group(title: "Fibonacci", tools: [.fibRetracement]),
+        Group(title: "Hình", tools: [.rectangle]),
+        Group(title: "Dự báo", tools: [.longPosition, .shortPosition]),
+        Group(title: "Chú thích", tools: [.text]),
+        Group(title: "Đo", tools: [.priceRange]),
     ]
+
+    /// Tool last picked in each group, shown as the group's icon.
+    @State private var lastUsed: [String: DrawingTool] = [:]
 
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 2) {
-                ForEach(Self.groups.indices, id: \.self) { group in
-                    ForEach(Self.groups[group]) { tool in
-                        Button {
-                            activeTool = activeTool == tool ? nil : tool
-                        } label: {
-                            icon(tool.systemImage, active: activeTool == tool)
-                        }
-                        .accessibilityLabel(tool.title)
-                    }
-                    Divider().frame(width: 28).padding(.vertical, 3)
+                Button { activeTool = nil } label: { icon("cursorarrow", active: activeTool == nil) }
+                    .accessibilityLabel("Con trỏ")
+                separator
+                ForEach(Self.groups) { group in
+                    groupButton(group)
                 }
+                separator
                 Button { magnet.toggle() } label: { icon("scope", active: magnet) }
-                    .accessibilityLabel("Nam châm: bám giá mở/cao/thấp/đóng")
-                Button { keepTool.toggle() } label: { icon("repeat", active: keepTool) }
-                    .accessibilityLabel("Giữ công cụ sau khi vẽ")
+                    .accessibilityLabel("Nam châm")
+                Button { keepTool.toggle() } label: { icon("pencil.and.outline", active: keepTool) }
+                    .accessibilityLabel("Giữ chế độ vẽ")
+                Button { lockAll.toggle() } label: { icon(lockAll ? "lock.fill" : "lock.open", active: lockAll) }
+                    .accessibilityLabel("Khoá tất cả hình vẽ")
                 Button { hideDrawings.toggle() } label: { icon(hideDrawings ? "eye.slash" : "eye", active: hideDrawings) }
-                    .accessibilityLabel("Ẩn hình vẽ")
-                Divider().frame(width: 28).padding(.vertical, 3)
+                    .accessibilityLabel("Ẩn tất cả hình vẽ")
+                Button(action: onRemoveAll) { icon("trash", active: false) }
+                    .accessibilityLabel("Xoá tất cả hình vẽ")
+                separator
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 15, weight: .semibold))
-                        .frame(width: 40, height: 36)
+                        .frame(width: 40, height: 34)
                         .foregroundColor(theme.text)
                 }
             }
             .padding(.vertical, 6)
         }
         .frame(width: 52)
-        .frame(maxHeight: 520)
+        .frame(maxHeight: 560)
         .background(theme.background, in: .rect(cornerRadius: 12))
         .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+    }
+
+    @ViewBuilder
+    private func groupButton(_ group: Group) -> some View {
+        let current = group.tools.first { $0 == activeTool } ?? lastUsed[group.title] ?? group.tools[0]
+        let active = activeTool.map { group.tools.contains($0) } ?? false
+        if group.tools.count == 1 {
+            Button { toggle(current, in: group) } label: { icon(current.systemImage, active: active) }
+                .accessibilityLabel(current.title)
+        } else {
+            Menu {
+                Section(group.title) {
+                    ForEach(group.tools) { tool in
+                        Button { toggle(tool, in: group, forceOn: true) } label: {
+                            Label(tool.title, systemImage: activeTool == tool ? "checkmark" : tool.systemImage)
+                        }
+                    }
+                }
+            } label: {
+                icon(current.systemImage, active: active)
+                    .overlay(alignment: .bottomTrailing) {
+                        // Small corner mark: this button has more tools.
+                        Image(systemName: "arrowtriangle.down.fill")
+                            .font(.system(size: 5))
+                            .rotationEffect(.degrees(-45))
+                            .foregroundColor(active ? .white : theme.text)
+                            .padding(4)
+                    }
+            }
+            .accessibilityLabel(group.title)
+        }
+    }
+
+    private func toggle(_ tool: DrawingTool, in group: Group, forceOn: Bool = false) {
+        lastUsed[group.title] = tool
+        activeTool = (activeTool == tool && !forceOn) ? nil : tool
+    }
+
+    private var separator: some View {
+        Divider().frame(width: 28).padding(.vertical, 3)
     }
 
     private func icon(_ systemName: String, active: Bool) -> some View {
@@ -62,68 +118,262 @@ struct DrawingToolbar: View {
     }
 }
 
-/// Actions for the selected drawing: colour, line style, risk/reward, label, delete.
+/// Floating style bar for the selected drawing, like TradingView's:
+/// colour, line width, line style, risk/reward, text, lock, clone,
+/// settings and delete.
 struct DrawingActionsBar: View {
     let drawing: Drawing
     let theme: ChartTheme
     var onChange: (Drawing) -> Void
     var onEditText: () -> Void
+    var onClone: () -> Void
+    var onSettings: () -> Void
     var onDelete: () -> Void
 
+    @State private var showColors = false
+
     var body: some View {
-        HStack(spacing: 16) {
-            Button {
-                var d = drawing
-                d.colorIndex = (d.colorIndex + 1) % DrawingPalette.colors.count
-                onChange(d)
-            } label: {
-                Circle().fill(drawing.color).frame(width: 20, height: 20)
-                    .overlay(Circle().stroke(theme.grid, lineWidth: 1))
-            }
-            if drawing.tool.isLine {
-                Button {
-                    var d = drawing
-                    d.lineWidth = d.lineWidth >= 3 ? 1 : d.lineWidth + 1
-                    onChange(d)
-                } label: {
-                    Text("\(Int(drawing.lineWidth.rounded(.down)))px")
-                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 4) {
+                Button { showColors = true } label: {
+                    item {
+                        Image(systemName: "paintbrush.pointed.fill")
+                            .foregroundColor(theme.primaryText)
+                            .overlay(alignment: .bottom) {
+                                Rectangle().fill(drawing.color).frame(height: 3).offset(y: 6)
+                            }
+                    }
                 }
-                Button {
-                    var d = drawing
-                    d.dashed.toggle()
-                    onChange(d)
-                } label: {
-                    Text(drawing.dashed ? "- - -" : "——")
-                        .font(.system(size: 13, weight: .bold))
+                .popover(isPresented: $showColors) {
+                    ColorPalettePicker(color: drawing.color) { color in
+                        var d = drawing
+                        d.customColor = RGBAColor(color)
+                        onChange(d)
+                    }
+                    .presentationCompactAdaptation(.popover)
                 }
-            }
-            if drawing.positionLevels != nil {
-                HStack(spacing: 6) {
+                if drawing.tool.isLine {
+                    Menu {
+                        ForEach([1.0, 2.0, 3.0, 4.0], id: \.self) { width in
+                            Button {
+                                var d = drawing
+                                d.lineWidth = width
+                                onChange(d)
+                            } label: {
+                                Label("\(Int(width))px", systemImage: Int(drawing.lineWidth) == Int(width) ? "checkmark" : "line.horizontal.3")
+                            }
+                        }
+                    } label: {
+                        item { Text("\(max(1, Int(drawing.lineWidth)))px").font(.system(size: 13, weight: .semibold).monospacedDigit()) }
+                    }
+                    Menu {
+                        ForEach(LineStyle.allCases, id: \.self) { style in
+                            Button {
+                                var d = drawing
+                                d.lineStyle = style
+                                onChange(d)
+                            } label: {
+                                Label(style.title, systemImage: drawing.lineStyle == style ? "checkmark" : "minus")
+                            }
+                        }
+                    } label: {
+                        item { LineStylePreview(style: drawing.lineStyle, color: theme.primaryText) }
+                    }
+                }
+                if drawing.positionLevels != nil {
                     Button {
                         var d = drawing
                         d.riskReward = max(0.5, d.riskReward - 0.5)
                         onChange(d)
-                    } label: { Image(systemName: "minus") }
+                    } label: { item { Image(systemName: "minus") } }
                     Text("RR \(String(format: "%.1f", drawing.riskReward))")
                         .font(.system(size: 13, weight: .semibold).monospacedDigit())
                     Button {
                         var d = drawing
-                        d.riskReward = min(20, d.riskReward + 0.5)
+                        d.riskReward = min(50, d.riskReward + 0.5)
                         onChange(d)
-                    } label: { Image(systemName: "plus") }
+                    } label: { item { Image(systemName: "plus") } }
+                }
+                if drawing.tool.isLine || drawing.tool == .text {
+                    Button(action: onEditText) { item { Image(systemName: "textformat") } }
+                }
+                Button {
+                    var d = drawing
+                    d.locked.toggle()
+                    onChange(d)
+                } label: { item { Image(systemName: drawing.locked ? "lock.fill" : "lock.open") } }
+                Button(action: onClone) { item { Image(systemName: "plus.square.on.square") } }
+                Button(action: onSettings) { item { Image(systemName: "gearshape") } }
+                Button(role: .destructive, action: onDelete) {
+                    item { Image(systemName: "trash").foregroundColor(theme.down) }
                 }
             }
-            if drawing.tool.isLine || drawing.tool == .text {
-                Button(action: onEditText) { Image(systemName: "character.cursor.ibeam") }
-            }
-            Button(role: .destructive, action: onDelete) { Image(systemName: "trash") }
+            .padding(.horizontal, 8)
         }
         .font(.system(size: 15, weight: .medium))
         .foregroundColor(theme.primaryText)
-        .padding(.horizontal, 16)
-        .padding(.vertical, 9)
-        .background(theme.background, in: Capsule())
-        .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
+        .frame(height: 44)
+        .background(theme.background, in: .rect(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.grid, lineWidth: 1))
+        .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+        .padding(.horizontal, 8)
+    }
+
+    private func item<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
+        content().frame(minWidth: 34, minHeight: 34)
+    }
+}
+
+/// A short line drawn in a line style, for the style menu.
+struct LineStylePreview: View {
+    let style: LineStyle
+    let color: Color
+
+    var body: some View {
+        Canvas { context, size in
+            var path = Path()
+            path.move(to: CGPoint(x: 2, y: size.height / 2))
+            path.addLine(to: CGPoint(x: size.width - 2, y: size.height / 2))
+            context.stroke(path, with: .color(color),
+                           style: StrokeStyle(lineWidth: 2, lineCap: style == .dotted ? .round : .butt, dash: style.dash))
+        }
+        .frame(width: 26, height: 14)
+    }
+}
+
+/// TradingView-like colour grid plus the system colour picker.
+struct ColorPalettePicker: View {
+    @State var color: Color
+    var onPick: (Color) -> Void
+
+    private static let grid: [Color] = DrawingPalette.colors + CandleColors.swatches
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(28), spacing: 8), count: 6), spacing: 8) {
+                ForEach(Self.grid.indices, id: \.self) { index in
+                    Button {
+                        color = Self.grid[index]
+                        onPick(Self.grid[index])
+                    } label: {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(Self.grid[index])
+                            .frame(width: 28, height: 28)
+                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.gray.opacity(0.4), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            ColorPicker("Màu khác…", selection: Binding(get: { color }, set: { color = $0; onPick($0) }),
+                        supportsOpacity: true)
+                .font(.footnote)
+        }
+        .padding(14)
+        .frame(width: 240)
+    }
+}
+
+/// Settings of one drawing (gear button): style, label and exact prices.
+struct DrawingSettingsView: View {
+    @State var drawing: Drawing
+    let decimals: Int
+    let sizing: PositionSizing?
+    var onSave: (Drawing) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Kiểu") {
+                    ColorPicker("Màu", selection: Binding(get: { drawing.color },
+                                                          set: { drawing.customColor = RGBAColor($0) }),
+                                supportsOpacity: true)
+                    if drawing.tool.isLine {
+                        Picker("Độ dày", selection: $drawing.lineWidth) {
+                            ForEach([1.0, 2.0, 3.0, 4.0], id: \.self) { Text("\(Int($0))px").tag($0) }
+                        }
+                        Picker("Nét", selection: $drawing.lineStyle) {
+                            ForEach(LineStyle.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }
+                    }
+                    if drawing.tool.isLine || drawing.tool == .text {
+                        TextField("Nhãn / ghi chú", text: $drawing.text)
+                    }
+                    Toggle("Khoá (không cho kéo)", isOn: $drawing.locked)
+                }
+
+                if drawing.positionLevels != nil {
+                    positionSection
+                } else {
+                    Section("Toạ độ") {
+                        ForEach(drawing.points.indices, id: \.self) { index in
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text("Điểm \(index + 1)")
+                                    Text(drawing.points[index].time.formatted(date: .abbreviated, time: .shortened))
+                                        .font(.caption).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                priceField($drawing.points[index].price)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle(drawing.tool.title)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Hủy bỏ") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Ok") {
+                        onSave(drawing)
+                        dismiss()
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var positionSection: some View {
+        let levels = drawing.positionLevels!
+        let isLong = drawing.tool == .longPosition
+        Section("Lệnh") {
+            HStack { Text("Giá vào"); Spacer(); priceField($drawing.points[0].price) }
+            HStack { Text("Cắt lỗ (SL)"); Spacer(); priceField($drawing.points[1].price) }
+            HStack {
+                Text("Chốt lời (TP)")
+                Spacer()
+                priceField(Binding(get: { levels.target }, set: { target in
+                    let risk = abs(levels.entry - levels.stop)
+                    let reward = isLong ? target - levels.entry : levels.entry - target
+                    if risk > 0, reward > 0 { drawing.riskReward = (reward / risk * 100).rounded() / 100 }
+                }))
+            }
+            Stepper("RR \(String(format: "%.2f", drawing.riskReward))", value: $drawing.riskReward, in: 0.25...50, step: 0.25)
+        }
+        Section("Khối lượng") {
+            let risk = abs(levels.entry - levels.stop)
+            LabeledContent("Khoảng SL", value: CandleChart.format(risk, decimals))
+            LabeledContent("Khoảng TP", value: CandleChart.format(abs(levels.target - levels.entry), decimals))
+            if let sizing, let lots = sizing.lots(entry: levels.entry, stop: levels.stop) {
+                LabeledContent("Số lot", value: String(format: "%.2f", lots))
+                LabeledContent("Rủi ro", value: String(format: "$%.2f", sizing.balance * sizing.riskPercent / 100))
+                LabeledContent("Lợi nhuận dự kiến",
+                               value: String(format: "$%.2f", sizing.balance * sizing.riskPercent / 100 * drawing.riskReward))
+            } else {
+                Text("Nhập vốn tài khoản trong ⋯ → Cài đặt biểu đồ để tính số lot.")
+                    .font(.footnote).foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func priceField(_ value: Binding<Double>) -> some View {
+        TextField("Giá", value: value, format: .number.precision(.fractionLength(decimals)))
+            .keyboardType(.decimalPad)
+            .multilineTextAlignment(.trailing)
+            .frame(maxWidth: 140)
     }
 }

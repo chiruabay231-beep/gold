@@ -74,6 +74,26 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
     }
 }
 
+enum LineStyle: String, Codable, CaseIterable {
+    case solid, dashed, dotted
+
+    var title: String {
+        switch self {
+        case .solid: return "Liền"
+        case .dashed: return "Gạch"
+        case .dotted: return "Chấm"
+        }
+    }
+
+    var dash: [CGFloat] {
+        switch self {
+        case .solid: return []
+        case .dashed: return [6, 4]
+        case .dotted: return [1.5, 3]
+        }
+    }
+}
+
 struct Drawing: Codable, Identifiable, Hashable {
     var id = UUID()
     var tool: DrawingTool
@@ -83,7 +103,11 @@ struct Drawing: Codable, Identifiable, Hashable {
     /// Target = entry ± riskReward × risk, for position tools.
     var riskReward = 2.0
     var lineWidth = 1.5
-    var dashed = false
+    var lineStyle = LineStyle.solid
+    /// Colour picked with the colour picker; overrides `colorIndex`.
+    var customColor: RGBAColor?
+    /// Locked drawings can be selected but not moved.
+    var locked = false
 
     init(tool: DrawingTool, points: [ChartPoint]) {
         self.tool = tool
@@ -103,10 +127,21 @@ struct Drawing: Codable, Identifiable, Hashable {
         colorIndex = try c.decodeIfPresent(Int.self, forKey: .colorIndex) ?? 0
         riskReward = try c.decodeIfPresent(Double.self, forKey: .riskReward) ?? 2
         lineWidth = try c.decodeIfPresent(Double.self, forKey: .lineWidth) ?? 1.5
-        dashed = try c.decodeIfPresent(Bool.self, forKey: .dashed) ?? false
+        lineStyle = try c.decodeIfPresent(LineStyle.self, forKey: .lineStyle) ?? .solid
+        customColor = try c.decodeIfPresent(RGBAColor.self, forKey: .customColor)
+        locked = try c.decodeIfPresent(Bool.self, forKey: .locked) ?? false
     }
 
-    var color: Color { DrawingPalette.colors[colorIndex % DrawingPalette.colors.count] }
+    var color: Color { customColor?.color ?? DrawingPalette.colors[colorIndex % DrawingPalette.colors.count] }
+
+    /// A copy a few bars later, for "Nhân bản".
+    func cloned(shift: TimeInterval) -> Drawing {
+        var copy = self
+        copy.id = UUID()
+        copy.locked = false
+        copy.points = points.map { ChartPoint(time: $0.time.addingTimeInterval(shift), price: $0.price) }
+        return copy
+    }
 
     /// Price levels of a position: entry, stop, target.
     var positionLevels: (entry: Double, stop: Double, target: Double)? {

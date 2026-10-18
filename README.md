@@ -98,6 +98,18 @@ swift test
 - Lớp ICT: Midnight Open, AM Open (09:30 NY), Prev Day High/Low, Asian/London High/Low với nhãn trên
   trục giá; hộp killzone Asia/London/NY AM; hộp ICT macro (08:50–09:10 NY…) kèm giờ địa phương.
 
+**Cài đặt biểu đồ (⋯ → Cài đặt biểu đồ)**, giống trang "Mã" của TradingView
+- Kiểu nến (nến, nến rỗng, thanh OHLC, đường); màu theo giá đóng cửa phiên trước.
+- Thân / Đường viền / Bóng nến: bật tắt và chọn màu tăng, màu giảm; có sẵn vài mẫu màu nhanh.
+- Độ chính xác giá, múi giờ trục thời gian (theo máy, UTC, Hà Nội, New York…).
+- Vốn, % rủi ro, hợp đồng/lot để công cụ Vị thế hiện số lot.
+
+**Thanh vẽ kiểu TradingView**
+- Bên trái: Con trỏ, Đường (xu hướng, tia, ngang, tia ngang, dọc), Fibonacci, Hình, Dự báo
+  (Long/Short), Chú thích, Đo; Nam châm, Giữ chế độ vẽ, Khoá tất cả, Ẩn tất cả, Xoá tất cả.
+- Khi chọn một hình: thanh kiểu nổi với màu (bảng màu + màu tuỳ ý), độ dày, kiểu nét, RR, chữ,
+  khoá, nhân bản, ⚙️ cài đặt (nhập giá chính xác, SL/TP, số lot) và xoá.
+
 **Dữ liệu**
 - Nhập CSV xuất từ MT5/Exness (kể cả file UTF-16, cột `<DATE>` `<TIME>` riêng),
   TradingView, Binance… Tự nhận dấu phân cách `,` `;` tab và nhiều định dạng thời gian.

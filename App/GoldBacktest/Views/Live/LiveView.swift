@@ -20,6 +20,15 @@ struct LiveView: View {
     @AppStorage("live.magnet") private var magnet = true
     @AppStorage("live.keepTool") private var keepTool = false
     @AppStorage("live.hideDrawings") private var hideDrawings = false
+    @AppStorage("live.lockDrawings") private var lockDrawings = false
+    @AppStorage("live.candleColors") private var candleColorsJSON = ""
+    @AppStorage("live.precision") private var precision = -1
+    @AppStorage("live.timeZone") private var timeZoneID = ""
+    @AppStorage("position.balance") private var accountBalance = 0.0
+    @AppStorage("position.riskPercent") private var riskPercent = 1.0
+    @AppStorage("position.contractSize") private var contractSize = 100.0
+    @State private var showChartSettings = false
+    @State private var settingsDrawing: Drawing?
 
     @State private var viewport = ChartViewport()
     @State private var customSymbol = ""
@@ -92,6 +101,17 @@ struct LiveView: View {
                 pendingOandaInstrument = nil
             }
         }
+        .sheet(isPresented: $showChartSettings) {
+            ChartSettingsView(theme: theme, colorsJSON: $candleColorsJSON, candleStyle: $candleStyle,
+                              precision: $precision, timeZoneID: $timeZoneID, balance: $accountBalance,
+                              riskPercent: $riskPercent, contractSize: $contractSize)
+        }
+        .sheet(item: $settingsDrawing) { drawing in
+            DrawingSettingsView(drawing: drawing, decimals: priceDecimals ?? CandleChart.decimals(for: market.candles.last?.close ?? 1),
+                                sizing: positionSizing) { changed in
+                store.updateDrawing(changed, key: drawingKey)
+            }
+        }
         .fullScreenCover(isPresented: $fullScreen) {
             FullScreenChart(title: "\(Self.displayName(market.symbol)) · \(Self.label(market.interval))", theme: theme,
                             onClose: { fullScreen = false }) {
@@ -106,7 +126,7 @@ struct LiveView: View {
         let last = market.ticker?.lastPrice ?? market.candles.last?.close ?? 0
         let changePct = market.ticker?.changePercent ?? 0
         let changeAbs = last - last / (1 + changePct / 100)
-        let decimals = CandleChart.decimals(for: last)
+        let decimals = priceDecimals ?? CandleChart.decimals(for: last)
         let changeColor = changePct >= 0 ? theme.up : theme.down
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 8) {
@@ -207,12 +227,18 @@ struct LiveView: View {
                         onSelectDrawing: { id in selectedDrawingID = id },
                         candleStyle: CandleStyle(rawValue: candleStyle) ?? .candles,
                         magnet: magnet,
+                        candleColors: CandleColors.decode(candleColorsJSON),
+                        priceDecimals: priceDecimals,
+                        timeZone: ChartTimeZones.zone(timeZoneID),
+                        drawingsLocked: lockDrawings,
+                        positionSizing: positionSizing,
                         viewport: $viewport)
         }
         .overlay(alignment: .leading) {
             if showDrawingBar {
                 DrawingToolbar(activeTool: $activeTool, magnet: $magnet, keepTool: $keepTool,
-                               hideDrawings: $hideDrawings, theme: theme) {
+                               lockAll: $lockDrawings, hideDrawings: $hideDrawings, theme: theme,
+                               onRemoveAll: { confirmClear = true }) {
                     showDrawingBar = false
                     activeTool = nil
                 }
@@ -236,6 +262,12 @@ struct LiveView: View {
                                           drawingText = drawing.text
                                           editingTextDrawing = drawing
                                       },
+                                      onClone: {
+                                          let copy = drawing.cloned(shift: market.interval.seconds * 5)
+                                          store.addDrawing(copy, key: drawingKey)
+                                          selectedDrawingID = copy.id
+                                      },
+                                      onSettings: { settingsDrawing = drawing },
                                       onDelete: {
                                           store.removeDrawing(drawing.id, key: drawingKey)
                                           selectedDrawingID = nil
@@ -244,6 +276,12 @@ struct LiveView: View {
             }
             .padding(.top, 8)
         }
+    }
+
+    private var priceDecimals: Int? { precision >= 0 ? precision : nil }
+
+    private var positionSizing: PositionSizing? {
+        accountBalance > 0 ? PositionSizing(balance: accountBalance, riskPercent: riskPercent, contractSize: contractSize) : nil
     }
 
     private var selectedDrawing: Drawing? {
@@ -448,6 +486,11 @@ struct LiveView: View {
                 ForEach(CandleStyle.allCases) { style in
                     Text(style.title).tag(style.rawValue)
                 }
+            }
+            Button {
+                showChartSettings = true
+            } label: {
+                Label("Cài đặt biểu đồ (màu nến…)", systemImage: "gearshape")
             }
             Button {
                 viewport.manualPriceRange = nil
