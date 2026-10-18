@@ -234,6 +234,9 @@ struct CandleChart: View {
     @State private var handleIndex: Int?
     /// Price line being dragged and its latest price.
     @State private var draggedLine: (id: String, price: Double)?
+    /// Order whose lines are shown fully (tapped recently); others are faint.
+    @State private var activeLineGroup: String?
+    @State private var activeLineToken = 0
 
     private let axisWidth: CGFloat = 66
     private let timeAxisHeight: CGFloat = 18
@@ -621,26 +624,36 @@ struct CandleChart: View {
                                         textColor: theme.primaryText))
         }
 
-        // Trade levels: full-width lines with a handle, a label and a price on the axis.
+        // Trade levels: full-width lines. Faint until tapped; a tapped order shows
+        // its handles and ✕ for a couple of seconds.
         for line in priceLines {
             let y = s.y(line.price)
             guard y >= layout.plot.minY - 1, y <= layout.plot.maxY + 1 else { continue }
+            let active = isLineActive(line)
+            let alpha: Double = active ? 1 : 0.4
+            let color = line.color.opacity(alpha)
             var path = Path()
             path.move(to: CGPoint(x: 0, y: y))
             path.addLine(to: CGPoint(x: layout.axisX, y: y))
-            context.stroke(path, with: .color(line.color), style: StrokeStyle(lineWidth: 1.2, dash: line.dash))
-            let label = context.resolve(Text(line.label).font(.system(size: 11, weight: .semibold)).foregroundColor(line.color))
+            context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: active ? 1.5 : 1, dash: line.dash))
+
+            // Label and money on the right, just left of the ✕.
+            let label = context.resolve(Text(line.label).font(.system(size: 11, weight: .semibold)).foregroundColor(color))
             let labelSize = label.measure(in: CGSize(width: 400, height: 40))
-            context.draw(label, at: CGPoint(x: 6, y: y - 9), anchor: .leading)
+            let text = context.resolve(Text(line.value).font(.system(size: 11, weight: .bold).monospacedDigit())
+                .foregroundColor(.white.opacity(active ? 1 : 0.85)))
+            let valueSize = line.value.isEmpty ? .zero : text.measure(in: CGSize(width: 400, height: 40))
+            let pillWidth = line.value.isEmpty ? 0 : valueSize.width + 10
+            let right = layout.axisX - (line.closable && active ? 40 : 8)
+            let labelX = right - pillWidth - (line.value.isEmpty ? 0 : 6) - labelSize.width
+            context.draw(label, at: CGPoint(x: labelX, y: y - 10), anchor: .leading)
             if !line.value.isEmpty {
-                let valueColor = line.valueColor ?? line.color
-                let text = context.resolve(Text(line.value).font(.system(size: 11, weight: .bold).monospacedDigit()).foregroundColor(.white))
-                let size = text.measure(in: CGSize(width: 400, height: 40))
-                let pill = CGRect(x: 6 + labelSize.width + 6, y: y - 9 - size.height / 2 - 2, width: size.width + 10, height: size.height + 4)
-                context.fill(Path(roundedRect: pill, cornerRadius: 4), with: .color(valueColor))
+                let pill = CGRect(x: right - pillWidth, y: y - 10 - valueSize.height / 2 - 2,
+                                  width: pillWidth, height: valueSize.height + 4)
+                context.fill(Path(roundedRect: pill, cornerRadius: 4), with: .color((line.valueColor ?? line.color).opacity(active ? 1 : 0.55)))
                 context.draw(text, at: CGPoint(x: pill.midX, y: pill.midY), anchor: .center)
             }
-            if line.closable {
+            if line.closable && active {
                 let button = closeButtonRect(y: y, layout: layout)
                 context.fill(Path(ellipseIn: button), with: .color(line.color))
                 var cross = Path()
@@ -654,17 +667,17 @@ struct CandleChart: View {
             if let index = line.markerIndex, range.contains(index) {
                 // Entry point on the candle where the order filled.
                 let dot = CGRect(x: s.x(index) - 5, y: y - 5, width: 10, height: 10)
-                context.fill(Path(ellipseIn: dot), with: .color(line.color))
-                context.stroke(Path(ellipseIn: dot), with: .color(.white), lineWidth: 1.5)
+                context.fill(Path(ellipseIn: dot), with: .color(color))
+                context.stroke(Path(ellipseIn: dot), with: .color(.white.opacity(alpha)), lineWidth: 1.5)
             }
-            if line.draggable {
+            if line.draggable && active {
                 let center = CGPoint(x: layout.plot.width * line.handleFraction, y: y)
                 let handle = CGRect(x: center.x - 7, y: center.y - 7, width: 14, height: 14)
                 context.fill(Path(ellipseIn: handle), with: .color(theme.background))
                 context.stroke(Path(ellipseIn: handle), with: .color(line.color), lineWidth: 2.5)
             }
             axisLabels.append(AxisLabel(price: line.price, text: Self.format(line.price, decimals), tag: "",
-                                        color: line.color, textColor: .white))
+                                        color: color, textColor: .white))
         }
 
         // Axis labels, nudged apart so they don't overlap.
@@ -1038,6 +1051,30 @@ struct CandleChart: View {
         return nil
     }
 
+    /// Lines of one order share the id before the last "|" (e.g. "pos|<id>").
+    private static func lineGroup(_ id: String) -> String {
+        id.split(separator: "|").dropLast().joined(separator: "|")
+    }
+
+    private func isLineActive(_ line: ChartPriceLine) -> Bool {
+        let group = Self.lineGroup(line.id)
+        // A limit order being placed is always shown fully.
+        if group == "draft" { return true }
+        if let dragged = draggedLine, Self.lineGroup(dragged.id) == group { return true }
+        return activeLineGroup == group
+    }
+
+    /// Shows an order's lines fully, then fades them after 2 seconds without touches.
+    private func activateLines(of id: String) {
+        activeLineGroup = Self.lineGroup(id)
+        activeLineToken += 1
+        let token = activeLineToken
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if token == activeLineToken, draggedLine == nil { activeLineGroup = nil }
+        }
+    }
+
     /// The ✕ button of a closable price line, just left of the price axis.
     private func closeButtonRect(y: CGFloat, layout: Layout) -> CGRect {
         CGRect(x: layout.axisX - 30, y: y - 11, width: 22, height: 22)
@@ -1160,9 +1197,16 @@ struct CandleChart: View {
             return
         }
         if let line = priceLines.first(where: {
-            $0.closable && closeButtonRect(y: s.y($0.price), layout: layout).insetBy(dx: -8, dy: -8).contains(location)
+            $0.closable && isLineActive($0)
+                && closeButtonRect(y: s.y($0.price), layout: layout).insetBy(dx: -8, dy: -8).contains(location)
         }) {
             onPriceLineClose?(line.id)
+            return
+        }
+        // Tapping a trade line brings its order to the front for a moment.
+        if let line = priceLines.filter({ abs(s.y($0.price) - location.y) < 16 })
+            .min(by: { abs(s.y($0.price) - location.y) < abs(s.y($1.price) - location.y) }) {
+            activateLines(of: line.id)
             return
         }
         if let tool = drawingTool {
@@ -1201,6 +1245,7 @@ struct CandleChart: View {
                     } else if drawingTool == nil, let line = hitPriceLine(at: value.startLocation, layout: layout) {
                         dragMode = .priceLine
                         draggedLine = (line.id, line.price)
+                        activeLineGroup = Self.lineGroup(line.id)
                         crosshair = nil
                     } else if drawingTool != nil {
                         dragMode = .create
@@ -1283,10 +1328,13 @@ struct CandleChart: View {
                 if dragMode == .moveDrawing || dragMode == .moveHandle, let moved = movingPreview {
                     onDrawingChanged?(moved)
                 }
+                let releasedLine = draggedLine
                 if dragMode == .priceLine, let line = draggedLine {
                     onPriceLineDrag?(line.id, line.price, true)
                 }
                 draggedLine = nil
+                // Keep the order highlighted for 2 s after letting go.
+                if let releasedLine { activateLines(of: releasedLine.id) }
                 if dragMode == .create, let created = creatingPreview {
                     pendingPoints = []
                     onDrawingCreated?(created)
