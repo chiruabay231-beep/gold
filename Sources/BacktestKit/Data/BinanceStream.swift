@@ -34,16 +34,64 @@ public struct Ticker24h: Equatable, Sendable {
     }
 }
 
+/// One trade: the building block of seconds bars.
+public struct TradeTick: Equatable, Sendable {
+    public var time: Date
+    public var price: Double
+    public var quantity: Double
+
+    public init(time: Date, price: Double, quantity: Double) {
+        self.time = time
+        self.price = price
+        self.quantity = quantity
+    }
+}
+
+/// Builds bars of any length in seconds from trades or shorter bars.
+public enum CandleAggregator {
+    /// Start of the bar that contains `time` (bars aligned to the Unix epoch).
+    public static func bucket(_ time: Date, seconds: TimeInterval) -> Date {
+        Date(timeIntervalSince1970: floor(time.timeIntervalSince1970 / seconds) * seconds)
+    }
+
+    public static func candles(from trades: [TradeTick], seconds: TimeInterval) -> [Candle] {
+        var buffer = LiveCandleBuffer(maxCount: Int.max)
+        for trade in trades.sorted(by: { $0.time < $1.time }) { buffer.apply(trade: trade, seconds: seconds) }
+        return buffer.candles
+    }
+
+    /// Merges shorter bars (e.g. 1s klines) into bars of `seconds`.
+    public static func resample(_ candles: [Candle], seconds: TimeInterval) -> [Candle] {
+        var result: [Candle] = []
+        for c in candles {
+            let start = bucket(c.time, seconds: seconds)
+            if var last = result.last, last.time == start {
+                last.high = max(last.high, c.high)
+                last.low = min(last.low, c.low)
+                last.close = c.close
+                last.volume += c.volume
+                result[result.count - 1] = last
+            } else {
+                result.append(Candle(time: start, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume))
+            }
+        }
+        return result
+    }
+}
+
 /// Messages from Binance's public WebSocket market streams.
 public enum BinanceStreamEvent: Equatable, Sendable {
     /// A candle update. `isClosed` is true once for the final state of a bar.
     case kline(symbol: String, candle: Candle, isClosed: Bool)
     case ticker(Ticker24h)
+    case trade(symbol: String, TradeTick)
 
-    /// URL of a combined stream with the kline and 24h ticker of one symbol.
+    /// URL of a combined stream with the kline (or, for seconds bars, the
+    /// trades) and the 24h ticker of one symbol.
     public static func url(host: URL, symbol: String, interval: BinanceClient.Interval) -> URL {
         let name = symbol.lowercased()
-        return URL(string: "\(host.absoluteString)/stream?streams=\(name)@kline_\(interval.rawValue)/\(name)@ticker")!
+        let bars = interval.isSeconds ? "\(name)@aggTrade" : "\(name)@kline_\(interval.rawValue)"
+        return URL(string: "\(host.absoluteString)/stream?streams=\(bars)/\(name)@ticker")!
     }
 
     /// Parses a raw stream message, with or without the combined-stream wrapper.
@@ -64,6 +112,11 @@ public enum BinanceStreamEvent: Equatable, Sendable {
                                 low: low, close: close, volume: number(k, "v") ?? 0)
             let closed = (k["x"] as? Bool) ?? ((k["x"] as? NSNumber)?.boolValue ?? false)
             return .kline(symbol: object["s"] as? String ?? "", candle: candle, isClosed: closed)
+        case "aggTrade":
+            guard let price = number(object, "p"), let time = number(object, "T") else { return nil }
+            return .trade(symbol: object["s"] as? String ?? "",
+                          TradeTick(time: Date(timeIntervalSince1970: time / 1000), price: price,
+                                    quantity: number(object, "q") ?? 0))
         case "24hrTicker":
             guard let last = number(object, "c"), let change = number(object, "P"),
                   let high = number(object, "h"), let low = number(object, "l")
@@ -94,6 +147,22 @@ public struct LiveCandleBuffer: Sendable {
     public init(candles: [Candle] = [], maxCount: Int = 2000) {
         self.candles = Array(candles.suffix(maxCount))
         self.maxCount = maxCount
+    }
+
+    /// Adds a trade to the bar of `seconds` it falls in, starting a new bar when needed.
+    @discardableResult
+    public mutating func apply(trade: TradeTick, seconds: TimeInterval) -> Update {
+        let start = CandleAggregator.bucket(trade.time, seconds: seconds)
+        if var last = candles.last, last.time == start {
+            last.high = max(last.high, trade.price)
+            last.low = min(last.low, trade.price)
+            last.close = trade.price
+            last.volume += trade.quantity
+            candles[candles.count - 1] = last
+            return .updatedLast
+        }
+        return apply(Candle(time: start, open: trade.price, high: trade.price, low: trade.price,
+                            close: trade.price, volume: trade.quantity))
     }
 
     @discardableResult

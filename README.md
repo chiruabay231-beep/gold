@@ -80,6 +80,8 @@ swift test
 **Live (Binance Futures: XAUUSDT, XAGUSDT, miễn phí)**
 - Bấm tên mã ở thanh dưới, mục Binance Futures, chọn XAU/USDT. Đây là hợp đồng vĩnh cửu vàng của
   Binance, giá bám vàng giao ngay XAU, không cần tài khoản hay key, nến realtime qua WebSocket.
+- Khung giây 5s, 10s, 15s, 30s: Binance không có sẵn nến này nên app tự ghép từ từng giao dịch
+  (aggTrade); lịch sử lấy từ nến 1 giây (spot) hoặc các giao dịch gần nhất (futures). OANDA có sẵn S5–S30.
 - Ngoài giờ thị trường vàng (cuối tuần) Binance giữ chỉ số ở giá đóng cửa, nên nến gần như đi ngang.
 
 **Live (OANDA: XAUUSD thật, forex, chỉ số)**

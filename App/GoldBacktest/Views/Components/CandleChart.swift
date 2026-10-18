@@ -577,9 +577,10 @@ struct CandleChart: View {
             context.draw(Text(Self.format(s.price(atY: y), decimals)).font(.system(size: 10)).foregroundColor(.white),
                          at: CGPoint(x: priceBox.midX, y: priceBox.midY), anchor: .center)
             var crosshairFormat = Date.FormatStyle.dateTime.year(.twoDigits).month(.twoDigits).day(.twoDigits).hour().minute()
+            if barInterval < 60 { crosshairFormat = crosshairFormat.second(.twoDigits) }
             crosshairFormat.timeZone = timeZone
             let timeText = candles[index].time.formatted(crosshairFormat)
-            let timeBox = CGRect(x: x - 52, y: layout.timeAxis.minY + 1, width: 104, height: 16)
+            let timeBox = CGRect(x: x - 60, y: layout.timeAxis.minY + 1, width: 120, height: 16)
             context.fill(Path(roundedRect: timeBox, cornerRadius: 2), with: .color(theme.crosshairLabel))
             context.draw(Text(timeText).font(.system(size: 10)).foregroundColor(.white),
                          at: CGPoint(x: timeBox.midX, y: timeBox.midY), anchor: .center)
@@ -1172,6 +1173,7 @@ struct CandleChart: View {
     static func timeFormat(for candles: [Candle]) -> Date.FormatStyle {
         let interval = candles.count > 1 ? candles[candles.count - 1].time.timeIntervalSince(candles[candles.count - 2].time) : 3600
         if interval >= 86_400 { return .dateTime.day(.twoDigits).month(.twoDigits) }
+        if interval < 60 { return .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits).second(.twoDigits) }
         return .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits)
     }
 

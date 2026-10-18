@@ -36,7 +36,7 @@ struct BinanceDownloadView: View {
                 }
                 Section("Khung thời gian") {
                     Picker("Khung", selection: $interval) {
-                        ForEach(BinanceClient.Interval.allCases, id: \.self) { item in
+                        ForEach(BinanceClient.Interval.allCases.filter { !$0.isSeconds }, id: \.self) { item in
                             Text(item.rawValue).tag(item)
                         }
                     }

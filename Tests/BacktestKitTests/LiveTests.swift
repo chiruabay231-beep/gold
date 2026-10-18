@@ -88,4 +88,55 @@ final class LiveTests: XCTestCase {
         XCTAssertEqual(OandaClient.granularity(.m15), "M15")
         XCTAssertEqual(OandaClient.granularity(.d1), "D")
     }
+
+    func testSecondsBarsFromTrades() throws {
+        let t0 = 1_700_000_010.0   // a multiple of 5, 15 and 30 seconds
+        let trades = [TradeTick(time: Date(timeIntervalSince1970: t0 + 1), price: 10, quantity: 1),
+                      TradeTick(time: Date(timeIntervalSince1970: t0 + 3), price: 12, quantity: 2),
+                      TradeTick(time: Date(timeIntervalSince1970: t0 + 4.9), price: 9, quantity: 1),
+                      TradeTick(time: Date(timeIntervalSince1970: t0 + 6), price: 11, quantity: 1)]
+        let bars = CandleAggregator.candles(from: trades, seconds: 5)
+        XCTAssertEqual(bars.count, 2)
+        XCTAssertEqual(bars[0].time, Date(timeIntervalSince1970: t0))
+        XCTAssertEqual([bars[0].open, bars[0].high, bars[0].low, bars[0].close, bars[0].volume], [10, 12, 9, 9, 4])
+        XCTAssertEqual(bars[1].time, Date(timeIntervalSince1970: t0 + 5))
+
+        var buffer = LiveCandleBuffer(candles: bars)
+        XCTAssertEqual(buffer.apply(trade: TradeTick(time: Date(timeIntervalSince1970: t0 + 9), price: 13, quantity: 1), seconds: 5), .updatedLast)
+        XCTAssertEqual(buffer.candles.last?.high, 13)
+        XCTAssertEqual(buffer.apply(trade: TradeTick(time: Date(timeIntervalSince1970: t0 + 10), price: 14, quantity: 1), seconds: 5), .appended)
+        XCTAssertEqual(buffer.candles.last?.open, 14)
+
+        let oneSecond: [Candle] = (0..<30).map { (i: Int) -> Candle in
+            let v = Double(i)
+            return Candle(time: Date(timeIntervalSince1970: t0 + v), open: v, high: v + 1, low: v - 1, close: v + 0.5, volume: 1)
+        }
+        let resampled = CandleAggregator.resample(oneSecond, seconds: 15)
+        XCTAssertEqual(resampled.count, 2)
+        XCTAssertEqual(resampled[0].open, 0)
+        XCTAssertEqual(resampled[0].high, 15)
+        XCTAssertEqual(resampled[0].low, -1)
+        XCTAssertEqual(resampled[0].close, 14.5)
+        XCTAssertEqual(resampled[1].volume, 15)
+    }
+
+    func testAggTradeMessagesAndURL() throws {
+        let json = """
+        {"stream":"xauusdt@aggTrade","data":{"e":"aggTrade","E":1700000001000,"s":"XAUUSDT","a":5,"p":"4012.35","q":"0.250","f":1,"l":2,"T":1700000000500,"m":false}}
+        """
+        guard case .trade(let symbol, let tick)? = BinanceStreamEvent.parse(Data(json.utf8)) else { return XCTFail() }
+        XCTAssertEqual(symbol, "XAUUSDT")
+        XCTAssertEqual(tick.price, 4012.35)
+        XCTAssertEqual(tick.time, Date(timeIntervalSince1970: 1_700_000_000.5))
+        let url = BinanceStreamEvent.url(host: BinanceClient.Market.futures.streamHosts[0], symbol: "XAUUSDT", interval: .s5)
+        XCTAssertEqual(url.absoluteString, "wss://fstream.binance.com/market/stream?streams=xauusdt@aggTrade/xauusdt@ticker")
+        let rest = try BinanceClient.parseAggTrades(Data("""
+        [{"a":26129,"p":"0.01633102","q":"4.70443515","f":27781,"l":27781,"T":1498793709153,"m":true,"M":true}]
+        """.utf8))
+        XCTAssertEqual(rest.first?.id, 26129)
+        XCTAssertEqual(rest.first?.tick.quantity, 4.70443515)
+        XCTAssertEqual(OandaClient.granularity(.s30), "S30")
+        XCTAssertTrue(BinanceClient.Interval.s15.isSeconds)
+        XCTAssertFalse(BinanceClient.Interval.m1.isSeconds)
+    }
 }

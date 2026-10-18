@@ -76,6 +76,10 @@ public struct OandaClient {
     /// OANDA's name for an interval: M1, M5, M15, M30, H1, H4, D, W.
     public static func granularity(_ interval: BinanceClient.Interval) -> String {
         switch interval {
+        case .s5: return "S5"
+        case .s10: return "S10"
+        case .s15: return "S15"
+        case .s30: return "S30"
         case .m1: return "M1"
         case .m5: return "M5"
         case .m15: return "M15"

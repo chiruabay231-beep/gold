@@ -45,7 +45,7 @@ final class LiveMarket {
 
     static let futuresSymbols = ["XAUUSDT", "XAGUSDT"]
     static let popularSymbols = ["BTCUSDT", "ETHUSDT", "PAXGUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
-    static let intervals: [BinanceClient.Interval] = [.m1, .m5, .m15, .h1, .h4, .d1]
+    static let intervals: [BinanceClient.Interval] = [.s5, .s10, .s15, .s30, .m1, .m5, .m15, .h1, .h4, .d1]
 
     private(set) var source: LiveSource = .binance
     private(set) var symbol = "PAXGUSDT"
@@ -72,6 +72,11 @@ final class LiveMarket {
     @ObservationIgnored private var socket: URLSessionWebSocketTask?
     @ObservationIgnored private var lastBarClosed = false
     @ObservationIgnored private var alertedSignalIDs: Set<String> = []
+    /// Seconds bars built from trades: changes not yet shown, so a busy
+    /// market redraws the chart a few times a second instead of per trade.
+    @ObservationIgnored private var pendingBuffer: LiveCandleBuffer?
+    @ObservationIgnored private var lastPublish = Date.distantPast
+    @ObservationIgnored private var flushScheduled = false
 
     var candles: [Candle] { buffer.candles }
 
@@ -128,6 +133,7 @@ final class LiveMarket {
     /// Reloads from scratch, e.g. after the OANDA token changed.
     func restart() {
         buffer = LiveCandleBuffer(maxCount: 2000)
+        pendingBuffer = nil
         ticker = nil
         signals = []
         plots = []
@@ -146,11 +152,15 @@ final class LiveMarket {
                 case .binance, .binanceFutures:
                     needsOandaToken = false
                     let symbol = self.symbol, interval = self.interval, market = binanceMarket
-                    let history = try await BinanceClient.withFallback(market: market) {
-                        try await $0.fetchCandles(symbol: symbol, interval: interval, count: 1000)
+                    let history = try await BinanceClient.withFallback(market: market) { client -> [Candle] in
+                        if interval.isSeconds {
+                            return try await client.fetchSecondCandles(symbol: symbol, seconds: interval.seconds, count: 500)
+                        }
+                        return try await client.fetchCandles(symbol: symbol, interval: interval, count: 1000)
                     }
                     guard !Task.isCancelled else { return }
                     buffer = LiveCandleBuffer(candles: history, maxCount: 2000)
+                    pendingBuffer = nil
                     lastBarClosed = false
                     ticker = try? await BinanceClient.withFallback(market: market) { try await $0.fetchTicker(symbol: symbol) }
                     rescan(alert: false)
@@ -284,7 +294,49 @@ final class LiveMarket {
                 ticker = t
             }
         case .ticker(let t):
-            if t.symbol.uppercased() == symbol { ticker = t }
+            if t.symbol.uppercased() == symbol {
+                var t = t
+                // Seconds bars: the newest trade is fresher than the ticker.
+                if interval.isSeconds, let close = (pendingBuffer ?? buffer).candles.last?.close { t.lastPrice = close }
+                ticker = t
+            }
+        case .trade(let tradeSymbol, let trade):
+            guard tradeSymbol.uppercased() == symbol, interval.isSeconds else { return }
+            var working = pendingBuffer ?? buffer
+            let update = working.apply(trade: trade, seconds: interval.seconds)
+            guard update != .ignored else { return }
+            if update == .appended || Date().timeIntervalSince(lastPublish) > 0.25 {
+                publish(working)
+                if update == .appended {
+                    // The previous bar has just closed.
+                    lastBarClosed = false
+                    rescan(alert: true)
+                }
+            } else {
+                pendingBuffer = working
+                scheduleFlush()
+            }
+        }
+    }
+
+    private func publish(_ working: LiveCandleBuffer) {
+        buffer = working
+        pendingBuffer = nil
+        lastPublish = Date()
+        if var t = ticker, let close = working.candles.last?.close {
+            t.lastPrice = close
+            ticker = t
+        }
+    }
+
+    private func scheduleFlush() {
+        guard !flushScheduled else { return }
+        flushScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard let self else { return }
+            self.flushScheduled = false
+            if let pending = self.pendingBuffer { self.publish(pending) }
         }
     }
 
