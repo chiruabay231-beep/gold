@@ -12,6 +12,7 @@ struct DrawingToolbar: View {
     @Binding var lockAll: Bool
     @Binding var hideDrawings: Bool
     let theme: ChartTheme
+    var onUndo: () -> Void
     var onRemoveAll: () -> Void
     var onClose: () -> Void
 
@@ -51,6 +52,8 @@ struct DrawingToolbar: View {
                     .accessibilityLabel("Khoá tất cả hình vẽ")
                 Button { hideDrawings.toggle() } label: { icon(hideDrawings ? "eye.slash" : "eye", active: hideDrawings) }
                     .accessibilityLabel("Ẩn tất cả hình vẽ")
+                Button(action: onUndo) { icon("arrow.uturn.backward", active: false) }
+                    .accessibilityLabel("Hoàn tác")
                 Button(action: onRemoveAll) { icon("trash", active: false) }
                     .accessibilityLabel("Xoá tất cả hình vẽ")
                 separator
@@ -129,6 +132,8 @@ struct DrawingActionsBar: View {
     var onClone: () -> Void
     var onSettings: () -> Void
     var onDelete: () -> Void
+    /// Sends a long/short position drawing to the demo account.
+    var onPlaceOrder: (() -> Void)? = nil
 
     @State private var showColors = false
 
@@ -193,6 +198,12 @@ struct DrawingActionsBar: View {
                         d.riskReward = min(50, d.riskReward + 0.5)
                         onChange(d)
                     } label: { item { Image(systemName: "plus") } }
+                }
+                if drawing.positionLevels != nil, let onPlaceOrder {
+                    Button(action: onPlaceOrder) {
+                        item { Image(systemName: "paperplane.fill").foregroundColor(theme.accent) }
+                    }
+                    .accessibilityLabel("Vào lệnh demo")
                 }
                 if drawing.tool.isLine || drawing.tool == .text {
                     Button(action: onEditText) { item { Image(systemName: "textformat") } }

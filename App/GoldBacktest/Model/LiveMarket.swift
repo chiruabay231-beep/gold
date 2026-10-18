@@ -68,6 +68,11 @@ final class LiveMarket {
     private(set) var scannedBarCount = 0
 
     @ObservationIgnored private weak var store: AppStore?
+    /// Receives every price update as (symbol key, price, time); drives the demo account.
+    @ObservationIgnored var onPrice: (@MainActor (String, Double, Date) -> Void)?
+
+    /// "SOURCE:SYMBOL", the key for drawings and demo orders.
+    var symbolKey: String { "\(source.rawValue):\(symbol)" }
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var socket: URLSessionWebSocketTask?
     @ObservationIgnored private var lastBarClosed = false
@@ -261,6 +266,7 @@ final class LiveMarket {
             }
             guard !Task.isCancelled else { throw CancellationError() }
             for item in latest { buffer.apply(item.candle) }
+            if let close = latest.last?.candle.close { onPrice?(symbolKey, close, Date()) }
             if let last = latest.last, last.candle.time == buffer.candles.last?.time {
                 lastBarClosed = last.complete
             }
@@ -284,6 +290,7 @@ final class LiveMarket {
         case .kline(let eventSymbol, let candle, let isClosed):
             guard eventSymbol.uppercased() == symbol else { return }
             let update = buffer.apply(candle)
+            onPrice?(symbolKey, candle.close, Date())
             if update == .appended { lastBarClosed = false }
             if update != .ignored, isClosed {
                 lastBarClosed = true
@@ -304,6 +311,7 @@ final class LiveMarket {
             guard tradeSymbol.uppercased() == symbol, interval.isSeconds else { return }
             var working = pendingBuffer ?? buffer
             let update = working.apply(trade: trade, seconds: interval.seconds)
+            onPrice?(symbolKey, trade.price, trade.time)
             guard update != .ignored else { return }
             if update == .appended || Date().timeIntervalSince(lastPublish) > 0.25 {
                 publish(working)
@@ -384,6 +392,11 @@ final class LiveMarket {
 
     private func announce(_ signal: LiveSignal, strategy: String) {
         UINotificationFeedbackGenerator().notificationOccurred(signal.kind.isEntry ? .success : .warning)
+        if VoiceSettings.speakSignals, signal.kind.isEntry {
+            VoiceAnnouncer.shared.speak(signal.kind == .longEntry
+                ? VoiceSettings.phrase(VoiceSettings.buyKey, default: VoiceSettings.defaultBuy)
+                : VoiceSettings.phrase(VoiceSettings.sellKey, default: VoiceSettings.defaultSell))
+        }
         guard notificationsEnabled else { return }
         let content = UNMutableNotificationContent()
         content.title = "\(LiveView.displayName(symbol)) · \(signal.kind.label)"

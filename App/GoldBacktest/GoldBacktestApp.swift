@@ -5,6 +5,7 @@ import UserNotifications
 struct GoldBacktestApp: App {
     @State private var store = AppStore()
     @State private var market = LiveMarket()
+    @State private var trader = PaperTrader()
 
     init() {
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
@@ -16,6 +17,11 @@ struct GoldBacktestApp: App {
             RootView()
                 .environment(store)
                 .environment(market)
+                .environment(trader)
+                .onAppear {
+                    let trader = trader
+                    market.onPrice = { symbol, price, time in trader.update(symbol: symbol, price: price, time: time) }
+                }
         }
     }
 }

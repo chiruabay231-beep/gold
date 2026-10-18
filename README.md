@@ -116,6 +116,17 @@ swift test
 - Khi chọn một hình: thanh kiểu nổi với màu (bảng màu + màu tuỳ ý), độ dày, kiểu nét, RR, chữ,
   khoá, nhân bản, ⚙️ cài đặt (nhập giá chính xác, SL/TP, số lot) và xoá.
 
+**Giao dịch demo và cảnh báo giọng nói**
+- Nút 💼 ở thanh dưới: tài khoản demo trong app (mặc định 10 000 $), lệnh MUA/BÁN thị trường có SL/TP,
+  lệnh đang mở, lệnh chờ, lịch sử. Lệnh khớp theo giá realtime đang xem (không qua sàn).
+- Vẽ Vị thế Long/Short → chọn → ✈︎ "Vào lệnh demo": đặt lệnh chờ tại giá vào (hoặc vào ngay) với SL/TP
+  của hình vẽ; số lot tính từ vốn và % rủi ro trong Cài đặt biểu đồ.
+- Đường giá vào / SL / TP của lệnh demo hiện trên biểu đồ.
+- Cảnh báo giọng nói (⋯ → Cảnh báo giọng nói): "Target fill" khi chạm TP, "Stop loss fill" khi chạm SL,
+  "Order filled" khi lệnh chờ khớp, đọc tín hiệu MUA/BÁN của chiến lược; đổi câu, giọng Anh/Việt.
+- "Chạy nền" giữ app hoạt động khi khoá màn hình (phát âm thanh im lặng) để vẫn nghe cảnh báo; tốn pin.
+- Không kết nối trực tiếp được tài khoản demo MT5 (Exness/OANDA) từ iPhone: MT5 không có API cho điện thoại.
+
 **Dữ liệu**
 - Nhập CSV xuất từ MT5/Exness (kể cả file UTF-16, cột `<DATE>` `<TIME>` riêng),
   TradingView, Binance… Tự nhận dấu phân cách `,` `;` tab và nhiều định dạng thời gian.

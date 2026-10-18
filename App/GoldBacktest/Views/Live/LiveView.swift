@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import BacktestKit
 
 /// Live chart laid out like TradingView's mobile app: symbol header with a
@@ -6,6 +7,7 @@ import BacktestKit
 struct LiveView: View {
     @Environment(AppStore.self) private var store
     @Environment(LiveMarket.self) private var market
+    @Environment(PaperTrader.self) private var trader
     @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("live.theme") private var themeName = "tradingView"
@@ -27,6 +29,13 @@ struct LiveView: View {
     @AppStorage("position.riskPercent") private var riskPercent = 1.0
     @AppStorage("position.contractSize") private var contractSize = 100.0
     @State private var showChartSettings = false
+    @State private var showTradePanel = false
+    @State private var showVoiceSettings = false
+    /// Position drawing waiting for confirmation before it becomes a demo order.
+    @State private var demoOrderDrawing: Drawing?
+    @AppStorage("trade.lots") private var defaultLots = 0.01
+    @AppStorage(VoiceSettings.backgroundKey) private var runInBackground = false
+    @AppStorage(VoiceSettings.keepAwakeKey) private var keepAwake = false
     @State private var settingsDrawing: Drawing?
 
     @State private var viewport = ChartViewport()
@@ -60,6 +69,7 @@ struct LiveView: View {
         .background(theme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = keepAwake
             market.start(store: store)
             if market.strategyID == nil {
                 market.track(strategy: store.strategies.first { $0.name.hasPrefix("ICT Silver") }?.id ?? store.strategies.first?.id)
@@ -67,10 +77,29 @@ struct LiveView: View {
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
-            case .active: market.start(store: store)
-            case .background: market.stop()
-            default: break
+            case .active:
+                BackgroundAudio.shared.stop()
+                market.start(store: store)
+            case .inactive:
+                // Start before iOS suspends the app, while audio may still begin.
+                if runInBackground { BackgroundAudio.shared.start() }
+            case .background:
+                if runInBackground { BackgroundAudio.shared.start() } else { market.stop() }
+            @unknown default:
+                break
             }
+        }
+        .onChange(of: keepAwake) { _, value in UIApplication.shared.isIdleTimerDisabled = value }
+        .sheet(isPresented: $showTradePanel) { TradePanelView() }
+        .sheet(isPresented: $showVoiceSettings) { VoiceSettingsView() }
+        .confirmationDialog(demoOrderTitle, isPresented: Binding(get: { demoOrderDrawing != nil },
+                                                                 set: { if !$0 { demoOrderDrawing = nil } }),
+                            titleVisibility: .visible) {
+            if let drawing = demoOrderDrawing, let levels = drawing.positionLevels {
+                Button("Lệnh chờ tại \(CandleChart.format(levels.entry, currentDecimals))") { placeDemoOrder(drawing, market: false) }
+                Button("Vào ngay giá \(CandleChart.format(currentPrice, currentDecimals))") { placeDemoOrder(drawing, market: true) }
+            }
+            Button("Huỷ", role: .cancel) { demoOrderDrawing = nil }
         }
         .alert("Nhập mã Binance", isPresented: $askingSymbol) {
             TextField("VD: ADAUSDT", text: $customSymbol)
@@ -153,6 +182,11 @@ struct LiveView: View {
                     .contentTransition(.numericText())
                 Text(String(format: "%+.\(decimals)f (%+.2f%%)", changeAbs, changePct))
                     .foregroundColor(changeColor)
+                if let profit = demoProfit {
+                    Text(String(format: "Demo %+.2f$", profit))
+                        .foregroundColor(profit >= 0 ? theme.up : theme.down)
+                        .onTapGesture { showTradePanel = true }
+                }
                 if market.needsOandaToken {
                     Button("Nhập token OANDA") { showOandaSettings = true }
                         .foregroundColor(theme.accent)
@@ -246,7 +280,7 @@ struct LiveView: View {
                         countdownInterval: market.interval.seconds,
                         theme: theme,
                         sessionBoxes: layer.boxes,
-                        segments: layer.segments,
+                        segments: layer.segments + tradeSegments,
                         verticalLines: layer.verticalLines,
                         notes: layer.notes,
                         showHighLowLabels: showHighLow,
@@ -269,6 +303,10 @@ struct LiveView: View {
             if showDrawingBar {
                 DrawingToolbar(activeTool: $activeTool, magnet: $magnet, keepTool: $keepTool,
                                lockAll: $lockDrawings, hideDrawings: $hideDrawings, theme: theme,
+                               onUndo: {
+                                   store.undoDrawing(key: drawingKey)
+                                   selectedDrawingID = nil
+                               },
                                onRemoveAll: { confirmClear = true }) {
                     showDrawingBar = false
                     activeTool = nil
@@ -312,7 +350,8 @@ struct LiveView: View {
                                       onDelete: {
                                           store.removeDrawing(drawing.id, key: drawingKey)
                                           selectedDrawingID = nil
-                                      })
+                                      },
+                                      onPlaceOrder: { demoOrderDrawing = drawing })
                 }
             }
             .padding(.top, 8)
@@ -320,6 +359,74 @@ struct LiveView: View {
     }
 
     private var priceDecimals: Int? { precision >= 0 ? precision : nil }
+
+    // MARK: - Demo trading
+
+    private var currentPrice: Double { market.ticker?.lastPrice ?? market.candles.last?.close ?? 0 }
+    private var currentDecimals: Int { priceDecimals ?? CandleChart.decimals(for: currentPrice) }
+
+    /// Open profit of demo positions on the symbol on screen.
+    private var demoProfit: Double? {
+        let positions = trader.account.positions.filter { $0.symbol == market.symbolKey }
+        guard !positions.isEmpty, let price = trader.price(market.symbolKey) else { return nil }
+        return positions.reduce(0) { $0 + $1.profit(at: price) }
+    }
+
+    private var demoOrderTitle: String {
+        guard let drawing = demoOrderDrawing, let levels = drawing.positionLevels else { return "" }
+        let side = drawing.tool == .longPosition ? "MUA" : "BÁN"
+        return "\(side) \(PaperTrader.lots(demoLots(for: drawing))) lot · SL \(CandleChart.format(levels.stop, currentDecimals)) · TP \(CandleChart.format(levels.target, currentDecimals))"
+    }
+
+    private func demoLots(for drawing: Drawing) -> Double {
+        guard let levels = drawing.positionLevels,
+              let lots = positionSizing?.lots(entry: levels.entry, stop: levels.stop) else { return defaultLots }
+        return max(0.01, (lots * 100).rounded(.down) / 100)
+    }
+
+    private func placeDemoOrder(_ drawing: Drawing, market useMarket: Bool) {
+        guard let levels = drawing.positionLevels, currentPrice > 0 else { return }
+        let side: PaperAccount.Side = drawing.tool == .longPosition ? .long : .short
+        let lots = demoLots(for: drawing)
+        if useMarket {
+            if side == .long {
+                trader.buy(symbol: market.symbolKey, lots: lots, price: currentPrice, stop: levels.stop, target: levels.target)
+            } else {
+                trader.sell(symbol: market.symbolKey, lots: lots, price: currentPrice, stop: levels.stop, target: levels.target)
+            }
+        } else {
+            trader.placePending(symbol: market.symbolKey, side: side, lots: lots, entry: levels.entry, stop: levels.stop,
+                                target: levels.target, currentPrice: currentPrice)
+        }
+        demoOrderDrawing = nil
+    }
+
+    /// Entry, stop and target lines of demo orders on this symbol.
+    private var tradeSegments: [ChartSegment] {
+        let key = market.symbolKey
+        let candles = market.candles
+        guard !candles.isEmpty else { return [] }
+        func start(_ time: Date) -> Double { Double(candles.lastIndex { $0.time <= time } ?? 0) }
+        var result: [ChartSegment] = []
+        func addLevels(from: Double, stop: Double?, target: Double?) {
+            if let stop { result.append(ChartSegment(start: from, end: nil, price: stop, color: theme.down, dash: [5, 3], label: "SL")) }
+            if let target { result.append(ChartSegment(start: from, end: nil, price: target, color: theme.up, dash: [5, 3], label: "TP")) }
+        }
+        for p in trader.account.positions where p.symbol == key {
+            let from = start(p.openTime)
+            let profit = trader.price(key).map { p.profit(at: $0) } ?? 0
+            let label = "\(p.side == .long ? "BUY" : "SELL") \(PaperTrader.lots(p.lots))  \(String(format: "%+.2f$", profit))"
+            result.append(ChartSegment(start: from, end: nil, price: p.entryPrice, color: theme.accent, width: 1.5, label: label))
+            addLevels(from: from, stop: p.stop, target: p.target)
+        }
+        for o in trader.account.pending where o.symbol == key {
+            let from = start(o.createdAt)
+            let label = "\(o.side == .long ? "BUY" : "SELL") \(o.triggersAbove == (o.side == .long) ? "STOP" : "LIMIT") \(PaperTrader.lots(o.lots))"
+            result.append(ChartSegment(start: from, end: nil, price: o.entry, color: theme.accent, dash: [2, 3], label: label))
+            addLevels(from: from, stop: o.stop, target: o.target)
+        }
+        return result
+    }
 
     private var positionSizing: PositionSizing? {
         accountBalance > 0 ? PositionSizing(balance: accountBalance, riskPercent: riskPercent, contractSize: contractSize) : nil
@@ -426,9 +533,8 @@ struct LiveView: View {
             }
             indicatorMenu
             moreMenu
-            toolbarButton("arrow.uturn.backward", active: false) {
-                store.undoDrawing(key: drawingKey)
-                selectedDrawingID = nil
+            toolbarButton("briefcase", active: !trader.account.positions.isEmpty) {
+                showTradePanel = true
             }
             toolbarButton("arrow.up.left.and.arrow.down.right", active: false) {
                 fullScreen = true
@@ -535,6 +641,16 @@ struct LiveView: View {
                 showChartSettings = true
             } label: {
                 Label("Cài đặt biểu đồ (màu nến…)", systemImage: "gearshape")
+            }
+            Button {
+                showTradePanel = true
+            } label: {
+                Label("Giao dịch demo…", systemImage: "briefcase")
+            }
+            Button {
+                showVoiceSettings = true
+            } label: {
+                Label("Cảnh báo giọng nói…", systemImage: "speaker.wave.2")
             }
             Button {
                 viewport.manualPriceRange = nil
