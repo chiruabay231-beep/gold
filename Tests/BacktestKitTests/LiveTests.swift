@@ -30,6 +30,9 @@ final class LiveTests: XCTestCase {
     func testStreamURL() {
         let url = BinanceStreamEvent.url(host: BinanceClient.streamHosts[0], symbol: "PAXGUSDT", interval: .m15)
         XCTAssertEqual(url.absoluteString, "wss://stream.binance.com:9443/stream?streams=paxgusdt@kline_15m/paxgusdt@ticker")
+        let futures = BinanceStreamEvent.url(host: BinanceClient.Market.futures.streamHosts[0], symbol: "XAUUSDT", interval: .m1)
+        XCTAssertEqual(futures.absoluteString, "wss://fstream.binance.com/market/stream?streams=xauusdt@kline_1m/xauusdt@ticker")
+        XCTAssertEqual(BinanceClient.Market.futures.apiPrefix, "fapi/v1")
     }
 
     func testBuffer() {

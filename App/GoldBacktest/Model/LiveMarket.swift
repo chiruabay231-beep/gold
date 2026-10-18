@@ -8,12 +8,15 @@ import BacktestKit
 enum LiveSource: String, Codable {
     /// Public market data, no account needed.
     case binance = "BINANCE"
+    /// Binance USDⓈ-M futures: XAUUSDT / XAGUSDT gold and silver perpetuals.
+    case binanceFutures = "BINANCE_FUTURES"
     /// OANDA v20 API with the user's token; XAU_USD, forex, indices.
     case oanda = "OANDA"
 
     var title: String {
         switch self {
         case .binance: return "Binance"
+        case .binanceFutures: return "Binance Futures"
         case .oanda: return "OANDA"
         }
     }
@@ -40,6 +43,7 @@ final class LiveMarket {
         }
     }
 
+    static let futuresSymbols = ["XAUUSDT", "XAGUSDT"]
     static let popularSymbols = ["BTCUSDT", "ETHUSDT", "PAXGUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
     static let intervals: [BinanceClient.Interval] = [.m1, .m5, .m15, .h1, .h4, .d1]
 
@@ -139,16 +143,16 @@ final class LiveMarket {
             status = .loading
             do {
                 switch source {
-                case .binance:
+                case .binance, .binanceFutures:
                     needsOandaToken = false
-                    let symbol = self.symbol, interval = self.interval
-                    let history = try await BinanceClient.withFallback {
+                    let symbol = self.symbol, interval = self.interval, market = binanceMarket
+                    let history = try await BinanceClient.withFallback(market: market) {
                         try await $0.fetchCandles(symbol: symbol, interval: interval, count: 1000)
                     }
                     guard !Task.isCancelled else { return }
                     buffer = LiveCandleBuffer(candles: history, maxCount: 2000)
                     lastBarClosed = false
-                    ticker = try? await BinanceClient.withFallback { try await $0.fetchTicker(symbol: symbol) }
+                    ticker = try? await BinanceClient.withFallback(market: market) { try await $0.fetchTicker(symbol: symbol) }
                     rescan(alert: false)
                     failures = 0
                     try await stream()
@@ -180,20 +184,29 @@ final class LiveMarket {
         }
     }
 
+    private var binanceMarket: BinanceClient.Market { source == .binanceFutures ? .futures : .spot }
+
     /// Reads the WebSocket until it fails, trying each stream host in turn.
     private func stream() async throws {
         var lastError: Error = URLError(.cannotConnectToHost)
-        for host in BinanceClient.streamHosts {
+        for host in binanceMarket.streamHosts {
             let url = BinanceStreamEvent.url(host: host, symbol: symbol, interval: interval)
             let socket = URLSession.shared.webSocketTask(with: url)
             self.socket = socket
             socket.resume()
+            // A host that accepts the connection but never sends anything is skipped.
+            let watchdog = Task {
+                try await Task.sleep(nanoseconds: 10_000_000_000)
+                socket.cancel(with: .goingAway, reason: nil)
+            }
+            defer { watchdog.cancel() }
             var received = false
             do {
                 while !Task.isCancelled {
                     let message = try await socket.receive()
                     if !received {
                         received = true
+                        watchdog.cancel()
                         status = .live
                     }
                     let data: Data

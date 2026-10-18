@@ -40,22 +40,44 @@ public struct BinanceClient {
         }
     }
 
+    /// Spot (BTCUSDT, PAXGUSDT…) or USDⓈ-M futures, which also list gold
+    /// and silver perpetuals (XAUUSDT, XAGUSDT) priced from spot XAU/XAG.
+    public enum Market: String, Sendable {
+        case spot, futures
+
+        /// Spot: main API first, then the public market-data mirror, which is
+        /// reachable from some networks where api.binance.com is blocked.
+        public var restHosts: [URL] {
+            switch self {
+            case .spot: return [URL(string: "https://api.binance.com")!, URL(string: "https://data-api.binance.vision")!]
+            case .futures: return [URL(string: "https://fapi.binance.com")!]
+            }
+        }
+
+        /// Futures: the dedicated market-data path first, then the legacy root.
+        public var streamHosts: [URL] {
+            switch self {
+            case .spot: return [URL(string: "wss://stream.binance.com:9443")!, URL(string: "wss://data-stream.binance.vision")!]
+            case .futures: return [URL(string: "wss://fstream.binance.com/market")!, URL(string: "wss://fstream.binance.com")!]
+            }
+        }
+
+        var apiPrefix: String { self == .spot ? "api/v3" : "fapi/v1" }
+    }
+
     public var baseURL: URL
+    public var market: Market
     public var session: URLSession
 
-    /// Main API first, then the public market-data mirror, which is reachable
-    /// from some networks where api.binance.com is blocked.
-    public static let restHosts = [URL(string: "https://api.binance.com")!,
-                                   URL(string: "https://data-api.binance.vision")!]
-    public static let streamHosts = [URL(string: "wss://stream.binance.com:9443")!,
-                                     URL(string: "wss://data-stream.binance.vision")!]
+    public static let restHosts = Market.spot.restHosts
+    public static let streamHosts = Market.spot.streamHosts
 
     /// Runs `operation` against each REST host in turn until one succeeds.
-    public static func withFallback<T>(_ operation: (BinanceClient) async throws -> T) async throws -> T {
+    public static func withFallback<T>(market: Market = .spot, _ operation: (BinanceClient) async throws -> T) async throws -> T {
         var lastError: Error = ClientError.malformed
-        for host in restHosts {
+        for host in market.restHosts {
             do {
-                return try await operation(BinanceClient(baseURL: host))
+                return try await operation(BinanceClient(baseURL: host, market: market))
             } catch {
                 lastError = error
             }
@@ -65,7 +87,7 @@ public struct BinanceClient {
 
     /// 24-hour statistics for the header of the live screen.
     public func fetchTicker(symbol: String) async throws -> Ticker24h {
-        var components = URLComponents(url: baseURL.appendingPathComponent("api/v3/ticker/24hr"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: baseURL.appendingPathComponent("\(market.apiPrefix)/ticker/24hr"), resolvingAgainstBaseURL: false)!
         components.queryItems = [URLQueryItem(name: "symbol", value: symbol.uppercased())]
         let (data, response) = try await load(URLRequest(url: components.url!))
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
@@ -75,8 +97,9 @@ public struct BinanceClient {
         return ticker
     }
 
-    public init(baseURL: URL = URL(string: "https://api.binance.com")!, session: URLSession = .shared) {
+    public init(baseURL: URL = URL(string: "https://api.binance.com")!, market: Market = .spot, session: URLSession = .shared) {
         self.baseURL = baseURL
+        self.market = market
         self.session = session
     }
 
@@ -96,7 +119,7 @@ public struct BinanceClient {
     }
 
     func fetchPage(symbol: String, interval: Interval, limit: Int, endTime: Int64?) async throws -> [Candle] {
-        var components = URLComponents(url: baseURL.appendingPathComponent("api/v3/klines"), resolvingAgainstBaseURL: false)!
+        var components = URLComponents(url: baseURL.appendingPathComponent("\(market.apiPrefix)/klines"), resolvingAgainstBaseURL: false)!
         var items = [
             URLQueryItem(name: "symbol", value: symbol.uppercased()),
             URLQueryItem(name: "interval", value: interval.rawValue),

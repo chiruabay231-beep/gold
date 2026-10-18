@@ -353,6 +353,11 @@ struct LiveView: View {
 
     private var symbolMenu: some View {
         Menu {
+            Section("Binance Futures · Vàng, Bạc (miễn phí)") {
+                ForEach(LiveMarket.futuresSymbols, id: \.self) { symbol in
+                    Button(Self.displayName(symbol)) { open(symbol: symbol, source: .binanceFutures) }
+                }
+            }
             Section("OANDA · Vàng, Forex, chỉ số") {
                 ForEach(OandaClient.instruments, id: \.self) { instrument in
                     Button(Self.displayName(instrument)) { open(oanda: instrument) }
@@ -469,12 +474,12 @@ struct LiveView: View {
         editingTextDrawing = nil
     }
 
-    private func open(symbol: String) {
+    private func open(symbol: String, source: LiveSource = .binance) {
         let cleaned = symbol.uppercased().filter { $0.isLetter || $0.isNumber }
         guard !cleaned.isEmpty else { return }
         viewport = ChartViewport()
         selectedDrawingID = nil
-        market.select(source: .binance, symbol: cleaned)
+        market.select(source: source, symbol: cleaned)
     }
 
     private func open(oanda instrument: String) {

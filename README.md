@@ -77,6 +77,11 @@ swift test
 - Chọn một chiến lược để theo dõi: mỗi khi đóng nến app chạy chiến lược, đánh dấu B/S trên biểu đồ,
   liệt kê tín hiệu kèm SL/TP và gửi thông báo. Chỉ chạy khi app đang mở (giới hạn của iOS).
 
+**Live (Binance Futures: XAUUSDT, XAGUSDT, miễn phí)**
+- Bấm tên mã ở thanh dưới, mục Binance Futures, chọn XAU/USDT. Đây là hợp đồng vĩnh cửu vàng của
+  Binance, giá bám vàng giao ngay XAU, không cần tài khoản hay key, nến realtime qua WebSocket.
+- Ngoài giờ thị trường vàng (cuối tuần) Binance giữ chỉ số ở giá đóng cửa, nên nến gần như đi ngang.
+
 **Live (OANDA: XAUUSD thật, forex, chỉ số)**
 - Bấm tên mã ở thanh dưới, mục OANDA, chọn XAUUSD (hoặc XAGUSD, EURUSD, NAS100USD…).
 - Lần đầu app hỏi token: đăng nhập oanda.com, vào **Manage API Access**, bấm **Generate**, copy token
