@@ -55,11 +55,36 @@ final class PaperTrader {
         let involved = account.positions.contains { $0.symbol == symbol } || account.pending.contains { $0.symbol == symbol }
         if involved || prices[symbol] == nil { prices[symbol] = price }
         guard involved else { return }
-        let events = account.process(symbol: symbol, price: price, time: time)
+        var events = account.process(symbol: symbol, price: price, time: time)
+        events += account.manage(symbol: symbol, price: price, time: time, rules: Self.rules)
         guard !events.isEmpty else { return }
         for event in events { announce(event) }
         lastEvent = events.last
         save()
+    }
+
+    /// A live bar closed: check open positions for reversal signs.
+    func barClosed(symbol: String, candles: [Candle]) {
+        guard !isReplaying, Self.rules.closeOnReversal, let price = candles.last?.close,
+              account.positions.contains(where: { $0.symbol == symbol }) else { return }
+        let events = account.manage(symbol: symbol, price: prices[symbol] ?? price, time: now, rules: Self.rules, closed: candles)
+        guard !events.isEmpty else { return }
+        for event in events { announce(event) }
+        lastEvent = events.last
+        save()
+    }
+
+    /// Trade management settings (automatic stop moves and reversal exits).
+    static var rules: TradeManagement {
+        guard let data = UserDefaults.standard.data(forKey: rulesKey),
+              let rules = try? JSONDecoder().decode(TradeManagement.self, from: data) else { return TradeManagement() }
+        return rules
+    }
+
+    static let rulesKey = "trade.management"
+
+    static func saveRules(_ rules: TradeManagement) {
+        UserDefaults.standard.set(try? JSONEncoder().encode(rules), forKey: rulesKey)
     }
 
     func price(_ symbol: String) -> Double? { prices[symbol] }
@@ -128,11 +153,14 @@ final class PaperTrader {
     }
 
     /// Applies a replayed bar: fills orders and stops/targets inside it.
-    func replay(bar: Candle, symbol: String) {
+    func replay(bar: Candle, symbol: String, closed: [Candle]) {
         guard isReplaying else { return }
         replayTime = bar.time
         prices[symbol] = bar.close
-        let events = account.process(symbol: symbol, candle: bar)
+        let rules = Self.rules
+        var events = account.process(symbol: symbol, candle: bar)
+        // Stops follow the bar's best price; reversals are judged at its close.
+        events += account.manage(symbol: symbol, price: bar.close, time: bar.time, rules: rules, closed: closed)
         for event in events { announce(event, notify: false) }
         if let last = events.last { lastEvent = last }
     }
@@ -158,6 +186,13 @@ final class PaperTrader {
     private func announce(_ event: PaperAccount.Event, notify notifyUser: Bool = true) {
         let details = VoiceSettings.speakDetails
         switch event {
+        case .stopMoved(let position):
+            VoiceAnnouncer.shared.speak(VoiceSettings.language.hasPrefix("vi") ? "Đã dời cắt lỗ" : "Stop moved")
+            if notifyUser {
+                notify(title: "Đã dời SL", body: "\(LiveView.displayName(Self.bareSymbol(position.symbol))) SL → \(Self.spoken(position.stop ?? 0))")
+            }
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            return
         case .opened(let position):
             var text = VoiceSettings.phrase(VoiceSettings.entryKey, default: VoiceSettings.defaultEntry)
             if details { text += ", \(Self.spokenSymbol(position.symbol)) \(Self.spoken(position.entryPrice))" }
@@ -166,12 +201,14 @@ final class PaperTrader {
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         case .closed(let trade):
             let isTarget = trade.reason == .target
+            let vietnamese = VoiceSettings.language.hasPrefix("vi")
             var text = isTarget
                 ? VoiceSettings.phrase(VoiceSettings.targetKey, default: VoiceSettings.defaultTarget)
                 : VoiceSettings.phrase(VoiceSettings.stopKey, default: VoiceSettings.defaultStop)
+            if trade.reason == .reversal { text = vietnamese ? "Đã chốt do đảo chiều" : "Closed on reversal" }
             if details { text += ", \(trade.profit >= 0 ? "plus" : "minus") \(Int(abs(trade.profit).rounded())) dollars" }
             VoiceAnnouncer.shared.speak(text)
-            if notifyUser { notify(title: isTarget ? "Chạm TP (Target fill)" : "Chạm SL (Stop loss fill)",
+            if notifyUser { notify(title: trade.reason == .reversal ? "Tự chốt lệnh (đảo chiều)" : (isTarget ? "Chạm TP (Target fill)" : "Chạm SL (Stop loss fill)"),
                    body: "\(LiveView.displayName(Self.bareSymbol(trade.symbol))) \(String(format: "%+.2f", trade.profit)) $") }
             UINotificationFeedbackGenerator().notificationOccurred(isTarget ? .success : .error)
         }

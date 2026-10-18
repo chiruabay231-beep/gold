@@ -451,7 +451,7 @@ public enum KillzonePivots {
 
     /// Breaks of swing highs/lows by a close. MSS when the break goes against the
     /// trend set by the previous break, BOS when it continues it.
-    static func structureBreaks(_ c: [Candle], config: Config) -> [StructureBreak] {
+    public static func structureBreaks(_ c: [Candle], config: Config) -> [StructureBreak] {
         let length = max(config.swingLength, 1)
         let n = c.count
         guard n > length * 2 + 1 else { return [] }

@@ -399,7 +399,11 @@ final class LiveMarket {
         rescan(alert: false)
     }
 
+    /// Receives the closed bars each time a bar closes; drives trade management.
+    @ObservationIgnored var onBarClose: (@MainActor (String, [Candle]) -> Void)?
+
     func rescan(alert: Bool) {
+        if alert { onBarClose?(symbolKey, closedCandles) }
         guard let store, let id = strategyID, let strategy = store.strategies.first(where: { $0.id == id }) else {
             signals = []
             plots = []

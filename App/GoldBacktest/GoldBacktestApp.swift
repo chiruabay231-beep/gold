@@ -21,6 +21,7 @@ struct GoldBacktestApp: App {
                 .onAppear {
                     let trader = trader
                     market.onPrice = { symbol, price, time in trader.update(symbol: symbol, price: price, time: time) }
+                    market.onBarClose = { symbol, candles in trader.barClosed(symbol: symbol, candles: candles) }
                 }
         }
     }

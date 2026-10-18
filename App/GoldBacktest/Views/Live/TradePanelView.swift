@@ -46,7 +46,7 @@ struct TradePanelView: View {
             }
             orderSection
             Section("Cài đặt") {
-                Button { showAutoStops = true } label: { Label("SL/TP tự động…", systemImage: "slider.horizontal.3") }
+                Button { showAutoStops = true } label: { Label("SL/TP tự động & quản lý lệnh…", systemImage: "slider.horizontal.3") }
                 Button { showVoiceSettings = true } label: { Label("Cảnh báo giọng nói…", systemImage: "speaker.wave.2") }
                 Button { store.selectedTab = .live } label: { Label("Mở biểu đồ Live", systemImage: "chart.xyaxis.line") }
             }
@@ -308,6 +308,7 @@ struct TradePanelView: View {
         case .target: return "Chạm TP"
         case .stop: return "Chạm SL"
         case .manual: return "Đóng tay"
+        case .reversal: return "Tự chốt (đảo chiều)"
         }
     }
 

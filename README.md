@@ -135,6 +135,9 @@ swift test
   từng đường; bấm nút "Buy/Sell Limit" ở dưới để đặt.
 - Kéo tay trên biểu đồ: SL/TP của lệnh đang mở, giá vào và SL/TP của lệnh chờ; kéo từ đường giá vào
   của lệnh đang mở ra phía lỗ → đặt SL, phía lời → đặt TP. Nhãn hiện số tiền lãi/lỗ (USD).
+- Quản lý lệnh tự động (Giao dịch → SL/TP tự động & quản lý lệnh): dời SL khi giá đạt xR (mặc định 2R → khoá +1R),
+  trailing theo bước R; tự chốt khi quay đầu (MSS ngược chiều, nến nhấn chìm, trả lại x% lợi nhuận), chỉ khi
+  đang lời ≥ yR. Áp dụng cho lệnh demo và Replay.
 - Cảnh báo giọng nói (⋯ → Cảnh báo giọng nói): "Target fill" khi chạm TP, "Stop loss fill" khi chạm SL,
   "Order filled" khi lệnh chờ khớp, đọc tín hiệu MUA/BÁN của chiến lược; đổi câu, giọng Anh/Việt.
 - "Chạy nền" giữ app hoạt động khi khoá màn hình (phát âm thanh im lặng) để vẫn nghe cảnh báo; tốn pin.

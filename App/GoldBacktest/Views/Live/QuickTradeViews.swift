@@ -244,6 +244,7 @@ struct AutoStopSettingsView: View {
     @AppStorage(AutoStops.modeKey) private var mode = AutoStopMode.volatility.rawValue
     @AppStorage(AutoStops.valueKey) private var value = 3.0
     @AppStorage(AutoStops.rrKey) private var riskReward = 2.0
+    @State private var rules = PaperTrader.rules
 
     var body: some View {
         NavigationStack {
@@ -271,8 +272,41 @@ struct AutoStopSettingsView: View {
                 } footer: {
                     Text("Sau khi đặt, vẫn kéo tay được đường SL/TP trên biểu đồ.")
                 }
+                Section {
+                    Toggle("Tự dời SL", isOn: $rules.moveStop)
+                    if rules.moveStop {
+                        Stepper("Khi giá đạt \(String(format: "%g", rules.triggerR))R (R:R 1:\(String(format: "%g", rules.triggerR)))",
+                                value: $rules.triggerR, in: 0.5...10, step: 0.5)
+                        Stepper(rules.lockR == 0 ? "Dời SL về hoà vốn" : "Dời SL khoá lời +\(String(format: "%g", rules.lockR))R",
+                                value: $rules.lockR, in: 0...9, step: 0.5)
+                        Stepper(rules.trailStepR == 0 ? "Trailing: tắt" : "Trailing: mỗi +\(String(format: "%g", rules.trailStepR))R dời thêm",
+                                value: $rules.trailStepR, in: 0...5, step: 0.5)
+                    }
+                } header: {
+                    Text("Tự dời SL (lệnh demo và Replay)")
+                } footer: {
+                    Text("1R = khoảng cách từ giá vào tới SL ban đầu. Ví dụ: vào 4000, SL 3990 (1R = 10$): khi giá tới 4020 (2R), SL dời lên 4010 (+1R). Bật trailing thì cứ thêm mỗi bước R, SL dời theo.")
+                }
+                Section {
+                    Toggle("Tự chốt khi giá quay đầu", isOn: $rules.closeOnReversal)
+                    if rules.closeOnReversal {
+                        Stepper("Chỉ khi đang lời ≥ \(String(format: "%g", rules.minProfitR))R", value: $rules.minProfitR, in: 0...10, step: 0.5)
+                        Toggle("MSS / phá cấu trúc ngược chiều", isOn: $rules.reversalStructure)
+                        if rules.reversalStructure {
+                            Stepper("Swing \(rules.swingLength) nến mỗi bên", value: $rules.swingLength, in: 1...10)
+                        }
+                        Toggle("Nến nhấn chìm ngược chiều", isOn: $rules.reversalEngulfing)
+                        Stepper(rules.givebackPercent == 0 ? "Trả lại lợi nhuận: tắt" : "Trả lại \(Int(rules.givebackPercent))% lợi nhuận cao nhất",
+                                value: $rules.givebackPercent, in: 0...90, step: 10)
+                    }
+                } header: {
+                    Text("Tự chốt khi quay đầu")
+                } footer: {
+                    Text("Kiểm tra mỗi khi một cây nến đóng trên khung đang xem. Lệnh đóng ở giá hiện tại và app đọc \"Closed on reversal\".")
+                }
             }
-            .navigationTitle("SL/TP tự động")
+            .onChange(of: rules) { _, value in PaperTrader.saveRules(value) }
+            .navigationTitle("SL/TP & quản lý lệnh")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Xong") { dismiss() } } }
         }

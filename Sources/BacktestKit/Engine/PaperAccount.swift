@@ -11,6 +11,8 @@ public struct PaperAccount: Codable, Hashable, Sendable {
 
     public enum ExitReason: String, Codable, Sendable {
         case target, stop, manual
+        /// Closed automatically on a reversal sign (trade management).
+        case reversal
     }
 
     /// An order waiting for price to reach `entry` (limit or stop, decided by
@@ -39,9 +41,25 @@ public struct PaperAccount: Codable, Hashable, Sendable {
         public var target: Double?
         public var contractSize: Double
         public var openTime: Date
+        /// The stop when the position opened; 1R = |entry − initial stop|.
+        public var initialStop: Double? = nil
+        /// Best price reached since opening (highest for longs, lowest for shorts).
+        public var peakPrice: Double? = nil
 
         public func profit(at price: Double) -> Double {
             (price - entryPrice) * side.sign * lots * contractSize
+        }
+
+        /// Price distance of 1R, if the position had a stop.
+        public var riskDistance: Double? {
+            guard let initialStop else { return nil }
+            let d = abs(entryPrice - initialStop)
+            return d > 0 ? d : nil
+        }
+
+        /// Profit in R at `price` (nil without an initial stop).
+        public func rMultiple(at price: Double) -> Double? {
+            riskDistance.map { (price - entryPrice) * side.sign / $0 }
         }
     }
 
@@ -61,6 +79,8 @@ public struct PaperAccount: Codable, Hashable, Sendable {
     public enum Event: Hashable, Sendable {
         case opened(Position)
         case closed(ClosedTrade)
+        /// Trade management moved the stop of a position.
+        case stopMoved(Position)
     }
 
     public var startingBalance: Double
@@ -93,7 +113,7 @@ public struct PaperAccount: Codable, Hashable, Sendable {
     public mutating func openMarket(symbol: String, side: Side, lots: Double, price: Double, stop: Double?, target: Double?,
                                     time: Date) -> Position {
         let position = Position(symbol: symbol, side: side, lots: lots, entryPrice: price, stop: stop, target: target,
-                                contractSize: Self.contractSize(for: symbol), openTime: time)
+                                contractSize: Self.contractSize(for: symbol), openTime: time, initialStop: stop, peakPrice: price)
         positions.append(position)
         return position
     }
@@ -128,6 +148,8 @@ public struct PaperAccount: Codable, Hashable, Sendable {
         guard let index = positions.firstIndex(where: { $0.id == positionID }) else { return }
         positions[index].stop = stop
         positions[index].target = target
+        // A stop added later defines 1R from then on.
+        if positions[index].initialStop == nil { positions[index].initialStop = stop }
     }
 
     /// Moves a pending order; whether it waits for price to rise or fall is
@@ -157,10 +179,15 @@ public struct PaperAccount: Codable, Hashable, Sendable {
             guard reached else { continue }
             cancel(orderID: order.id)
             var position = Position(symbol: symbol, side: order.side, lots: order.lots, entryPrice: order.entry,
-                                    stop: order.stop, target: order.target, contractSize: order.contractSize, openTime: time)
+                                    stop: order.stop, target: order.target, contractSize: order.contractSize, openTime: time,
+                                    initialStop: order.stop, peakPrice: order.entry)
             position.id = order.id
             positions.append(position)
             events.append(.opened(position))
+        }
+        for i in positions.indices where positions[i].symbol == symbol {
+            let peak = positions[i].peakPrice ?? positions[i].entryPrice
+            positions[i].peakPrice = positions[i].side == .long ? max(peak, price) : min(peak, price)
         }
         for position in positions where position.symbol == symbol {
             let isLong = position.side == .long

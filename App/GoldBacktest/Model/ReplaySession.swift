@@ -74,7 +74,7 @@ final class ReplaySession {
         }
         cursor += 1
         visibleCandles.append(history[cursor])
-        trader?.replay(bar: history[cursor], symbol: symbolKey)
+        trader?.replay(bar: history[cursor], symbol: symbolKey, closed: visibleCandles)
     }
 
     func play() {
