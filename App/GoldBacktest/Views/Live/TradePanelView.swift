@@ -50,7 +50,6 @@ struct TradePanelView: View {
                 Button { showVoiceSettings = true } label: { Label("Cảnh báo giọng nói…", systemImage: "speaker.wave.2") }
                 Button { store.selectedTab = .live } label: { Label("Mở biểu đồ Live", systemImage: "chart.xyaxis.line") }
             }
-            LiveSignalsSection()
             Section {
                 NavigationLink {
                     DatasetListView()
@@ -90,23 +89,36 @@ struct TradePanelView: View {
     // MARK: - Account
 
     private var accountSection: some View {
-        Section("Tài khoản") {
-            LabeledContent("Số dư", value: money(trader.account.balance))
-            LabeledContent("Vốn hiện tại (equity)", value: money(trader.equity))
-            LabeledContent("Lãi/lỗ đang mở") {
-                Text(signedMoney(trader.openProfit)).foregroundColor(trader.openProfit >= 0 ? .green : .red)
+        let closed = trader.account.balance - trader.account.startingBalance
+        let wins = trader.account.history.filter { $0.profit > 0 }.count
+        let total = trader.account.history.count
+        return Section {
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
+                GridRow {
+                    stat("Số dư", money(trader.account.balance), .primary)
+                    stat("Vốn hiện tại", money(trader.equity), .primary)
+                }
+                GridRow {
+                    stat("Lãi/lỗ đang mở", signedMoney(trader.openProfit), trader.openProfit >= 0 ? .green : .red)
+                    stat("Đã chốt", signedMoney(closed), closed >= 0 ? .green : .red)
+                }
+                GridRow {
+                    stat("Lệnh đã đóng", "\(total)", .primary)
+                    stat("Tỉ lệ thắng", total == 0 ? "–" : String(format: "%.0f%%", Double(wins) / Double(total) * 100), .primary)
+                }
             }
-            LabeledContent("Tổng lãi/lỗ đã chốt") {
-                let total = trader.account.balance - trader.account.startingBalance
-                Text(signedMoney(total)).foregroundColor(total >= 0 ? .green : .red)
-            }
-            if !trader.account.history.isEmpty {
-                let wins = trader.account.history.filter { $0.profit > 0 }.count
-                LabeledContent("Tỉ lệ thắng",
-                               value: String(format: "%.0f%% (%d/%d)", Double(wins) / Double(trader.account.history.count) * 100,
-                                             wins, trader.account.history.count))
-            }
+            .padding(.vertical, 4)
+        } header: {
+            Text("Tài khoản demo")
         }
+    }
+
+    private func stat(_ title: String, _ value: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption).foregroundColor(.secondary)
+            Text(value).font(.headline.monospacedDigit()).foregroundColor(color)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Orders
@@ -316,9 +328,6 @@ struct VoiceSettingsView: View {
     @AppStorage(VoiceSettings.targetKey) private var target = VoiceSettings.defaultTarget
     @AppStorage(VoiceSettings.stopKey) private var stop = VoiceSettings.defaultStop
     @AppStorage(VoiceSettings.entryKey) private var entry = VoiceSettings.defaultEntry
-    @AppStorage(VoiceSettings.buyKey) private var buy = VoiceSettings.defaultBuy
-    @AppStorage(VoiceSettings.sellKey) private var sell = VoiceSettings.defaultSell
-    @AppStorage(VoiceSettings.signalsKey) private var signals = true
     @AppStorage(VoiceSettings.detailsKey) private var details = false
     @AppStorage(VoiceSettings.backgroundKey) private var background = false
     @AppStorage(VoiceSettings.keepAwakeKey) private var keepAwake = false
@@ -338,11 +347,6 @@ struct VoiceSettingsView: View {
                     phraseRow("Chạm SL", text: $stop)
                     phraseRow("Lệnh chờ khớp", text: $entry)
                     Toggle("Đọc thêm mã, giá, số tiền lãi/lỗ", isOn: $details)
-                }
-                Section("Tín hiệu chiến lược") {
-                    Toggle("Đọc tín hiệu MUA/BÁN", isOn: $signals)
-                    phraseRow("Tín hiệu MUA", text: $buy)
-                    phraseRow("Tín hiệu BÁN", text: $sell)
                 }
                 Section {
                     Toggle("Chạy nền (nghe khi khoá màn hình)", isOn: $background)

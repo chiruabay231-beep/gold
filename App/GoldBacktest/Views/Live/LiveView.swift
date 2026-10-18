@@ -12,7 +12,6 @@ struct LiveView: View {
 
     @AppStorage("live.theme") private var themeName = "tradingView"
     @AppStorage("live.showMA") private var showMA = false
-    @AppStorage("live.showStrategyPlots") private var showStrategyPlots = true
     @AppStorage("live.killzonePivots.on") private var showKillzonePivots = true
     @AppStorage(KillzonePivotsSettings.storageKey) private var killzonePivotsJSON = ""
     @AppStorage("live.volume") private var showVolume = true
@@ -68,7 +67,6 @@ struct LiveView: View {
         VStack(spacing: 0) {
             header
             chartPanel
-            latestSignalBar
             bottomBar
         }
         .background(theme.background.ignoresSafeArea())
@@ -76,9 +74,8 @@ struct LiveView: View {
         .onAppear {
             UIApplication.shared.isIdleTimerDisabled = keepAwake
             market.start(store: store)
-            if market.strategyID == nil {
-                market.track(strategy: store.strategies.first { $0.name.hasPrefix("ICT Silver") }?.id ?? store.strategies.first?.id)
-            }
+            // Live strategy signals are not used on this screen any more.
+            market.track(strategy: nil)
         }
         .onChange(of: scenePhase) { _, phase in
             switch phase {
@@ -238,9 +235,6 @@ struct LiveView: View {
         var names: [String] = []
         if showKillzonePivots { names.append(Self.killzonePivotsName) }
         if showMA { names.append("MA 7 / 25 / 99") }
-        if showStrategyPlots, let strategy = store.strategies.first(where: { $0.id == market.strategyID }) {
-            names.append(strategy.name)
-        }
         return names
     }
 
@@ -271,17 +265,36 @@ struct LiveView: View {
                     }
                 }
             }
-            Button {
-                withAnimation(.easeInOut(duration: 0.15)) { legendExpanded.toggle() }
-            } label: {
-                Image(systemName: legendExpanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundColor(theme.text)
-                    .frame(width: 30, height: 20)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.grid, lineWidth: 1))
+            HStack(spacing: 10) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { legendExpanded.toggle() }
+                } label: {
+                    Image(systemName: legendExpanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(theme.text)
+                        .frame(width: 30, height: 22)
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.grid, lineWidth: 1))
+                }
+                // Favourite timeframes, one tap to switch.
+                ForEach(Self.quickIntervals, id: \.self) { interval in
+                    Button {
+                        viewport = ChartViewport()
+                        market.select(interval: interval)
+                    } label: {
+                        Text(Self.label(interval))
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(interval == market.interval ? .white : theme.primaryText)
+                            .frame(minWidth: 40, minHeight: 22)
+                            .background(interval == market.interval ? theme.accent : .clear, in: RoundedRectangle(cornerRadius: 5))
+                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(theme.grid, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
             }
         }
     }
+
+    static let quickIntervals: [BinanceClient.Interval] = [.m1, .m5, .m15]
 
     // MARK: - Chart
 
@@ -301,7 +314,6 @@ struct LiveView: View {
         return ZStack(alignment: .trailing) {
             CandleChart(candles: market.candles,
                         overlays: overlays,
-                        markers: markers,
                         showVolume: showVolume,
                         countdownInterval: market.interval.seconds,
                         theme: theme,
@@ -691,66 +703,7 @@ struct LiveView: View {
                                        color: BinanceTheme.maColors[index]))
             }
         }
-        if showStrategyPlots {
-            lines += ChartPalette.lines(from: market.plots, offset: 3)
-        }
         return lines
-    }
-
-    private var markers: [ChartMarker] {
-        market.signals.compactMap { signal in
-            switch signal.kind {
-            case .longEntry: return ChartMarker(index: signal.barIndex, price: signal.price, kind: .buy)
-            case .shortEntry: return ChartMarker(index: signal.barIndex, price: signal.price, kind: .sell)
-            case .longExit, .shortExit: return nil
-            }
-        }
-    }
-
-    // MARK: - Latest signal
-
-    /// One line with the newest signal; the full list and the strategy
-    /// picker live in the Data tab.
-    private var latestSignalBar: some View {
-        let strategy = store.strategies.first { $0.id == market.strategyID }
-        let latest = market.signals.last
-        return Button {
-            store.selectedTab = .trade
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "bolt.fill").foregroundColor(BinanceTheme.yellow)
-                if let strategy {
-                    Text(strategy.name)
-                        .foregroundColor(theme.text)
-                        .lineLimit(1)
-                    if let error = market.strategyError {
-                        Text(error).foregroundColor(theme.down).lineLimit(1)
-                    } else if let latest {
-                        Text(latest.kind.label)
-                            .fontWeight(.bold)
-                            .foregroundColor(LiveSignalRow.color(for: latest.kind))
-                        Text(CandleChart.format(latest.price, CandleChart.decimals(for: latest.price)))
-                            .foregroundColor(theme.primaryText)
-                        Text(latest.time.formatted(.dateTime.hour().minute()))
-                            .foregroundColor(theme.text)
-                    } else {
-                        Text("Chưa có tín hiệu").foregroundColor(theme.text)
-                    }
-                } else {
-                    Text("Chọn chiến lược để nhận tín hiệu").foregroundColor(theme.text)
-                }
-                Spacer(minLength: 4)
-                Image(systemName: market.notificationsEnabled ? "bell.fill" : "bell.slash")
-                    .foregroundColor(theme.text)
-                Image(systemName: "chevron.right")
-                    .foregroundColor(theme.text)
-            }
-            .font(.system(size: 12).monospacedDigit())
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            .background(theme.panel)
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: - Bottom tool bar
@@ -850,7 +803,6 @@ struct LiveView: View {
             }
             Section("Khác") {
                 Toggle("MA 7 / 25 / 99", isOn: $showMA)
-                Toggle("Đường của chiến lược", isOn: $showStrategyPlots)
                 Toggle("Khối lượng", isOn: $showVolume)
                 Toggle("Nhãn Cao / Thấp", isOn: $showHighLow)
             }
