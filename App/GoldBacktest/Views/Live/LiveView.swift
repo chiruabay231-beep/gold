@@ -11,7 +11,7 @@ struct LiveView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("live.theme") private var themeName = "tradingView"
-    @AppStorage("live.showMA") private var showMA = false
+    @AppStorage("live.showEMA200") private var showEMA200 = true
     @AppStorage("live.killzonePivots.on") private var showKillzonePivots = true
     @AppStorage(KillzonePivotsSettings.storageKey) private var killzonePivotsJSON = ""
     @AppStorage("live.volume") private var showVolume = true
@@ -249,7 +249,7 @@ struct LiveView: View {
     private var activeLayerNames: [String] {
         var names: [String] = []
         if showKillzonePivots { names.append(Self.killzonePivotsName) }
-        if showMA { names.append("MA 7 / 25 / 99") }
+        if showEMA200 { names.append("EMA 200") }
         return names
     }
 
@@ -768,12 +768,10 @@ struct LiveView: View {
 
     private var overlays: [ChartLine] {
         var lines: [ChartLine] = []
-        if showMA {
+        if showEMA200 {
             let closes = chartCandles.map { $0.close }
-            for (index, length) in [7, 25, 99].enumerated() {
-                lines.append(ChartLine(title: "MA(\(length))", values: TA.sma(closes, length),
-                                       color: BinanceTheme.maColors[index]))
-            }
+            lines.append(ChartLine(title: "EMA(200)", values: TA.ema(closes, 200),
+                                   color: Color(red: 1.0, green: 0.596, blue: 0.0)))
         }
         return lines
     }
@@ -852,7 +850,7 @@ struct LiveView: View {
                 }
             }
             Section("Khác") {
-                Toggle("MA 7 / 25 / 99", isOn: $showMA)
+                Toggle("EMA 200", isOn: $showEMA200)
                 Toggle("Khối lượng", isOn: $showVolume)
                 Toggle("Nhãn Cao / Thấp", isOn: $showHighLow)
             }

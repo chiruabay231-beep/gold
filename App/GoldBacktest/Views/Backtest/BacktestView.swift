@@ -156,6 +156,12 @@ struct BacktestView: View {
             }
         }
         .navigationTitle("Backtest")
+        .toolbar {
+            // Strategies no longer have their own tab; they are edited from here.
+            ToolbarItem(placement: .primaryAction) {
+                NavigationLink { StrategyListView() } label: { Label("Chiến lược", systemImage: "list.bullet.rectangle") }
+            }
+        }
         .navigationDestination(item: $run) { run in
             BacktestResultView(run: run)
         }

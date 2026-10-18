@@ -138,6 +138,12 @@ swift test
 - "Chạy nền" giữ app hoạt động khi khoá màn hình (phát âm thanh im lặng) để vẫn nghe cảnh báo; tốn pin.
 - Không kết nối trực tiếp được tài khoản demo MT5 (Exness/OANDA) từ iPhone: MT5 không có API cho điện thoại.
 
+**Tin tức** (tab thay cho Chiến lược; chiến lược nay mở từ nút trên tab Backtest)
+- Lịch kinh tế tuần này (Forex Factory): tin USD đỏ / cam ảnh hưởng XAUUSD, dự báo, kỳ trước, giờ địa phương.
+- Đếm ngược tới tin đỏ USD tiếp theo; tuỳ chọn thông báo trước 15 phút.
+- Tin vàng 2 ngày gần nhất (Google News, tiếng Anh hoặc tiếng Việt), chạm để đọc.
+- Biểu đồ Live: EMA 200 (thay MA 7/25/99).
+
 **Dữ liệu**
 - Nhập CSV xuất từ MT5/Exness (kể cả file UTF-16, cột `<DATE>` `<TIME>` riêng),
   TradingView, Binance… Tự nhận dấu phân cách `,` `;` tab và nhiều định dạng thời gian.

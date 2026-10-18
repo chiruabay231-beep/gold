@@ -15,9 +15,9 @@ struct RootView: View {
             NavigationStack { IndicatorListView() }
                 .tabItem { Label("Chỉ báo", systemImage: "function") }
                 .tag(AppTab.indicators)
-            NavigationStack { StrategyListView() }
-                .tabItem { Label("Chiến lược", systemImage: "list.bullet.rectangle") }
-                .tag(AppTab.strategies)
+            NavigationStack { NewsView() }
+                .tabItem { Label("Tin tức", systemImage: "newspaper") }
+                .tag(AppTab.news)
             NavigationStack { BacktestView() }
                 .tabItem { Label("Backtest", systemImage: "play.circle") }
                 .tag(AppTab.backtest)
