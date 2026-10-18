@@ -21,6 +21,7 @@ struct KillzonePivotsSettingsView: View {
             Form {
                 general
                 killzones
+                macros
                 boxes
                 pivots
                 opens
@@ -93,6 +94,49 @@ struct KillzonePivotsSettingsView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var macros: some View {
+        Section {
+            Toggle("Hiện macros", isOn: $settings.config.showMacros)
+            if settings.config.showMacros {
+                Picker("Chỉ vẽ trên khung ≤", selection: $settings.config.macroTimeframeLimitMinutes) {
+                    ForEach([1.0, 5.0, 15.0, 30.0], id: \.self) { Text("\(Int($0))m").tag($0) }
+                }
+                Picker("Nhãn hộp", selection: $settings.config.macroTimeLabels) {
+                    Text("Giờ (08:50–09:10)").tag(true)
+                    Text("Tên macro").tag(false)
+                }
+                colorRow("Màu", color: $settings.macroColor)
+                ForEach(settings.config.macros.indices, id: \.self) { index in
+                    DisclosureGroup {
+                        TextField("Tên", text: $settings.config.macros[index].name)
+                        timeRow("Bắt đầu", hour: $settings.config.macros[index].start)
+                        timeRow("Kết thúc", hour: $settings.config.macros[index].end)
+                    } label: {
+                        HStack {
+                            Toggle(isOn: $settings.config.macros[index].enabled) { EmptyView() }.labelsHidden()
+                            Text(settings.config.macros[index].name)
+                            Spacer()
+                            Text("\(Self.clock(settings.config.macros[index].start)) – \(Self.clock(settings.config.macros[index].end))")
+                                .font(.footnote.monospacedDigit())
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+                .onDelete { settings.config.macros.remove(atOffsets: $0) }
+                Button {
+                    settings.config.macros.append(KillzonePivots.Macro(name: "Macro \(settings.config.macros.count + 1)",
+                                                                       start: 9, end: 9.5))
+                } label: {
+                    Label("Thêm macro", systemImage: "plus")
+                }
+            }
+        } header: {
+            Text("ICT Macros")
+        } footer: {
+            Text("Các khung giờ ngắn (thường 20 phút) mà ICT cho là thuật toán hay tạo cú quét thanh khoản hoặc lấp FVG. Vuốt sang trái để xoá một macro.")
         }
     }
 

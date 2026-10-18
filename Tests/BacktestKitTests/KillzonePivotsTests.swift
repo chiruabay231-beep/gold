@@ -73,4 +73,15 @@ final class KillzonePivotsTests: XCTestCase {
         let roundTrip = try JSONDecoder().decode(KillzonePivots.Config.self, from: JSONEncoder().encode(config))
         XCTAssertEqual(roundTrip, config)
     }
+
+    func testMacroBoxes() {
+        let data = candles { c in c[36].high = 120 }   // 09:00, inside the 08:50–09:10 macro
+        let output = KillzonePivots.compute(candles: data, barInterval: 900, config: KillzonePivots.Config())
+        let amMacro = output.macroBoxes.first { $0.macro == 2 && $0.range.contains(36) }
+        XCTAssertEqual(amMacro?.range, 36...36)   // 15m bars: only the 09:00 bar is inside
+        XCTAssertEqual(amMacro?.high, 120)
+        var config = KillzonePivots.Config()
+        config.macroTimeframeLimitMinutes = 5
+        XCTAssertTrue(KillzonePivots.compute(candles: data, barInterval: 900, config: config).macroBoxes.isEmpty)
+    }
 }

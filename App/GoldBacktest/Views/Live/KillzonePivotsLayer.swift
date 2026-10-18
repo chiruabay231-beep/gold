@@ -23,6 +23,7 @@ struct KillzonePivotsSettings: Codable, Hashable {
     var timestampStyle = LineStyle.dotted
     var periodColor = RGBAColor(red: 0.075, green: 0.090, blue: 0.133)
     var labelColor = RGBAColor(red: 0.471, green: 0.482, blue: 0.525)
+    var macroColor = RGBAColor(red: 0.471, green: 0.482, blue: 0.525)
 
     static let storageKey = "live.killzonePivots"
 
@@ -45,6 +46,7 @@ struct KillzonePivotsSettings: Codable, Hashable {
         timestampStyle = try c.decodeIfPresent(LineStyle.self, forKey: .timestampStyle) ?? d.timestampStyle
         periodColor = try c.decodeIfPresent(RGBAColor.self, forKey: .periodColor) ?? d.periodColor
         labelColor = try c.decodeIfPresent(RGBAColor.self, forKey: .labelColor) ?? d.labelColor
+        macroColor = try c.decodeIfPresent(RGBAColor.self, forKey: .macroColor) ?? d.macroColor
     }
 
     static func decode(_ json: String) -> KillzonePivotsSettings {
@@ -86,6 +88,14 @@ struct KillzonePivotsLayer {
             boxes.append(SessionBox(id: "kz-\(box.session)-\(box.range.lowerBound)", range: box.range, high: box.high, low: box.low,
                                     label: config.showBoxLabels ? session.name : "", color: settings.sessionColor(box.session),
                                     style: .filled, fillOpacity: settings.boxOpacity, showBorder: settings.showBoxBorder))
+        }
+        for box in output.macroBoxes {
+            let macro = config.macros[box.macro]
+            let label = config.macroTimeLabels
+                ? "\(KillzonePivotsSettingsView.clock(macro.start))–\(KillzonePivotsSettingsView.clock(macro.end))"
+                : macro.name
+            boxes.append(SessionBox(id: "macro-\(box.macro)-\(box.range.lowerBound)", range: box.range, high: box.high,
+                                    low: box.low, label: label, color: settings.macroColor.color, style: .dotted))
         }
         for level in output.levels {
             var segment = ChartSegment(start: Double(level.start), end: level.end.map(Double.init), price: level.price,

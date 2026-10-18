@@ -4,7 +4,8 @@ import Foundation
 /// TradingView indicator: session boxes, session highs/lows extended until
 /// price trades through them, opening-price lines, vertical timestamps, a
 /// daily cutoff time, previous day/week/month highs and lows, day-of-week
-/// labels and session range statistics. All times are in `timeZoneID`.
+/// labels, session range statistics and ICT macro windows. All times are
+/// in `timeZoneID`.
 public enum KillzonePivots {
     public struct Session: Codable, Hashable, Sendable {
         public var enabled: Bool
@@ -22,6 +23,21 @@ public enum KillzonePivots {
             self.end = end
             self.highLabel = highLabel
             self.lowLabel = lowLabel
+        }
+    }
+
+    /// A short ICT "macro" window, drawn as a dotted box on low timeframes.
+    public struct Macro: Codable, Hashable, Sendable {
+        public var enabled: Bool
+        public var name: String
+        public var start: Double
+        public var end: Double
+
+        public init(enabled: Bool = true, name: String, start: Double, end: Double) {
+            self.enabled = enabled
+            self.name = name
+            self.start = start
+            self.end = end
         }
     }
 
@@ -91,6 +107,22 @@ public enum KillzonePivots {
         /// Sessions averaged in the range table.
         public var rangeAverageCount = 5
 
+        public var showMacros = true
+        /// Macros are only drawn on bars of at most this many minutes.
+        public var macroTimeframeLimitMinutes = 15.0
+        /// Label macro boxes with their times (true) or names (false).
+        public var macroTimeLabels = true
+        public var macros: [Macro] = [
+            Macro(name: "London 1", start: 2 + 33.0 / 60, end: 3),
+            Macro(name: "London 2", start: 4 + 3.0 / 60, end: 4.5),
+            Macro(name: "NY AM 1", start: 8 + 50.0 / 60, end: 9 + 10.0 / 60),
+            Macro(name: "NY AM 2", start: 9 + 50.0 / 60, end: 10 + 10.0 / 60),
+            Macro(name: "NY AM 3", start: 10 + 50.0 / 60, end: 11 + 10.0 / 60),
+            Macro(name: "NY Lunch", start: 11 + 50.0 / 60, end: 12 + 10.0 / 60),
+            Macro(name: "NY PM", start: 13 + 10.0 / 60, end: 13 + 40.0 / 60),
+            Macro(name: "Last Hour", start: 15.25, end: 15.75),
+        ]
+
         public init() {}
 
         // Missing keys keep their defaults, so settings saved by an older
@@ -119,6 +151,10 @@ public enum KillzonePivots {
             showDayOfWeek = try c.decodeIfPresent(Bool.self, forKey: .showDayOfWeek) ?? d.showDayOfWeek
             showRangeTable = try c.decodeIfPresent(Bool.self, forKey: .showRangeTable) ?? d.showRangeTable
             rangeAverageCount = try c.decodeIfPresent(Int.self, forKey: .rangeAverageCount) ?? d.rangeAverageCount
+            showMacros = try c.decodeIfPresent(Bool.self, forKey: .showMacros) ?? d.showMacros
+            macroTimeframeLimitMinutes = try c.decodeIfPresent(Double.self, forKey: .macroTimeframeLimitMinutes) ?? d.macroTimeframeLimitMinutes
+            macroTimeLabels = try c.decodeIfPresent(Bool.self, forKey: .macroTimeLabels) ?? d.macroTimeLabels
+            macros = try c.decodeIfPresent([Macro].self, forKey: .macros) ?? d.macros
         }
     }
 
@@ -148,6 +184,13 @@ public enum KillzonePivots {
         public var mitigated: Bool
     }
 
+    public struct MacroBox: Hashable, Sendable {
+        public var macro: Int
+        public var range: ClosedRange<Int>
+        public var high: Double
+        public var low: Double
+    }
+
     public struct Stamp: Hashable, Sendable {
         public var mark: Int
         public var index: Int
@@ -168,6 +211,7 @@ public enum KillzonePivots {
 
     public struct Output: Sendable {
         public var boxes: [Box] = []
+        public var macroBoxes: [MacroBox] = []
         public var levels: [Level] = []
         public var stamps: [Stamp] = []
         public var dayLabels: [DayLabel] = []
@@ -241,6 +285,18 @@ public enum KillzonePivots {
             if let latest = ranges.last {
                 let recent = ranges.suffix(max(config.rangeAverageCount, 1))
                 output.ranges.append(RangeStat(session: s, latest: latest, average: recent.reduce(0, +) / Double(recent.count)))
+            }
+        }
+
+        // Macros: dotted boxes over their few bars, on low timeframes only.
+        if config.showMacros, barInterval <= config.macroTimeframeLimitMinutes * 60 {
+            for (m, macro) in config.macros.enumerated() where macro.enabled {
+                for window in ICT.sessionWindows(clock: clock, start: macro.start, end: macro.end)
+                where clock.day[window.upperBound] >= firstDay {
+                    let bars = candles[window]
+                    output.macroBoxes.append(MacroBox(macro: m, range: window, high: bars.map(\.high).max() ?? 0,
+                                                      low: bars.map(\.low).min() ?? 0))
+                }
             }
         }
 
