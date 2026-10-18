@@ -45,8 +45,7 @@ struct LiveView: View {
     @State private var settingsDrawing: Drawing?
 
     @State private var viewport = ChartViewport()
-    @State private var customSymbol = ""
-    @State private var askingSymbol = false
+    @State private var showSymbolPicker = false
     @State private var showDrawingBar = false
     @State private var activeTool: DrawingTool?
     @State private var selectedDrawingID: UUID?
@@ -110,11 +109,18 @@ struct LiveView: View {
             }
             Button("Huỷ", role: .cancel) { demoOrderDrawing = nil }
         }
-        .alert("Nhập mã Binance", isPresented: $askingSymbol) {
-            TextField("VD: ADAUSDT", text: $customSymbol)
-                .textInputAutocapitalization(.characters)
-            Button("Huỷ", role: .cancel) {}
-            Button("Mở") { open(symbol: customSymbol) }
+        .sheet(isPresented: $showSymbolPicker) {
+            SymbolPickerView(currentID: market.symbolKey, onOpen: { item in
+                switch item.source {
+                case .oanda: open(oanda: item.symbol)
+                default: open(symbol: item.symbol, source: item.source)
+                }
+            }, onOandaToken: {
+                showSymbolPicker = false
+                pendingOandaInstrument = nil
+                // Open the token sheet once the picker has gone.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { showOandaSettings = true }
+            })
         }
         .alert("Nhãn / ghi chú", isPresented: Binding(get: { editingTextDrawing != nil },
                                                       set: { if !$0 { editingTextDrawing = nil } })) {
@@ -795,33 +801,7 @@ struct LiveView: View {
     }
 
     private var symbolMenu: some View {
-        Menu {
-            Section("Binance Futures · Vàng, Bạc (miễn phí)") {
-                ForEach(LiveMarket.futuresSymbols, id: \.self) { symbol in
-                    Button(Self.displayName(symbol)) { open(symbol: symbol, source: .binanceFutures) }
-                }
-            }
-            Section("OANDA · Vàng, Forex, chỉ số") {
-                ForEach(OandaClient.instruments, id: \.self) { instrument in
-                    Button(Self.displayName(instrument)) { open(oanda: instrument) }
-                }
-                Button {
-                    pendingOandaInstrument = nil
-                    showOandaSettings = true
-                } label: {
-                    Label("Token OANDA…", systemImage: "key")
-                }
-            }
-            Section("Binance · Crypto") {
-                ForEach(LiveMarket.popularSymbols, id: \.self) { symbol in
-                    Button(Self.displayName(symbol)) { open(symbol: symbol) }
-                }
-                Button("Nhập mã khác…") {
-                    customSymbol = ""
-                    askingSymbol = true
-                }
-            }
-        } label: {
+        Button { showSymbolPicker = true } label: {
             HStack(spacing: 6) {
                 Circle()
                     .fill(LinearGradient(colors: [BinanceTheme.yellow, .orange], startPoint: .top, endPoint: .bottom))
