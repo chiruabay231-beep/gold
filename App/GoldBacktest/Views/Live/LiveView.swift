@@ -11,9 +11,8 @@ struct LiveView: View {
     @AppStorage("live.theme") private var themeName = "tradingView"
     @AppStorage("live.showMA") private var showMA = false
     @AppStorage("live.showStrategyPlots") private var showStrategyPlots = true
-    @AppStorage("live.ictLevels") private var showICTLevels = true
-    @AppStorage("live.killzones") private var showKillzones = true
-    @AppStorage("live.macros") private var showMacros = true
+    @AppStorage("live.killzonePivots.on") private var showKillzonePivots = true
+    @AppStorage(KillzonePivotsSettings.storageKey) private var killzonePivotsJSON = ""
     @AppStorage("live.volume") private var showVolume = true
     @AppStorage("live.highLow") private var showHighLow = true
     @AppStorage("live.candleStyle") private var candleStyle = CandleStyle.candles.rawValue
@@ -41,7 +40,8 @@ struct LiveView: View {
     @State private var legendExpanded = true
     @State private var fullScreen = false
     @State private var confirmClear = false
-    @State private var layerCache = ICTLayerCache()
+    @State private var killzoneCache = KillzonePivotsCache()
+    @State private var showKillzoneSettings = false
     @State private var showOandaSettings = false
     /// OANDA instrument to open once a token has been saved.
     @State private var pendingOandaInstrument: String?
@@ -100,6 +100,9 @@ struct LiveView: View {
                 }
                 pendingOandaInstrument = nil
             }
+        }
+        .sheet(isPresented: $showKillzoneSettings) {
+            KillzonePivotsSettingsView(json: $killzonePivotsJSON)
         }
         .sheet(isPresented: $showChartSettings) {
             ChartSettingsView(theme: theme, colorsJSON: $candleColorsJSON, candleStyle: $candleStyle,
@@ -173,8 +176,7 @@ struct LiveView: View {
 
     private var activeLayerNames: [String] {
         var names: [String] = []
-        if showICTLevels { names.append("ICT Levels (Midnight, AM Open, PDH/PDL, Asia, London)") }
-        if showKillzones || showMacros { names.append("ICT Sessions" + (showMacros ? " + Macros" : "")) }
+        if showKillzonePivots { names.append(Self.killzonePivotsName) }
         if showMA { names.append("MA 7 / 25 / 99") }
         if showStrategyPlots, let strategy = store.strategies.first(where: { $0.id == market.strategyID }) {
             names.append(strategy.name)
@@ -186,10 +188,27 @@ struct LiveView: View {
         VStack(alignment: .leading, spacing: 3) {
             if legendExpanded {
                 ForEach(activeLayerNames, id: \.self) { name in
-                    Text(name)
-                        .font(.system(size: 12))
-                        .foregroundColor(theme.primaryText)
-                        .lineLimit(1)
+                    if name == Self.killzonePivotsName {
+                        // Tap the name to open its settings, like TradingView's legend.
+                        Button { showKillzoneSettings = true } label: {
+                            HStack(spacing: 6) {
+                                Text(name)
+                                Image(systemName: "gearshape").font(.system(size: 10))
+                                if killzoneLayer.output.hiddenByTimeframe {
+                                    Text("· ẩn trên khung này").foregroundColor(theme.text)
+                                }
+                            }
+                            .font(.system(size: 12))
+                            .foregroundColor(theme.primaryText)
+                            .lineLimit(1)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Text(name)
+                            .font(.system(size: 12))
+                            .foregroundColor(theme.primaryText)
+                            .lineLimit(1)
+                    }
                 }
             }
             Button {
@@ -206,18 +225,30 @@ struct LiveView: View {
 
     // MARK: - Chart
 
+    static let killzonePivotsName = "ICT Killzones + Pivots [TFO]"
+
+    private var killzoneSettings: KillzonePivotsSettings { killzoneCache.settings(json: killzonePivotsJSON) }
+
+    private var killzoneLayer: KillzonePivotsLayer {
+        killzoneCache.layer(candles: market.candles, barInterval: market.interval.seconds,
+                            settings: killzoneSettings, enabled: showKillzonePivots)
+    }
+
     private var chartPanel: some View {
-        let layers = layerCache.layers(
-            candles: market.candles, barInterval: market.interval.seconds,
-            options: ICTLayers.Options(levels: showICTLevels, killzones: showKillzones, macros: showMacros))
+        let settings = killzoneSettings
+        let layer = killzoneCache.layer(candles: market.candles, barInterval: market.interval.seconds,
+                                        settings: settings, enabled: showKillzonePivots)
         return ZStack(alignment: .trailing) {
             CandleChart(candles: market.candles,
-                        overlays: overlays + layers.0,
+                        overlays: overlays,
                         markers: markers,
                         showVolume: showVolume,
                         countdownInterval: market.interval.seconds,
                         theme: theme,
-                        sessionBoxes: layers.1,
+                        sessionBoxes: layer.boxes,
+                        segments: layer.segments,
+                        verticalLines: layer.verticalLines,
+                        notes: layer.notes,
                         showHighLowLabels: showHighLow,
                         drawings: hideDrawings ? [] : drawings,
                         drawingTool: activeTool,
@@ -243,6 +274,16 @@ struct LiveView: View {
                     activeTool = nil
                 }
                 .padding(.leading, 6)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if showKillzonePivots, settings.config.showRangeTable {
+                KillzoneRangeTable(layer: layer, settings: settings,
+                                   decimals: priceDecimals ?? CandleChart.decimals(for: market.candles.last?.close ?? 1),
+                                   theme: theme)
+                    .padding(.trailing, 72)
+                    .padding(.top, 40)
+                    .allowsHitTesting(false)
             }
         }
         .overlay(alignment: .top) {
@@ -461,9 +502,12 @@ struct LiveView: View {
     private var indicatorMenu: some View {
         Menu {
             Section("ICT") {
-                Toggle("Mức giá (Midnight, AM Open, PDH/PDL…)", isOn: $showICTLevels)
-                Toggle("Killzone (Asia, London, NY AM)", isOn: $showKillzones)
-                Toggle("ICT Macros (khung ≤ 15m)", isOn: $showMacros)
+                Toggle(Self.killzonePivotsName, isOn: $showKillzonePivots)
+                Button {
+                    showKillzoneSettings = true
+                } label: {
+                    Label("Cài đặt Killzones + Pivots…", systemImage: "gearshape")
+                }
             }
             Section("Khác") {
                 Toggle("MA 7 / 25 / 99", isOn: $showMA)

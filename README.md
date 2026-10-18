@@ -97,8 +97,11 @@ swift test
   ✏️ vẽ · ƒ chỉ báo · ⋯ · hoàn tác · toàn màn hình.
 - Công cụ vẽ: đường ngang, tia ngang, đường dọc, đường xu hướng, hộp vùng giá, vị thế Long/Short
   (SL/TP + RR chỉnh được), chữ. Chạm để chọn, kéo để di chuyển, đổi màu, xoá, hoàn tác; lưu theo mã.
-- Lớp ICT: Midnight Open, AM Open (09:30 NY), Prev Day High/Low, Asian/London High/Low với nhãn trên
-  trục giá; hộp killzone Asia/London/NY AM; hộp ICT macro (08:50–09:10 NY…) kèm giờ địa phương.
+- Chỉ báo **ICT Killzones + Pivots [TFO]** (viết lại theo chỉ báo cùng tên trên TradingView): 5 killzone
+  (Asia 20:00–00:00, London 02:00–05:00, NY AM 09:30–11:00, NY Lunch 12:00–13:00, NY PM 13:30–16:00,
+  giờ New York), pivot đỉnh/đáy phiên kéo dài tới khi bị phá (AS.H, LO.L…), giá mở cửa (DO, 09:30…),
+  mốc thời gian dọc, giờ cắt, PDH/PDL/PWH/PWL/PMH/PML, nhãn thứ, bảng biên độ phiên. Chạm tên chỉ báo
+  trên biểu đồ (hoặc ƒ → Cài đặt Killzones + Pivots) để chỉnh mọi thông số.
 
 **Cài đặt biểu đồ (⋯ → Cài đặt biểu đồ)**, giống trang "Mã" của TradingView
 - Kiểu nến (nến, nến rỗng, thanh OHLC, đường); màu theo giá đóng cửa phiên trước.

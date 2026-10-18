@@ -112,6 +112,35 @@ struct SessionBox: Identifiable {
     var label: String
     var color: Color
     var style: Style
+    var fillOpacity = 0.10
+    var showBorder = false
+}
+
+/// A horizontal line between two bars with a small label at its right end;
+/// `end == nil` extends to the price axis. Not part of the price auto-scale.
+struct ChartSegment {
+    var start: Double
+    var end: Double?
+    var price: Double
+    var color: Color
+    var width: CGFloat = 1
+    var dash: [CGFloat] = []
+    var label = ""
+}
+
+/// A vertical line at a bar (timestamps).
+struct ChartVerticalLine {
+    var index: Int
+    var color: Color
+    var dash: [CGFloat] = [4, 4]
+    var label = ""
+}
+
+/// Text at the bottom of the plot under a bar (day-of-week labels).
+struct ChartNote {
+    var index: Int
+    var text: String
+    var color: Color
 }
 
 /// Candlestick chart in the style of Binance / TradingView: MA overlays,
@@ -130,6 +159,9 @@ struct CandleChart: View {
     var interactive = true
     var theme: ChartTheme = .binance
     var sessionBoxes: [SessionBox] = []
+    var segments: [ChartSegment] = []
+    var verticalLines: [ChartVerticalLine] = []
+    var notes: [ChartNote] = []
     /// Labels for the visible high and low on the price axis.
     var showHighLowLabels = false
     var drawings: [Drawing] = []
@@ -399,7 +431,10 @@ struct CandleChart: View {
                               height: max(2, s.y(box.low) - s.y(box.high)))
             switch box.style {
             case .filled:
-                plotContext.fill(Path(rect), with: .color(box.color.opacity(0.10)))
+                plotContext.fill(Path(rect), with: .color(box.color.opacity(box.fillOpacity)))
+                if box.showBorder {
+                    plotContext.stroke(Path(rect), with: .color(box.color.opacity(0.7)), lineWidth: 1)
+                }
             case .dotted:
                 plotContext.stroke(Path(rect), with: .color(box.color.opacity(0.8)),
                                    style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
@@ -408,6 +443,38 @@ struct CandleChart: View {
                 plotContext.draw(Text(box.label).font(.system(size: 9)).foregroundColor(box.color),
                                  at: CGPoint(x: rect.minX + 2, y: rect.minY - 7), anchor: .leading)
             }
+        }
+
+        // Timestamps, segments (pivots, opens) and notes, behind the candles.
+        for line in verticalLines where range.contains(line.index) {
+            let x = s.x(line.index) - s.barWidth / 2
+            var path = Path()
+            path.move(to: CGPoint(x: x, y: layout.plot.minY))
+            path.addLine(to: CGPoint(x: x, y: layout.plot.maxY))
+            plotContext.stroke(path, with: .color(line.color), style: StrokeStyle(lineWidth: 1, dash: line.dash))
+            if !line.label.isEmpty {
+                plotContext.draw(Text(line.label).font(.system(size: 9)).foregroundColor(line.color),
+                                 at: CGPoint(x: x + 3, y: layout.plot.minY + 8), anchor: .leading)
+            }
+        }
+        for segment in segments {
+            let startX = s.x(segment.start)
+            let endX = segment.end.map { s.x($0) } ?? layout.axisX
+            guard endX >= 0, startX <= layout.axisX else { continue }
+            let y = s.y(segment.price)
+            var path = Path()
+            path.move(to: CGPoint(x: startX, y: y))
+            path.addLine(to: CGPoint(x: endX, y: y))
+            plotContext.stroke(path, with: .color(segment.color), style: StrokeStyle(lineWidth: segment.width, dash: segment.dash))
+            if !segment.label.isEmpty {
+                let labelX = min(endX, layout.axisX - 4)
+                plotContext.draw(Text(segment.label).font(.system(size: 9, weight: .medium)).foregroundColor(segment.color),
+                                 at: CGPoint(x: labelX, y: y - 6), anchor: .trailing)
+            }
+        }
+        for note in notes where range.contains(note.index) {
+            plotContext.draw(Text(note.text).font(.system(size: 10, weight: .medium)).foregroundColor(note.color),
+                             at: CGPoint(x: s.x(note.index), y: layout.plot.maxY - 8), anchor: .center)
         }
 
         // Volume.

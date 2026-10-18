@@ -21,7 +21,11 @@ public enum ICT {
         public var week: [Int]
 
         public init(time: [Date]) {
-            let zone = TimeZone(identifier: "America/New_York")!
+            self.init(time: time, zone: TimeZone(identifier: "America/New_York")!)
+        }
+
+        /// The same clock in another time zone (hours, days and weeks are local to `zone`).
+        public init(time: [Date], zone: TimeZone) {
             var hour = Series(repeating: 0, count: time.count)
             var day = [Int](repeating: 0, count: time.count)
             var week = [Int](repeating: 0, count: time.count)
