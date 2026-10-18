@@ -84,6 +84,22 @@ struct ChartMarker: Identifiable {
     var linkTo: (index: Int, price: Double, isWin: Bool)?
 }
 
+/// How bars are drawn.
+enum CandleStyle: String, CaseIterable, Identifiable {
+    case candles, hollow, bars, line
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .candles: return "Nến"
+        case .hollow: return "Nến rỗng"
+        case .bars: return "Thanh OHLC"
+        case .line: return "Đường"
+        }
+    }
+}
+
 /// A highlighted time window (killzone, ICT macro…) drawn as a box from the
 /// window's low to its high.
 struct SessionBox: Identifiable {
@@ -124,9 +140,12 @@ struct CandleChart: View {
     var onDrawingChanged: ((Drawing) -> Void)?
     var onSelectDrawing: ((UUID?) -> Void)?
     var showHeader = true
+    var candleStyle: CandleStyle = .candles
+    /// Snap new drawing points to the open, high, low or close of the bar.
+    var magnet = false
     @Binding var viewport: ChartViewport
 
-    private enum DragMode { case pan, axis, crosshair, moveDrawing }
+    private enum DragMode { case pan, axis, crosshair, moveDrawing, moveHandle, create }
 
     @State private var dragMode: DragMode?
     @State private var panStartOffset: Double = 0
@@ -137,6 +156,12 @@ struct CandleChart: View {
     @State private var pendingPoints: [ChartPoint] = []
     @State private var movingOriginal: Drawing?
     @State private var movingPreview: Drawing?
+    /// Drawing being dragged out with the active tool.
+    @State private var creatingPreview: Drawing?
+    /// Finger position while creating or reshaping, shown as a guide.
+    @State private var guidePoint: CGPoint?
+    /// Handle of the selected drawing being dragged (2 = position target).
+    @State private var handleIndex: Int?
 
     private let axisWidth: CGFloat = 66
     private let timeAxisHeight: CGFloat = 18
@@ -291,7 +316,31 @@ struct CandleChart: View {
         let s = scale(layout: layout)
         // Snap to the nearest bar like TradingView.
         let index = s.fractionalIndex(atX: location.x).rounded()
-        return ChartPoint(time: time(forIndex: index), price: s.price(atY: location.y))
+        var price = s.price(atY: location.y)
+        if magnet, let bar = Int(exactly: index), candles.indices.contains(bar) {
+            let c = candles[bar]
+            let nearest = [c.open, c.high, c.low, c.close].min { abs(s.y($0) - location.y) < abs(s.y($1) - location.y) }!
+            if abs(s.y(nearest) - location.y) < 28 { price = nearest }
+        }
+        return ChartPoint(time: time(forIndex: index), price: price)
+    }
+
+    /// Screen position of a chart point (after magnet snapping).
+    private func screenPoint(_ point: ChartPoint, layout: Layout) -> CGPoint {
+        let s = scale(layout: layout)
+        return CGPoint(x: s.x(index(for: point.time)), y: s.y(point.price))
+    }
+
+    /// A new drawing from its defining points; positions get the stop on the losing side.
+    private func makeDrawing(_ tool: DrawingTool, points: [ChartPoint]) -> Drawing {
+        var drawing = Drawing(tool: tool, points: points)
+        if tool == .longPosition || tool == .shortPosition, points.count > 1 {
+            let entry = points[0].price
+            var distance = abs(points[1].price - entry)
+            if distance == 0 { distance = max(abs(entry) * 0.001, 1e-6) }
+            drawing.points[1].price = tool == .longPosition ? entry - distance : entry + distance
+        }
+        return drawing
     }
 
     // MARK: - Drawing
@@ -365,20 +414,7 @@ struct CandleChart: View {
             }
         }
 
-        // Candles.
-        for i in range {
-            let c = candles[i]
-            let color = c.close >= c.open ? theme.up : theme.down
-            let x = s.x(i)
-            var wick = Path()
-            wick.move(to: CGPoint(x: x, y: s.y(c.high)))
-            wick.addLine(to: CGPoint(x: x, y: s.y(c.low)))
-            plotContext.stroke(wick, with: .color(color), lineWidth: 1)
-            let top = s.y(max(c.open, c.close))
-            let bottom = s.y(min(c.open, c.close))
-            let body = CGRect(x: x - s.barWidth * 0.35, y: top, width: max(1, s.barWidth * 0.7), height: max(1, bottom - top))
-            plotContext.fill(Path(body), with: .color(color))
-        }
+        drawCandles(in: &plotContext, range: range, s: s)
 
         // Overlays.
         var axisLabels: [AxisLabel] = []
@@ -442,10 +478,26 @@ struct CandleChart: View {
             drawDrawing(drawingToShow, in: &plotContext, s: s, layout: layout, decimals: decimals,
                         selected: drawingToShow.id == selectedDrawingID, axisLabels: &axisLabels)
         }
+        if let preview = creatingPreview {
+            drawDrawing(preview, in: &plotContext, s: s, layout: layout, decimals: decimals,
+                        selected: true, axisLabels: &axisLabels)
+        }
         for point in pendingPoints {
             let center = CGPoint(x: s.x(index(for: point.time)), y: s.y(point.price))
             plotContext.fill(Path(ellipseIn: CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10)),
                              with: .color(theme.accent))
+        }
+        // Guide lines under the finger while drawing, since the finger hides the point.
+        if let guide = guidePoint {
+            var path = Path()
+            path.move(to: CGPoint(x: guide.x, y: layout.plot.minY))
+            path.addLine(to: CGPoint(x: guide.x, y: layout.plot.maxY))
+            path.move(to: CGPoint(x: 0, y: guide.y))
+            path.addLine(to: CGPoint(x: layout.axisX, y: guide.y))
+            plotContext.stroke(path, with: .color(theme.accent.opacity(0.7)), style: StrokeStyle(lineWidth: 0.8, dash: [3, 3]))
+            let price = s.price(atY: guide.y)
+            axisLabels.append(AxisLabel(price: price, text: Self.format(price, decimals), tag: "",
+                                        color: theme.accent, textColor: .white))
         }
 
         // Visible high / low.
@@ -544,34 +596,99 @@ struct CandleChart: View {
     private func drawDrawing(_ d: Drawing, in context: inout GraphicsContext, s: Scale, layout: Layout,
                              decimals: Int, selected: Bool, axisLabels: inout [AxisLabel]) {
         let color = d.color
-        let width: CGFloat = selected ? 2.2 : 1.4
+        let width = CGFloat(d.lineWidth) + (selected ? 0.8 : 0)
+        let stroke = StrokeStyle(lineWidth: width, lineCap: .round, dash: d.dashed ? [6, 4] : [])
         let points = d.points.map { CGPoint(x: s.x(index(for: $0.time)), y: s.y($0.price)) }
         guard let p0 = points.first else { return }
+        func label(_ text: String, at point: CGPoint, anchor: UnitPoint = .leading, color labelColor: Color? = nil) {
+            guard !text.isEmpty else { return }
+            context.draw(Text(text).font(.system(size: 10, weight: .semibold)).foregroundColor(labelColor ?? color),
+                         at: point, anchor: anchor)
+        }
         switch d.tool {
         case .horizontalLine, .horizontalRay:
             var path = Path()
             path.move(to: CGPoint(x: d.tool == .horizontalRay ? p0.x : 0, y: p0.y))
             path.addLine(to: CGPoint(x: layout.axisX, y: p0.y))
-            context.stroke(path, with: .color(color), lineWidth: width)
+            context.stroke(path, with: .color(color), style: stroke)
             axisLabels.append(AxisLabel(price: d.points[0].price, text: Self.format(d.points[0].price, decimals),
                                         tag: d.text, color: color, textColor: .white))
         case .verticalLine:
             var path = Path()
             path.move(to: CGPoint(x: p0.x, y: layout.plot.minY))
             path.addLine(to: CGPoint(x: p0.x, y: layout.plot.maxY))
-            context.stroke(path, with: .color(color), lineWidth: width)
-        case .trendLine:
+            context.stroke(path, with: .color(color), style: stroke)
+            label(d.text, at: CGPoint(x: p0.x + 4, y: layout.plot.minY + 10))
+        case .trendLine, .trendRay:
             guard points.count > 1 else { break }
+            var end = points[1]
+            if d.tool == .trendRay {
+                // Extend through the second point to the edge of the plot.
+                let dx = end.x - p0.x, dy = end.y - p0.y
+                let length = max(hypot(dx, dy), 0.001)
+                let reach = (layout.plot.width + layout.plot.height) * 2
+                end = CGPoint(x: p0.x + dx / length * reach, y: p0.y + dy / length * reach)
+            }
             var path = Path()
             path.move(to: p0)
-            path.addLine(to: points[1])
-            context.stroke(path, with: .color(color), lineWidth: width)
+            path.addLine(to: end)
+            context.stroke(path, with: .color(color), style: stroke)
+            label(d.text, at: CGPoint(x: points[1].x + 6, y: points[1].y))
         case .rectangle:
             guard points.count > 1 else { break }
             let rect = CGRect(x: min(p0.x, points[1].x), y: min(p0.y, points[1].y),
                               width: abs(points[1].x - p0.x), height: abs(points[1].y - p0.y))
             context.fill(Path(rect), with: .color(color.opacity(0.15)))
-            context.stroke(Path(rect), with: .color(color), lineWidth: width)
+            context.stroke(Path(rect), with: .color(color), style: stroke)
+            label(d.text, at: CGPoint(x: rect.minX + 4, y: rect.minY + 9))
+        case .fibRetracement:
+            guard points.count > 1 else { break }
+            let left = min(p0.x, points[1].x)
+            let right = max(max(p0.x, points[1].x), left + s.barWidth * 12)
+            if let top = d.fibPrice(0.62), let bottom = d.fibPrice(0.79) {
+                let y1 = s.y(top), y2 = s.y(bottom)
+                let zone = CGRect(x: left, y: min(y1, y2), width: right - left, height: abs(y2 - y1))
+                context.fill(Path(zone), with: .color(DrawingPalette.colors[3].opacity(0.16)))
+            }
+            for level in Drawing.fibLevels {
+                guard let price = d.fibPrice(level) else { continue }
+                let y = s.y(price)
+                let levelColor: Color = level == 0 || level == 1 ? color
+                    : (level < 0 ? theme.up : (level >= 0.62 && level <= 0.79 ? DrawingPalette.colors[3] : color))
+                var path = Path()
+                path.move(to: CGPoint(x: left, y: y))
+                path.addLine(to: CGPoint(x: right, y: y))
+                context.stroke(path, with: .color(levelColor), lineWidth: level == 0.705 ? 1.4 : 1)
+                let name = level == 0.705 ? "0.705 OTE" : String(format: "%g", level)
+                label("\(name) (\(Self.format(price, decimals)))", at: CGPoint(x: left + 3, y: y - 6), color: levelColor)
+            }
+            var diagonal = Path()
+            diagonal.move(to: p0)
+            diagonal.addLine(to: points[1])
+            context.stroke(diagonal, with: .color(color.opacity(0.6)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+        case .priceRange:
+            guard points.count > 1 else { break }
+            let rect = CGRect(x: min(p0.x, points[1].x), y: min(p0.y, points[1].y),
+                              width: abs(points[1].x - p0.x), height: abs(points[1].y - p0.y))
+            let change = d.points[1].price - d.points[0].price
+            let rangeColor = change >= 0 ? theme.up : theme.down
+            context.fill(Path(rect), with: .color(rangeColor.opacity(0.14)))
+            var arrow = Path()
+            arrow.move(to: CGPoint(x: rect.midX, y: p0.y))
+            arrow.addLine(to: CGPoint(x: rect.midX, y: points[1].y))
+            context.stroke(arrow, with: .color(rangeColor), lineWidth: 1.2)
+            context.fill(triangle(tip: CGPoint(x: rect.midX, y: points[1].y), pointingUp: change >= 0), with: .color(rangeColor))
+            let bars = Int((index(for: d.points[1].time) - index(for: d.points[0].time)).rounded())
+            let seconds = abs(d.points[1].time.timeIntervalSince(d.points[0].time))
+            let percent = d.points[0].price != 0 ? change / d.points[0].price * 100 : 0
+            let text = "\(change >= 0 ? "+" : "")\(Self.format(change, decimals)) (\(String(format: "%+.2f", percent))%) · \(abs(bars)) nến · \(Self.duration(seconds))"
+            let labelY = change >= 0 ? rect.minY - 10 : rect.maxY + 10
+            let textView = Text(text).font(.system(size: 10, weight: .semibold)).foregroundColor(.white)
+            let size = context.resolve(textView).measure(in: CGSize(width: 400, height: 30))
+            let box = CGRect(x: rect.midX - size.width / 2 - 5, y: labelY - size.height / 2 - 3,
+                             width: size.width + 10, height: size.height + 6)
+            context.fill(Path(roundedRect: box, cornerRadius: 4), with: .color(rangeColor))
+            context.draw(textView, at: CGPoint(x: box.midX, y: box.midY), anchor: .center)
         case .longPosition, .shortPosition:
             guard let levels = d.positionLevels, points.count > 1 else { break }
             let left = min(p0.x, points[1].x)
@@ -589,20 +706,90 @@ struct CandleChart: View {
             let reward = abs(levels.target - levels.entry)
             let targetText = "TP \(Self.format(levels.target, decimals)) (+\(Self.format(reward, decimals))) · RR \(String(format: "%.1f", d.riskReward))"
             let stopText = "SL \(Self.format(levels.stop, decimals)) (−\(Self.format(risk, decimals)))"
-            context.draw(Text(targetText).font(.system(size: 9, weight: .semibold)).foregroundColor(theme.up),
-                         at: CGPoint(x: left + 4, y: targetY + (targetY < entryY ? 8 : -8)), anchor: .leading)
-            context.draw(Text(stopText).font(.system(size: 9, weight: .semibold)).foregroundColor(theme.down),
-                         at: CGPoint(x: left + 4, y: stopY + (stopY < entryY ? 8 : -8)), anchor: .leading)
+            label(targetText, at: CGPoint(x: left + 4, y: targetY + (targetY < entryY ? 8 : -8)), color: theme.up)
+            label(stopText, at: CGPoint(x: left + 4, y: stopY + (stopY < entryY ? 8 : -8)), color: theme.down)
+            label("Vào \(Self.format(levels.entry, decimals))", at: CGPoint(x: right - 4, y: entryY - 8), anchor: .trailing,
+                  color: theme.primaryText)
         case .text:
             let text = d.text.isEmpty ? "Ghi chú" : d.text
             context.draw(Text(text).font(.system(size: 12, weight: .medium)).foregroundColor(color),
                          at: p0, anchor: .leading)
         }
         if selected {
-            for p in points {
-                let handle = CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)
+            for p in handlePoints(of: d, s: s) {
+                let handle = CGRect(x: p.x - 6, y: p.y - 6, width: 12, height: 12)
                 context.fill(Path(ellipseIn: handle), with: .color(theme.background))
-                context.stroke(Path(ellipseIn: handle), with: .color(color), lineWidth: 1.5)
+                context.stroke(Path(ellipseIn: handle), with: .color(color), lineWidth: 2)
+            }
+        }
+    }
+
+    /// Draggable points of a drawing on screen; for positions the target is the third.
+    private func handlePoints(of d: Drawing, s: Scale) -> [CGPoint] {
+        var points = d.points.map { CGPoint(x: s.x(index(for: $0.time)), y: s.y($0.price)) }
+        if let levels = d.positionLevels, points.count > 1 {
+            points.append(CGPoint(x: points[1].x, y: s.y(levels.target)))
+        }
+        return points
+    }
+
+    /// Bars of OHLC data in the chosen style. Wicks are snapped to device
+    /// pixels so they stay sharp and visible at every zoom level.
+    private func drawCandles(in context: inout GraphicsContext, range: Range<Int>, s: Scale) {
+        let pixel = 1 / max(context.environment.displayScale, 1)
+        func snap(_ v: CGFloat) -> CGFloat { (v / pixel).rounded() * pixel }
+        let wickWidth: CGFloat = s.barWidth >= 16 ? 1.5 : 1
+        let bodyWidth = max(pixel, snap(s.barWidth * 0.72))
+        if candleStyle == .line {
+            var path = Path()
+            for i in range {
+                let point = CGPoint(x: s.x(i), y: s.y(candles[i].close))
+                if i == range.lowerBound { path.move(to: point) } else { path.addLine(to: point) }
+            }
+            context.stroke(path, with: .color(theme.accent), style: StrokeStyle(lineWidth: 1.6, lineJoin: .round))
+            return
+        }
+        for i in range {
+            let c = candles[i]
+            let isUp = c.close >= c.open
+            let color = isUp ? theme.up : theme.down
+            let x = snap(s.x(i))
+            let highY = s.y(c.high), lowY = s.y(c.low)
+            let top = s.y(max(c.open, c.close)), bottom = s.y(min(c.open, c.close))
+            if candleStyle == .bars {
+                var bar = Path()
+                bar.move(to: CGPoint(x: x, y: highY))
+                bar.addLine(to: CGPoint(x: x, y: lowY))
+                let tick = max(2, bodyWidth / 2)
+                bar.move(to: CGPoint(x: x - tick, y: s.y(c.open)))
+                bar.addLine(to: CGPoint(x: x, y: s.y(c.open)))
+                bar.move(to: CGPoint(x: x, y: s.y(c.close)))
+                bar.addLine(to: CGPoint(x: x + tick, y: s.y(c.close)))
+                context.stroke(bar, with: .color(color), lineWidth: max(1, wickWidth))
+                continue
+            }
+            // Upper and lower wick as separate segments so hollow bodies stay empty.
+            var wick = Path()
+            wick.move(to: CGPoint(x: x, y: highY))
+            wick.addLine(to: CGPoint(x: x, y: top))
+            wick.move(to: CGPoint(x: x, y: bottom))
+            wick.addLine(to: CGPoint(x: x, y: lowY))
+            context.stroke(wick, with: .color(color), lineWidth: wickWidth)
+            // Very narrow bars are just the high–low line, like TradingView when zoomed out.
+            guard s.barWidth >= 2.5 else {
+                var line = Path()
+                line.move(to: CGPoint(x: x, y: top))
+                line.addLine(to: CGPoint(x: x, y: max(bottom, top + pixel)))
+                context.stroke(line, with: .color(color), lineWidth: wickWidth)
+                continue
+            }
+            let body = CGRect(x: x - bodyWidth / 2, y: snap(top), width: bodyWidth,
+                              height: max(pixel * 2, snap(bottom) - snap(top)))
+            if candleStyle == .hollow && isUp {
+                context.fill(Path(body), with: .color(theme.background))
+                context.stroke(Path(body.insetBy(dx: pixel / 2, dy: pixel / 2)), with: .color(color), lineWidth: 1)
+            } else {
+                context.fill(Path(body), with: .color(color))
             }
         }
     }
@@ -621,10 +808,13 @@ struct CandleChart: View {
 
     private func hitDrawing(at location: CGPoint, layout: Layout) -> Drawing? {
         let s = scale(layout: layout)
-        let tolerance: CGFloat = 14
+        let tolerance: CGFloat = 16
         for d in drawings.reversed() {
             let points = d.points.map { CGPoint(x: s.x(index(for: $0.time)), y: s.y($0.price)) }
             guard let p0 = points.first else { continue }
+            if handlePoints(of: d, s: s).contains(where: { hypot($0.x - location.x, $0.y - location.y) < tolerance }) {
+                return d
+            }
             switch d.tool {
             case .horizontalLine:
                 if abs(location.y - p0.y) < tolerance { return d }
@@ -634,11 +824,29 @@ struct CandleChart: View {
                 if abs(location.x - p0.x) < tolerance { return d }
             case .trendLine:
                 if points.count > 1, Self.distance(from: location, toSegment: p0, points[1]) < tolerance { return d }
-            case .rectangle:
+            case .trendRay:
+                if points.count > 1 {
+                    let dx = points[1].x - p0.x, dy = points[1].y - p0.y
+                    let length = max(hypot(dx, dy), 0.001)
+                    let reach = (layout.plot.width + layout.plot.height) * 2
+                    let end = CGPoint(x: p0.x + dx / length * reach, y: p0.y + dy / length * reach)
+                    if Self.distance(from: location, toSegment: p0, end) < tolerance { return d }
+                }
+            case .rectangle, .priceRange:
                 if points.count > 1 {
                     let rect = CGRect(x: min(p0.x, points[1].x), y: min(p0.y, points[1].y),
                                       width: abs(points[1].x - p0.x), height: abs(points[1].y - p0.y))
                     if rect.insetBy(dx: -tolerance, dy: -tolerance).contains(location) { return d }
+                }
+            case .fibRetracement:
+                if points.count > 1 {
+                    let left = min(p0.x, points[1].x)
+                    let right = max(max(p0.x, points[1].x), left + s.barWidth * 12)
+                    let ys = Drawing.fibLevels.compactMap { d.fibPrice($0) }.map { s.y($0) }
+                    if location.x > left - tolerance, location.x < right + tolerance,
+                       let top = ys.min(), let bottom = ys.max(), location.y > top - tolerance, location.y < bottom + tolerance {
+                        return d
+                    }
                 }
             case .longPosition, .shortPosition:
                 if let levels = d.positionLevels, points.count > 1 {
@@ -649,10 +857,56 @@ struct CandleChart: View {
                     if CGRect(x: left, y: top, width: right - left, height: bottom - top).contains(location) { return d }
                 }
             case .text:
-                if CGRect(x: p0.x - 6, y: p0.y - 12, width: 140, height: 24).contains(location) { return d }
+                if CGRect(x: p0.x - 6, y: p0.y - 14, width: 160, height: 28).contains(location) { return d }
             }
         }
         return nil
+    }
+
+    /// Index of the selected drawing's handle under `location`.
+    private func hitHandle(at location: CGPoint, layout: Layout) -> (Drawing, Int)? {
+        guard let id = selectedDrawingID, let d = drawings.first(where: { $0.id == id }) else { return nil }
+        let s = scale(layout: layout)
+        let handles = handlePoints(of: d, s: s)
+        guard let nearest = handles.indices.min(by: {
+            hypot(handles[$0].x - location.x, handles[$0].y - location.y) < hypot(handles[$1].x - location.x, handles[$1].y - location.y)
+        }), hypot(handles[nearest].x - location.x, handles[nearest].y - location.y) < 24 else { return nil }
+        return (d, nearest)
+    }
+
+    /// Moves one handle of a drawing to `point`, keeping positions consistent.
+    private func moving(_ d: Drawing, handle: Int, to point: ChartPoint) -> Drawing {
+        var moved = d
+        if let levels = d.positionLevels {
+            let isLong = d.tool == .longPosition
+            switch handle {
+            case 0:
+                moved.points[0] = point
+                // Keep the stop on the losing side of the entry.
+                if isLong ? levels.stop >= point.price : levels.stop <= point.price {
+                    moved.points[1].price = isLong ? point.price - abs(levels.entry - levels.stop) : point.price + abs(levels.entry - levels.stop)
+                }
+            case 1:
+                let gap = max(abs(levels.entry) * 0.00001, 1e-9)
+                moved.points[1] = ChartPoint(time: point.time,
+                                             price: isLong ? min(point.price, levels.entry - gap) : max(point.price, levels.entry + gap))
+            default:
+                let risk = abs(levels.entry - levels.stop)
+                let reward = isLong ? point.price - levels.entry : levels.entry - point.price
+                if risk > 0 { moved.riskReward = min(max((reward / risk * 10).rounded() / 10, 0.1), 50) }
+            }
+            return moved
+        }
+        if handle < moved.points.count { moved.points[handle] = point }
+        return moved
+    }
+
+    static func duration(_ seconds: TimeInterval) -> String {
+        let minutes = Int(seconds / 60)
+        if minutes < 60 { return "\(minutes)m" }
+        let hours = minutes / 60
+        if hours < 48 { return minutes % 60 == 0 ? "\(hours)h" : "\(hours)h \(minutes % 60)m" }
+        return "\(hours / 24)d \(hours % 24)h"
     }
 
     private static func distance(from p: CGPoint, toSegment a: CGPoint, _ b: CGPoint) -> CGFloat {
@@ -713,16 +967,10 @@ struct CandleChart: View {
         // The release of a long press also ends as a tap; keep that crosshair.
         guard location.x < layout.axisX, Date().timeIntervalSince(pressEndedAt) > 0.3 else { return }
         if let tool = drawingTool {
+            // Tapping works too: one tap per point.
             pendingPoints.append(chartPoint(at: location, layout: layout))
             if pendingPoints.count >= tool.pointsNeeded {
-                var drawing = Drawing(tool: tool, points: pendingPoints)
-                if tool == .longPosition || tool == .shortPosition {
-                    // Keep the stop on the losing side of the entry.
-                    let entry = pendingPoints[0].price
-                    let distance = abs(pendingPoints[1].price - entry)
-                    drawing.points[1].price = tool == .longPosition ? entry - distance : entry + distance
-                    drawing.colorIndex = tool == .longPosition ? 2 : 1
-                }
+                let drawing = makeDrawing(tool, points: pendingPoints)
                 pendingPoints = []
                 onDrawingCreated?(drawing)
             }
@@ -751,6 +999,13 @@ struct CandleChart: View {
                     if value.startLocation.x > layout.axisX {
                         dragMode = .axis
                         dragStartRange = range
+                    } else if drawingTool != nil {
+                        dragMode = .create
+                        crosshair = nil
+                    } else if let hit = hitHandle(at: value.startLocation, layout: layout) {
+                        dragMode = .moveHandle
+                        movingOriginal = hit.0
+                        handleIndex = hit.1
                     } else if let id = selectedDrawingID, let hit = hitDrawing(at: value.startLocation, layout: layout), hit.id == id {
                         dragMode = .moveDrawing
                         movingOriginal = hit
@@ -782,6 +1037,21 @@ struct CandleChart: View {
                         ChartPoint(time: time(forIndex: index(for: p.time) + barShift), price: p.price + priceShift)
                     }
                     movingPreview = moved
+                case .create:
+                    guard let tool = drawingTool else { return }
+                    let end = chartPoint(at: value.location, layout: layout)
+                    if tool.pointsNeeded == 1 {
+                        creatingPreview = makeDrawing(tool, points: [end])
+                    } else {
+                        let start = pendingPoints.first ?? chartPoint(at: value.startLocation, layout: layout)
+                        creatingPreview = makeDrawing(tool, points: [start, end])
+                    }
+                    guidePoint = screenPoint(end, layout: layout)
+                case .moveHandle:
+                    guard let original = movingOriginal, let handle = handleIndex else { return }
+                    let point = chartPoint(at: value.location, layout: layout)
+                    movingPreview = moving(original, handle: handle, to: point)
+                    guidePoint = screenPoint(point, layout: layout)
                 case .crosshair:
                     crosshair = value.location
                 case .pan:
@@ -798,9 +1068,16 @@ struct CandleChart: View {
                 }
             }
             .onEnded { _ in
-                if dragMode == .moveDrawing, let moved = movingPreview {
+                if dragMode == .moveDrawing || dragMode == .moveHandle, let moved = movingPreview {
                     onDrawingChanged?(moved)
                 }
+                if dragMode == .create, let created = creatingPreview {
+                    pendingPoints = []
+                    onDrawingCreated?(created)
+                }
+                creatingPreview = nil
+                guidePoint = nil
+                handleIndex = nil
                 dragMode = nil
                 dragStartRange = nil
                 movingOriginal = nil
@@ -827,7 +1104,8 @@ struct CandleChart: View {
         LongPressGesture(minimumDuration: 0.3)
             .sequenced(before: DragGesture(minimumDistance: 0))
             .onChanged { value in
-                if case .second(true, let drag?) = value {
+                if drawingTool == nil, dragMode != .moveHandle, dragMode != .moveDrawing,
+                   case .second(true, let drag?) = value {
                     crosshair = drag.location
                 }
             }

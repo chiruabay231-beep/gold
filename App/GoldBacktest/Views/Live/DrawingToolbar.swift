@@ -3,25 +3,41 @@ import SwiftUI
 /// Floating vertical tool bar, like TradingView's drawing panel.
 struct DrawingToolbar: View {
     @Binding var activeTool: DrawingTool?
+    /// Snap points to the bar's open/high/low/close.
+    @Binding var magnet: Bool
+    /// Stay on the tool after placing a drawing.
+    @Binding var keepTool: Bool
+    @Binding var hideDrawings: Bool
     let theme: ChartTheme
     var onClose: () -> Void
 
+    private static let groups: [[DrawingTool]] = [
+        [.trendLine, .trendRay, .horizontalLine, .horizontalRay, .verticalLine],
+        [.fibRetracement, .rectangle, .priceRange],
+        [.longPosition, .shortPosition, .text],
+    ]
+
     var body: some View {
         ScrollView(showsIndicators: false) {
-            VStack(spacing: 4) {
-                ForEach(DrawingTool.allCases) { tool in
-                    Button {
-                        activeTool = activeTool == tool ? nil : tool
-                    } label: {
-                        Image(systemName: tool.systemImage)
-                            .font(.system(size: 17))
-                            .frame(width: 40, height: 40)
-                            .foregroundColor(activeTool == tool ? .white : theme.primaryText)
-                            .background(activeTool == tool ? theme.accent : .clear, in: .rect(cornerRadius: 8))
+            VStack(spacing: 2) {
+                ForEach(Self.groups.indices, id: \.self) { group in
+                    ForEach(Self.groups[group]) { tool in
+                        Button {
+                            activeTool = activeTool == tool ? nil : tool
+                        } label: {
+                            icon(tool.systemImage, active: activeTool == tool)
+                        }
+                        .accessibilityLabel(tool.title)
                     }
-                    .accessibilityLabel(tool.title)
+                    Divider().frame(width: 28).padding(.vertical, 3)
                 }
-                Divider().frame(width: 28)
+                Button { magnet.toggle() } label: { icon("scope", active: magnet) }
+                    .accessibilityLabel("Nam châm: bám giá mở/cao/thấp/đóng")
+                Button { keepTool.toggle() } label: { icon("repeat", active: keepTool) }
+                    .accessibilityLabel("Giữ công cụ sau khi vẽ")
+                Button { hideDrawings.toggle() } label: { icon(hideDrawings ? "eye.slash" : "eye", active: hideDrawings) }
+                    .accessibilityLabel("Ẩn hình vẽ")
+                Divider().frame(width: 28).padding(.vertical, 3)
                 Button(action: onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 15, weight: .semibold))
@@ -32,13 +48,21 @@ struct DrawingToolbar: View {
             .padding(.vertical, 6)
         }
         .frame(width: 52)
-        .frame(maxHeight: 440)
+        .frame(maxHeight: 520)
         .background(theme.background, in: .rect(cornerRadius: 12))
         .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
     }
+
+    private func icon(_ systemName: String, active: Bool) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 17))
+            .frame(width: 40, height: 38)
+            .foregroundColor(active ? .white : theme.primaryText)
+            .background(active ? theme.accent : .clear, in: .rect(cornerRadius: 8))
+    }
 }
 
-/// Actions for the selected drawing: colour, risk/reward, label, delete.
+/// Actions for the selected drawing: colour, line style, risk/reward, label, delete.
 struct DrawingActionsBar: View {
     let drawing: Drawing
     let theme: ChartTheme
@@ -47,7 +71,7 @@ struct DrawingActionsBar: View {
     var onDelete: () -> Void
 
     var body: some View {
-        HStack(spacing: 14) {
+        HStack(spacing: 16) {
             Button {
                 var d = drawing
                 d.colorIndex = (d.colorIndex + 1) % DrawingPalette.colors.count
@@ -55,6 +79,24 @@ struct DrawingActionsBar: View {
             } label: {
                 Circle().fill(drawing.color).frame(width: 20, height: 20)
                     .overlay(Circle().stroke(theme.grid, lineWidth: 1))
+            }
+            if drawing.tool.isLine {
+                Button {
+                    var d = drawing
+                    d.lineWidth = d.lineWidth >= 3 ? 1 : d.lineWidth + 1
+                    onChange(d)
+                } label: {
+                    Text("\(Int(drawing.lineWidth.rounded(.down)))px")
+                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                }
+                Button {
+                    var d = drawing
+                    d.dashed.toggle()
+                    onChange(d)
+                } label: {
+                    Text(drawing.dashed ? "- - -" : "——")
+                        .font(.system(size: 13, weight: .bold))
+                }
             }
             if drawing.positionLevels != nil {
                 HStack(spacing: 6) {
@@ -72,7 +114,7 @@ struct DrawingActionsBar: View {
                     } label: { Image(systemName: "plus") }
                 }
             }
-            if drawing.tool == .text || drawing.tool == .horizontalLine || drawing.tool == .horizontalRay {
+            if drawing.tool.isLine || drawing.tool == .text {
                 Button(action: onEditText) { Image(systemName: "character.cursor.ibeam") }
             }
             Button(role: .destructive, action: onDelete) { Image(systemName: "trash") }

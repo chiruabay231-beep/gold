@@ -16,6 +16,10 @@ struct LiveView: View {
     @AppStorage("live.macros") private var showMacros = true
     @AppStorage("live.volume") private var showVolume = true
     @AppStorage("live.highLow") private var showHighLow = true
+    @AppStorage("live.candleStyle") private var candleStyle = CandleStyle.candles.rawValue
+    @AppStorage("live.magnet") private var magnet = true
+    @AppStorage("live.keepTool") private var keepTool = false
+    @AppStorage("live.hideDrawings") private var hideDrawings = false
 
     @State private var viewport = ChartViewport()
     @State private var customSymbol = ""
@@ -195,19 +199,24 @@ struct LiveView: View {
                         theme: theme,
                         sessionBoxes: layers.1,
                         showHighLowLabels: showHighLow,
-                        drawings: drawings,
+                        drawings: hideDrawings ? [] : drawings,
                         drawingTool: activeTool,
                         selectedDrawingID: selectedDrawingID,
                         onDrawingCreated: { drawing in drawingCreated(drawing) },
                         onDrawingChanged: { drawing in store.updateDrawing(drawing, key: drawingKey) },
                         onSelectDrawing: { id in selectedDrawingID = id },
+                        candleStyle: CandleStyle(rawValue: candleStyle) ?? .candles,
+                        magnet: magnet,
                         viewport: $viewport)
+        }
+        .overlay(alignment: .leading) {
             if showDrawingBar {
-                DrawingToolbar(activeTool: $activeTool, theme: theme) {
+                DrawingToolbar(activeTool: $activeTool, magnet: $magnet, keepTool: $keepTool,
+                               hideDrawings: $hideDrawings, theme: theme) {
                     showDrawingBar = false
                     activeTool = nil
                 }
-                .padding(.trailing, 74)
+                .padding(.leading, 6)
             }
         }
         .overlay(alignment: .top) {
@@ -248,9 +257,10 @@ struct LiveView: View {
             editingTextDrawing = drawing
         } else {
             store.addDrawing(drawing, key: drawingKey)
-            selectedDrawingID = drawing.id
+            selectedDrawingID = keepTool ? nil : drawing.id
         }
-        activeTool = nil
+        if !keepTool || drawing.tool == .text { activeTool = nil }
+        hideDrawings = false
     }
 
     private var overlays: [ChartLine] {
@@ -433,6 +443,11 @@ struct LiveView: View {
             Picker("Giao diện", selection: $themeName) {
                 Text("TradingView (sáng)").tag("tradingView")
                 Text("Binance (tối)").tag("binance")
+            }
+            Picker("Kiểu nến", selection: $candleStyle) {
+                ForEach(CandleStyle.allCases) { style in
+                    Text(style.title).tag(style.rawValue)
+                }
             }
             Button {
                 viewport.manualPriceRange = nil
