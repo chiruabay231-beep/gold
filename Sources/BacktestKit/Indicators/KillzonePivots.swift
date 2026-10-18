@@ -123,6 +123,27 @@ public enum KillzonePivots {
             Macro(name: "Last Hour", start: 15.25, end: 15.75),
         ]
 
+        /// Fair value gaps (3-candle imbalances), drawn as short boxes with a 50% line.
+        public var showFVG = true
+        /// FVGs only on bars of at least this many minutes (e.g. 5 = M5 and higher).
+        public var fvgMinTimeframeMinutes = 5.0
+        /// Box length in bars, starting at the candle that makes the gap.
+        public var fvgBoxBars = 2
+        /// Gaps smaller than this fraction of the average bar range are skipped.
+        public var fvgMinSize = 0.0
+        public var fvgHideFilled = false
+        public var fvgMidline = true
+        /// Most recent FVGs kept.
+        public var fvgCount = 40
+
+        /// Market structure: MSS (break against the trend) and optionally BOS.
+        public var showMSS = true
+        public var showBOS = false
+        /// Bars left and right of a swing high/low.
+        public var swingLength = 5
+        /// Most recent breaks kept.
+        public var structureCount = 20
+
         public init() {}
 
         // Missing keys keep their defaults, so settings saved by an older
@@ -155,6 +176,17 @@ public enum KillzonePivots {
             macroTimeframeLimitMinutes = try c.decodeIfPresent(Double.self, forKey: .macroTimeframeLimitMinutes) ?? d.macroTimeframeLimitMinutes
             macroTimeLabels = try c.decodeIfPresent(Bool.self, forKey: .macroTimeLabels) ?? d.macroTimeLabels
             macros = try c.decodeIfPresent([Macro].self, forKey: .macros) ?? d.macros
+            showFVG = try c.decodeIfPresent(Bool.self, forKey: .showFVG) ?? d.showFVG
+            fvgMinTimeframeMinutes = try c.decodeIfPresent(Double.self, forKey: .fvgMinTimeframeMinutes) ?? d.fvgMinTimeframeMinutes
+            fvgBoxBars = try c.decodeIfPresent(Int.self, forKey: .fvgBoxBars) ?? d.fvgBoxBars
+            fvgMinSize = try c.decodeIfPresent(Double.self, forKey: .fvgMinSize) ?? d.fvgMinSize
+            fvgHideFilled = try c.decodeIfPresent(Bool.self, forKey: .fvgHideFilled) ?? d.fvgHideFilled
+            fvgMidline = try c.decodeIfPresent(Bool.self, forKey: .fvgMidline) ?? d.fvgMidline
+            fvgCount = try c.decodeIfPresent(Int.self, forKey: .fvgCount) ?? d.fvgCount
+            showMSS = try c.decodeIfPresent(Bool.self, forKey: .showMSS) ?? d.showMSS
+            showBOS = try c.decodeIfPresent(Bool.self, forKey: .showBOS) ?? d.showBOS
+            swingLength = try c.decodeIfPresent(Int.self, forKey: .swingLength) ?? d.swingLength
+            structureCount = try c.decodeIfPresent(Int.self, forKey: .structureCount) ?? d.structureCount
         }
     }
 
@@ -209,14 +241,39 @@ public enum KillzonePivots {
         public var average: Double
     }
 
+    /// A fair value gap between the high and low of the candles around `index`.
+    public struct FairValueGap: Hashable, Sendable {
+        public var bullish: Bool
+        public var top: Double
+        public var bottom: Double
+        /// Bar where the box starts (the middle, displacement candle).
+        public var start: Int
+        public var end: Int
+        /// Price later traded through the whole gap.
+        public var filled: Bool
+        public var mid: Double { (top + bottom) / 2 }
+    }
+
+    /// A close through the last swing high/low. `shift` = against the previous trend (MSS).
+    public struct StructureBreak: Hashable, Sendable {
+        public var bullish: Bool
+        public var shift: Bool
+        public var price: Double
+        /// Swing bar and breaking bar.
+        public var start: Int
+        public var end: Int
+    }
+
     public struct Output: Sendable {
+        public var fvgs: [FairValueGap] = []
+        public var breaks: [StructureBreak] = []
         public var boxes: [Box] = []
         public var macroBoxes: [MacroBox] = []
         public var levels: [Level] = []
         public var stamps: [Stamp] = []
         public var dayLabels: [DayLabel] = []
         public var ranges: [RangeStat] = []
-        /// True when the chart timeframe is above the limit and nothing is drawn.
+        /// True when the chart timeframe is above the limit and the killzones are not drawn.
         public var hiddenByTimeframe = false
 
         public init() {}
@@ -225,6 +282,13 @@ public enum KillzonePivots {
     public static func compute(candles: [Candle], barInterval: TimeInterval, config: Config) -> Output {
         var output = Output()
         guard candles.count > 2 else { return output }
+        // FVG and structure have their own timeframe rules.
+        if config.showFVG, barInterval >= config.fvgMinTimeframeMinutes * 60 - 1 {
+            output.fvgs = fairValueGaps(candles, config: config)
+        }
+        if config.showMSS || config.showBOS {
+            output.breaks = structureBreaks(candles, config: config)
+        }
         guard barInterval <= config.timeframeLimitMinutes * 60 else {
             output.hiddenByTimeframe = true
             return output
@@ -353,6 +417,74 @@ public enum KillzonePivots {
             }
         }
         return output
+    }
+
+    /// 3-candle imbalances: a bullish gap when a candle's low is above the high two
+    /// candles before, a bearish one the other way round.
+    static func fairValueGaps(_ c: [Candle], config: Config) -> [FairValueGap] {
+        let n = c.count
+        guard n > 3 else { return [] }
+        let averageRange = c.suffix(100).reduce(0) { $0 + ($1.high - $1.low) } / Double(min(n, 100))
+        let minimum = averageRange * max(config.fvgMinSize, 0)
+        var gaps: [FairValueGap] = []
+        for i in 2..<n {
+            var gap: FairValueGap?
+            if c[i].low > c[i - 2].high, c[i].low - c[i - 2].high > minimum {
+                gap = FairValueGap(bullish: true, top: c[i].low, bottom: c[i - 2].high, start: i - 1,
+                                   end: min(n - 1, i - 1 + max(config.fvgBoxBars, 1) - 1), filled: false)
+            } else if c[i].high < c[i - 2].low, c[i - 2].low - c[i].high > minimum {
+                gap = FairValueGap(bullish: false, top: c[i - 2].low, bottom: c[i].high, start: i - 1,
+                                   end: min(n - 1, i - 1 + max(config.fvgBoxBars, 1) - 1), filled: false)
+            }
+            guard var found = gap else { continue }
+            if i + 1 < n {
+                for j in (i + 1)..<n where found.bullish ? c[j].low <= found.bottom : c[j].high >= found.top {
+                    found.filled = true
+                    break
+                }
+            }
+            if found.filled && config.fvgHideFilled { continue }
+            gaps.append(found)
+        }
+        return Array(gaps.suffix(max(config.fvgCount, 1)))
+    }
+
+    /// Breaks of swing highs/lows by a close. MSS when the break goes against the
+    /// trend set by the previous break, BOS when it continues it.
+    static func structureBreaks(_ c: [Candle], config: Config) -> [StructureBreak] {
+        let length = max(config.swingLength, 1)
+        let n = c.count
+        guard n > length * 2 + 1 else { return [] }
+        var activeHigh: (price: Double, index: Int)?
+        var activeLow: (price: Double, index: Int)?
+        var trend = 0
+        var breaks: [StructureBreak] = []
+        for i in 0..<n {
+            // A swing is confirmed `length` bars after it.
+            let p = i - length
+            if p >= length {
+                let window = (p - length)...(p + length)
+                if window.allSatisfy({ $0 == p || c[$0].high < c[p].high }) { activeHigh = (c[p].high, p) }
+                if window.allSatisfy({ $0 == p || c[$0].low > c[p].low }) { activeLow = (c[p].low, p) }
+            }
+            if let high = activeHigh, c[i].close > high.price {
+                let shift = trend == -1
+                if shift ? config.showMSS : config.showBOS {
+                    breaks.append(StructureBreak(bullish: true, shift: shift, price: high.price, start: high.index, end: i))
+                }
+                trend = 1
+                activeHigh = nil
+            }
+            if let low = activeLow, c[i].close < low.price {
+                let shift = trend == 1
+                if shift ? config.showMSS : config.showBOS {
+                    breaks.append(StructureBreak(bullish: false, shift: shift, price: low.price, start: low.index, end: i))
+                }
+                trend = -1
+                activeLow = nil
+            }
+        }
+        return Array(breaks.suffix(max(config.structureCount, 1)))
     }
 
     /// First bar of each day (from `firstDay`) at or after `hour`.

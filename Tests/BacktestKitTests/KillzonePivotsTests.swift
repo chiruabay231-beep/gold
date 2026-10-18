@@ -84,4 +84,51 @@ final class KillzonePivotsTests: XCTestCase {
         config.macroTimeframeLimitMinutes = 5
         XCTAssertTrue(KillzonePivots.compute(candles: data, barInterval: 900, config: config).macroBoxes.isEmpty)
     }
+
+    func testFairValueGapsAndTimeframeRule() {
+        let data = candles { c in
+            // Bullish gap: bar 102 low (103) above bar 100 high (101).
+            c[100].high = 101; c[101].high = 104; c[101].close = 104; c[102].low = 103; c[102].high = 105
+            for j in 103..<288 { c[j].low = 104; c[j].high = 105; c[j].open = 104.5; c[j].close = 104.5 }
+        }
+        var config = KillzonePivots.Config()
+        config.fvgMinSize = 0.5
+        let gaps = KillzonePivots.compute(candles: data, barInterval: 900, config: config).fvgs
+        let gap = gaps.first { $0.bullish && $0.start == 101 }
+        XCTAssertEqual(gap?.bottom, 101)
+        XCTAssertEqual(gap?.top, 103)
+        XCTAssertEqual(gap?.end, 102)       // 2-bar box
+        XCTAssertEqual(gap?.mid, 102)
+        XCTAssertEqual(gap?.filled, false)
+        // M1 is below the M5 minimum.
+        XCTAssertTrue(KillzonePivots.compute(candles: data, barInterval: 60, config: config).fvgs.isEmpty)
+        // FVG still drawn above the killzone timeframe limit.
+        let hourly = KillzonePivots.compute(candles: data, barInterval: 3600, config: config)
+        XCTAssertTrue(hourly.hiddenByTimeframe)
+        XCTAssertFalse(hourly.fvgs.isEmpty)
+    }
+
+    func testMarketStructureShift() {
+        // Up leg with a swing high at 20, down leg breaking the swing low, then a rally through the last swing high.
+        var prices: [Double] = []
+        prices += (0...20).map { 100 + Double($0) }          // to 120
+        prices += (1...15).map { 120 - Double($0) * 1.5 }    // to 97.5
+        prices += (1...10).map { 97.5 + Double($0) * 0.5 }   // to 102.5
+        prices += (1...10).map { 102.5 - Double($0) }        // to 92.5 (breaks swing low)
+        prices += (1...30).map { 92.5 + Double($0) * 1.2 }   // to 128.5 (breaks swing highs)
+        let t0 = Date(timeIntervalSince1970: 0)
+        let data = prices.enumerated().map { i, p in
+            Candle(time: t0.addingTimeInterval(Double(i) * 900), open: p, high: p + 0.2, low: p - 0.2, close: p)
+        }
+        var config = KillzonePivots.Config()
+        config.swingLength = 3
+        config.showBOS = true
+        let breaks = KillzonePivots.compute(candles: data, barInterval: 900, config: config).breaks
+        XCTAssertTrue(breaks.contains { !$0.bullish })
+        let mss = breaks.first { $0.bullish && $0.shift }
+        XCTAssertNotNil(mss)
+        XCTAssertLessThan(mss!.start, mss!.end)
+        config.showBOS = false
+        XCTAssertTrue(KillzonePivots.compute(candles: data, barInterval: 900, config: config).breaks.allSatisfy(\.shift))
+    }
 }

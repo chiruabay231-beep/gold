@@ -21,6 +21,8 @@ struct KillzonePivotsSettingsView: View {
             Form {
                 general
                 killzones
+                fvgSection
+                structureSection
                 macros
                 boxes
                 pivots
@@ -94,6 +96,50 @@ struct KillzonePivotsSettingsView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var fvgSection: some View {
+        Section {
+            Toggle("Hiện FVG", isOn: $settings.config.showFVG)
+            if settings.config.showFVG {
+                Picker("Chỉ hiện trên khung ≥", selection: $settings.config.fvgMinTimeframeMinutes) {
+                    ForEach([1.0, 5.0, 15.0, 30.0, 60.0, 240.0], id: \.self) { minutes in
+                        Text(minutes >= 60 ? "H\(Int(minutes / 60))" : "M\(Int(minutes))").tag(minutes)
+                    }
+                }
+                Stepper("Dài \(settings.config.fvgBoxBars) cây nến", value: $settings.config.fvgBoxBars, in: 1...30)
+                Toggle("Đường giữa 50%", isOn: $settings.config.fvgMidline)
+                Toggle("Ẩn FVG đã bị lấp", isOn: $settings.config.fvgHideFilled)
+                Stepper("Lọc FVG nhỏ: \(String(format: "%.1f", settings.config.fvgMinSize)) × biên độ nến",
+                        value: $settings.config.fvgMinSize, in: 0...2, step: 0.1)
+                Stepper("Giữ \(settings.config.fvgCount) FVG gần nhất", value: $settings.config.fvgCount, in: 5...200, step: 5)
+                colorRow("Màu FVG tăng", color: $settings.fvgBullColor)
+                colorRow("Màu FVG giảm", color: $settings.fvgBearColor)
+                HStack {
+                    Text("Độ đậm")
+                    Slider(value: $settings.fvgOpacity, in: 0.05...0.6)
+                }
+            }
+        } header: {
+            Text("FVG (Fair Value Gap)")
+        } footer: {
+            Text("Khoảng trống giữa nến 1 và nến 3. Hộp chỉ kẻ ngang qua các nến tạo FVG; FVG đã bị lấp được vẽ mờ hơn.")
+        }
+    }
+
+    private var structureSection: some View {
+        Section {
+            Toggle("Hiện MSS (đổi cấu trúc)", isOn: $settings.config.showMSS)
+            Toggle("Hiện BOS (phá cấu trúc cùng xu hướng)", isOn: $settings.config.showBOS)
+            Stepper("Swing: \(settings.config.swingLength) nến mỗi bên", value: $settings.config.swingLength, in: 1...20)
+            Stepper("Giữ \(settings.config.structureCount) lần phá gần nhất", value: $settings.config.structureCount, in: 2...100, step: 2)
+            colorRow("Màu tăng", color: $settings.mssBullColor)
+            colorRow("Màu giảm", color: $settings.mssBearColor)
+        } header: {
+            Text("Cấu trúc thị trường")
+        } footer: {
+            Text("Đường ngang từ đỉnh/đáy swing tới cây nến đóng cửa phá qua. MSS: phá ngược xu hướng trước đó (nét liền); BOS: phá cùng xu hướng (nét đứt).")
         }
     }
 

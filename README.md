@@ -101,7 +101,9 @@ swift test
   (Asia 20:00–00:00, London 02:00–05:00, NY AM 09:30–11:00, NY Lunch 12:00–13:00, NY PM 13:30–16:00,
   giờ New York), pivot đỉnh/đáy phiên kéo dài tới khi bị phá (AS.H, LO.L…), giá mở cửa (DO, 09:30…),
   mốc thời gian dọc, giờ cắt, PDH/PDL/PWH/PWL/PMH/PML, nhãn thứ, bảng biên độ phiên, ICT Macros
-  (8 macro mặc định, hộp nét chấm trên khung ≤ 15m, thêm/sửa/xoá được). Chạm tên chỉ báo
+  (8 macro mặc định, hộp nét chấm trên khung ≤ 15m, thêm/sửa/xoá được).
+  FVG (hộp ngắn qua các nến tạo FVG + đường giữa 50%, mặc định từ M5 trở lên) và MSS/BOS
+  (đường từ swing tới nến phá, nhãn MSS/BOS); FVG và MSS hiện cả trên khung lớn hơn giới hạn killzone. Chạm tên chỉ báo
   trên biểu đồ (hoặc ƒ → Cài đặt Killzones + Pivots) để chỉnh mọi thông số.
 
 **Cài đặt biểu đồ (⋯ → Cài đặt biểu đồ)**, giống trang "Mã" của TradingView

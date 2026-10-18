@@ -263,7 +263,7 @@ struct LiveView: View {
                                 Text(name)
                                 Image(systemName: "gearshape").font(.system(size: 10))
                                 if killzoneLayer.output.hiddenByTimeframe {
-                                    Text("· ẩn trên khung này").foregroundColor(theme.text)
+                                    Text("· killzone ẩn trên khung này").foregroundColor(theme.text)
                                 }
                             }
                             .font(.system(size: 12))

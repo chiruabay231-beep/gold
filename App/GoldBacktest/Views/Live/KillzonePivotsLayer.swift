@@ -24,6 +24,11 @@ struct KillzonePivotsSettings: Codable, Hashable {
     var periodColor = RGBAColor(red: 0.075, green: 0.090, blue: 0.133)
     var labelColor = RGBAColor(red: 0.471, green: 0.482, blue: 0.525)
     var macroColor = RGBAColor(red: 0.471, green: 0.482, blue: 0.525)
+    var fvgBullColor = RGBAColor(red: 0.031, green: 0.6, blue: 0.506)
+    var fvgBearColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
+    var fvgOpacity = 0.22
+    var mssBullColor = RGBAColor(red: 0.031, green: 0.6, blue: 0.506)
+    var mssBearColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
 
     static let storageKey = "live.killzonePivots"
 
@@ -47,6 +52,11 @@ struct KillzonePivotsSettings: Codable, Hashable {
         periodColor = try c.decodeIfPresent(RGBAColor.self, forKey: .periodColor) ?? d.periodColor
         labelColor = try c.decodeIfPresent(RGBAColor.self, forKey: .labelColor) ?? d.labelColor
         macroColor = try c.decodeIfPresent(RGBAColor.self, forKey: .macroColor) ?? d.macroColor
+        fvgBullColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgBullColor) ?? d.fvgBullColor
+        fvgBearColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgBearColor) ?? d.fvgBearColor
+        fvgOpacity = try c.decodeIfPresent(Double.self, forKey: .fvgOpacity) ?? d.fvgOpacity
+        mssBullColor = try c.decodeIfPresent(RGBAColor.self, forKey: .mssBullColor) ?? d.mssBullColor
+        mssBearColor = try c.decodeIfPresent(RGBAColor.self, forKey: .mssBearColor) ?? d.mssBearColor
     }
 
     static func decode(_ json: String) -> KillzonePivotsSettings {
@@ -88,6 +98,23 @@ struct KillzonePivotsLayer {
             boxes.append(SessionBox(id: "kz-\(box.session)-\(box.range.lowerBound)", range: box.range, high: box.high, low: box.low,
                                     label: config.showBoxLabels ? session.name : "", color: settings.sessionColor(box.session),
                                     style: .filled, fillOpacity: settings.boxOpacity, showBorder: settings.showBoxBorder))
+        }
+        for (k, gap) in output.fvgs.enumerated() {
+            let color = (gap.bullish ? settings.fvgBullColor : settings.fvgBearColor).color
+            boxes.append(SessionBox(id: "fvg-\(k)-\(gap.start)", range: gap.start...max(gap.start, gap.end), high: gap.top,
+                                    low: gap.bottom, label: "", color: color, style: .filled,
+                                    fillOpacity: gap.filled ? settings.fvgOpacity * 0.45 : settings.fvgOpacity))
+            if config.fvgMidline {
+                // 50% (consequent encroachment) line across the same candles.
+                segments.append(ChartSegment(start: Double(gap.start) - 0.5, end: Double(max(gap.start, gap.end)) + 0.5,
+                                             price: gap.mid, color: color, width: 1, dash: [3, 2]))
+            }
+        }
+        for brk in output.breaks {
+            let color = (brk.bullish ? settings.mssBullColor : settings.mssBearColor).color
+            segments.append(ChartSegment(start: Double(brk.start), end: Double(brk.end), price: brk.price, color: color,
+                                         width: brk.shift ? 1.4 : 1, dash: brk.shift ? [] : [4, 3],
+                                         label: brk.shift ? "MSS" : "BOS"))
         }
         for box in output.macroBoxes {
             let macro = config.macros[box.macro]
