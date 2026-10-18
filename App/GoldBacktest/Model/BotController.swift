@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import UserNotifications
 import BacktestKit
 
 /// Runs a strategy script as a bot on the live chart: on every closed bar its
@@ -60,41 +61,77 @@ final class BotController {
         add("■ Dừng bot")
     }
 
-    /// Fresh signals on the bar that just closed.
+    /// Fresh signals on the bar that just closed. Every signal ends in a
+    /// notification saying what the bot did, so an alert never appears
+    /// without either an order or the reason there is none.
     func handle(signals: [LiveSignal], symbol: String) {
-        guard isRunning, let trader, !trader.isReplaying else { return }
+        guard isRunning, let trader else { return }
         for signal in signals {
-            let price = trader.price(symbol) ?? signal.price
-            let positions = trader.account.positions.filter { $0.symbol == symbol }
-            switch signal.kind {
-            case .longExit, .shortExit:
-                let side: PaperAccount.Side = signal.kind == .longExit ? .long : .short
-                for p in positions where p.side == side {
-                    trader.close(p)
-                    add("Đóng \(side == .long ? "BUY" : "SELL") theo tín hiệu thoát @ \(Self.format(price))")
-                }
-            case .longEntry, .shortEntry:
-                let side: PaperAccount.Side = signal.kind == .longEntry ? .long : .short
-                guard side == .long ? allowLong : allowShort else { continue }
-                if positions.contains(where: { $0.side == side }) { continue }   // one position per direction
-                let opposite = positions.filter { $0.side != side }
-                if !opposite.isEmpty {
-                    guard reverse else { continue }
-                    for p in opposite { trader.close(p) }
-                    add("Đảo lệnh: đóng \(side == .long ? "SELL" : "BUY")")
-                }
-                let size = orderLots(entry: price, stop: signal.stop)
-                if side == .long {
-                    trader.buy(symbol: symbol, lots: size, price: price, stop: signal.stop, target: signal.target)
-                } else {
-                    trader.sell(symbol: symbol, lots: size, price: price, stop: signal.stop, target: signal.target)
-                }
-                var text = "\(side == .long ? "BUY" : "SELL") \(String(format: "%.2f", size)) lot @ \(Self.format(price))"
-                if let stop = signal.stop { text += " · SL \(Self.format(stop))" }
-                if let target = signal.target { text += " · TP \(Self.format(target))" }
-                add(text)
-            }
+            let outcome = act(on: signal, symbol: symbol, trader: trader)
+            add(outcome.text)
+            notify(title: "🤖 \(LiveView.displayName(PaperTrader.bareSymbol(symbol))) · \(outcome.title)", body: outcome.text)
         }
+    }
+
+    private func act(on signal: LiveSignal, symbol: String, trader: PaperTrader) -> (title: String, text: String) {
+        let label = signal.kind.label
+        if trader.isReplaying {
+            return ("Bỏ qua \(label)", "Tín hiệu \(label) bị bỏ qua: đang Replay (lệnh replay không dùng tài khoản demo)")
+        }
+        let price = trader.price(symbol) ?? signal.price
+        let positions = trader.account.positions.filter { $0.symbol == symbol }
+        switch signal.kind {
+        case .longExit, .shortExit:
+            let side: PaperAccount.Side = signal.kind == .longExit ? .long : .short
+            let matching = positions.filter { $0.side == side }
+            guard !matching.isEmpty else { return (label, "Tín hiệu \(label): không có lệnh để đóng") }
+            for p in matching { trader.close(p) }
+            return (label, "Đóng \(matching.count) lệnh \(side == .long ? "MUA" : "BÁN") theo tín hiệu thoát @ \(Self.format(price))")
+        case .longEntry, .shortEntry:
+            let side: PaperAccount.Side = signal.kind == .longEntry ? .long : .short
+            let name = side == .long ? "MUA" : "BÁN"
+            guard side == .long ? allowLong : allowShort else {
+                return ("Bỏ qua \(label)", "Tín hiệu \(name) bị bỏ qua: đang tắt \"Cho phép \(name)\"")
+            }
+            // One position per direction.
+            if positions.contains(where: { $0.side == side }) {
+                return ("Bỏ qua \(label)", "Tín hiệu \(name) bị bỏ qua: đã có lệnh \(name) đang mở")
+            }
+            // The script sets SL/TP at the signal bar; price may already be past them.
+            if let stop = signal.stop, (stop - price) * side.sign >= 0 {
+                return ("Bỏ qua \(label)", "Tín hiệu \(name) bị bỏ qua: giá \(Self.format(price)) đã vượt SL \(Self.format(stop))")
+            }
+            if let target = signal.target, (target - price) * side.sign <= 0 {
+                return ("Bỏ qua \(label)", "Tín hiệu \(name) bị bỏ qua: giá \(Self.format(price)) đã qua TP \(Self.format(target))")
+            }
+            let opposite = positions.filter { $0.side != side }
+            var text = ""
+            if !opposite.isEmpty {
+                guard reverse else {
+                    return ("Bỏ qua \(label)", "Tín hiệu \(name) bị bỏ qua: đang có lệnh ngược chiều và tắt \"Đảo lệnh\"")
+                }
+                for p in opposite { trader.close(p) }
+                text = "Đảo lệnh: đóng \(side == .long ? "BÁN" : "MUA"). "
+            }
+            let size = orderLots(entry: price, stop: signal.stop)
+            if side == .long {
+                trader.buy(symbol: symbol, lots: size, price: price, stop: signal.stop, target: signal.target)
+            } else {
+                trader.sell(symbol: symbol, lots: size, price: price, stop: signal.stop, target: signal.target)
+            }
+            text += "Đã vào lệnh demo \(name) \(String(format: "%.2f", size)) lot @ \(Self.format(price))"
+            if let stop = signal.stop { text += " · SL \(Self.format(stop))" }
+            if let target = signal.target { text += " · TP \(Self.format(target))" }
+            return ("Đã \(side == .long ? "mua" : "bán")", text)
+        }
+    }
+
+    private func notify(title: String, body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 
     private func orderLots(entry: Double, stop: Double?) -> Double {

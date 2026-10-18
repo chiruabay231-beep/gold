@@ -430,7 +430,8 @@ final class LiveMarket {
             let fresh = scan.signals.filter { $0.barIndex == closed.count - 1 && !alertedSignalIDs.contains($0.id) }
             alertedSignalIDs.formUnion(scan.signals.map(\.id))
             if alert, !fresh.isEmpty { onSignals?(fresh, symbolKey) }
-            if alert, let signal = fresh.first(where: \.kind.isEntry) ?? fresh.first {
+            // The bot reports each signal with what it did; plain alerts only without it.
+            if alert, onSignals == nil, let signal = fresh.first(where: \.kind.isEntry) ?? fresh.first {
                 latestAlert = signal
                 announce(signal, strategy: strategy.name)
             }
