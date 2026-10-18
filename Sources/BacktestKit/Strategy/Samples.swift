@@ -294,6 +294,49 @@ public enum Samples {
                 plot(eq, "Equilibrium")
                 plot(dr_low(swing, swing), "Đáy range")
                 """),
+            StrategyDefinition(
+                name: "ICT M1 Trend · FVG Killzone",
+                summary: "Khung M1, chỉ đánh thuận xu hướng: giá và EMA 50 trên EMA 200 + cấu trúc swing tăng → chờ giá hồi vào FVG tăng trong killzone London / NY AM, nến đóng bật lên thì MUA. Ngược lại cho BÁN. SL dưới FVG/đáy gần, TP = RR × rủi ro, thoát sớm khi có MSS ngược chiều.",
+                parameters: [ScriptParameter(name: "fast_len", defaultValue: 50, minValue: 10, maxValue: 200, step: 10),
+                             ScriptParameter(name: "trend_len", defaultValue: 200, minValue: 50, maxValue: 500, step: 50),
+                             ScriptParameter(name: "swing", defaultValue: 3, minValue: 2, maxValue: 10, step: 1),
+                             ScriptParameter(name: "rr", defaultValue: 2, minValue: 1, maxValue: 5, step: 0.5),
+                             ScriptParameter(name: "sl_buffer", defaultValue: 0.3, minValue: 0, maxValue: 2, step: 0.1)],
+                script: """
+                // 1. Xu hướng: EMA nhanh / EMA 200 và cấu trúc swing cùng hướng
+                fast = ema(close, fast_len)
+                trend = ema(close, trend_len)
+                ms = structure(swing, swing)
+                uptrend   = close > trend and fast > trend and ms == 1
+                downtrend = close < trend and fast < trend and ms == -1
+
+                // 2. Thời gian: chỉ trong killzone London và New York AM (giờ New York, tự đổi giờ mùa hè)
+                kz = kz_london() or kz_ny_am()
+
+                // 3. Vùng vào lệnh: FVG gần nhất thuận xu hướng chưa bị lấp
+                up_top = bull_fvg_top()
+                up_bot = bull_fvg_bottom()
+                dn_top = bear_fvg_top()
+                dn_bot = bear_fvg_bottom()
+
+                // 4. Kích hoạt: giá hồi chạm FVG rồi nến đóng cửa bật lại theo xu hướng
+                long_entry  = kz and uptrend and low <= up_top and close > up_bot and close > open
+                short_entry = kz and downtrend and high >= dn_bot and close < dn_top and close < open
+
+                // 5. Quản lý: SL ngoài FVG / đỉnh-đáy 5 nến + đệm ATR, TP theo RR
+                a = atr(14)
+                long_stop    = min(up_bot, lowest(low, 5)) - sl_buffer * a
+                short_stop   = max(dn_top, highest(high, 5)) + sl_buffer * a
+                long_target  = close + rr * (close - long_stop)
+                short_target = close - rr * (short_stop - close)
+
+                // 6. Thoát sớm khi cấu trúc đảo chiều (MSS ngược chiều)
+                long_exit  = mss_bear(swing, swing)
+                short_exit = mss_bull(swing, swing)
+
+                plot(fast, "EMA nhanh")
+                plot(trend, "EMA xu hướng")
+                """),
         ]
     }
 }

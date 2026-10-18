@@ -210,7 +210,17 @@ final class AppStore {
             save(indicators, to: "indicators.json")
             save(strategies, to: "strategies.json")
             addSampleDataset()
+        } else {
+            // Sample strategies added in app updates appear once; deleted ones stay deleted.
+            let seen = Set(UserDefaults.standard.stringArray(forKey: "samples.seenStrategies") ?? strategies.map(\.name))
+            let new = Samples.strategies.filter { !seen.contains($0.name) && !strategies.map(\.name).contains($0.name) }
+            if !new.isEmpty {
+                strategies += new
+                save(strategies, to: "strategies.json")
+            }
         }
+        UserDefaults.standard.set(Array(Set(Samples.strategies.map(\.name)).union(strategies.map(\.name))),
+                                  forKey: "samples.seenStrategies")
     }
 
     private func saveDatasets() {

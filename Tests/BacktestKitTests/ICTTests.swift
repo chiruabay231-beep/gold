@@ -186,4 +186,14 @@ final class ICTTests: XCTestCase {
             XCTAssertGreaterThan(result.trades.count, 0, strategy.name)
         }
     }
+
+    func testICTM1TrendStrategyOnOneMinuteBars() throws {
+        let strategy = try XCTUnwrap(Samples.strategies.first { $0.name.hasPrefix("ICT M1 Trend") })
+        try strategy.validate()
+        let data = PriceData(candles: SampleData.candles(count: 20_000, interval: 60))
+        let result = try BacktestEngine.run(strategy: strategy, data: data, config: BacktestConfig(),
+                                            library: FunctionLibrary.standard.adding(Samples.indicators))
+        XCTAssertGreaterThan(result.trades.count, 0)
+        print("ICT M1 Trend on 20k synthetic M1 bars: \(result.trades.count) trades, win rate \(result.metrics.winRate), net \(result.metrics.netProfit)")
+    }
 }
