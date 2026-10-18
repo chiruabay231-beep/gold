@@ -37,6 +37,13 @@ LOG_PATH = os.path.join(HERE, "server.log")
 IS_WINDOWS = os.name == "nt"
 NO_WINDOW = 0x08000000 if IS_WINDOWS else 0  # CREATE_NO_WINDOW
 
+# Windows consoles default to cp1252, which cannot print Vietnamese.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 DEFAULT_CONFIG = {
     "password": "",
     "port": 8787,
