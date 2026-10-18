@@ -65,4 +65,14 @@ final class PaperAccountTests: XCTestCase {
         XCTAssertTrue(account.process(symbol: "XAUUSDT", price: 3996, time: t).isEmpty)
         XCTAssertEqual(account.process(symbol: "XAUUSDT", price: 3994, time: t).count, 1)
     }
+
+    func testReplayBarHitsStopBeforeTargetOnDownBar() {
+        var account = PaperAccount()
+        account.openMarket(symbol: "X", side: .long, lots: 1, price: 100, stop: 95, target: 105, time: t)
+        // A down bar that touches both: high first, so the target fills.
+        let events = account.process(symbol: "X", candle: Candle(time: t, open: 100, high: 106, low: 94, close: 96))
+        guard case .closed(let trade)? = events.first else { return XCTFail() }
+        XCTAssertEqual(trade.reason, .target)
+        XCTAssertEqual(events.count, 1)
+    }
 }

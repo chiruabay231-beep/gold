@@ -44,6 +44,8 @@ final class LiveMarket {
     }
 
     static let futuresSymbols = ["XAUUSDT", "XAGUSDT"]
+    /// Bars kept in memory, including older history loaded while scrolling back.
+    static let maxBars = 20_000
     static let popularSymbols = ["BTCUSDT", "ETHUSDT", "PAXGUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
     static let intervals: [BinanceClient.Interval] = [.s5, .s10, .s15, .s30, .m1, .m5, .m15, .h1, .h4, .d1]
 
@@ -52,7 +54,7 @@ final class LiveMarket {
     private(set) var interval: BinanceClient.Interval = .m15
     /// True while OANDA is selected but no token is saved.
     private(set) var needsOandaToken = false
-    private(set) var buffer = LiveCandleBuffer(maxCount: 2000)
+    private(set) var buffer = LiveCandleBuffer(maxCount: LiveMarket.maxBars)
     private(set) var ticker: Ticker24h?
     private(set) var status: Status = .idle
 
@@ -82,6 +84,9 @@ final class LiveMarket {
     @ObservationIgnored private var pendingBuffer: LiveCandleBuffer?
     @ObservationIgnored private var lastPublish = Date.distantPast
     @ObservationIgnored private var flushScheduled = false
+    @ObservationIgnored private var loadingOlder = false
+    /// No older bars exist (start of the market's history).
+    @ObservationIgnored private var reachedStart = false
 
     var candles: [Candle] { buffer.candles }
 
@@ -135,9 +140,46 @@ final class LiveMarket {
         restart()
     }
 
+    /// Loads up to `count` bars before the oldest one on the chart and puts
+    /// them in front of the history. Returns the bars added.
+    @discardableResult
+    func loadOlder(count: Int = 1000) async -> [Candle] {
+        guard !loadingOlder, !reachedStart, let first = buffer.candles.first else { return [] }
+        loadingOlder = true
+        defer { loadingOlder = false }
+        let symbol = self.symbol, interval = self.interval, source = self.source
+        var older: [Candle] = []
+        do {
+            switch source {
+            case .binance, .binanceFutures:
+                let market: BinanceClient.Market = source == .binanceFutures ? .futures : .spot
+                // Seconds bars are built from trades; there is no older history to fetch.
+                if interval.isSeconds { return [] }
+                older = try await BinanceClient.withFallback(market: market) { client in
+                    try await client.fetchCandles(symbol: symbol, interval: interval, count: count, before: first.time)
+                }
+            case .oanda:
+                guard let client = OandaSettings.client() else { return [] }
+                older = try await client.fetchCandles(instrument: symbol, interval: interval, count: count, to: first.time)
+                    .map(\.candle)
+            }
+        } catch {
+            return []
+        }
+        // The chart may have switched symbol or interval while loading.
+        guard symbol == self.symbol, interval == self.interval, source == self.source else { return [] }
+        if older.isEmpty { reachedStart = true }
+        let before = buffer.candles.count
+        buffer.prepend(older)
+        let added = Array(buffer.candles.prefix(buffer.candles.count - before))
+        if !added.isEmpty { rescan(alert: false) }
+        return added
+    }
+
     /// Reloads from scratch, e.g. after the OANDA token changed.
     func restart() {
-        buffer = LiveCandleBuffer(maxCount: 2000)
+        reachedStart = false
+        buffer = LiveCandleBuffer(maxCount: LiveMarket.maxBars)
         pendingBuffer = nil
         ticker = nil
         signals = []
@@ -164,7 +206,7 @@ final class LiveMarket {
                         return try await client.fetchCandles(symbol: symbol, interval: interval, count: 1000)
                     }
                     guard !Task.isCancelled else { return }
-                    buffer = LiveCandleBuffer(candles: history, maxCount: 2000)
+                    buffer = LiveCandleBuffer(candles: history, maxCount: LiveMarket.maxBars)
                     pendingBuffer = nil
                     lastBarClosed = false
                     ticker = try? await BinanceClient.withFallback(market: market) { try await $0.fetchTicker(symbol: symbol) }
@@ -179,7 +221,7 @@ final class LiveMarket {
                     needsOandaToken = false
                     let history = try await client.fetchCandles(instrument: symbol, interval: interval, count: 1000)
                     guard !Task.isCancelled else { return }
-                    buffer = LiveCandleBuffer(candles: history.map(\.candle), maxCount: 2000)
+                    buffer = LiveCandleBuffer(candles: history.map(\.candle), maxCount: LiveMarket.maxBars)
                     lastBarClosed = history.last?.complete ?? false
                     ticker = try? await client.fetchTicker(instrument: symbol)
                     rescan(alert: false)

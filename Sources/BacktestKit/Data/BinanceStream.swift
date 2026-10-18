@@ -149,6 +149,17 @@ public struct LiveCandleBuffer: Sendable {
         self.maxCount = maxCount
     }
 
+    /// Adds older bars in front of the history; returns how many were added.
+    @discardableResult
+    public mutating func prepend(_ older: [Candle]) -> Int {
+        let first = candles.first?.time ?? .distantFuture
+        let fresh = older.filter { $0.time < first }.sorted { $0.time < $1.time }
+        let room = max(0, maxCount - candles.count)
+        let added = Array(fresh.suffix(room))
+        candles.insert(contentsOf: added, at: 0)
+        return added.count
+    }
+
     /// Adds a trade to the bar of `seconds` it falls in, starting a new bar when needed.
     @discardableResult
     public mutating func apply(trade: TradeTick, seconds: TimeInterval) -> Update {

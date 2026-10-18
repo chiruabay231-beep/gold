@@ -9,7 +9,22 @@ import BacktestKit
 @MainActor
 @Observable
 final class PaperTrader {
-    private(set) var account: PaperAccount
+    /// The saved account that trades live prices.
+    private(set) var liveAccount: PaperAccount
+    /// A separate account while bar replay runs; nil otherwise.
+    private(set) var replayAccount: PaperAccount?
+    /// Time of the replayed bar, used as "now" for orders during replay.
+    private(set) var replayTime: Date?
+
+    var isReplaying: Bool { replayAccount != nil }
+
+    /// The account orders go to: the replay account during replay, else the live one.
+    private(set) var account: PaperAccount {
+        get { replayAccount ?? liveAccount }
+        set { if replayAccount != nil { replayAccount = newValue } else { liveAccount = newValue } }
+    }
+
+    private var now: Date { replayTime ?? Date() }
     /// Latest price per symbol key, for profit and equity.
     private(set) var prices: [String: Double] = [:]
     /// Newest fill, shown briefly on the chart.
@@ -24,9 +39,9 @@ final class PaperTrader {
     init() {
         if let data = try? Data(contentsOf: Self.fileURL),
            let saved = try? JSONDecoder().decode(PaperAccount.self, from: data) {
-            account = saved
+            liveAccount = saved
         } else {
-            account = PaperAccount()
+            liveAccount = PaperAccount()
         }
     }
 
@@ -34,6 +49,8 @@ final class PaperTrader {
 
     /// Called by the live feed on every price update of `symbol`.
     func update(symbol: String, price: Double, time: Date) {
+        // Live prices must not touch the replay account.
+        guard !isReplaying else { return }
         // Only touch observed state when something can change, to keep redraws cheap.
         let involved = account.positions.contains { $0.symbol == symbol } || account.pending.contains { $0.symbol == symbol }
         if involved || prices[symbol] == nil { prices[symbol] = price }
@@ -56,14 +73,14 @@ final class PaperTrader {
     // MARK: - Orders
 
     func buy(symbol: String, lots: Double, price: Double, stop: Double?, target: Double?) {
-        account.openMarket(symbol: symbol, side: .long, lots: lots, price: price, stop: stop, target: target, time: Date())
+        account.openMarket(symbol: symbol, side: .long, lots: lots, price: price, stop: stop, target: target, time: now)
         prices[symbol] = price
         speakEntry(side: .long, symbol: symbol, price: price)
         save()
     }
 
     func sell(symbol: String, lots: Double, price: Double, stop: Double?, target: Double?) {
-        account.openMarket(symbol: symbol, side: .short, lots: lots, price: price, stop: stop, target: target, time: Date())
+        account.openMarket(symbol: symbol, side: .short, lots: lots, price: price, stop: stop, target: target, time: now)
         prices[symbol] = price
         speakEntry(side: .short, symbol: symbol, price: price)
         save()
@@ -72,7 +89,7 @@ final class PaperTrader {
     func placePending(symbol: String, side: PaperAccount.Side, lots: Double, entry: Double, stop: Double?, target: Double?,
                       currentPrice: Double) {
         account.placePending(symbol: symbol, side: side, lots: lots, entry: entry, stop: stop, target: target,
-                             currentPrice: currentPrice, time: Date())
+                             currentPrice: currentPrice, time: now)
         prices[symbol] = currentPrice
         VoiceAnnouncer.shared.speak(VoiceSettings.language.hasPrefix("vi") ? "Đã đặt lệnh chờ" : "Order placed")
         save()
@@ -80,7 +97,7 @@ final class PaperTrader {
 
     func close(_ position: PaperAccount.Position) {
         guard let price = prices[position.symbol] else { return }
-        if let trade = account.close(positionID: position.id, price: price, time: Date()) {
+        if let trade = account.close(positionID: position.id, price: price, time: now) {
             lastEvent = .closed(trade)
         }
         save()
@@ -101,6 +118,35 @@ final class PaperTrader {
         save()
     }
 
+    // MARK: - Bar replay
+
+    /// Starts a fresh replay account; live positions are untouched.
+    func beginReplay(balance: Double = 10_000) {
+        replayAccount = PaperAccount(startingBalance: balance)
+        replayTime = nil
+        lastEvent = nil
+    }
+
+    /// Applies a replayed bar: fills orders and stops/targets inside it.
+    func replay(bar: Candle, symbol: String) {
+        guard isReplaying else { return }
+        replayTime = bar.time
+        prices[symbol] = bar.close
+        let events = account.process(symbol: symbol, candle: bar)
+        for event in events { announce(event, notify: false) }
+        if let last = events.last { lastEvent = last }
+    }
+
+    /// Ends replay and returns its account for a summary.
+    @discardableResult
+    func endReplay() -> PaperAccount? {
+        let finished = replayAccount
+        replayAccount = nil
+        replayTime = nil
+        lastEvent = nil
+        return finished
+    }
+
     func reset(balance: Double) {
         account = PaperAccount(startingBalance: balance)
         lastEvent = nil
@@ -109,14 +155,14 @@ final class PaperTrader {
 
     // MARK: - Alerts
 
-    private func announce(_ event: PaperAccount.Event) {
+    private func announce(_ event: PaperAccount.Event, notify notifyUser: Bool = true) {
         let details = VoiceSettings.speakDetails
         switch event {
         case .opened(let position):
             var text = VoiceSettings.phrase(VoiceSettings.entryKey, default: VoiceSettings.defaultEntry)
             if details { text += ", \(Self.spokenSymbol(position.symbol)) \(Self.spoken(position.entryPrice))" }
             VoiceAnnouncer.shared.speak(text)
-            notify(title: "Lệnh demo đã khớp", body: "\(position.side == .long ? "MUA" : "BÁN") \(Self.lots(position.lots)) lot \(LiveView.displayName(Self.bareSymbol(position.symbol))) @ \(Self.spoken(position.entryPrice))")
+            if notifyUser { notify(title: "Lệnh demo đã khớp", body: "\(position.side == .long ? "MUA" : "BÁN") \(Self.lots(position.lots)) lot \(LiveView.displayName(Self.bareSymbol(position.symbol))) @ \(Self.spoken(position.entryPrice))") }
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         case .closed(let trade):
             let isTarget = trade.reason == .target
@@ -125,8 +171,8 @@ final class PaperTrader {
                 : VoiceSettings.phrase(VoiceSettings.stopKey, default: VoiceSettings.defaultStop)
             if details { text += ", \(trade.profit >= 0 ? "plus" : "minus") \(Int(abs(trade.profit).rounded())) dollars" }
             VoiceAnnouncer.shared.speak(text)
-            notify(title: isTarget ? "Chạm TP (Target fill)" : "Chạm SL (Stop loss fill)",
-                   body: "\(LiveView.displayName(Self.bareSymbol(trade.symbol))) \(String(format: "%+.2f", trade.profit)) $")
+            if notifyUser { notify(title: isTarget ? "Chạm TP (Target fill)" : "Chạm SL (Stop loss fill)",
+                   body: "\(LiveView.displayName(Self.bareSymbol(trade.symbol))) \(String(format: "%+.2f", trade.profit)) $") }
             UINotificationFeedbackGenerator().notificationOccurred(isTarget ? .success : .error)
         }
     }
@@ -146,7 +192,8 @@ final class PaperTrader {
     }
 
     private func save() {
-        guard let data = try? JSONEncoder().encode(account) else { return }
+        // Replay trades are practice only and are not saved.
+        guard !isReplaying, let data = try? JSONEncoder().encode(liveAccount) else { return }
         try? data.write(to: Self.fileURL, options: .atomic)
         lastSave = Date()
     }

@@ -139,4 +139,14 @@ final class LiveTests: XCTestCase {
         XCTAssertTrue(BinanceClient.Interval.s15.isSeconds)
         XCTAssertFalse(BinanceClient.Interval.m1.isSeconds)
     }
+
+    func testPrependOlderBars() {
+        let t = { (i: Int) in Date(timeIntervalSince1970: Double(i) * 60) }
+        var buffer = LiveCandleBuffer(candles: [Candle(time: t(10), open: 1, high: 1, low: 1, close: 1)], maxCount: 3)
+        let older = [Candle(time: t(9), open: 2, high: 2, low: 2, close: 2), Candle(time: t(10), open: 9, high: 9, low: 9, close: 9),
+                     Candle(time: t(7), open: 3, high: 3, low: 3, close: 3), Candle(time: t(8), open: 4, high: 4, low: 4, close: 4)]
+        XCTAssertEqual(buffer.prepend(older), 2)   // only room for 2; the newest older bars are kept
+        XCTAssertEqual(buffer.candles.map(\.time), [t(8), t(9), t(10)])
+        XCTAssertEqual(buffer.candles.last?.close, 1)
+    }
 }

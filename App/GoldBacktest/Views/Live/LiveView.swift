@@ -29,6 +29,8 @@ struct LiveView: View {
     @AppStorage("position.contractSize") private var contractSize = 100.0
     @State private var showChartSettings = false
     @State private var showAutoStopSettings = false
+    @State private var replay = ReplaySession()
+    @State private var replaySummary: String?
     @AppStorage("live.showTradeButtons") private var showTradeButtons = true
     @State private var showVoiceSettings = false
     /// Position drawing waiting for confirmation before it becomes a demo order.
@@ -93,6 +95,11 @@ struct LiveView: View {
         }
         .onChange(of: keepAwake) { _, value in UIApplication.shared.isIdleTimerDisabled = value }
         .sheet(isPresented: $showAutoStopSettings) { AutoStopSettingsView() }
+        .alert("Kết quả replay", isPresented: Binding(get: { replaySummary != nil }, set: { if !$0 { replaySummary = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(replaySummary ?? "")
+        }
         .sheet(isPresented: $showVoiceSettings) { VoiceSettingsView() }
         .confirmationDialog(demoOrderTitle, isPresented: Binding(get: { demoOrderDrawing != nil },
                                                                  set: { if !$0 { demoOrderDrawing = nil } }),
@@ -157,7 +164,7 @@ struct LiveView: View {
     // MARK: - Header (TradingView style)
 
     private var header: some View {
-        let last = market.ticker?.lastPrice ?? market.candles.last?.close ?? 0
+        let last = currentPrice
         let changePct = market.ticker?.changePercent ?? 0
         let changeAbs = last - last / (1 + changePct / 100)
         let decimals = priceDecimals ?? CandleChart.decimals(for: last)
@@ -179,6 +186,14 @@ struct LiveView: View {
                     .lineLimit(1)
                     .layoutPriority(-1)
                 statusDot
+                if replay.isActive {
+                    Text("REPLAY")
+                        .font(.system(size: 10, weight: .heavy))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.orange, in: Capsule())
+                }
                 Spacer(minLength: 6)
                 // One-click trading in the top right corner, like MT5.
                 if showTradeButtons {
@@ -275,26 +290,32 @@ struct LiveView: View {
                         .frame(width: 30, height: 22)
                         .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.grid, lineWidth: 1))
                 }
-                // Favourite timeframes, one tap to switch.
-                ForEach(Self.quickIntervals, id: \.self) { interval in
-                    Button {
-                        viewport = ChartViewport()
-                        market.select(interval: interval)
-                    } label: {
-                        Text(Self.label(interval))
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(interval == market.interval ? .white : theme.primaryText)
-                            .frame(minWidth: 40, minHeight: 22)
-                            .background(interval == market.interval ? theme.accent : .clear, in: RoundedRectangle(cornerRadius: 5))
-                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(theme.grid, lineWidth: 1))
+                // Every timeframe, one tap to switch; swipe sideways for the rest.
+                ScrollViewReader { proxy in
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(LiveMarket.intervals, id: \.self) { interval in
+                                Button { selectInterval(interval) } label: {
+                                    Text(Self.label(interval))
+                                        .font(.system(size: 13, weight: .semibold))
+                                        .foregroundColor(interval == market.interval ? .white : theme.primaryText)
+                                        .frame(minWidth: 38, minHeight: 22)
+                                        .background(interval == market.interval ? theme.accent : .clear,
+                                                    in: RoundedRectangle(cornerRadius: 5))
+                                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(theme.grid, lineWidth: 1))
+                                }
+                                .buttonStyle(.plain)
+                                .id(interval)
+                            }
+                        }
+                        .padding(.vertical, 1)
                     }
-                    .buttonStyle(.plain)
+                    .onAppear { proxy.scrollTo(market.interval, anchor: .center) }
                 }
             }
         }
     }
 
-    static let quickIntervals: [BinanceClient.Interval] = [.m1, .m5, .m15]
 
     // MARK: - Chart
 
@@ -303,19 +324,19 @@ struct LiveView: View {
     private var killzoneSettings: KillzonePivotsSettings { killzoneCache.settings(json: killzonePivotsJSON) }
 
     private var killzoneLayer: KillzonePivotsLayer {
-        killzoneCache.layer(candles: market.candles, barInterval: market.interval.seconds,
+        killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
                             settings: killzoneSettings, enabled: showKillzonePivots)
     }
 
     private var chartPanel: some View {
         let settings = killzoneSettings
-        let layer = killzoneCache.layer(candles: market.candles, barInterval: market.interval.seconds,
+        let layer = killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
                                         settings: settings, enabled: showKillzonePivots)
         return ZStack(alignment: .trailing) {
-            CandleChart(candles: market.candles,
+            CandleChart(candles: chartCandles,
                         overlays: overlays,
                         showVolume: showVolume,
-                        countdownInterval: market.interval.seconds,
+                        countdownInterval: replay.isActive ? nil : market.interval.seconds,
                         theme: theme,
                         sessionBoxes: layer.boxes,
                         segments: layer.segments,
@@ -324,6 +345,8 @@ struct LiveView: View {
                         priceLines: tradeLines,
                         onPriceLineDrag: { id, price, ended in tradeLineDragged(id: id, price: price, ended: ended) },
                         onPriceLineClose: { id in tradeLineClosed(id: id) },
+                        onPickBar: replay.isPicking ? { index in replay.pick(index: index) } : nil,
+                        onNeedOlder: { loadOlderBars() },
                         showHighLowLabels: showHighLow,
                         drawings: hideDrawings ? [] : drawings,
                         drawingTool: activeTool,
@@ -358,7 +381,7 @@ struct LiveView: View {
         .overlay(alignment: .topTrailing) {
             if showKillzonePivots, settings.config.showRangeTable {
                 KillzoneRangeTable(layer: layer, settings: settings,
-                                   decimals: priceDecimals ?? CandleChart.decimals(for: market.candles.last?.close ?? 1),
+                                   decimals: priceDecimals ?? CandleChart.decimals(for: chartCandles.last?.close ?? 1),
                                    theme: theme)
                     .padding(.trailing, 72)
                     .padding(.top, 40)
@@ -366,6 +389,7 @@ struct LiveView: View {
             }
         }
         .overlay(alignment: .bottom) {
+            VStack(spacing: 8) {
             if let draft = limitDraft {
                 let side = draft.side(price: currentPrice)
                 LimitOrderBar(title: "\(side == .long ? "Buy" : "Sell") Limit \(QuickTradePanel.lotText(defaultLots))",
@@ -377,8 +401,13 @@ struct LiveView: View {
                               },
                               onSettings: { showAutoStopSettings = true },
                               onCancel: { limitDraft = nil })
-                    .padding(.bottom, 24)
             }
+            if replay.isActive {
+                ReplayControlBar(replay: replay, profit: trader.account.balance - trader.account.startingBalance + trader.openProfit,
+                                 trades: trader.account.history.count, theme: theme, onExit: { endReplay() })
+            }
+            }
+            .padding(.bottom, 24)
         }
         .overlay(alignment: .top) {
             VStack(spacing: 8) {
@@ -418,7 +447,50 @@ struct LiveView: View {
 
     // MARK: - Demo trading
 
-    private var currentPrice: Double { market.ticker?.lastPrice ?? market.candles.last?.close ?? 0 }
+    /// Bars on the chart: the live feed, or the bars revealed so far in replay.
+    private var chartCandles: [Candle] { replay.isActive ? replay.visibleCandles : market.candles }
+
+    private var currentPrice: Double {
+        replay.isActive ? (replay.visibleCandles.last?.close ?? 0) : (market.ticker?.lastPrice ?? market.candles.last?.close ?? 0)
+    }
+
+    // MARK: - Replay and history
+
+    private func loadOlderBars() {
+        Task {
+            let added = await market.loadOlder()
+            if replay.isActive { replay.prepend(added) }
+        }
+    }
+
+    private func toggleReplay() {
+        if replay.isActive {
+            endReplay()
+        } else {
+            limitDraft = nil
+            replay.begin(candles: market.candles, symbolKey: market.symbolKey, trader: trader)
+            viewport = ChartViewport()
+        }
+    }
+
+    private func endReplay() {
+        guard let account = replay.end() else { return }
+        viewport = ChartViewport()
+        let trades = account.history
+        guard !trades.isEmpty || !account.positions.isEmpty else { return }
+        let wins = trades.filter { $0.profit > 0 }.count
+        let total = account.balance - account.startingBalance
+        replaySummary = String(format: "%d lệnh đã đóng · thắng %d (%.0f%%)\nLãi/lỗ: %+.2f USD", trades.count, wins,
+                               trades.isEmpty ? 0 : Double(wins) / Double(trades.count) * 100, total)
+            + (account.positions.isEmpty ? "" : "\n\(account.positions.count) lệnh còn mở bị bỏ qua.")
+    }
+
+    /// Changes timeframe; replay is left first since its bars belong to the old one.
+    private func selectInterval(_ interval: BinanceClient.Interval) {
+        if replay.isActive { endReplay() }
+        viewport = ChartViewport()
+        market.select(interval: interval)
+    }
     private var currentDecimals: Int { priceDecimals ?? CandleChart.decimals(for: currentPrice) }
 
     private var demoOrderTitle: String {
@@ -452,7 +524,7 @@ struct LiveView: View {
 
     /// Typical bar range, used to place a new limit order and its SL/TP.
     private var defaultDistance: Double {
-        let recent = market.candles.suffix(20)
+        let recent = chartCandles.suffix(20)
         let average = recent.isEmpty ? 0 : recent.reduce(0) { $0 + ($1.high - $1.low) } / Double(recent.count)
         return average > 0 ? average : max(currentPrice * 0.001, 1e-6)
     }
@@ -520,7 +592,7 @@ struct LiveView: View {
 
     /// Bar on which a position was opened, for its entry marker.
     private func openIndex(_ time: Date) -> Int? {
-        market.candles.lastIndex { $0.time <= time }
+        chartCandles.lastIndex { $0.time <= time }
     }
 
     /// Money made or lost if price moves from `entry` to `price`.
@@ -697,7 +769,7 @@ struct LiveView: View {
     private var overlays: [ChartLine] {
         var lines: [ChartLine] = []
         if showMA {
-            let closes = market.candles.map { $0.close }
+            let closes = chartCandles.map { $0.close }
             for (index, length) in [7, 25, 99].enumerated() {
                 lines.append(ChartLine(title: "MA(\(length))", values: TA.sma(closes, length),
                                        color: BinanceTheme.maColors[index]))
@@ -711,8 +783,8 @@ struct LiveView: View {
     private var bottomBar: some View {
         HStack(spacing: 0) {
             symbolMenu
-            intervalMenu
             Spacer(minLength: 4)
+            toolbarButton("backward.end.alt", active: replay.isActive) { toggleReplay() }
             toolbarButton("pencil.tip", active: showDrawingBar) {
                 showDrawingBar.toggle()
                 if !showDrawingBar { activeTool = nil }
@@ -766,28 +838,6 @@ struct LiveView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
                 .frame(maxWidth: 110, alignment: .leading)
-        }
-    }
-
-    private var intervalMenu: some View {
-        Menu {
-            ForEach(LiveMarket.intervals, id: \.self) { interval in
-                Button {
-                    viewport = ChartViewport()
-                    market.select(interval: interval)
-                } label: {
-                    if interval == market.interval {
-                        Label(Self.label(interval), systemImage: "checkmark")
-                    } else {
-                        Text(Self.label(interval))
-                    }
-                }
-            }
-        } label: {
-            Text(Self.label(market.interval))
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundColor(theme.primaryText)
-                .frame(width: 44)
         }
     }
 
@@ -880,6 +930,7 @@ struct LiveView: View {
     private func open(symbol: String, source: LiveSource = .binance) {
         let cleaned = symbol.uppercased().filter { $0.isLetter || $0.isNumber }
         guard !cleaned.isEmpty else { return }
+        if replay.isActive { endReplay() }
         viewport = ChartViewport()
         selectedDrawingID = nil
         market.select(source: source, symbol: cleaned)
@@ -891,6 +942,7 @@ struct LiveView: View {
             showOandaSettings = true
             return
         }
+        if replay.isActive { endReplay() }
         viewport = ChartViewport()
         selectedDrawingID = nil
         market.select(source: .oanda, symbol: instrument)

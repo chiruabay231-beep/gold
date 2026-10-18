@@ -119,7 +119,11 @@ swift test
 **Giao dịch demo và cảnh báo giọng nói**
 - Tab **Giao dịch** (thay tab Dữ liệu; dữ liệu backtest nằm ở mục "Dữ liệu backtest" trong tab này):
   tài khoản demo, các tab Đang mở / Lệnh chờ / Lịch sử, tỉ lệ thắng, SL/TP tự động.
-- Nút khung giờ nhanh 1m / 5m / 15m cạnh nút thu gọn chú thích trên biểu đồ Live.
+- Hàng nút khung giờ (5s → 1D, vuốt ngang) cạnh nút thu gọn chú thích trên biểu đồ Live.
+- Kéo nến sang trái để chừa khoảng trống bên phải; kéo về quá khứ thì app tự tải thêm nến cũ.
+- **Replay** (nút ⏮ ở thanh dưới): chạm cây nến để chọn điểm bắt đầu, phát / tạm dừng / từng nến,
+  tốc độ 0.5–20 nến/giây; đặt lệnh SELL/BUY/Limit và kéo SL/TP như lúc live trên tài khoản replay riêng
+  (không ảnh hưởng tài khoản demo); thoát replay sẽ hiện kết quả (số lệnh, tỉ lệ thắng, lãi/lỗ).
 - Nút 💼 ở thanh dưới mở tab Giao dịch: tài khoản demo trong app (mặc định 10 000 $), lệnh MUA/BÁN thị trường có SL/TP,
   lệnh đang mở, lệnh chờ, lịch sử. Lệnh khớp theo giá realtime đang xem (không qua sàn).
 - Vẽ Vị thế Long/Short → chọn → ✈︎ "Vào lệnh demo": đặt lệnh chờ tại giá vào (hoặc vào ngay) với SL/TP

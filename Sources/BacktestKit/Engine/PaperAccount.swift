@@ -140,6 +140,14 @@ public struct PaperAccount: Codable, Hashable, Sendable {
         pending[index].triggersAbove = entry > currentPrice
     }
 
+    /// Applies a whole bar (bar replay): open, then the extreme reached
+    /// first (the low for an up bar, the high for a down bar), the other
+    /// extreme and the close.
+    public mutating func process(symbol: String, candle c: Candle) -> [Event] {
+        let path = c.close >= c.open ? [c.open, c.low, c.high, c.close] : [c.open, c.high, c.low, c.close]
+        return path.flatMap { process(symbol: symbol, price: $0, time: c.time) }
+    }
+
     /// Applies a new price of `symbol`: fills pending orders, then closes
     /// positions whose stop or target was reached (at the stop/target price).
     public mutating func process(symbol: String, price: Double, time: Date) -> [Event] {

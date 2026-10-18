@@ -117,6 +117,12 @@ public struct BinanceClient {
         try await fetchCandles(symbol: symbol, intervalName: interval.rawValue, count: count)
     }
 
+    /// `count` candles that open before `before`, for loading older history.
+    public func fetchCandles(symbol: String, interval: Interval, count: Int, before: Date) async throws -> [Candle] {
+        try await fetchCandles(symbol: symbol, intervalName: interval.rawValue, count: count,
+                               endTime: Int64(before.timeIntervalSince1970 * 1000) - 1)
+    }
+
     /// Recent bars of a seconds interval. Spot: 1-second klines merged into
     /// bigger bars. Futures (no 1s klines): built from aggregate trades.
     public func fetchSecondCandles(symbol: String, seconds: TimeInterval, count: Int,
@@ -167,9 +173,9 @@ public struct BinanceClient {
         }
     }
 
-    func fetchCandles(symbol: String, intervalName: String, count: Int) async throws -> [Candle] {
+    func fetchCandles(symbol: String, intervalName: String, count: Int, endTime start: Int64? = nil) async throws -> [Candle] {
         var result: [Candle] = []
-        var endTime: Int64?
+        var endTime: Int64? = start
         while result.count < count {
             let batch = min(1000, count - result.count)
             let page = try await fetchPage(symbol: symbol, intervalName: intervalName, limit: batch, endTime: endTime)

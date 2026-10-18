@@ -101,12 +101,15 @@ public struct OandaClient {
 
     /// The most recent `count` candles (at most 5000) built from bid prices,
     /// the same prices MT4/MT5 charts show.
-    public func fetchCandles(instrument: String, interval: BinanceClient.Interval, count: Int) async throws -> [OandaCandle] {
-        let data = try await get("v3/instruments/\(instrument)/candles", query: [
+    public func fetchCandles(instrument: String, interval: BinanceClient.Interval, count: Int, to: Date? = nil) async throws -> [OandaCandle] {
+        var query = [
             URLQueryItem(name: "granularity", value: Self.granularity(interval)),
             URLQueryItem(name: "count", value: String(max(1, min(5000, count)))),
             URLQueryItem(name: "price", value: "B"),
-        ])
+        ]
+        // Candles up to `to` (exclusive), for loading older history.
+        if let to { query.append(URLQueryItem(name: "to", value: String(format: "%.0f", to.timeIntervalSince1970))) }
+        let data = try await get("v3/instruments/\(instrument)/candles", query: query)
         return try Self.parseCandles(data)
     }
 

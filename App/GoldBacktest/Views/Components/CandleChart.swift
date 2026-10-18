@@ -187,6 +187,10 @@ struct CandleChart: View {
     var onPriceLineDrag: ((String, Double, Bool) -> Void)?
     /// The ✕ of a closable price line was tapped.
     var onPriceLineClose: ((String) -> Void)?
+    /// When set, a tap chooses a bar (bar replay start) instead of the usual tap actions.
+    var onPickBar: ((Int) -> Void)?
+    /// Called when scrolling reaches the oldest bars, to load more history.
+    var onNeedOlder: (() -> Void)?
     /// Labels for the visible high and low on the price axis.
     var showHighLowLabels = false
     var drawings: [Drawing] = []
@@ -268,10 +272,11 @@ struct CandleChart: View {
                     })
             })
         }
-        .onChange(of: candles.count) { oldCount, newCount in
+        .onChange(of: candles.last?.time) { oldTime, newTime in
             // Keep the same bars on screen when scrolled back and a new bar arrives.
-            if viewport.rightOffset > 0.5, newCount > oldCount, oldCount > 0 {
-                viewport.rightOffset += Double(newCount - oldCount)
+            // (Older bars added in front don't move the view: it is anchored at the right.)
+            if viewport.rightOffset > 0.5, let oldTime, let newTime, newTime > oldTime {
+                viewport.rightOffset += 1
             }
         }
         .onChange(of: drawingTool) { _, _ in pendingPoints = [] }
@@ -1150,6 +1155,10 @@ struct CandleChart: View {
         // The release of a long press also ends as a tap; keep that crosshair.
         guard location.x < layout.axisX, Date().timeIntervalSince(pressEndedAt) > 0.3 else { return }
         let s = scale(layout: layout)
+        if let onPickBar, !candles.isEmpty {
+            onPickBar(min(max(s.index(atX: location.x), 0), candles.count - 1))
+            return
+        }
         if let line = priceLines.first(where: {
             $0.closable && closeButtonRect(y: s.y($0.price), layout: layout).insetBy(dx: -8, dy: -8).contains(location)
         }) {
@@ -1257,7 +1266,10 @@ struct CandleChart: View {
                 case .pan:
                     let barWidth = layout.plot.width / CGFloat(max(viewport.visibleCount, 1))
                     let offset = panStartOffset + Double(value.translation.width / barWidth)
-                    viewport.rightOffset = min(max(offset, 0), Double(max(candles.count - 10, 0)))
+                    // Negative offsets leave empty space after the last bar, like TradingView.
+                    let minOffset = -viewport.visibleCount * 0.85
+                    viewport.rightOffset = min(max(offset, minOffset), Double(max(candles.count - 10, 0)))
+                    if viewport.bounds(total: candles.count).start < 40 { onNeedOlder?() }
                     if let range = dragStartRange {
                         let pricePerPoint = (range.upperBound - range.lowerBound) / Double(max(layout.plot.height, 1))
                         let shift = Double(value.translation.height) * pricePerPoint
