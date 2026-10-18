@@ -77,6 +77,14 @@ swift test
 - Chọn một chiến lược để theo dõi: mỗi khi đóng nến app chạy chiến lược, đánh dấu B/S trên biểu đồ,
   liệt kê tín hiệu kèm SL/TP và gửi thông báo. Chỉ chạy khi app đang mở (giới hạn của iOS).
 
+**Live (OANDA: XAUUSD thật, forex, chỉ số)**
+- Bấm tên mã ở thanh dưới, mục OANDA, chọn XAUUSD (hoặc XAGUSD, EURUSD, NAS100USD…).
+- Lần đầu app hỏi token: đăng nhập oanda.com, vào **Manage API Access**, bấm **Generate**, copy token
+  (65 ký tự), dán vào app, chọn Demo/Live đúng loại tài khoản, bấm **Kiểm tra kết nối** rồi **Lưu**.
+- Token chỉ lưu trong Keychain của máy. Đừng gửi token cho ai và đừng commit token vào repo.
+- Cần tài khoản fxTrade hoặc fxTrade Practice (v20). Tài khoản loại MT4/MT5 không có API.
+- Nến lấy theo giá Bid (giống MT5), cập nhật mỗi giây.
+
 **Live kiểu TradingView**
 - Giao diện sáng kiểu TradingView (đổi sang tối kiểu Binance ở menu ⋯), thanh dưới: mã · khung ·
   ✏️ vẽ · ƒ chỉ báo · ⋯ · hoàn tác · toàn màn hình.

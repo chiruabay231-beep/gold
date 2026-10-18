@@ -4,8 +4,23 @@ import UIKit
 import UserNotifications
 import BacktestKit
 
-/// Live candles from Binance (REST history + WebSocket updates) and the
-/// signals a chosen strategy gives on each closed bar.
+/// Where live candles come from.
+enum LiveSource: String, Codable {
+    /// Public market data, no account needed.
+    case binance = "BINANCE"
+    /// OANDA v20 API with the user's token; XAU_USD, forex, indices.
+    case oanda = "OANDA"
+
+    var title: String {
+        switch self {
+        case .binance: return "Binance"
+        case .oanda: return "OANDA"
+        }
+    }
+}
+
+/// Live candles from Binance (REST history + WebSocket updates) or OANDA
+/// (REST polling) and the signals a chosen strategy gives on each closed bar.
 @MainActor
 @Observable
 final class LiveMarket {
@@ -28,8 +43,11 @@ final class LiveMarket {
     static let popularSymbols = ["BTCUSDT", "ETHUSDT", "PAXGUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
     static let intervals: [BinanceClient.Interval] = [.m1, .m5, .m15, .h1, .h4, .d1]
 
+    private(set) var source: LiveSource = .binance
     private(set) var symbol = "PAXGUSDT"
     private(set) var interval: BinanceClient.Interval = .m15
+    /// True while OANDA is selected but no token is saved.
+    private(set) var needsOandaToken = false
     private(set) var buffer = LiveCandleBuffer(maxCount: 2000)
     private(set) var ticker: Ticker24h?
     private(set) var status: Status = .idle
@@ -53,6 +71,19 @@ final class LiveMarket {
 
     var candles: [Candle] { buffer.candles }
 
+    init() {
+        let defaults = UserDefaults.standard
+        if let source = defaults.string(forKey: "live.source").flatMap(LiveSource.init),
+           let symbol = defaults.string(forKey: "live.symbol"), !symbol.isEmpty {
+            self.source = source
+            self.symbol = symbol
+        }
+        if let interval = defaults.string(forKey: "live.interval").flatMap(BinanceClient.Interval.init),
+           Self.intervals.contains(interval) {
+            self.interval = interval
+        }
+    }
+
     /// Candles whose bar has finished; strategies only ever see these.
     var closedCandles: [Candle] {
         lastBarClosed ? buffer.candles : Array(buffer.candles.dropLast())
@@ -74,12 +105,24 @@ final class LiveMarket {
         status = .idle
     }
 
-    func select(symbol: String? = nil, interval: BinanceClient.Interval? = nil) {
+    func select(source: LiveSource? = nil, symbol: String? = nil, interval: BinanceClient.Interval? = nil) {
+        let newSource = source ?? self.source
         let newSymbol = symbol?.uppercased().trimmingCharacters(in: .whitespaces) ?? self.symbol
         let newInterval = interval ?? self.interval
-        guard newSymbol != self.symbol || newInterval != self.interval, !newSymbol.isEmpty else { return }
+        guard newSource != self.source || newSymbol != self.symbol || newInterval != self.interval,
+              !newSymbol.isEmpty else { return }
+        self.source = newSource
         self.symbol = newSymbol
         self.interval = newInterval
+        let defaults = UserDefaults.standard
+        defaults.set(newSource.rawValue, forKey: "live.source")
+        defaults.set(newSymbol, forKey: "live.symbol")
+        defaults.set(newInterval.rawValue, forKey: "live.interval")
+        restart()
+    }
+
+    /// Reloads from scratch, e.g. after the OANDA token changed.
+    func restart() {
         buffer = LiveCandleBuffer(maxCount: 2000)
         ticker = nil
         signals = []
@@ -95,17 +138,35 @@ final class LiveMarket {
         while !Task.isCancelled {
             status = .loading
             do {
-                let symbol = self.symbol, interval = self.interval
-                let history = try await BinanceClient.withFallback {
-                    try await $0.fetchCandles(symbol: symbol, interval: interval, count: 1000)
+                switch source {
+                case .binance:
+                    needsOandaToken = false
+                    let symbol = self.symbol, interval = self.interval
+                    let history = try await BinanceClient.withFallback {
+                        try await $0.fetchCandles(symbol: symbol, interval: interval, count: 1000)
+                    }
+                    guard !Task.isCancelled else { return }
+                    buffer = LiveCandleBuffer(candles: history, maxCount: 2000)
+                    lastBarClosed = false
+                    ticker = try? await BinanceClient.withFallback { try await $0.fetchTicker(symbol: symbol) }
+                    rescan(alert: false)
+                    failures = 0
+                    try await stream()
+                case .oanda:
+                    guard let client = OandaSettings.client() else {
+                        needsOandaToken = true
+                        throw OandaClient.ClientError.missingToken
+                    }
+                    needsOandaToken = false
+                    let history = try await client.fetchCandles(instrument: symbol, interval: interval, count: 1000)
+                    guard !Task.isCancelled else { return }
+                    buffer = LiveCandleBuffer(candles: history.map(\.candle), maxCount: 2000)
+                    lastBarClosed = history.last?.complete ?? false
+                    ticker = try? await client.fetchTicker(instrument: symbol)
+                    rescan(alert: false)
+                    failures = 0
+                    try await poll(client)
                 }
-                guard !Task.isCancelled else { return }
-                buffer = LiveCandleBuffer(candles: history, maxCount: 2000)
-                lastBarClosed = false
-                ticker = try? await BinanceClient.withFallback { try await $0.fetchTicker(symbol: symbol) }
-                rescan(alert: false)
-                failures = 0
-                try await stream()
             } catch is CancellationError {
                 return
             } catch {
@@ -153,6 +214,46 @@ final class LiveMarket {
             }
         }
         throw lastError
+    }
+
+    /// OANDA has no public candle stream, so the last bars are re-read every second.
+    private func poll(_ client: OandaClient) async throws {
+        var newestComplete = closedCandles.last?.time
+        var errors = 0
+        var polls = 0
+        status = .live
+        while !Task.isCancelled {
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            let latest: [OandaCandle]
+            do {
+                latest = try await client.fetchCandles(instrument: symbol, interval: interval, count: 3)
+                errors = 0
+                status = .live
+            } catch {
+                if Task.isCancelled { throw CancellationError() }
+                errors += 1
+                // A few misses in a row are usually a weak connection; then reload.
+                if errors >= 3 { throw error }
+                continue
+            }
+            guard !Task.isCancelled else { throw CancellationError() }
+            for item in latest { buffer.apply(item.candle) }
+            if let last = latest.last, last.candle.time == buffer.candles.last?.time {
+                lastBarClosed = last.complete
+            }
+            if let closedTime = latest.last(where: \.complete)?.candle.time, closedTime != newestComplete {
+                newestComplete = closedTime
+                rescan(alert: true)
+            }
+            polls += 1
+            if polls % 60 == 0, let fresh = try? await client.fetchTicker(instrument: symbol) {
+                ticker = fresh
+            } else if var t = ticker, let close = buffer.candles.last?.close {
+                t.lastPrice = close
+                ticker = t
+            }
+        }
+        throw CancellationError()
     }
 
     private func handle(_ event: BinanceStreamEvent) {
@@ -220,7 +321,7 @@ final class LiveMarket {
         UINotificationFeedbackGenerator().notificationOccurred(signal.kind.isEntry ? .success : .warning)
         guard notificationsEnabled else { return }
         let content = UNMutableNotificationContent()
-        content.title = "\(symbol) · \(signal.kind.label)"
+        content.title = "\(LiveView.displayName(symbol)) · \(signal.kind.label)"
         var body = "\(strategy) · giá \(CandleChart.format(signal.price, CandleChart.decimals(for: signal.price)))"
         if let stop = signal.stop { body += " · SL \(CandleChart.format(stop, CandleChart.decimals(for: stop)))" }
         if let target = signal.target { body += " · TP \(CandleChart.format(target, CandleChart.decimals(for: target)))" }

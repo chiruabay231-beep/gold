@@ -29,9 +29,12 @@ struct LiveView: View {
     @State private var fullScreen = false
     @State private var confirmClear = false
     @State private var layerCache = ICTLayerCache()
+    @State private var showOandaSettings = false
+    /// OANDA instrument to open once a token has been saved.
+    @State private var pendingOandaInstrument: String?
 
     private var theme: ChartTheme { themeName == "binance" ? .binance : .tradingView }
-    private var drawingKey: String { "BINANCE:\(market.symbol)" }
+    private var drawingKey: String { "\(market.source.rawValue):\(market.symbol)" }
     private var drawings: [Drawing] { store.drawings(for: drawingKey) }
 
     var body: some View {
@@ -75,6 +78,16 @@ struct LiveView: View {
                 selectedDrawingID = nil
             }
         }
+        .sheet(isPresented: $showOandaSettings, onDismiss: { pendingOandaInstrument = nil }) {
+            OandaSettingsView {
+                if let instrument = pendingOandaInstrument {
+                    open(oanda: instrument)
+                } else if market.source == .oanda {
+                    market.restart()
+                }
+                pendingOandaInstrument = nil
+            }
+        }
         .fullScreenCover(isPresented: $fullScreen) {
             FullScreenChart(title: "\(Self.displayName(market.symbol)) · \(Self.label(market.interval))", theme: theme,
                             onClose: { fullScreen = false }) {
@@ -101,6 +114,9 @@ struct LiveView: View {
                     .font(.system(size: 19, weight: .semibold))
                     .foregroundColor(theme.primaryText)
                     .lineLimit(1)
+                Text(market.source.title)
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.text)
                 statusDot
                 Spacer()
             }
@@ -110,7 +126,10 @@ struct LiveView: View {
                     .contentTransition(.numericText())
                 Text(String(format: "%+.\(decimals)f (%+.2f%%)", changeAbs, changePct))
                     .foregroundColor(changeColor)
-                if case .reconnecting(let reason) = market.status {
+                if market.needsOandaToken {
+                    Button("Nhập token OANDA") { showOandaSettings = true }
+                        .foregroundColor(theme.accent)
+                } else if case .reconnecting(let reason) = market.status {
                     Text(reason).foregroundColor(theme.down).lineLimit(1)
                 }
             }
@@ -334,15 +353,28 @@ struct LiveView: View {
 
     private var symbolMenu: some View {
         Menu {
-            ForEach(LiveMarket.popularSymbols, id: \.self) { symbol in
-                Button(Self.displayName(symbol)) { open(symbol: symbol) }
+            Section("OANDA · Vàng, Forex, chỉ số") {
+                ForEach(OandaClient.instruments, id: \.self) { instrument in
+                    Button(Self.displayName(instrument)) { open(oanda: instrument) }
+                }
+                Button {
+                    pendingOandaInstrument = nil
+                    showOandaSettings = true
+                } label: {
+                    Label("Token OANDA…", systemImage: "key")
+                }
             }
-            Button("Nhập mã khác…") {
-                customSymbol = ""
-                askingSymbol = true
+            Section("Binance · Crypto") {
+                ForEach(LiveMarket.popularSymbols, id: \.self) { symbol in
+                    Button(Self.displayName(symbol)) { open(symbol: symbol) }
+                }
+                Button("Nhập mã khác…") {
+                    customSymbol = ""
+                    askingSymbol = true
+                }
             }
         } label: {
-            Text(market.symbol)
+            Text(market.symbol.replacingOccurrences(of: "_", with: ""))
                 .font(.system(size: 17, weight: .semibold))
                 .foregroundColor(theme.primaryText)
                 .lineLimit(1)
@@ -442,10 +474,22 @@ struct LiveView: View {
         guard !cleaned.isEmpty else { return }
         viewport = ChartViewport()
         selectedDrawingID = nil
-        market.select(symbol: cleaned)
+        market.select(source: .binance, symbol: cleaned)
+    }
+
+    private func open(oanda instrument: String) {
+        guard OandaSettings.hasToken else {
+            pendingOandaInstrument = instrument
+            showOandaSettings = true
+            return
+        }
+        viewport = ChartViewport()
+        selectedDrawingID = nil
+        market.select(source: .oanda, symbol: instrument)
     }
 
     static func displayName(_ symbol: String) -> String {
+        if symbol.contains("_") { return symbol.replacingOccurrences(of: "_", with: "") }
         for quote in ["USDT", "FDUSD", "USDC", "BTC"] where symbol.hasSuffix(quote) && symbol.count > quote.count {
             return "\(symbol.dropLast(quote.count))/\(quote)"
         }
