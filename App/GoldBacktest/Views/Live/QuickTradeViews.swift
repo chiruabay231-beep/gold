@@ -141,6 +141,7 @@ struct LimitOrderBar: View {
     var onSend: () -> Void
     var onToggleStop: () -> Void
     var onToggleTarget: () -> Void
+    var onSettings: () -> Void
     var onCancel: () -> Void
 
     var body: some View {
@@ -159,6 +160,11 @@ struct LimitOrderBar: View {
             Spacer(minLength: 4)
             toggle("SL", on: hasStop, color: Color(red: 0.949, green: 0.212, blue: 0.271), action: onToggleStop)
             toggle("TP", on: hasTarget, color: Color(red: 0.031, green: 0.6, blue: 0.506), action: onToggleTarget)
+            Button(action: onSettings) {
+                Image(systemName: "gearshape").font(.system(size: 16))
+                    .frame(width: 30, height: 36)
+                    .foregroundColor(.secondary)
+            }
             Button(action: onCancel) {
                 Image(systemName: "xmark").font(.system(size: 15, weight: .semibold))
                     .frame(width: 36, height: 36)
@@ -179,6 +185,104 @@ struct LimitOrderBar: View {
                 .foregroundColor(on ? .white : color)
                 .background(on ? color : .clear, in: Circle())
                 .overlay(Circle().stroke(color, lineWidth: 1.5))
+        }
+    }
+}
+
+/// How SL/TP are set automatically on new orders.
+enum AutoStopMode: String, CaseIterable, Identifiable {
+    /// SL = multiplier × typical bar range of the chart.
+    case volatility
+    /// SL a fixed price distance from the entry (e.g. 5.0 = $5 on gold).
+    case price
+    /// SL where the loss reaches a fixed amount of money.
+    case money
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .volatility: return "Theo biến động (× biên độ nến)"
+        case .price: return "Khoảng giá cố định"
+        case .money: return "Số tiền rủi ro ($)"
+        }
+    }
+}
+
+/// Automatic SL/TP settings, stored in UserDefaults.
+enum AutoStops {
+    static let enabledKey = "trade.auto.enabled"
+    static let marketKey = "trade.auto.market"
+    static let modeKey = "trade.auto.mode"
+    static let valueKey = "trade.auto.value"
+    static let rrKey = "trade.auto.rr"
+
+    private static var defaults: UserDefaults { .standard }
+
+    static var enabled: Bool { defaults.object(forKey: enabledKey) as? Bool ?? true }
+    static var applyToMarket: Bool { defaults.object(forKey: marketKey) as? Bool ?? false }
+    static var mode: AutoStopMode { defaults.string(forKey: modeKey).flatMap(AutoStopMode.init) ?? .volatility }
+    static var value: Double { defaults.object(forKey: valueKey) as? Double ?? 3 }
+    static var riskReward: Double { defaults.object(forKey: rrKey) as? Double ?? 2 }
+
+    /// Distance from the entry to the stop, or nil when automatic SL/TP is off.
+    static func stopDistance(lots: Double, contractSize: Double, typicalRange: Double) -> Double? {
+        guard enabled, value > 0 else { return nil }
+        switch mode {
+        case .volatility: return typicalRange * value
+        case .price: return value
+        case .money: return lots > 0 && contractSize > 0 ? value / (lots * contractSize) : nil
+        }
+    }
+}
+
+/// Settings of automatic SL/TP for limit and one-click orders.
+struct AutoStopSettingsView: View {
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage(AutoStops.enabledKey) private var enabled = true
+    @AppStorage(AutoStops.marketKey) private var applyToMarket = false
+    @AppStorage(AutoStops.modeKey) private var mode = AutoStopMode.volatility.rawValue
+    @AppStorage(AutoStops.valueKey) private var value = 3.0
+    @AppStorage(AutoStops.rrKey) private var riskReward = 2.0
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Toggle("Tự đặt SL/TP cho lệnh Limit", isOn: $enabled)
+                    Toggle("Cả lệnh SELL/BUY một chạm", isOn: $applyToMarket)
+                        .disabled(!enabled)
+                }
+                Section {
+                    Picker("Cách tính SL", selection: $mode) {
+                        ForEach(AutoStopMode.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    HStack {
+                        Text(valueTitle)
+                        Spacer()
+                        TextField("0", value: $value, format: .number)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: 100)
+                    }
+                    Stepper("TP = \(String(format: "%g", riskReward)) × SL (RR)", value: $riskReward, in: 0.5...20, step: 0.5)
+                } header: {
+                    Text("Khoảng cách")
+                } footer: {
+                    Text("Sau khi đặt, vẫn kéo tay được đường SL/TP trên biểu đồ.")
+                }
+            }
+            .navigationTitle("SL/TP tự động")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Xong") { dismiss() } } }
+        }
+    }
+
+    private var valueTitle: String {
+        switch AutoStopMode(rawValue: mode) ?? .volatility {
+        case .volatility: return "Số lần biên độ nến"
+        case .price: return "Khoảng giá (vd 5 = 5$ vàng)"
+        case .money: return "Rủi ro mỗi lệnh ($)"
         }
     }
 }

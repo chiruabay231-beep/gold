@@ -9,9 +9,9 @@ struct RootView: View {
             NavigationStack { LiveView() }
                 .tabItem { Label("Live", systemImage: "waveform.path.ecg.rectangle") }
                 .tag(AppTab.live)
-            NavigationStack { DatasetListView() }
-                .tabItem { Label("Dữ liệu", systemImage: "chart.bar.xaxis") }
-                .tag(AppTab.data)
+            NavigationStack { TradePanelView() }
+                .tabItem { Label("Giao dịch", systemImage: "briefcase") }
+                .tag(AppTab.trade)
             NavigationStack { IndicatorListView() }
                 .tabItem { Label("Chỉ báo", systemImage: "function") }
                 .tag(AppTab.indicators)

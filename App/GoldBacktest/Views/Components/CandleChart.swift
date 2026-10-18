@@ -144,6 +144,8 @@ struct ChartPriceLine {
     var valueColor: Color?
     /// Bar where the order was filled; drawn as a dot on the line.
     var markerIndex: Int?
+    /// Shows a ✕ button at the right end of the line (close / cancel).
+    var closable = false
 }
 
 /// A vertical line at a bar (timestamps).
@@ -183,6 +185,8 @@ struct CandleChart: View {
     var priceLines: [ChartPriceLine] = []
     /// A price line was dragged to a price; `true` when the finger lifts.
     var onPriceLineDrag: ((String, Double, Bool) -> Void)?
+    /// The ✕ of a closable price line was tapped.
+    var onPriceLineClose: ((String) -> Void)?
     /// Labels for the visible high and low on the price axis.
     var showHighLowLabels = false
     var drawings: [Drawing] = []
@@ -631,6 +635,17 @@ struct CandleChart: View {
                 context.fill(Path(roundedRect: pill, cornerRadius: 4), with: .color(valueColor))
                 context.draw(text, at: CGPoint(x: pill.midX, y: pill.midY), anchor: .center)
             }
+            if line.closable {
+                let button = closeButtonRect(y: y, layout: layout)
+                context.fill(Path(ellipseIn: button), with: .color(line.color))
+                var cross = Path()
+                let inset: CGFloat = 6
+                cross.move(to: CGPoint(x: button.minX + inset, y: button.minY + inset))
+                cross.addLine(to: CGPoint(x: button.maxX - inset, y: button.maxY - inset))
+                cross.move(to: CGPoint(x: button.maxX - inset, y: button.minY + inset))
+                cross.addLine(to: CGPoint(x: button.minX + inset, y: button.maxY - inset))
+                context.stroke(cross, with: .color(.white), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+            }
             if let index = line.markerIndex, range.contains(index) {
                 // Entry point on the candle where the order filled.
                 let dot = CGRect(x: s.x(index) - 5, y: y - 5, width: 10, height: 10)
@@ -1018,6 +1033,11 @@ struct CandleChart: View {
         return nil
     }
 
+    /// The ✕ button of a closable price line, just left of the price axis.
+    private func closeButtonRect(y: CGFloat, layout: Layout) -> CGRect {
+        CGRect(x: layout.axisX - 30, y: y - 11, width: 22, height: 22)
+    }
+
     /// The draggable price line nearest to `location`, within a finger's reach.
     private func hitPriceLine(at location: CGPoint, layout: Layout) -> ChartPriceLine? {
         let s = scale(layout: layout)
@@ -1129,6 +1149,13 @@ struct CandleChart: View {
     private func handleTap(at location: CGPoint, layout: Layout) {
         // The release of a long press also ends as a tap; keep that crosshair.
         guard location.x < layout.axisX, Date().timeIntervalSince(pressEndedAt) > 0.3 else { return }
+        let s = scale(layout: layout)
+        if let line = priceLines.first(where: {
+            $0.closable && closeButtonRect(y: s.y($0.price), layout: layout).insetBy(dx: -8, dy: -8).contains(location)
+        }) {
+            onPriceLineClose?(line.id)
+            return
+        }
         if let tool = drawingTool {
             // Tapping works too: one tap per point.
             pendingPoints.append(chartPoint(at: location, layout: layout))

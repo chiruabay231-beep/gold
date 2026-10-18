@@ -3,7 +3,7 @@ import Observation
 import BacktestKit
 
 enum AppTab: Hashable {
-    case live, data, indicators, strategies, backtest
+    case live, trade, indicators, strategies, backtest
 }
 
 /// App-wide state: datasets, custom indicators, strategies and the last

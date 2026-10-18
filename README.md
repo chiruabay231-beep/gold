@@ -117,7 +117,9 @@ swift test
   khoá, nhân bản, ⚙️ cài đặt (nhập giá chính xác, SL/TP, số lot) và xoá.
 
 **Giao dịch demo và cảnh báo giọng nói**
-- Nút 💼 ở thanh dưới: tài khoản demo trong app (mặc định 10 000 $), lệnh MUA/BÁN thị trường có SL/TP,
+- Tab **Giao dịch** (thay tab Dữ liệu; dữ liệu backtest nằm ở mục "Dữ liệu backtest" trong tab này):
+  tài khoản demo, các tab Đang mở / Lệnh chờ / Lịch sử, tỉ lệ thắng, tín hiệu Live, SL/TP tự động.
+- Nút 💼 ở thanh dưới mở tab Giao dịch: tài khoản demo trong app (mặc định 10 000 $), lệnh MUA/BÁN thị trường có SL/TP,
   lệnh đang mở, lệnh chờ, lịch sử. Lệnh khớp theo giá realtime đang xem (không qua sàn).
 - Vẽ Vị thế Long/Short → chọn → ✈︎ "Vào lệnh demo": đặt lệnh chờ tại giá vào (hoặc vào ngay) với SL/TP
   của hình vẽ; số lot tính từ vốn và % rủi ro trong Cài đặt biểu đồ.

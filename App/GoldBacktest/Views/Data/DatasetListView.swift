@@ -10,7 +10,6 @@ struct DatasetListView: View {
 
     var body: some View {
         List {
-            LiveSignalsSection()
             if store.datasets.isEmpty {
                 ContentUnavailableView {
                     Label("Chưa có dữ liệu", systemImage: "tray")
