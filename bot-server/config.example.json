@@ -1,0 +1,23 @@
+{
+  "password": "",
+  "port": 8787,
+  "telegram": {
+    "token": "",
+    "chat_id": ""
+  },
+  "tunnel": true,
+  "poll_seconds": 2,
+  "history_bars": 1000,
+  "paper_balance": 10000,
+  "mt5": {
+    "path": "",
+    "login": 0,
+    "password": "",
+    "server": "",
+    "trading_enabled": false,
+    "allow_real_account": false,
+    "max_lots": 0.1,
+    "magic": 20260,
+    "deviation": 30
+  }
+}

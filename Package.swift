@@ -9,9 +9,12 @@ let package = Package(
     ],
     products: [
         .library(name: "BacktestKit", targets: ["BacktestKit"]),
+        // Strategy engine for the VPS bot server (bot-server/).
+        .executable(name: "botkit", targets: ["botkit"]),
     ],
     targets: [
         .target(name: "BacktestKit"),
+        .executableTarget(name: "botkit", dependencies: ["BacktestKit"]),
         .testTarget(name: "BacktestKitTests", dependencies: ["BacktestKit"]),
     ]
 )

@@ -1,0 +1,12 @@
+config.json
+state.json
+*.log
+*.log.old
+tunnel.txt
+python.txt
+*.tmp
+botkit
+botkit.exe
+cloudflared.exe
+*.dll
+__pycache__/

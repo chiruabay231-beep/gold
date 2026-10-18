@@ -64,3 +64,57 @@ jobs:
             --title "Gold Backtest (bản mới nhất)" \
             --notes "Bản build tự động từ commit $GITHUB_SHA. Tải GoldBacktest.ipa trên iPhone rồi mở bằng SideStore." \
             --prerelease
+
+  # botkit.exe + the Python bot server for a Windows VPS (bot-server/install.ps1).
+  windows-bot:
+    name: VPS bot (Windows)
+    runs-on: windows-2022
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: compnerd/gha-setup-swift@main
+        with:
+          branch: swift-5.10.1-release
+          tag: 5.10.1-RELEASE
+      - name: Build botkit.exe
+        run: swift build -c release --product botkit
+      - name: Bundle with the Swift runtime
+        shell: pwsh
+        run: |
+          $dist = "dist"
+          New-Item -ItemType Directory -Force $dist | Out-Null
+          $bin = swift build -c release --show-bin-path
+          Copy-Item "$bin\botkit.exe" $dist
+          # Foundation, swiftCore, ICU… so botkit runs without a Swift install.
+          $dirs = @("swiftCore.dll", "Foundation.dll") | ForEach-Object { Split-Path -Parent ((where.exe $_) | Select-Object -First 1) } | Select-Object -Unique
+          foreach ($d in $dirs) { Copy-Item "$d\*.dll" $dist -Force }
+          Copy-Item bot-server\bot_server.py, bot-server\run.ps1, bot-server\install.ps1, bot-server\config.example.json $dist
+          Get-ChildItem $dist | Format-Table Name, Length
+      - name: Self-test without the Swift toolchain
+        shell: pwsh
+        run: |
+          $python = (Get-Command python).Source
+          $env:PATH = "C:\Windows\System32;C:\Windows"
+          Push-Location dist
+          & $python bot_server.py --selftest
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          Pop-Location
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path dist\* -DestinationPath gold-bot-windows.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gold-bot-windows
+          path: gold-bot-windows.zip
+      - name: Publish as the "bot-latest" release
+        if: github.event_name != 'pull_request'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete bot-latest --yes --cleanup-tag 2>$null
+          gh release create bot-latest gold-bot-windows.zip --target "$env:GITHUB_SHA" `
+            --title "Gold Bot cho VPS Windows" `
+            --notes "botkit.exe + máy chủ bot từ commit $env:GITHUB_SHA. Cài trên VPS: xem docs/VPS.md." `
+            --prerelease
