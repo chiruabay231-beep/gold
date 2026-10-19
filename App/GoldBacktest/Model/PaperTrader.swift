@@ -47,16 +47,21 @@ final class PaperTrader {
 
     // MARK: - Prices
 
-    /// Called by the live feed on every price update of `symbol`.
-    func update(symbol: String, price: Double, time: Date) {
+    /// Latest ask per symbol key; `prices` holds the bid.
+    @ObservationIgnored private var asks: [String: Double] = [:]
+
+    /// Called by the live feed on every quote of `symbol`. Buys fill at the ask
+    /// and close at the bid, sells the other way round.
+    func update(symbol: String, bid: Double, ask: Double, time: Date) {
         // Live prices must not touch the replay account.
         guard !isReplaying else { return }
+        asks[symbol] = ask
         // Only touch observed state when something can change, to keep redraws cheap.
         let involved = account.positions.contains { $0.symbol == symbol } || account.pending.contains { $0.symbol == symbol }
-        if involved || prices[symbol] == nil { prices[symbol] = price }
+        if involved || prices[symbol] == nil { prices[symbol] = bid }
         guard involved else { return }
-        var events = account.process(symbol: symbol, price: price, time: time)
-        events += account.manage(symbol: symbol, price: price, time: time, rules: Self.rules)
+        var events = account.process(symbol: symbol, bid: bid, ask: ask, time: time)
+        events += account.manage(symbol: symbol, price: bid, time: time, rules: Self.rules)
         guard !events.isEmpty else { return }
         for event in events { announce(event) }
         lastEvent = events.last
@@ -87,13 +92,26 @@ final class PaperTrader {
         UserDefaults.standard.set(try? JSONEncoder().encode(rules), forKey: rulesKey)
     }
 
+    /// The bid (chart price) of `symbol`.
     func price(_ symbol: String) -> Double? { prices[symbol] }
 
-    var equity: Double { account.equity { self.prices[$0] } }
+    /// The ask of `symbol`; the bid when no spread is known.
+    func ask(_ symbol: String) -> Double? { asks[symbol] ?? prices[symbol] }
+
+    /// Price a position would close at now: the bid for buys, the ask for sells.
+    func closePrice(_ position: PaperAccount.Position) -> Double? {
+        position.side == .long ? price(position.symbol) : ask(position.symbol)
+    }
+
+    func profit(_ position: PaperAccount.Position) -> Double? {
+        closePrice(position).map { position.profit(at: $0) }
+    }
 
     var openProfit: Double {
-        account.positions.reduce(0) { sum, p in sum + (prices[p.symbol].map { p.profit(at: $0) } ?? 0) }
+        account.positions.reduce(0) { sum, p in sum + (profit(p) ?? 0) }
     }
+
+    var equity: Double { account.balance + openProfit }
 
     // MARK: - Orders
 
@@ -121,7 +139,7 @@ final class PaperTrader {
     }
 
     func close(_ position: PaperAccount.Position) {
-        guard let price = prices[position.symbol] else { return }
+        guard let price = closePrice(position) else { return }
         if let trade = account.close(positionID: position.id, price: price, time: now) {
             lastEvent = .closed(trade)
         }

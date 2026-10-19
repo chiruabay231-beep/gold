@@ -29,9 +29,9 @@ final class LiveTests: XCTestCase {
 
     func testStreamURL() {
         let url = BinanceStreamEvent.url(host: BinanceClient.streamHosts[0], symbol: "PAXGUSDT", interval: .m15)
-        XCTAssertEqual(url.absoluteString, "wss://stream.binance.com:9443/stream?streams=paxgusdt@kline_15m/paxgusdt@ticker")
+        XCTAssertEqual(url.absoluteString, "wss://stream.binance.com:9443/stream?streams=paxgusdt@kline_15m/paxgusdt@ticker/paxgusdt@bookTicker")
         let futures = BinanceStreamEvent.url(host: BinanceClient.Market.futures.streamHosts[0], symbol: "XAUUSDT", interval: .m1)
-        XCTAssertEqual(futures.absoluteString, "wss://fstream.binance.com/market/stream?streams=xauusdt@kline_1m/xauusdt@ticker")
+        XCTAssertEqual(futures.absoluteString, "wss://fstream.binance.com/market/stream?streams=xauusdt@kline_1m/xauusdt@ticker/xauusdt@bookTicker")
         XCTAssertEqual(BinanceClient.Market.futures.apiPrefix, "fapi/v1")
     }
 
@@ -129,7 +129,7 @@ final class LiveTests: XCTestCase {
         XCTAssertEqual(tick.price, 4012.35)
         XCTAssertEqual(tick.time, Date(timeIntervalSince1970: 1_700_000_000.5))
         let url = BinanceStreamEvent.url(host: BinanceClient.Market.futures.streamHosts[0], symbol: "XAUUSDT", interval: .s5)
-        XCTAssertEqual(url.absoluteString, "wss://fstream.binance.com/market/stream?streams=xauusdt@aggTrade/xauusdt@ticker")
+        XCTAssertEqual(url.absoluteString, "wss://fstream.binance.com/market/stream?streams=xauusdt@aggTrade/xauusdt@ticker/xauusdt@bookTicker")
         let rest = try BinanceClient.parseAggTrades(Data("""
         [{"a":26129,"p":"0.01633102","q":"4.70443515","f":27781,"l":27781,"T":1498793709153,"m":true,"M":true}]
         """.utf8))
@@ -148,5 +148,13 @@ final class LiveTests: XCTestCase {
         XCTAssertEqual(buffer.prepend(older), 2)   // only room for 2; the newest older bars are kept
         XCTAssertEqual(buffer.candles.map(\.time), [t(8), t(9), t(10)])
         XCTAssertEqual(buffer.candles.last?.close, 1)
+    }
+
+    func testParsesBookTickers() {
+        let futures = Data(#"{"stream":"xauusdt@bookTicker","data":{"e":"bookTicker","s":"XAUUSDT","b":"4146.67","B":"3","a":"4146.84","A":"2"}}"#.utf8)
+        XCTAssertEqual(BinanceStreamEvent.parse(futures), .book(symbol: "XAUUSDT", bid: 4146.67, ask: 4146.84))
+        let spot = Data(#"{"u":1,"s":"PAXGUSDT","b":"4150.1","B":"1","a":"4150.9","A":"1"}"#.utf8)
+        XCTAssertEqual(BinanceStreamEvent.parse(spot), .book(symbol: "PAXGUSDT", bid: 4150.1, ask: 4150.9))
+        XCTAssertNil(BinanceStreamEvent.parse(Data(#"{"result":null,"id":1}"#.utf8)))
     }
 }

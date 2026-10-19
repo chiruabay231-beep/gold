@@ -177,11 +177,19 @@ public struct PaperAccount: Codable, Hashable, Sendable {
         return path.flatMap { process(symbol: symbol, price: $0, time: c.time) }
     }
 
-    /// Applies a new price of `symbol`: fills pending orders, then closes
-    /// positions whose stop or target was reached (at the stop/target price).
+    /// Applies a new price of `symbol` with no spread.
     public mutating func process(symbol: String, price: Double, time: Date) -> [Event] {
+        process(symbol: symbol, bid: price, ask: price, time: time)
+    }
+
+    /// Applies a new quote of `symbol`, like a broker: buys open at the ask and
+    /// close at the bid, sells the other way round. Pending buys fill when the
+    /// ask reaches their entry, pending sells on the bid; long stops and targets
+    /// trigger on the bid, short ones on the ask (fills at the stop/target price).
+    public mutating func process(symbol: String, bid: Double, ask: Double, time: Date) -> [Event] {
         var events: [Event] = []
         for order in pending where order.symbol == symbol {
+            let price = order.side == .long ? ask : bid
             let reached = order.triggersAbove ? price >= order.entry : price <= order.entry
             guard reached else { continue }
             cancel(orderID: order.id)
@@ -194,10 +202,11 @@ public struct PaperAccount: Codable, Hashable, Sendable {
         }
         for i in positions.indices where positions[i].symbol == symbol {
             let peak = positions[i].peakPrice ?? positions[i].entryPrice
-            positions[i].peakPrice = positions[i].side == .long ? max(peak, price) : min(peak, price)
+            positions[i].peakPrice = positions[i].side == .long ? max(peak, bid) : min(peak, ask)
         }
         for position in positions where position.symbol == symbol {
             let isLong = position.side == .long
+            let price = isLong ? bid : ask
             if let stop = position.stop, isLong ? price <= stop : price >= stop,
                let trade = close(positionID: position.id, price: stop, time: time, reason: .stop) {
                 events.append(.closed(trade))

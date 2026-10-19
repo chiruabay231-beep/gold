@@ -74,7 +74,41 @@ final class LiveMarket {
 
     @ObservationIgnored private weak var store: AppStore?
     /// Receives every price update as (symbol key, price, time); drives the demo account.
-    @ObservationIgnored var onPrice: (@MainActor (String, Double, Date) -> Void)?
+    /// Receives every price update as (symbol key, bid, ask, time); drives the demo account.
+    @ObservationIgnored var onPrice: (@MainActor (String, Double, Double, Date) -> Void)?
+
+    /// Best bid/ask from the broker or exchange, refreshed a few times a second on screen.
+    struct Quote: Equatable {
+        var bid: Double
+        var ask: Double
+        var spread: Double { ask - bid }
+    }
+    private(set) var quote: Quote?
+    @ObservationIgnored private var rawQuote: (bid: Double, ask: Double, time: Date)?
+    @ObservationIgnored private var lastQuotePublish = Date.distantPast
+
+    /// Bid and ask to trade at: the live quote when it is fresh and sane, else `last` for both.
+    func tradeQuote(last: Double) -> Quote {
+        if let q = rawQuote, Date().timeIntervalSince(q.time) < 15, q.ask >= q.bid, q.bid > 0,
+           q.ask - q.bid < max(last, q.bid) * 0.01 {
+            return Quote(bid: q.bid, ask: q.ask)
+        }
+        return Quote(bid: last, ask: last)
+    }
+
+    private func setQuote(bid: Double, ask: Double) {
+        rawQuote = (bid, ask, Date())
+        // Book updates arrive many times a second; redraw a few times a second at most.
+        if Date().timeIntervalSince(lastQuotePublish) > 0.3 {
+            lastQuotePublish = Date()
+            quote = Quote(bid: bid, ask: ask)
+        }
+    }
+
+    private func emitPrice(_ last: Double, time: Date = Date()) {
+        let q = tradeQuote(last: last)
+        onPrice?(symbolKey, q.bid, q.ask, time)
+    }
 
     /// "SOURCE:SYMBOL", the key for drawings and demo orders.
     var symbolKey: String { "\(source.rawValue):\(symbol)" }
@@ -273,6 +307,8 @@ final class LiveMarket {
         signals = []
         plots = []
         alertedSignalIDs = []
+        quote = nil
+        rawQuote = nil
         let store = self.store
         stop()
         if let store { start(store: store) }
@@ -412,7 +448,7 @@ final class LiveMarket {
             }
             guard !Task.isCancelled else { throw CancellationError() }
             for item in latest { buffer.apply(item.candle) }
-            if let close = latest.last?.candle.close { onPrice?(symbolKey, close, Date()) }
+            if let close = latest.last?.candle.close { emitPrice(close) }
             if let last = latest.last, last.candle.time == buffer.candles.last?.time {
                 lastBarClosed = last.complete
             }
@@ -440,7 +476,10 @@ final class LiveMarket {
             try await Task.sleep(nanoseconds: 1_000_000_000)
             let latest: [Candle]
             do {
-                latest = try await client.mt5Candles(symbol: symbol, interval: interval, count: 3)
+                let bars = try await client.mt5Bars(symbol: symbol, interval: interval, count: 3)
+                latest = bars.candles
+                // MT5 bars are bid prices; the server also sends the live bid/ask.
+                if let bid = bars.bid, let ask = bars.ask, bid > 0, ask >= bid { setQuote(bid: bid, ask: ask) }
                 errors = 0
                 status = .live
             } catch {
@@ -452,7 +491,7 @@ final class LiveMarket {
             guard !Task.isCancelled else { throw CancellationError() }
             for bar in latest { buffer.apply(bar) }
             lastBarClosed = false
-            if let close = latest.last?.close { onPrice?(symbolKey, close, Date()) }
+            if let close = latest.last?.close { emitPrice(close) }
             // Every bar before the newest has closed.
             if latest.count >= 2, latest[latest.count - 2].time != newestClosed {
                 newestClosed = latest[latest.count - 2].time
@@ -467,7 +506,7 @@ final class LiveMarket {
         case .kline(let eventSymbol, let candle, let isClosed):
             guard eventSymbol.uppercased() == symbol else { return }
             let update = buffer.apply(candle)
-            onPrice?(symbolKey, candle.close, Date())
+            emitPrice(candle.close)
             if update == .appended { lastBarClosed = false }
             if update != .ignored, isClosed {
                 lastBarClosed = true
@@ -477,6 +516,10 @@ final class LiveMarket {
                 t.lastPrice = candle.close
                 ticker = t
             }
+        case .book(let bookSymbol, let bid, let ask):
+            guard bookSymbol.uppercased() == symbol else { return }
+            setQuote(bid: bid, ask: ask)
+            if let last = buffer.candles.last?.close { emitPrice(last) }
         case .ticker(let t):
             if t.symbol.uppercased() == symbol {
                 var t = t
@@ -488,7 +531,7 @@ final class LiveMarket {
             guard tradeSymbol.uppercased() == symbol, interval.isSeconds else { return }
             var working = pendingBuffer ?? buffer
             let update = working.apply(trade: trade, seconds: interval.seconds)
-            onPrice?(symbolKey, trade.price, trade.time)
+            emitPrice(trade.price, time: trade.time)
             guard update != .ignored else { return }
             if update == .appended || Date().timeIntervalSince(lastPublish) > 0.25 {
                 publish(working)

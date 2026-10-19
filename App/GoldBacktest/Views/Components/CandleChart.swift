@@ -193,6 +193,8 @@ struct CandleChart: View {
     var notes: [ChartNote] = []
     /// News flags on the time axis.
     var timeEvents: [ChartTimeEvent] = []
+    /// Ask price, drawn as a second dotted line above the bid (the spread).
+    var askPrice: Double?
     var priceLines: [ChartPriceLine] = []
     /// A price line was dragged to a price; `true` when the finger lifts.
     var onPriceLineDrag: ((String, Double, Bool) -> Void)?
@@ -698,34 +700,28 @@ struct CandleChart: View {
                                         textColor: theme.primaryText))
         }
 
-        // Trade levels: full-width lines. Faint until tapped; a tapped order shows
-        // its handles and ✕ for a couple of seconds.
+        // Trade levels, MT5 style: a thin full-width line, its name at the left,
+        // the money at the right and the price in an outlined box on the axis.
+        // Faint until tapped; a tapped order shows its ✕ for a couple of seconds.
         for line in priceLines {
             let y = s.y(line.price)
             guard y >= layout.plot.minY - 1, y <= layout.plot.maxY + 1 else { continue }
             let active = isLineActive(line)
-            let alpha: Double = active ? 1 : 0.4
+            let alpha: Double = active ? 1 : 0.6
             let color = line.color.opacity(alpha)
             var path = Path()
             path.move(to: CGPoint(x: 0, y: y))
             path.addLine(to: CGPoint(x: layout.axisX, y: y))
-            context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: active ? 1.5 : 1, dash: line.dash))
+            context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: active ? 1.3 : 1, dash: line.dash))
 
-            // Label and money on the right, just left of the ✕.
-            let label = context.resolve(Text(line.label).font(.system(size: 11, weight: .semibold)).foregroundColor(color))
-            let labelSize = label.measure(in: CGSize(width: 400, height: 40))
-            let text = context.resolve(Text(line.value).font(.system(size: 11, weight: .bold).monospacedDigit())
-                .foregroundColor(.white.opacity(active ? 1 : 0.85)))
-            let valueSize = line.value.isEmpty ? .zero : text.measure(in: CGSize(width: 400, height: 40))
-            let pillWidth = line.value.isEmpty ? 0 : valueSize.width + 10
-            let right = layout.axisX - (line.closable && active ? 40 : 8)
-            let labelX = right - pillWidth - (line.value.isEmpty ? 0 : 6) - labelSize.width
-            context.draw(label, at: CGPoint(x: labelX, y: y - 10), anchor: .leading)
+            let label = context.resolve(Text(line.label.uppercased()).font(.system(size: 11, weight: .medium))
+                .kerning(0.6).foregroundColor(color))
+            context.draw(label, at: CGPoint(x: 6, y: y - 9), anchor: .leading)
             if !line.value.isEmpty {
-                let pill = CGRect(x: right - pillWidth, y: y - 10 - valueSize.height / 2 - 2,
-                                  width: pillWidth, height: valueSize.height + 4)
-                context.fill(Path(roundedRect: pill, cornerRadius: 4), with: .color((line.valueColor ?? line.color).opacity(active ? 1 : 0.55)))
-                context.draw(text, at: CGPoint(x: pill.midX, y: pill.midY), anchor: .center)
+                let right = layout.axisX - (line.closable && active ? 40 : 6)
+                let value = context.resolve(Text(line.value).font(.system(size: 11, weight: .semibold).monospacedDigit())
+                    .foregroundColor((line.valueColor ?? line.color).opacity(alpha)))
+                context.draw(value, at: CGPoint(x: right, y: y - 9), anchor: .trailing)
             }
             if line.closable && active {
                 let button = closeButtonRect(y: y, layout: layout)
@@ -740,18 +736,32 @@ struct CandleChart: View {
             }
             if let index = line.markerIndex, range.contains(index) {
                 // Entry point on the candle where the order filled.
-                let dot = CGRect(x: s.x(index) - 5, y: y - 5, width: 10, height: 10)
+                let dot = CGRect(x: s.x(index) - 4, y: y - 4, width: 8, height: 8)
                 context.fill(Path(ellipseIn: dot), with: .color(color))
-                context.stroke(Path(ellipseIn: dot), with: .color(.white.opacity(alpha)), lineWidth: 1.5)
+                context.stroke(Path(ellipseIn: dot), with: .color(theme.background.opacity(alpha)), lineWidth: 1.2)
             }
-            if line.draggable && active {
+            if line.draggable {
+                // Drag handle: a ring on the line, like MT5's.
                 let center = CGPoint(x: layout.plot.width * line.handleFraction, y: y)
                 let handle = CGRect(x: center.x - 7, y: center.y - 7, width: 14, height: 14)
                 context.fill(Path(ellipseIn: handle), with: .color(theme.background))
-                context.stroke(Path(ellipseIn: handle), with: .color(line.color), lineWidth: 2.5)
+                context.stroke(Path(ellipseIn: handle), with: .color(color), lineWidth: 2.2)
+                let dot = CGRect(x: center.x - 2.5, y: center.y - 2.5, width: 5, height: 5)
+                context.fill(Path(ellipseIn: dot), with: .color(color))
             }
             axisLabels.append(AxisLabel(price: line.price, text: Self.format(line.price, decimals), tag: "",
-                                        color: color, textColor: .white))
+                                        color: theme.background, textColor: line.color, border: line.color))
+        }
+
+        // Ask line: the spread above the bid (the last price below).
+        if let ask = askPrice, let last = candles.last, ask > last.close {
+            let y = s.y(ask)
+            if y >= layout.plot.minY, y <= layout.plot.maxY {
+                var path = Path()
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: layout.axisX, y: y))
+                context.stroke(path, with: .color(theme.down.opacity(0.85)), style: StrokeStyle(lineWidth: 0.8, dash: [2, 2]))
+            }
         }
 
         // Axis labels, nudged apart so they don't overlap.
@@ -760,6 +770,9 @@ struct CandleChart: View {
         for (label, y) in placed {
             let box = CGRect(x: layout.axisX + 1, y: y - 8, width: axisWidth - 2, height: 16)
             context.fill(Path(roundedRect: box, cornerRadius: 2), with: .color(label.color))
+            if let border = label.border {
+                context.stroke(Path(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), cornerRadius: 2), with: .color(border), lineWidth: 1)
+            }
             context.draw(Text(label.text).font(.system(size: 10, weight: .medium)).foregroundColor(label.textColor),
                          at: CGPoint(x: box.midX, y: box.midY), anchor: .center)
             if !label.tag.isEmpty {
@@ -791,6 +804,18 @@ struct CandleChart: View {
             if let countdown {
                 context.draw(Text(countdown).font(.system(size: 10).monospacedDigit()).foregroundColor(.white.opacity(0.9)),
                              at: CGPoint(x: box.midX, y: box.minY + 20), anchor: .center)
+            }
+            // Ask price in an outlined box just above the bid box.
+            if let ask = askPrice, ask > last.close {
+                let askY = min(s.y(ask), box.minY - 9)
+                if askY >= layout.plot.minY + 8 {
+                    let askBox = CGRect(x: layout.axisX + 1, y: askY - 8, width: axisWidth - 2, height: 16)
+                    context.fill(Path(roundedRect: askBox, cornerRadius: 2), with: .color(theme.background))
+                    context.stroke(Path(roundedRect: askBox.insetBy(dx: 0.5, dy: 0.5), cornerRadius: 2),
+                                   with: .color(theme.down), lineWidth: 1)
+                    context.draw(Text(Self.format(ask, decimals)).font(.system(size: 10, weight: .medium)).foregroundColor(theme.down),
+                                 at: CGPoint(x: askBox.midX, y: askBox.midY), anchor: .center)
+                }
             }
         }
 
@@ -825,6 +850,8 @@ struct CandleChart: View {
         var tag: String
         var color: Color
         var textColor: Color
+        /// MT5-style order price: background box with a coloured border.
+        var border: Color? = nil
     }
 
     /// Moves labels vertically so none are closer than `minGap`.

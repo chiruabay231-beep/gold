@@ -52,25 +52,6 @@ struct QuickTradePanel: View {
     static func lotText(_ lots: Double) -> String { String(format: "%.2f", lots) }
 }
 
-/// Starts or cancels a limit order placed by dragging its line.
-struct LimitToggleButton: View {
-    let active: Bool
-    var action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Label("Lệnh Limit", systemImage: active ? "xmark" : "arrow.up.arrow.down")
-                .font(.system(size: 11, weight: .semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(active ? Color.blue : Color(.systemBackground), in: Capsule())
-                .foregroundColor(active ? .white : .blue)
-                .overlay(Capsule().stroke(Color.blue.opacity(0.5), lineWidth: 1))
-        }
-        .fixedSize()
-    }
-}
-
 /// Lot size picker like MT5: presets, quick increments and a stepper.
 struct LotPicker: View {
     @Binding var lots: Double
@@ -111,81 +92,6 @@ struct LotPicker: View {
 
     private func set(_ value: Double) {
         lots = min(100, max(0.01, (value * 100).rounded() / 100))
-    }
-}
-
-/// A limit order being placed by dragging its line: below the price it is a
-/// buy limit, above it a sell limit. SL/TP are kept as distances from the entry.
-struct LimitDraft: Equatable {
-    var entry: Double
-    var stopDistance: Double?
-    var targetDistance: Double?
-
-    func side(price: Double) -> PaperAccount.Side { entry > price ? .short : .long }
-
-    func stop(price: Double) -> Double? {
-        stopDistance.map { side(price: price) == .long ? entry - $0 : entry + $0 }
-    }
-
-    func target(price: Double) -> Double? {
-        targetDistance.map { side(price: price) == .long ? entry + $0 : entry - $0 }
-    }
-}
-
-/// Bottom bar while a limit order is being placed: send, SL and TP toggles, cancel.
-struct LimitOrderBar: View {
-    let title: String
-    let isBuy: Bool
-    let hasStop: Bool
-    let hasTarget: Bool
-    var onSend: () -> Void
-    var onToggleStop: () -> Void
-    var onToggleTarget: () -> Void
-    var onSettings: () -> Void
-    var onCancel: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Button(action: onSend) {
-                HStack(spacing: 10) {
-                    Image(systemName: "arrow.right.circle.fill").font(.system(size: 22))
-                    Text(title).font(.system(size: 15, weight: .semibold))
-                }
-                .foregroundColor(.white)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background(isBuy ? Color(red: 0.161, green: 0.384, blue: 1.0) : Color(red: 0.949, green: 0.212, blue: 0.271),
-                            in: Capsule())
-            }
-            Spacer(minLength: 4)
-            toggle("SL", on: hasStop, color: Color(red: 0.949, green: 0.212, blue: 0.271), action: onToggleStop)
-            toggle("TP", on: hasTarget, color: Color(red: 0.031, green: 0.6, blue: 0.506), action: onToggleTarget)
-            Button(action: onSettings) {
-                Image(systemName: "gearshape").font(.system(size: 16))
-                    .frame(width: 30, height: 36)
-                    .foregroundColor(.secondary)
-            }
-            Button(action: onCancel) {
-                Image(systemName: "xmark").font(.system(size: 15, weight: .semibold))
-                    .frame(width: 36, height: 36)
-                    .foregroundColor(.secondary)
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
-        .padding(.horizontal, 8)
-    }
-
-    private func toggle(_ title: String, on: Bool, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 14, weight: .semibold))
-                .frame(width: 40, height: 40)
-                .foregroundColor(on ? .white : color)
-                .background(on ? color : .clear, in: Circle())
-                .overlay(Circle().stroke(color, lineWidth: 1.5))
-        }
     }
 }
 

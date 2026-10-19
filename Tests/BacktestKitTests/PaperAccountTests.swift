@@ -83,4 +83,27 @@ final class PaperAccountTests: XCTestCase {
         XCTAssertEqual(trade.reason, .target)
         XCTAssertEqual(events.count, 1)
     }
+
+    func testSpreadFillsBuysAtAskAndSellsAtBid() {
+        var account = PaperAccount(startingBalance: 1000)
+        let t = Date()
+        // Buy limit at 100 fills only when the ask gets there, not the bid.
+        account.placePending(symbol: "XAUUSD", side: .long, lots: 0.01, entry: 100, stop: 98, target: 104,
+                             currentPrice: 101, time: t)
+        XCTAssertTrue(account.process(symbol: "XAUUSD", bid: 99.8, ask: 100.2, time: t).isEmpty)
+        XCTAssertEqual(account.process(symbol: "XAUUSD", bid: 99.6, ask: 100.0, time: t).count, 1)
+        // The long's target is reached on the bid only.
+        XCTAssertTrue(account.process(symbol: "XAUUSD", bid: 103.8, ask: 104.2, time: t).isEmpty)
+        let closed = account.process(symbol: "XAUUSD", bid: 104, ask: 104.4, time: t)
+        if case .closed(let trade)? = closed.first {
+            XCTAssertEqual(trade.reason, .target)
+            XCTAssertEqual(trade.profit, 4, accuracy: 1e-9)   // 4 × 0.01 lot × 100 oz
+        } else {
+            XCTFail("target not hit")
+        }
+        // A short's stop triggers on the ask.
+        account.openMarket(symbol: "XAUUSD", side: .short, lots: 0.01, price: 100, stop: 101, target: nil, time: t)
+        XCTAssertTrue(account.process(symbol: "XAUUSD", bid: 100.6, ask: 100.9, time: t).isEmpty)
+        XCTAssertEqual(account.process(symbol: "XAUUSD", bid: 100.7, ask: 101.0, time: t).count, 1)
+    }
 }

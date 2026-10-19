@@ -113,13 +113,15 @@ final class BotController {
                 for p in opposite { trader.close(p) }
                 text = "Đảo lệnh: đóng \(side == .long ? "BÁN" : "MUA"). "
             }
-            let size = orderLots(entry: price, stop: signal.stop)
+            // Buys fill at the ask.
+            let fill = side == .long ? (trader.ask(symbol) ?? price) : price
+            let size = orderLots(entry: fill, stop: signal.stop)
             if side == .long {
-                trader.buy(symbol: symbol, lots: size, price: price, stop: signal.stop, target: signal.target)
+                trader.buy(symbol: symbol, lots: size, price: fill, stop: signal.stop, target: signal.target)
             } else {
                 trader.sell(symbol: symbol, lots: size, price: price, stop: signal.stop, target: signal.target)
             }
-            text += "Đã vào lệnh demo \(name) \(String(format: "%.2f", size)) lot @ \(Self.format(price))"
+            text += "Đã vào lệnh demo \(name) \(String(format: "%.2f", size)) lot @ \(Self.format(fill))"
             if let stop = signal.stop { text += " · SL \(Self.format(stop))" }
             if let target = signal.target { text += " · TP \(Self.format(target))" }
             return ("Đã \(side == .long ? "mua" : "bán")", text)

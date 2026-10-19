@@ -288,16 +288,27 @@ struct RemoteBotClient {
 
     /// Bars of `symbol`; the newest is still forming unless `before` is given.
     func mt5Candles(symbol: String, interval: BinanceClient.Interval, count: Int, before: Date? = nil) async throws -> [Candle] {
-        struct Response: Decodable { var candles: [[Double]] }
+        try await mt5Bars(symbol: symbol, interval: interval, count: count, before: before).candles
+    }
+
+    /// Bars plus the current bid and ask.
+    func mt5Bars(symbol: String, interval: BinanceClient.Interval, count: Int,
+                 before: Date? = nil) async throws -> (candles: [Candle], bid: Double?, ask: Double?) {
+        struct Response: Decodable {
+            var candles: [[Double]]
+            var bid: Double?
+            var ask: Double?
+        }
         let s = Self.queryValue(symbol)
         var path = "/mt5/candles?symbol=\(s)&interval=\(interval.rawValue)&count=\(count)"
         if let before { path += "&before=\(Int(before.timeIntervalSince1970))" }
-        let rows = try JSONDecoder().decode(Response.self, from: await request(path, timeout: 15)).candles
-        return rows.compactMap { r in
+        let response = try JSONDecoder().decode(Response.self, from: await request(path, timeout: 15))
+        let candles = response.candles.compactMap { r -> Candle? in
             guard r.count >= 5 else { return nil }
             return Candle(time: Date(timeIntervalSince1970: r[0]), open: r[1], high: r[2], low: r[3], close: r[4],
                           volume: r.count > 5 ? r[5] : 0)
         }
+        return (candles, response.bid, response.ask)
     }
 }
 
@@ -397,6 +408,12 @@ struct MT5TradingState: Decodable {
     var deals: [Deal]
     var balance: Double?
     var equity: Double?
+    var margin: Double?
+    var marginFree: Double?
+    var marginLevel: Double?
+    var profit: Double?
+    var leverage: Int?
+    var server: String?
     var currency: String?
     var login: Int?
     var mode: String?

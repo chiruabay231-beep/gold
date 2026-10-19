@@ -48,7 +48,8 @@ struct LiveView: View {
     /// Position drawing waiting for confirmation before it becomes a demo order.
     @State private var demoOrderDrawing: Drawing?
     /// Limit order being placed by dragging its line on the chart.
-    @State private var limitDraft: LimitDraft?
+    /// The order being prepared in the order sheet (drawn on the chart).
+    @State private var orderTicket: OrderTicket?
     /// Prices of trade lines while they are being dragged.
     @State private var lineOverrides: [String: Double] = [:]
     @AppStorage("trade.lots") private var defaultLots = 0.01
@@ -84,6 +85,11 @@ struct LiveView: View {
             header
             charts
             indicatorPanes
+            if showTradeButtons {
+                TradeBar(bid: liveQuote.bid, ask: liveQuote.ask, decimals: currentDecimals, lots: $defaultLots,
+                         onSell: { marketOrder(.short) }, onBuy: { marketOrder(.long) },
+                         onTicket: { side in openTicket(side: side, kind: .market) })
+            }
             bottomBar
         }
         .background(theme.background.ignoresSafeArea())
@@ -152,6 +158,15 @@ struct LiveView: View {
             Text(replaySummary ?? "")
         }
         .sheet(isPresented: $showVoiceSettings) { VoiceSettingsView() }
+        .sheet(isPresented: Binding(get: { orderTicket != nil }, set: { if !$0 { orderTicket = nil } })) {
+            OrderTicketSheet(ticket: $orderTicket, lots: $defaultLots, bid: liveQuote.bid, ask: liveQuote.ask,
+                             decimals: currentDecimals, contractSize: PaperAccount.contractSize(for: market.symbolKey),
+                             distance: defaultDistance, accountLabel: orderAccountLabel, onSubmit: { submitTicket() })
+                .presentationDetents([.fraction(0.48), .large])
+                .presentationDragIndicator(.visible)
+                // The chart stays usable: drag the order's lines while the sheet is open.
+                .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.48)))
+        }
         .confirmationDialog(demoOrderTitle, isPresented: Binding(get: { demoOrderDrawing != nil },
                                                                  set: { if !$0 { demoOrderDrawing = nil } }),
                             titleVisibility: .visible) {
@@ -246,27 +261,17 @@ struct LiveView: View {
                         .background(Color.orange, in: Capsule())
                 }
                 Spacer(minLength: 6)
-                // One-click trading in the top right corner, like MT5.
-                if showTradeButtons {
-                    QuickTradePanel(price: currentPrice, decimals: currentDecimals, lots: $defaultLots,
-                                    onSell: { marketOrder(.short) }, onBuy: { marketOrder(.long) })
-                    // Hide the one-click buttons.
-                    Button { showTradeButtons = false } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 18))
-                            .foregroundColor(theme.text)
-                    }
-                    .accessibilityLabel("Tắt nút giao dịch")
-                } else {
-                    Button { showTradeButtons = true } label: {
-                        Label("BUY/SELL", systemImage: "arrow.left.arrow.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .overlay(Capsule().stroke(theme.accent.opacity(0.6), lineWidth: 1))
-                            .foregroundColor(theme.accent)
-                    }
+                // Shows or hides the SELL | lot | BUY bar under the chart.
+                Button { showTradeButtons.toggle() } label: {
+                    Label("BUY/SELL", systemImage: showTradeButtons ? "chevron.down.circle.fill" : "arrow.left.arrow.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .foregroundColor(showTradeButtons ? .white : theme.accent)
+                        .background(Capsule().fill(showTradeButtons ? theme.accent : Color.clear))
+                        .overlay(Capsule().stroke(theme.accent.opacity(0.6), lineWidth: 1))
                 }
+                .accessibilityLabel(showTradeButtons ? "Ẩn nút giao dịch" : "Hiện nút giao dịch")
             }
             HStack(spacing: 8) {
                 Text(CandleChart.format(last, decimals))
@@ -281,7 +286,16 @@ struct LiveView: View {
                     Text(reason).foregroundColor(theme.down).lineLimit(1)
                 }
                 Spacer(minLength: 4)
-                LimitToggleButton(active: limitDraft != nil) { toggleLimitDraft() }
+                Button { toggleTicket() } label: {
+                    Label(orderTicket != nil ? "Đóng lệnh chờ" : "Lệnh chờ", systemImage: orderTicket != nil ? "xmark" : "plus.forwardslash.minus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .foregroundColor(orderTicket != nil ? .white : theme.accent)
+                        .background(Capsule().fill(orderTicket != nil ? theme.accent : Color.clear))
+                        .overlay(Capsule().stroke(theme.accent.opacity(0.5), lineWidth: 1))
+                }
+                .fixedSize()
             }
             .font(.system(size: 14).monospacedDigit())
             legend
@@ -509,6 +523,7 @@ struct LiveView: View {
                         verticalLines: layer.verticalLines,
                         notes: layer.notes,
                         timeEvents: replay.isActive ? [] : newsTimeEvents,
+                        askPrice: liveQuote.ask > liveQuote.bid ? liveQuote.ask : nil,
                         priceLines: tradeLines,
                         onPriceLineDrag: { id, price, ended in tradeLineDragged(id: id, price: price, ended: ended) },
                         onPriceLineClose: { id in tradeLineClosed(id: id) },
@@ -557,18 +572,6 @@ struct LiveView: View {
         }
         .overlay(alignment: .bottom) {
             VStack(spacing: 8) {
-            if let draft = limitDraft {
-                let side = draft.side(price: currentPrice)
-                LimitOrderBar(title: "\(side == .long ? "Buy" : "Sell") Limit \(QuickTradePanel.lotText(defaultLots))",
-                              isBuy: side == .long, hasStop: draft.stopDistance != nil, hasTarget: draft.targetDistance != nil,
-                              onSend: { sendLimitDraft() },
-                              onToggleStop: { limitDraft?.stopDistance = draft.stopDistance == nil ? autoStopDistance : nil },
-                              onToggleTarget: {
-                                  limitDraft?.targetDistance = draft.targetDistance == nil ? autoStopDistance * AutoStops.riskReward : nil
-                              },
-                              onSettings: { showAutoStopSettings = true },
-                              onCancel: { limitDraft = nil })
-            }
             if replay.isActive {
                 ReplayControlBar(replay: replay, profit: trader.account.balance - trader.account.startingBalance + trader.openProfit,
                                  trades: trader.account.history.count, theme: theme, onExit: { endReplay() })
@@ -634,7 +637,7 @@ struct LiveView: View {
         if replay.isActive {
             endReplay()
         } else {
-            limitDraft = nil
+            orderTicket = nil
             replay.begin(candles: market.candles, symbolKey: market.symbolKey, trader: trader)
             viewport = ChartViewport()
         }
@@ -707,15 +710,54 @@ struct LiveView: View {
         return average > 0 ? average : max(currentPrice * 0.001, 1e-6)
     }
 
-    private func toggleLimitDraft() {
-        if limitDraft != nil {
-            limitDraft = nil
-        } else if currentPrice > 0 {
-            // Start a buy limit a little below the price; drag it above the price for a sell limit.
-            let auto = AutoStops.enabled ? autoStopDistance : nil
-            limitDraft = LimitDraft(entry: currentPrice - defaultDistance * 3, stopDistance: auto,
-                                    targetDistance: auto.map { $0 * AutoStops.riskReward })
+    /// Bid/ask to show and trade at: the live quote, or the chart price for both.
+    private var liveQuote: LiveMarket.Quote {
+        if !replay.isActive, let q = market.quote, q.bid > 0, q.ask >= q.bid, q.ask - q.bid < currentPrice * 0.01 {
+            return q
         }
+        return LiveMarket.Quote(bid: currentPrice, ask: currentPrice)
+    }
+
+    /// Where orders go, shown in the order sheet.
+    private var orderAccountLabel: String {
+        if replay.isActive { return "Tài khoản replay" }
+        if tradesMT5 {
+            let login = mt5.state?.login.map { "#\($0)" } ?? ""
+            return "MT5 \(login) · \(mt5.isReal ? "TIỀN THẬT" : "demo")"
+        }
+        return "Tài khoản demo trong app"
+    }
+
+    private func toggleTicket() {
+        if orderTicket != nil {
+            orderTicket = nil
+        } else {
+            openTicket(side: .long, kind: .limit)
+        }
+    }
+
+    private func openTicket(side: PaperAccount.Side, kind: OrderTicket.Kind) {
+        guard currentPrice > 0 else { return }
+        let auto = AutoStops.enabled ? autoStopDistance : nil
+        orderTicket = OrderTicket.make(side: side, kind: kind, bid: liveQuote.bid, ask: liveQuote.ask,
+                                       distance: defaultDistance, stopDistance: auto,
+                                       targetDistance: auto.map { $0 * AutoStops.riskReward })
+    }
+
+    private func submitTicket() {
+        guard let t = orderTicket, currentPrice > 0, t.problem(bid: liveQuote.bid, ask: liveQuote.ask) == nil else { return }
+        if t.kind == .market {
+            marketOrder(t.side, stop: t.stop, target: t.target)
+        } else if tradesMT5 {
+            let symbol = market.symbol, lots = defaultLots
+            sendMT5 { await mt5.pending(symbol: symbol, side: t.side, lots: lots, entry: t.entry, stop: t.stop, target: t.target) }
+        } else {
+            // The demo account decides limit or stop from where the entry is against the price.
+            let reference = t.side == .long ? liveQuote.ask : liveQuote.bid
+            trader.placePending(symbol: market.symbolKey, side: t.side, lots: defaultLots, entry: t.entry,
+                                stop: t.stop, target: t.target, currentPrice: reference)
+        }
+        orderTicket = nil
     }
 
     /// SL distance from the automatic SL/TP settings (falls back to 3 bar ranges).
@@ -737,14 +779,19 @@ struct LiveView: View {
         }
     }
 
-    /// One-click SELL/BUY, with automatic SL/TP when that option is on.
-    private func marketOrder(_ side: PaperAccount.Side) {
+    /// SELL at the bid or BUY at the ask. One-click orders get the automatic
+    /// SL/TP when that option is on; the order sheet passes its own.
+    private func marketOrder(_ side: PaperAccount.Side, stop givenStop: Double?? = nil, target givenTarget: Double?? = nil) {
         guard currentPrice > 0 else { return }
+        let fill = side == .long ? liveQuote.ask : liveQuote.bid
         var stop: Double?, target: Double?
-        if AutoStops.enabled, AutoStops.applyToMarket {
+        if let givenStop, let givenTarget {
+            stop = givenStop
+            target = givenTarget
+        } else if AutoStops.enabled, AutoStops.applyToMarket {
             let distance = autoStopDistance
-            stop = currentPrice - side.sign * distance
-            target = currentPrice + side.sign * distance * AutoStops.riskReward
+            stop = fill - side.sign * distance
+            target = fill + side.sign * distance * AutoStops.riskReward
         }
         if tradesMT5 {
             let symbol = market.symbol, lots = defaultLots
@@ -752,9 +799,9 @@ struct LiveView: View {
             return
         }
         if side == .long {
-            trader.buy(symbol: market.symbolKey, lots: defaultLots, price: currentPrice, stop: stop, target: target)
+            trader.buy(symbol: market.symbolKey, lots: defaultLots, price: fill, stop: stop, target: target)
         } else {
-            trader.sell(symbol: market.symbolKey, lots: defaultLots, price: currentPrice, stop: stop, target: target)
+            trader.sell(symbol: market.symbolKey, lots: defaultLots, price: fill, stop: stop, target: target)
         }
     }
 
@@ -771,25 +818,11 @@ struct LiveView: View {
             if let p = trader.account.positions.first(where: { $0.id.uuidString == parts[1] }) { trader.close(p) }
         case "ord":
             if let o = trader.account.pending.first(where: { $0.id.uuidString == parts[1] }) { trader.cancel(o) }
-        case "draft":
-            limitDraft = nil
+        case "ticket":
+            orderTicket = nil
         default:
             break
         }
-    }
-
-    private func sendLimitDraft() {
-        guard let draft = limitDraft, currentPrice > 0 else { return }
-        if tradesMT5 {
-            let symbol = market.symbol, lots = defaultLots, side = draft.side(price: currentPrice)
-            let stop = draft.stop(price: currentPrice), target = draft.target(price: currentPrice), entry = draft.entry
-            sendMT5 { await mt5.pending(symbol: symbol, side: side, lots: lots, entry: entry, stop: stop, target: target) }
-            limitDraft = nil
-            return
-        }
-        trader.placePending(symbol: market.symbolKey, side: draft.side(price: currentPrice), lots: defaultLots, entry: draft.entry,
-                            stop: draft.stop(price: currentPrice), target: draft.target(price: currentPrice), currentPrice: currentPrice)
-        limitDraft = nil
     }
 
     /// Green when moving from `entry` to `price` makes money, red when it loses.
@@ -821,7 +854,7 @@ struct LiveView: View {
         }
         for p in trader.account.positions where p.symbol == key && !tradesMT5 {
             let id = "pos|\(p.id.uuidString)"
-            let profit = trader.price(key).map { p.profit(at: $0) } ?? 0
+            let profit = trader.profit(p) ?? 0
             if let dragged = lineOverrides[id + "|entry"] {
                 // Dragging away from the entry sets a new SL or TP.
                 let isProfit = (dragged - p.entryPrice) * p.side.sign > 0
@@ -831,18 +864,18 @@ struct LiveView: View {
             }
             lines.append(ChartPriceLine(id: id + "|entry", price: p.entryPrice, color: p.side == .long ? blue : red,
                                         label: "\(p.side == .long ? "BUY" : "SELL") \(QuickTradePanel.lotText(p.lots))",
-                                        handleFraction: 0.42,
+                                        dash: [6, 4], handleFraction: 0.42,
                                         value: String(format: "%+.2f USD", profit), valueColor: profit >= 0 ? green : red,
                                         markerIndex: openIndex(p.openTime), closable: true))
             if let stop = p.stop {
                 let price = value(id + "|sl", stop)
-                lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red, label: "SL", handleFraction: 0.42,
+                lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red, label: "SL", dash: [4, 4], handleFraction: 0.42,
                                             value: money(side: p.side, lots: p.lots, entry: p.entryPrice, price: price),
                                             valueColor: moneyColor(side: p.side, entry: p.entryPrice, price: price)))
             }
             if let target = p.target {
                 let price = value(id + "|tp", target)
-                lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green, label: "TP", handleFraction: 0.42,
+                lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green, label: "TP", dash: [4, 4], handleFraction: 0.42,
                                             value: money(side: p.side, lots: p.lots, entry: p.entryPrice, price: price),
                                             valueColor: moneyColor(side: p.side, entry: p.entryPrice, price: price)))
             }
@@ -854,42 +887,45 @@ struct LiveView: View {
             let kind = (entry > currentPrice) == (o.side == .long) ? "STOP" : "LIMIT"
             lines.append(ChartPriceLine(id: id + "|entry", price: entry, color: o.side == .long ? blue : red,
                                         label: "\(o.side == .long ? "BUY" : "SELL") \(kind) \(QuickTradePanel.lotText(o.lots))",
-                                        dash: [8, 4], handleFraction: 0.55, closable: true))
+                                        handleFraction: 0.55, closable: true))
             if let stop = o.stop {
                 let price = value(id + "|sl", stop + (entry - o.entry))
                 lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red,
-                                            label: "SL", dash: [5, 3], handleFraction: 0.55,
+                                            label: "SL", dash: [4, 4], handleFraction: 0.55,
                                             value: money(side: o.side, lots: o.lots, entry: entry, price: price),
                                             valueColor: moneyColor(side: o.side, entry: entry, price: price)))
             }
             if let target = o.target {
                 let price = value(id + "|tp", target + (entry - o.entry))
                 lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green,
-                                            label: "TP", dash: [5, 3], handleFraction: 0.55,
+                                            label: "TP", dash: [4, 4], handleFraction: 0.55,
                                             value: money(side: o.side, lots: o.lots, entry: entry, price: price),
                                             valueColor: moneyColor(side: o.side, entry: entry, price: price)))
             }
         }
 
-        if var draft = limitDraft {
-            draft.entry = value("draft|entry", draft.entry)
-            let side = draft.side(price: currentPrice)
-            lines.append(ChartPriceLine(id: "draft|entry", price: draft.entry, color: side == .long ? blue : red,
-                                        label: "\(side == .long ? "BUY" : "SELL") LIMIT \(QuickTradePanel.lotText(defaultLots))",
-                                        dash: [8, 4], handleFraction: 0.68, closable: true))
-            if let stop = draft.stop(price: currentPrice) {
-                let price = value("draft|sl", stop)
-                lines.append(ChartPriceLine(id: "draft|sl", price: price, color: red,
-                                            label: "SL", dash: [5, 3], handleFraction: 0.68,
-                                            value: money(side: side, lots: defaultLots, entry: draft.entry, price: price),
-                                            valueColor: moneyColor(side: side, entry: draft.entry, price: price)))
+        if let t = orderTicket {
+            let open = t.openPrice(bid: liveQuote.bid, ask: liveQuote.ask)
+            let entry = t.isPending ? value("ticket|entry", t.entry) : open
+            let shift = t.isPending ? entry - t.entry : 0
+            if t.isPending {
+                lines.append(ChartPriceLine(id: "ticket|entry", price: entry, color: t.side == .long ? blue : red,
+                                            label: "\(t.name) \(QuickTradePanel.lotText(defaultLots))",
+                                            handleFraction: 0.42, closable: true))
             }
-            if let target = draft.target(price: currentPrice) {
-                let price = value("draft|tp", target)
-                lines.append(ChartPriceLine(id: "draft|tp", price: price, color: green,
-                                            label: "TP", dash: [5, 3], handleFraction: 0.68,
-                                            value: money(side: side, lots: defaultLots, entry: draft.entry, price: price),
-                                            valueColor: moneyColor(side: side, entry: draft.entry, price: price)))
+            if let stop = t.stop {
+                let price = value("ticket|sl", stop + shift)
+                lines.append(ChartPriceLine(id: "ticket|sl", price: price, color: red, label: "SL", dash: [4, 4],
+                                            handleFraction: 0.42,
+                                            value: money(side: t.side, lots: defaultLots, entry: entry, price: price),
+                                            valueColor: moneyColor(side: t.side, entry: entry, price: price)))
+            }
+            if let target = t.target {
+                let price = value("ticket|tp", target + shift)
+                lines.append(ChartPriceLine(id: "ticket|tp", price: price, color: green, label: "TP", dash: [4, 4],
+                                            handleFraction: 0.42,
+                                            value: money(side: t.side, lots: defaultLots, entry: entry, price: price),
+                                            valueColor: moneyColor(side: t.side, entry: entry, price: price)))
             }
         }
         return lines
@@ -905,19 +941,19 @@ struct LiveView: View {
             let side = p.paperSide
             lines.append(ChartPriceLine(id: id + "|entry", price: p.entry, color: side == .long ? blue : red,
                                         label: "\(side == .long ? "BUY" : "SELL") \(QuickTradePanel.lotText(p.lots))\(tag)",
-                                        handleFraction: 0.42,
+                                        dash: [6, 4], handleFraction: 0.42,
                                         value: String(format: "%+.2f %@", p.profit, mt5.state?.currency ?? "USD"),
                                         valueColor: p.profit >= 0 ? green : red,
                                         markerIndex: openIndex(Date(timeIntervalSince1970: p.time)), closable: true))
             if let stop = p.stop {
                 let price = value(id + "|sl", stop)
-                lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red, label: "SL", handleFraction: 0.42,
+                lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red, label: "SL", dash: [4, 4], handleFraction: 0.42,
                                             value: money(side: side, lots: p.lots, entry: p.entry, price: price),
                                             valueColor: moneyColor(side: side, entry: p.entry, price: price)))
             }
             if let target = p.target {
                 let price = value(id + "|tp", target)
-                lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green, label: "TP", handleFraction: 0.42,
+                lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green, label: "TP", dash: [4, 4], handleFraction: 0.42,
                                             value: money(side: side, lots: p.lots, entry: p.entry, price: price),
                                             valueColor: moneyColor(side: side, entry: p.entry, price: price)))
             }
@@ -928,17 +964,17 @@ struct LiveView: View {
             let entry = value(id + "|entry", o.entry)
             lines.append(ChartPriceLine(id: id + "|entry", price: entry, color: side == .long ? blue : red,
                                         label: "\(side == .long ? "BUY" : "SELL") \(o.kind.uppercased()) \(QuickTradePanel.lotText(o.lots))\(tag)",
-                                        dash: [8, 4], handleFraction: 0.55, closable: true))
+                                        handleFraction: 0.55, closable: true))
             if let stop = o.stop {
                 let price = value(id + "|sl", stop + (entry - o.entry))
-                lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red, label: "SL", dash: [5, 3],
+                lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red, label: "SL", dash: [4, 4],
                                             handleFraction: 0.55,
                                             value: money(side: side, lots: o.lots, entry: entry, price: price),
                                             valueColor: moneyColor(side: side, entry: entry, price: price)))
             }
             if let target = o.target {
                 let price = value(id + "|tp", target + (entry - o.entry))
-                lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green, label: "TP", dash: [5, 3],
+                lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green, label: "TP", dash: [4, 4],
                                             handleFraction: 0.55,
                                             value: money(side: side, lots: o.lots, entry: entry, price: price),
                                             valueColor: moneyColor(side: side, entry: entry, price: price)))
@@ -995,15 +1031,20 @@ struct LiveView: View {
         switch parts[0] {
         case "mpos", "mord":
             if let ticket = Int(parts[1]) { mt5LineDragged(kind: parts[0], ticket: ticket, field: field, price: price) }
-        case "draft":
-            guard var draft = limitDraft else { return }
+        case "ticket":
+            guard var t = orderTicket else { return }
             switch field {
-            case "entry": draft.entry = price
-            case "sl": draft.stopDistance = abs(price - draft.entry)
-            case "tp": draft.targetDistance = abs(price - draft.entry)
+            case "entry":
+                // SL and TP move with the entry.
+                let shift = price - t.entry
+                t.entry = price
+                t.stop = t.stop.map { $0 + shift }
+                t.target = t.target.map { $0 + shift }
+            case "sl": t.stop = price
+            case "tp": t.target = price
             default: break
             }
-            limitDraft = draft
+            orderTicket = t
         case "pos":
             guard let p = trader.account.positions.first(where: { $0.id.uuidString == parts[1] }) else { return }
             let now = trader.price(market.symbolKey) ?? currentPrice

@@ -85,13 +85,15 @@ public enum BinanceStreamEvent: Equatable, Sendable {
     case kline(symbol: String, candle: Candle, isClosed: Bool)
     case ticker(Ticker24h)
     case trade(symbol: String, TradeTick)
+    /// Best bid and ask (the spread).
+    case book(symbol: String, bid: Double, ask: Double)
 
     /// URL of a combined stream with the kline (or, for seconds bars, the
-    /// trades) and the 24h ticker of one symbol.
+    /// trades), the 24h ticker and the best bid/ask of one symbol.
     public static func url(host: URL, symbol: String, interval: BinanceClient.Interval) -> URL {
         let name = symbol.lowercased()
         let bars = interval.isSeconds ? "\(name)@aggTrade" : "\(name)@kline_\(interval.rawValue)"
-        return URL(string: "\(host.absoluteString)/stream?streams=\(bars)/\(name)@ticker")!
+        return URL(string: "\(host.absoluteString)/stream?streams=\(bars)/\(name)@ticker/\(name)@bookTicker")!
     }
 
     /// Parses a raw stream message, with or without the combined-stream wrapper.
@@ -124,6 +126,11 @@ public enum BinanceStreamEvent: Equatable, Sendable {
             return .ticker(Ticker24h(symbol: object["s"] as? String ?? "", lastPrice: last, changePercent: change,
                                      high: high, low: low, volume: number(object, "v") ?? 0,
                                      quoteVolume: number(object, "q") ?? 0))
+        case "bookTicker", nil:
+            // Futures send "e":"bookTicker"; spot book tickers have no event type.
+            guard let bid = number(object, "b"), let ask = number(object, "a"), let symbol = object["s"] as? String
+            else { return nil }
+            return .book(symbol: symbol, bid: bid, ask: ask)
         default:
             return nil
         }

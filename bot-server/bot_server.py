@@ -573,6 +573,9 @@ class Mt5Account:
                 mode = {mt5.ACCOUNT_TRADE_MODE_DEMO: "demo", mt5.ACCOUNT_TRADE_MODE_REAL: "real"}.get(a.trade_mode, "contest")
             return {"ok": True, "positions": positions, "orders": orders, "deals": deals[-30:],
                     "balance": a.balance if a else None, "equity": a.equity if a else None,
+                    "margin": a.margin if a else None, "marginFree": a.margin_free if a else None,
+                    "marginLevel": a.margin_level if a else None, "profit": a.profit if a else None,
+                    "leverage": a.leverage if a else None, "server": a.server if a else None,
                     "currency": a.currency if a else None, "login": a.login if a else None, "mode": mode,
                     "tradingEnabled": bool(self.cfg.get("trading_enabled")),
                     "allowReal": bool(self.cfg.get("allow_real_account")),

@@ -1,7 +1,8 @@
 import SwiftUI
 import BacktestKit
 
-/// "Giao dịch" tab: the in-app demo account or logging in to brokers.
+/// "Giao dịch" tab: the in-app demo account, the broker (MT5) account, and
+/// logging in to brokers, each on its own page.
 struct TradeRootView: View {
     @AppStorage("trade.page") private var page = 0
 
@@ -9,19 +10,152 @@ struct TradeRootView: View {
         VStack(spacing: 0) {
             Picker("Trang", selection: $page) {
                 Text("Demo").tag(0)
-                Text("Đăng nhập sàn").tag(1)
+                Text("Sàn (MT5)").tag(1)
+                Text("Đăng nhập").tag(2)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
-            if page == 0 {
-                TradePanelView()
-            } else {
-                BrokerLoginView()
+            switch page {
+            case 0: TradePanelView()
+            case 1: BrokerTradeView(page: $page)
+            default: BrokerLoginView()
             }
         }
         .background(Color(.systemGroupedBackground))
     }
+}
+
+/// "Sàn" page: the MT5 account on the VPS laid out like the broker's app:
+/// floating profit, balance, equity, margin, open positions, pending orders.
+struct BrokerTradeView: View {
+    @Binding var page: Int
+    @Environment(MT5Trader.self) private var mt5
+    @Environment(AppStore.self) private var store
+    @Environment(LiveMarket.self) private var market
+    @State private var closing: MT5TradingState.Position?
+    @State private var showSymbols = false
+
+    var body: some View {
+        List {
+            if RemoteBotSettings.client() == nil || mt5.state?.login == nil {
+                Section {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Chưa có tài khoản sàn").font(.headline)
+                        Text("Đăng nhập Exness (hoặc sàn MT5 khác) qua máy chủ VPS để xem và đặt lệnh tại đây.")
+                            .font(.footnote).foregroundColor(.secondary)
+                        Button("Đi tới Đăng nhập") { page = 2 }
+                            .buttonStyle(.borderedProminent)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            if let state = mt5.state, state.login != nil {
+                Section {
+                    AccountSummary(floating: state.profit ?? state.positions.reduce(0) { $0 + $1.profit },
+                                   currency: state.currency ?? "USD", rows: summaryRows(state))
+                } footer: {
+                    Text("#\(state.login.map { String($0) } ?? "") · \(state.server ?? "") · \(state.mode == "real" ? "TIỀN THẬT" : "demo")")
+                }
+                if !state.tradingEnabled {
+                    Section {
+                        Label("Chưa bật đặt lệnh từ app (bật ở trang Đăng nhập).", systemImage: "lock")
+                            .font(.footnote).foregroundColor(.orange)
+                    }
+                }
+                Section("Lệnh có trạng thái") {
+                    if state.positions.isEmpty { Text("Không có lệnh đang mở").foregroundColor(.secondary) }
+                    ForEach(state.positions) { p in
+                        TradeRow(symbol: p.symbol, detail: "\(p.side == "long" ? "buy" : "sell") \(Self.lots(p.lots))",
+                                 isBuy: p.side == "long",
+                                 line: "\(Self.price(p.entry)) → \(p.price.map(Self.price) ?? "–")",
+                                 trailing: String(format: "%.2f", p.profit),
+                                 trailingColor: p.profit >= 0 ? TradeRow.profitColor : TradeRow.lossColor)
+                            .contentShape(Rectangle())
+                            .onTapGesture { closing = p }
+                            .swipeActions {
+                                Button("Đóng", role: .destructive) { closing = p }
+                            }
+                    }
+                }
+                if !state.orders.isEmpty {
+                    Section("Các lệnh") {
+                        ForEach(state.orders) { o in
+                            TradeRow(symbol: o.symbol, detail: "\(o.side == "long" ? "buy" : "sell") \(o.kind)",
+                                     isBuy: o.side == "long", line: "\(Self.lots(o.lots)) at \(Self.price(o.entry))",
+                                     trailing: "placed", trailingColor: Color(red: 0.1, green: 0.2, blue: 0.45))
+                                .swipeActions {
+                                    Button("Huỷ", role: .destructive) { Task { await mt5.cancel(o.ticket) } }
+                                }
+                        }
+                    }
+                }
+                if !state.deals.isEmpty {
+                    Section("Đã đóng (24 giờ)") {
+                        ForEach(state.deals.reversed()) { d in
+                            TradeRow(symbol: d.symbol, detail: "\(d.side == "long" ? "buy" : "sell") \(Self.lots(d.lots))",
+                                     isBuy: d.side == "long",
+                                     line: "\(Self.price(d.price)) · \(d.reason == "target" ? "TP" : (d.reason == "stop" ? "SL" : "đóng")) · \(Date(timeIntervalSince1970: d.time).formatted(date: .omitted, time: .shortened))",
+                                     trailing: String(format: "%.2f", d.profit),
+                                     trailingColor: d.profit >= 0 ? TradeRow.profitColor : TradeRow.lossColor)
+                        }
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Tài khoản sàn")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button { showSymbols = true } label: { Label("Mở biểu đồ để giao dịch…", systemImage: "chart.xyaxis.line") }
+                    Button { Task { await mt5.refresh() } } label: { Label("Làm mới", systemImage: "arrow.clockwise") }
+                    Button { page = 2 } label: { Label("Tài khoản & quyền đặt lệnh…", systemImage: "person.badge.key") }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+            }
+        }
+        .task { await mt5.watch() }
+        .refreshable { await mt5.refresh() }
+        .sheet(isPresented: $showSymbols) {
+            MT5SymbolSearchView { symbol in
+                market.select(source: .mt5, symbol: symbol, interval: market.interval.isSeconds ? .m1 : nil)
+                store.selectedTab = .live
+            }
+        }
+        .confirmationDialog(closing.map { "Đóng \($0.symbol) \($0.side == "long" ? "buy" : "sell") \(Self.lots($0.lots))?" } ?? "",
+                            isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } }),
+                            titleVisibility: .visible) {
+            Button("Đóng lệnh", role: .destructive) {
+                if let ticket = closing?.ticket { Task { await mt5.close(ticket) } }
+                closing = nil
+            }
+        } message: {
+            if let p = closing {
+                Text("Vào \(Self.price(p.entry)) · SL \(p.stop.map(Self.price) ?? "–") · TP \(p.target.map(Self.price) ?? "–") · lãi/lỗ \(String(format: "%+.2f", p.profit))\(mt5.isReal ? " · TIỀN THẬT" : "")")
+            }
+        }
+        .alert("Lệnh MT5", isPresented: Binding(get: { mt5.lastError != nil }, set: { if !$0 { mt5.lastError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(mt5.lastError ?? "")
+        }
+    }
+
+    private func summaryRows(_ s: MT5TradingState) -> [(String, String)] {
+        var rows: [(String, String)] = []
+        if let v = s.balance { rows.append(("Số dư", String(format: "%.2f", v))) }
+        if let v = s.equity { rows.append(("Vốn", String(format: "%.2f", v))) }
+        if let v = s.margin { rows.append(("Tiền ký quỹ", String(format: "%.2f", v))) }
+        if let v = s.marginFree { rows.append(("Ký quỹ dư", String(format: "%.2f", v))) }
+        if let v = s.marginLevel, v > 0 { rows.append(("Mức ký quỹ (%)", String(format: "%.2f", v))) }
+        return rows
+    }
+
+    static func price(_ value: Double) -> String { CandleChart.format(value, CandleChart.decimals(for: value)) }
+    static func lots(_ value: Double) -> String { String(format: "%g", value) }
 }
 
 /// Logs the MT5 terminal on the VPS in to Exness (or any MT5 broker) and
@@ -30,7 +164,6 @@ struct BrokerLoginView: View {
     @Environment(AppStore.self) private var store
     @Environment(LiveMarket.self) private var market
     @Environment(MT5Trader.self) private var mt5
-    @State private var confirmClose: MT5TradingState.Position?
 
     enum Broker: String, CaseIterable, Identifiable {
         case exness = "Exness"
@@ -62,7 +195,6 @@ struct BrokerLoginView: View {
                 accountSection
                 if status?.connected == true {
                     tradingSection
-                    ordersSection
                 }
                 loginSection
                 if !saved.isEmpty { savedSection }
@@ -70,21 +202,12 @@ struct BrokerLoginView: View {
             otherMarketsSection
         }
         .navigationTitle("Đăng nhập sàn")
+        .navigationBarTitleDisplayMode(.inline)
         .task { await refresh() }
         .task(id: status?.login) {
             // Positions stay fresh while this page is open.
             guard status?.connected == true else { return }
             await mt5.watch()
-        }
-        .confirmationDialog("Đóng lệnh #\(confirmClose.map { String($0.ticket) } ?? "")?",
-                            isPresented: Binding(get: { confirmClose != nil }, set: { if !$0 { confirmClose = nil } }),
-                            titleVisibility: .visible) {
-            Button("Đóng lệnh", role: .destructive) {
-                if let ticket = confirmClose?.ticket { Task { await mt5.close(ticket) } }
-                confirmClose = nil
-            }
-        } message: {
-            Text("Lệnh đóng theo giá thị trường hiện tại trên MT5.")
         }
         .alert("Lệnh MT5", isPresented: Binding(get: { mt5.lastError != nil }, set: { if !$0 { mt5.lastError = nil } })) {
             Button("OK", role: .cancel) {}
@@ -179,64 +302,6 @@ struct BrokerLoginView: View {
             Text("Giao dịch tài khoản này từ app")
         } footer: {
             Text("Khi bật, trên biểu đồ Live của mã MT5 (nguồn \"MT5 (VPS)\"): nút BUY/SELL, lệnh limit, kéo SL/TP và ✕ đóng lệnh đều gửi thẳng vào tài khoản này, như app MT5. Tài khoản THẬT luôn hỏi xác nhận. Cần mật khẩu chính (không phải investor) và nút Algo Trading bật trong MT5 trên VPS.")
-        }
-    }
-
-    @ViewBuilder
-    private var ordersSection: some View {
-        let state = mt5.state
-        Section {
-            if (state?.positions.isEmpty ?? true) && (state?.orders.isEmpty ?? true) {
-                Text("Không có lệnh đang mở").foregroundColor(.secondary)
-            }
-            ForEach(state?.positions ?? []) { p in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(p.side == "long" ? "MUA" : "BÁN") \(String(format: "%.2f", p.lots)) \(p.symbol)\(p.bot == true ? " · bot" : "")")
-                            .foregroundColor(p.side == "long" ? .blue : .red)
-                        Text("@ \(PaperTrader.spoken(p.entry)) · SL \(p.stop.map { PaperTrader.spoken($0) } ?? "—") · TP \(p.target.map { PaperTrader.spoken($0) } ?? "—")")
-                            .font(.caption.monospacedDigit()).foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    Text(String(format: "%+.2f", p.profit))
-                        .font(.subheadline.monospacedDigit())
-                        .foregroundColor(p.profit >= 0 ? .green : .red)
-                    Button { confirmClose = p } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.borderless)
-                }
-            }
-            ForEach(state?.orders ?? []) { o in
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("\(o.side == "long" ? "BUY" : "SELL") \(o.kind.uppercased()) \(String(format: "%.2f", o.lots)) \(o.symbol)")
-                        Text("@ \(PaperTrader.spoken(o.entry))").font(.caption.monospacedDigit()).foregroundColor(.secondary)
-                    }
-                    Spacer()
-                    Button("Huỷ", role: .destructive) { Task { await mt5.cancel(o.ticket) } }
-                        .buttonStyle(.borderless)
-                }
-            }
-        } header: {
-            Text("Lệnh trên MT5")
-        }
-        if let deals = state?.deals, !deals.isEmpty {
-            Section("Đã đóng (24 giờ)") {
-                ForEach(deals.reversed()) { d in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("\(d.side == "long" ? "MUA" : "BÁN") \(String(format: "%.2f", d.lots)) \(d.symbol) · \(d.reason == "target" ? "TP" : (d.reason == "stop" ? "SL" : "đóng"))")
-                            Text(Date(timeIntervalSince1970: d.time).formatted(date: .omitted, time: .shortened))
-                                .font(.caption2).foregroundColor(.secondary)
-                        }
-                        Spacer()
-                        Text(String(format: "%+.2f", d.profit))
-                            .font(.subheadline.monospacedDigit())
-                            .foregroundColor(d.profit >= 0 ? .green : .red)
-                    }
-                }
-            }
         }
     }
 

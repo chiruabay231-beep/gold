@@ -26,7 +26,7 @@ struct GoldBacktestApp: App {
                 .environment(mt5Trader)
                 .onAppear {
                     let trader = trader
-                    market.onPrice = { symbol, price, time in trader.update(symbol: symbol, price: price, time: time) }
+                    market.onPrice = { symbol, bid, ask, time in trader.update(symbol: symbol, bid: bid, ask: ask, time: time) }
                     market.onBarClose = { symbol, candles in trader.barClosed(symbol: symbol, candles: candles) }
                     let bot = bot
                     bot.attach(market: market, trader: trader)

@@ -1,74 +1,164 @@
 import SwiftUI
 import BacktestKit
 
-/// The "Giao dịch" tab: the demo account with open positions, pending
-/// (limit) orders and closed trades, a manual order form, live strategy
-/// signals and the backtest data sets. Orders fill against the live price.
+/// Shared look of the trade pages, like broker apps: the floating profit in
+/// big type, then the account figures.
+struct AccountSummary: View {
+    let floating: Double
+    let currency: String
+    let rows: [(String, String)]
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Text(String(format: "%.2f %@", floating, currency))
+                .font(.system(size: 30, weight: .bold).monospacedDigit())
+                .foregroundColor(floating >= 0 ? TradeRow.profitColor : TradeRow.lossColor)
+                .frame(maxWidth: .infinity)
+            ForEach(rows.indices, id: \.self) { i in
+                HStack {
+                    Text(rows[i].0)
+                    Spacer()
+                    Text(rows[i].1).monospacedDigit()
+                }
+                .font(.system(size: 16))
+            }
+        }
+        .padding(.vertical, 6)
+    }
+}
+
+/// One order in the lists: "XAUUSD buy 0.10" / "4145.150 → 4146.621" / profit.
+struct TradeRow: View {
+    let symbol: String
+    let detail: String
+    let isBuy: Bool
+    let line: String
+    let trailing: String
+    var trailingColor: Color = .primary
+
+    static let profitColor = Color(red: 0.16, green: 0.45, blue: 0.95)
+    static let lossColor = Color(red: 0.92, green: 0.27, blue: 0.24)
+
+    var body: some View {
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(symbol).font(.system(size: 16, weight: .bold))
+                    Text(detail).font(.system(size: 16, weight: .semibold))
+                        .foregroundColor(isBuy ? Self.profitColor : Self.lossColor)
+                }
+                Text(line).font(.system(size: 14).monospacedDigit()).foregroundColor(.secondary)
+            }
+            Spacer()
+            Text(trailing)
+                .font(.system(size: 18, weight: .semibold).monospacedDigit())
+                .foregroundColor(trailingColor)
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+/// "Demo" page of the Giao dịch tab: the in-app demo account, laid out like
+/// a broker app (summary, open positions, pending orders, history).
 struct TradePanelView: View {
     @Environment(PaperTrader.self) private var trader
-    @Environment(LiveMarket.self) private var market
     @Environment(AppStore.self) private var store
 
-    enum Page: String, CaseIterable, Identifiable {
-        case open = "Đang mở", pending = "Lệnh chờ", history = "Lịch sử"
-        var id: String { rawValue }
-    }
-
-    @AppStorage("trade.lots") private var lots = 0.01
-    @State private var page = Page.open
-    @State private var stopText = ""
-    @State private var targetText = ""
     @State private var showVoiceSettings = false
     @State private var showAutoStops = false
     @State private var confirmReset = false
     @State private var resetBalance = 10_000.0
-
-    private var symbol: String { market.symbolKey }
-    private var price: Double { market.ticker?.lastPrice ?? market.candles.last?.close ?? 0 }
-    private var decimals: Int { CandleChart.decimals(for: price) }
+    @State private var closing: PaperAccount.Position?
 
     var body: some View {
+        let account = trader.account
+        let closed = account.balance - account.startingBalance
+        let wins = account.history.filter { $0.profit > 0 }.count
         List {
-            accountSection
             Section {
-                Picker("Lệnh", selection: $page) {
-                    ForEach(Page.allCases) { item in
-                        Text("\(item.rawValue) (\(count(item)))").tag(item)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .listRowInsets(EdgeInsets(top: 6, leading: 8, bottom: 6, trailing: 8))
-                switch page {
-                case .open: positionRows
-                case .pending: pendingRows
-                case .history: historyRows
+                AccountSummary(floating: trader.openProfit, currency: "USD", rows: [
+                    ("Số dư", money(account.balance)),
+                    ("Vốn", money(trader.equity)),
+                    ("Đã chốt", String(format: "%+.2f", closed)),
+                    ("Tỉ lệ thắng", account.history.isEmpty ? "–"
+                        : String(format: "%.0f%% (%d lệnh)", Double(wins) / Double(account.history.count) * 100, account.history.count)),
+                ])
+            }
+            Section("Lệnh có trạng thái") {
+                if account.positions.isEmpty { Text("Không có lệnh đang mở").foregroundColor(.secondary) }
+                ForEach(account.positions) { p in
+                    let profit = trader.profit(p)
+                    TradeRow(symbol: name(p.symbol), detail: "\(p.side == .long ? "buy" : "sell") \(PaperTrader.lots(p.lots))",
+                             isBuy: p.side == .long,
+                             line: "\(price(p.entryPrice)) → \(trader.closePrice(p).map(price) ?? "–")",
+                             trailing: profit.map { String(format: "%.2f", $0) } ?? "–",
+                             trailingColor: (profit ?? 0) >= 0 ? TradeRow.profitColor : TradeRow.lossColor)
+                        .contentShape(Rectangle())
+                        .onTapGesture { closing = p }
+                        .swipeActions {
+                            Button("Đóng", role: .destructive) { trader.close(p) }
+                        }
                 }
             }
-            orderSection
-            Section("Cài đặt") {
-                Button { showAutoStops = true } label: { Label("SL/TP tự động & quản lý lệnh…", systemImage: "slider.horizontal.3") }
-                Button { showVoiceSettings = true } label: { Label("Cảnh báo giọng nói…", systemImage: "speaker.wave.2") }
-                Button { store.selectedTab = .live } label: { Label("Mở biểu đồ Live", systemImage: "chart.xyaxis.line") }
+            if !account.pending.isEmpty {
+                Section("Các lệnh") {
+                    ForEach(account.pending) { o in
+                        TradeRow(symbol: name(o.symbol), detail: orderType(o), isBuy: o.side == .long,
+                                 line: "\(PaperTrader.lots(o.lots)) at \(price(o.entry))", trailing: "placed",
+                                 trailingColor: Color(red: 0.1, green: 0.2, blue: 0.45))
+                            .swipeActions {
+                                Button("Huỷ", role: .destructive) { trader.cancel(o) }
+                            }
+                    }
+                }
             }
             Section {
                 NavigationLink {
-                    DatasetListView()
+                    DemoHistoryView()
                 } label: {
-                    Label("Dữ liệu backtest (CSV, Binance) · \(store.datasets.count)", systemImage: "chart.bar.xaxis")
+                    Label("Lịch sử lệnh · \(account.history.count)", systemImage: "clock.arrow.circlepath")
                 }
             } footer: {
-                Text("Tài khoản demo trong app: lệnh khớp theo giá realtime đang xem (không qua sàn, không có spread/phí). Lệnh chỉ được theo dõi khi app đang chạy và đang mở đúng mã đó.")
+                Text("Đặt lệnh trên biểu đồ Live: thanh BÁN/MUA bên dưới, giữ để mở bảng lệnh (Limit, Stop, SL, TP). Vuốt trái một lệnh để đóng hoặc huỷ.")
             }
-            Section {
-                Button("Làm mới tài khoản demo", role: .destructive) {
-                    resetBalance = trader.account.startingBalance
-                    confirmReset = true
+        }
+        .listStyle(.insetGrouped)
+        .navigationTitle("Giao dịch demo")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    Button { store.selectedTab = .live } label: { Label("Mở biểu đồ Live", systemImage: "chart.xyaxis.line") }
+                    Button { showAutoStops = true } label: { Label("SL/TP tự động & quản lý lệnh…", systemImage: "slider.horizontal.3") }
+                    Button { showVoiceSettings = true } label: { Label("Cảnh báo giọng nói…", systemImage: "speaker.wave.2") }
+                    NavigationLink {
+                        DatasetListView()
+                    } label: {
+                        Label("Dữ liệu backtest · \(store.datasets.count)", systemImage: "chart.bar.xaxis")
+                    }
+                    Button(role: .destructive) {
+                        resetBalance = trader.account.startingBalance
+                        confirmReset = true
+                    } label: { Label("Làm mới tài khoản demo", systemImage: "arrow.counterclockwise") }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
             }
         }
-        .navigationTitle("Giao dịch demo")
         .sheet(isPresented: $showVoiceSettings) { VoiceSettingsView() }
         .sheet(isPresented: $showAutoStops) { AutoStopSettingsView() }
+        .confirmationDialog(closing.map { "\(name($0.symbol)) \($0.side == .long ? "buy" : "sell") \(PaperTrader.lots($0.lots))" } ?? "",
+                            isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } }),
+                            titleVisibility: .visible) {
+            Button("Đóng lệnh", role: .destructive) {
+                if let p = closing { trader.close(p) }
+                closing = nil
+            }
+        } message: {
+            if let p = closing {
+                Text("Vào \(price(p.entryPrice)) · SL \(p.stop.map(price) ?? "–") · TP \(p.target.map(price) ?? "–")")
+            }
+        }
         .alert("Làm mới tài khoản demo", isPresented: $confirmReset) {
             TextField("Số dư", value: $resetBalance, format: .number).keyboardType(.decimalPad)
             Button("Huỷ", role: .cancel) {}
@@ -78,247 +168,53 @@ struct TradePanelView: View {
         }
     }
 
-    private func count(_ page: Page) -> Int {
-        switch page {
-        case .open: return trader.account.positions.count
-        case .pending: return trader.account.pending.count
-        case .history: return trader.account.history.count
-        }
-    }
-
-    // MARK: - Account
-
-    private var accountSection: some View {
-        let closed = trader.account.balance - trader.account.startingBalance
-        let wins = trader.account.history.filter { $0.profit > 0 }.count
-        let total = trader.account.history.count
-        return Section {
-            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
-                GridRow {
-                    stat("Số dư", money(trader.account.balance), .primary)
-                    stat("Vốn hiện tại", money(trader.equity), .primary)
-                }
-                GridRow {
-                    stat("Lãi/lỗ đang mở", signedMoney(trader.openProfit), trader.openProfit >= 0 ? .green : .red)
-                    stat("Đã chốt", signedMoney(closed), closed >= 0 ? .green : .red)
-                }
-                GridRow {
-                    stat("Lệnh đã đóng", "\(total)", .primary)
-                    stat("Tỉ lệ thắng", total == 0 ? "–" : String(format: "%.0f%%", Double(wins) / Double(total) * 100), .primary)
-                }
-            }
-            .padding(.vertical, 4)
-        } header: {
-            Text("Tài khoản demo")
-        }
-    }
-
-    private func stat(_ title: String, _ value: String, _ color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.caption).foregroundColor(.secondary)
-            Text(value).font(.headline.monospacedDigit()).foregroundColor(color)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    // MARK: - Orders
-
-    @ViewBuilder
-    private var positionRows: some View {
-        if trader.account.positions.isEmpty {
-            Text("Chưa có lệnh đang mở").foregroundColor(.secondary)
-        }
-        ForEach(trader.account.positions) { position in
-            let current = trader.price(position.symbol)
-            let profit = current.map { position.profit(at: $0) }
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    sideText(position.side == .long ? "BUY" : "SELL", long: position.side == .long)
-                    Text("\(PaperTrader.lots(position.lots)) lot \(LiveView.displayName(PaperTrader.bareSymbol(position.symbol)))")
-                    Spacer()
-                    Text(profit.map(signedMoney) ?? "–")
-                        .fontWeight(.semibold)
-                        .foregroundColor((profit ?? 0) >= 0 ? .green : .red)
-                }
-                HStack {
-                    Text(levels(entry: position.entryPrice, stop: position.stop, target: position.target))
-                        .font(.caption.monospacedDigit())
-                        .foregroundColor(.secondary)
-                    Spacer()
-                    Button("Đóng lệnh") { trader.close(position) }
-                        .font(.caption.weight(.semibold))
-                        .buttonStyle(.bordered)
-                        .tint(.orange)
-                        .disabled(current == nil)
-                }
-                Text(position.openTime.formatted(date: .abbreviated, time: .standard))
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var pendingRows: some View {
-        if trader.account.pending.isEmpty {
-            Text("Chưa có lệnh chờ. Bấm \"Lệnh Limit\" trên biểu đồ Live để đặt.").foregroundColor(.secondary)
-        }
-        ForEach(trader.account.pending) { order in
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    sideText(orderType(order), long: order.side == .long)
-                    Text("\(PaperTrader.lots(order.lots)) lot \(LiveView.displayName(PaperTrader.bareSymbol(order.symbol)))")
-                    Spacer()
-                    Button("Huỷ") { trader.cancel(order) }
-                        .font(.caption.weight(.semibold))
-                        .buttonStyle(.bordered)
-                        .tint(.red)
-                }
-                Text(levels(entry: order.entry, stop: order.stop, target: order.target))
-                    .font(.caption.monospacedDigit())
-                    .foregroundColor(.secondary)
-                Text(order.createdAt.formatted(date: .abbreviated, time: .standard))
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var historyRows: some View {
-        if trader.account.history.isEmpty {
-            Text("Chưa có lệnh đã đóng").foregroundColor(.secondary)
-        }
-        ForEach(trader.account.history.prefix(200)) { trade in
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    sideText(trade.side == .long ? "BUY" : "SELL", long: trade.side == .long)
-                    Text("\(PaperTrader.lots(trade.lots)) \(LiveView.displayName(PaperTrader.bareSymbol(trade.symbol)))")
-                    Spacer()
-                    Text(signedMoney(trade.profit))
-                        .fontWeight(.semibold)
-                        .foregroundColor(trade.profit >= 0 ? .green : .red)
-                }
-                Text("\(CandleChart.format(trade.entryPrice, decimals)) → \(CandleChart.format(trade.exitPrice, decimals)) · \(reason(trade.reason))")
-                    .font(.caption.monospacedDigit())
-                    .foregroundColor(.secondary)
-                Text("\(trade.openTime.formatted(date: .abbreviated, time: .shortened)) → \(trade.closeTime.formatted(date: .omitted, time: .shortened))")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-        }
-    }
-
-    private func sideText(_ text: String, long: Bool) -> some View {
-        Text(text)
-            .font(.caption.weight(.bold))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .foregroundColor(.white)
-            .background(long ? Color(red: 0.161, green: 0.384, blue: 1.0) : Color(red: 0.949, green: 0.212, blue: 0.271),
-                        in: RoundedRectangle(cornerRadius: 4))
-    }
-
-    private var orderSection: some View {
-        Section {
-            HStack {
-                Text(LiveView.displayName(market.symbol)).font(.headline)
-                Spacer()
-                Text(CandleChart.format(price, decimals)).font(.headline.monospacedDigit())
-            }
-            Stepper(value: $lots, in: 0.01...100, step: 0.01) {
-                HStack {
-                    Text("Khối lượng")
-                    Spacer()
-                    TextField("lot", value: $lots, format: .number.precision(.fractionLength(2)))
-                        .keyboardType(.decimalPad)
-                        .multilineTextAlignment(.trailing)
-                        .frame(maxWidth: 80)
-                    Text("lot").foregroundColor(.secondary)
-                }
-            }
-            priceRow("Cắt lỗ (SL)", text: $stopText)
-            priceRow("Chốt lời (TP)", text: $targetText)
-            HStack(spacing: 12) {
-                orderButton("BÁN", color: .red) {
-                    trader.sell(symbol: symbol, lots: lots, price: price, stop: Self.parse(stopText), target: Self.parse(targetText))
-                }
-                orderButton("MUA", color: Color(red: 0.161, green: 0.384, blue: 1.0)) {
-                    trader.buy(symbol: symbol, lots: lots, price: price, stop: Self.parse(stopText), target: Self.parse(targetText))
-                }
-            }
-            .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
-        } header: {
-            Text("Lệnh thị trường")
-        } footer: {
-            Text("Để trống SL/TP nếu không dùng. Muốn đặt lệnh chờ: vẽ Vị thế Long/Short trên biểu đồ, chọn nó rồi bấm nút ✈︎ \"Vào lệnh demo\".")
-        }
-    }
-
-    // MARK: - Helpers
-
-    private func priceRow(_ title: String, text: Binding<String>) -> some View {
-        HStack {
-            Text(title)
-            Spacer()
-            TextField("Không", text: text)
-                .keyboardType(.decimalPad)
-                .multilineTextAlignment(.trailing)
-                .frame(maxWidth: 120)
-            Button {
-                text.wrappedValue = CandleChart.format(price, decimals)
-            } label: {
-                Image(systemName: "scope")
-            }
-            .buttonStyle(.borderless)
-        }
-    }
-
-    private func orderButton(_ title: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-                .background(color, in: .rect(cornerRadius: 8))
-                .foregroundColor(.white)
-        }
-        .buttonStyle(.borderless)
-        .disabled(price <= 0 || lots <= 0)
-    }
+    private func name(_ key: String) -> String { LiveView.displayName(PaperTrader.bareSymbol(key)) }
+    private func price(_ value: Double) -> String { CandleChart.format(value, CandleChart.decimals(for: value)) }
+    private func money(_ value: Double) -> String { String(format: "%.2f", value) }
 
     private func orderType(_ order: PaperAccount.PendingOrder) -> String {
         switch (order.side, order.triggersAbove) {
-        case (.long, true): return "BUY STOP"
-        case (.long, false): return "BUY LIMIT"
-        case (.short, true): return "SELL LIMIT"
-        case (.short, false): return "SELL STOP"
+        case (.long, true): return "buy stop"
+        case (.long, false): return "buy limit"
+        case (.short, true): return "sell limit"
+        case (.short, false): return "sell stop"
         }
     }
+}
 
-    private func levels(entry: Double, stop: Double?, target: Double?) -> String {
-        var parts = ["Vào \(CandleChart.format(entry, decimals))"]
-        if let stop { parts.append("SL \(CandleChart.format(stop, decimals))") }
-        if let target { parts.append("TP \(CandleChart.format(target, decimals))") }
-        return parts.joined(separator: " · ")
+/// Closed demo trades.
+struct DemoHistoryView: View {
+    @Environment(PaperTrader.self) private var trader
+
+    var body: some View {
+        List {
+            if trader.account.history.isEmpty {
+                Text("Chưa có lệnh đã đóng").foregroundColor(.secondary)
+            }
+            ForEach(trader.account.history.prefix(300)) { t in
+                VStack(alignment: .leading, spacing: 2) {
+                    TradeRow(symbol: LiveView.displayName(PaperTrader.bareSymbol(t.symbol)),
+                             detail: "\(t.side == .long ? "buy" : "sell") \(PaperTrader.lots(t.lots))", isBuy: t.side == .long,
+                             line: "\(PaperTrader.spoken(t.entryPrice)) → \(PaperTrader.spoken(t.exitPrice)) · \(Self.reason(t.reason))",
+                             trailing: String(format: "%.2f", t.profit),
+                             trailingColor: t.profit >= 0 ? TradeRow.profitColor : TradeRow.lossColor)
+                    Text("\(t.openTime.formatted(date: .abbreviated, time: .shortened)) → \(t.closeTime.formatted(date: .omitted, time: .shortened))")
+                        .font(.caption2).foregroundColor(.secondary)
+                }
+            }
+        }
+        .navigationTitle("Lịch sử lệnh demo")
+        .navigationBarTitleDisplayMode(.inline)
     }
 
-    private func reason(_ reason: PaperAccount.ExitReason) -> String {
+    static func reason(_ reason: PaperAccount.ExitReason) -> String {
         switch reason {
-        case .target: return "Chạm TP"
-        case .stop: return "Chạm SL"
-        case .manual: return "Đóng tay"
-        case .reversal: return "Tự chốt (đảo chiều)"
+        case .target: return "TP"
+        case .stop: return "SL"
+        case .manual: return "đóng tay"
+        case .reversal: return "tự chốt"
         }
     }
-
-    /// Reads a price typed with either "." or "," as decimal separator.
-    static func parse(_ text: String) -> Double? {
-        Double(text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "."))
-    }
-
-    private func money(_ value: Double) -> String { String(format: "%.2f $", value) }
-    private func signedMoney(_ value: Double) -> String { String(format: "%+.2f $", value) }
 }
 
 /// Voice alert phrases, language and background listening.
