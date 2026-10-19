@@ -66,11 +66,11 @@ struct BrokerTradeView: View {
                 Section("Lệnh có trạng thái") {
                     if state.positions.isEmpty { Text("Không có lệnh đang mở").foregroundColor(.secondary) }
                     ForEach(state.positions) { p in
-                        TradeRow(symbol: p.symbol, detail: "\(p.side == "long" ? "buy" : "sell") \(Self.lots(p.lots))",
+                        OrderRow(symbol: p.symbol, detail: "\(p.side == "long" ? "buy" : "sell") \(Self.lots(p.lots))",
                                  isBuy: p.side == "long",
                                  line: "\(Self.price(p.entry)) → \(p.price.map(Self.price) ?? "–")",
                                  trailing: String(format: "%.2f", p.profit),
-                                 trailingColor: p.profit >= 0 ? TradeRow.profitColor : TradeRow.lossColor)
+                                 trailingColor: p.profit >= 0 ? OrderRow.profitColor : OrderRow.lossColor)
                             .contentShape(Rectangle())
                             .onTapGesture { closing = p }
                             .swipeActions {
@@ -81,7 +81,7 @@ struct BrokerTradeView: View {
                 if !state.orders.isEmpty {
                     Section("Các lệnh") {
                         ForEach(state.orders) { o in
-                            TradeRow(symbol: o.symbol, detail: "\(o.side == "long" ? "buy" : "sell") \(o.kind)",
+                            OrderRow(symbol: o.symbol, detail: "\(o.side == "long" ? "buy" : "sell") \(o.kind)",
                                      isBuy: o.side == "long", line: "\(Self.lots(o.lots)) at \(Self.price(o.entry))",
                                      trailing: "placed", trailingColor: Color(red: 0.1, green: 0.2, blue: 0.45))
                                 .swipeActions {
@@ -93,11 +93,11 @@ struct BrokerTradeView: View {
                 if !state.deals.isEmpty {
                     Section("Đã đóng (24 giờ)") {
                         ForEach(state.deals.reversed()) { d in
-                            TradeRow(symbol: d.symbol, detail: "\(d.side == "long" ? "buy" : "sell") \(Self.lots(d.lots))",
+                            OrderRow(symbol: d.symbol, detail: "\(d.side == "long" ? "buy" : "sell") \(Self.lots(d.lots))",
                                      isBuy: d.side == "long",
                                      line: "\(Self.price(d.price)) · \(d.reason == "target" ? "TP" : (d.reason == "stop" ? "SL" : "đóng")) · \(Date(timeIntervalSince1970: d.time).formatted(date: .omitted, time: .shortened))",
                                      trailing: String(format: "%.2f", d.profit),
-                                     trailingColor: d.profit >= 0 ? TradeRow.profitColor : TradeRow.lossColor)
+                                     trailingColor: d.profit >= 0 ? OrderRow.profitColor : OrderRow.lossColor)
                         }
                     }
                 }
@@ -372,7 +372,7 @@ struct BrokerLoginView: View {
                             Text(account.server).font(.caption).foregroundColor(.secondary)
                         }
                         Spacer()
-                        if status?.login.map { String($0) } == account.login, status?.server == account.server {
+                        if status?.login.map({ String($0) }) == account.login, status?.server == account.server {
                             Image(systemName: "checkmark.circle.fill").foregroundColor(.green)
                         }
                     }

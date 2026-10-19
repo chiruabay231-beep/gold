@@ -12,7 +12,7 @@ struct AccountSummary: View {
         VStack(spacing: 10) {
             Text(String(format: "%.2f %@", floating, currency))
                 .font(.system(size: 30, weight: .bold).monospacedDigit())
-                .foregroundColor(floating >= 0 ? TradeRow.profitColor : TradeRow.lossColor)
+                .foregroundColor(floating >= 0 ? OrderRow.profitColor : OrderRow.lossColor)
                 .frame(maxWidth: .infinity)
             ForEach(rows.indices, id: \.self) { i in
                 HStack {
@@ -28,7 +28,7 @@ struct AccountSummary: View {
 }
 
 /// One order in the lists: "XAUUSD buy 0.10" / "4145.150 → 4146.621" / profit.
-struct TradeRow: View {
+struct OrderRow: View {
     let symbol: String
     let detail: String
     let isBuy: Bool
@@ -88,11 +88,11 @@ struct TradePanelView: View {
                 if account.positions.isEmpty { Text("Không có lệnh đang mở").foregroundColor(.secondary) }
                 ForEach(account.positions) { p in
                     let profit = trader.profit(p)
-                    TradeRow(symbol: name(p.symbol), detail: "\(p.side == .long ? "buy" : "sell") \(PaperTrader.lots(p.lots))",
+                    OrderRow(symbol: name(p.symbol), detail: "\(p.side == .long ? "buy" : "sell") \(PaperTrader.lots(p.lots))",
                              isBuy: p.side == .long,
                              line: "\(price(p.entryPrice)) → \(trader.closePrice(p).map(price) ?? "–")",
                              trailing: profit.map { String(format: "%.2f", $0) } ?? "–",
-                             trailingColor: (profit ?? 0) >= 0 ? TradeRow.profitColor : TradeRow.lossColor)
+                             trailingColor: (profit ?? 0) >= 0 ? OrderRow.profitColor : OrderRow.lossColor)
                         .contentShape(Rectangle())
                         .onTapGesture { closing = p }
                         .swipeActions {
@@ -103,7 +103,7 @@ struct TradePanelView: View {
             if !account.pending.isEmpty {
                 Section("Các lệnh") {
                     ForEach(account.pending) { o in
-                        TradeRow(symbol: name(o.symbol), detail: orderType(o), isBuy: o.side == .long,
+                        OrderRow(symbol: name(o.symbol), detail: orderType(o), isBuy: o.side == .long,
                                  line: "\(PaperTrader.lots(o.lots)) at \(price(o.entry))", trailing: "placed",
                                  trailingColor: Color(red: 0.1, green: 0.2, blue: 0.45))
                             .swipeActions {
@@ -193,11 +193,11 @@ struct DemoHistoryView: View {
             }
             ForEach(trader.account.history.prefix(300)) { t in
                 VStack(alignment: .leading, spacing: 2) {
-                    TradeRow(symbol: LiveView.displayName(PaperTrader.bareSymbol(t.symbol)),
+                    OrderRow(symbol: LiveView.displayName(PaperTrader.bareSymbol(t.symbol)),
                              detail: "\(t.side == .long ? "buy" : "sell") \(PaperTrader.lots(t.lots))", isBuy: t.side == .long,
                              line: "\(PaperTrader.spoken(t.entryPrice)) → \(PaperTrader.spoken(t.exitPrice)) · \(Self.reason(t.reason))",
                              trailing: String(format: "%.2f", t.profit),
-                             trailingColor: t.profit >= 0 ? TradeRow.profitColor : TradeRow.lossColor)
+                             trailingColor: t.profit >= 0 ? OrderRow.profitColor : OrderRow.lossColor)
                     Text("\(t.openTime.formatted(date: .abbreviated, time: .shortened)) → \(t.closeTime.formatted(date: .omitted, time: .shortened))")
                         .font(.caption2).foregroundColor(.secondary)
                 }
