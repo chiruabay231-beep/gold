@@ -194,9 +194,10 @@ struct RemoteBotClient {
         return url
     }
 
-    private func request(_ path: String, method: String = "GET", body: Data? = nil) async throws -> Data {
+    private func request(_ path: String, method: String = "GET", body: Data? = nil,
+                         timeout: TimeInterval = 25) async throws -> Data {
         guard let url = URL(string: baseURL.absoluteString + path) else { throw ServerError(message: "Địa chỉ không hợp lệ") }
-        var request = URLRequest(url: url, timeoutInterval: 25)
+        var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = method
         request.setValue("Bearer \(password)", forHTTPHeaderField: "Authorization")
         if let body {
@@ -251,6 +252,74 @@ struct RemoteBotClient {
     func testTelegram() async throws {
         _ = try await request("/telegram-test", method: "POST", body: Data("{}".utf8))
     }
+
+    // MARK: - MT5 account and market data (Exness or any MT5 broker on the VPS)
+
+    /// Encodes a query value; symbols can contain "#", "&" or "+".
+    static func queryValue(_ text: String) -> String {
+        text.addingPercentEncoding(withAllowedCharacters: CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))) ?? text
+    }
+
+    func mt5Status() async throws -> MT5AccountStatus {
+        // Starting the MT5 terminal can take a while the first time.
+        try JSONDecoder().decode(MT5AccountStatus.self, from: await request("/mt5/status", timeout: 60))
+    }
+
+    func mt5Login(login: String, password: String, server: String, remember: Bool) async throws -> MT5AccountStatus {
+        let object: [String: Any] = ["login": login, "password": password, "server": server, "remember": remember]
+        let body = try JSONSerialization.data(withJSONObject: object)
+        return try JSONDecoder().decode(MT5AccountStatus.self, from: await request("/mt5/login", method: "POST", body: body, timeout: 90))
+    }
+
+    func mt5Logout() async throws {
+        _ = try await request("/mt5/logout", method: "POST", body: Data("{}".utf8))
+    }
+
+    func mt5Symbols(query: String) async throws -> [MT5Symbol] {
+        struct Response: Decodable { var symbols: [MT5Symbol] }
+        let q = Self.queryValue(query)
+        return try JSONDecoder().decode(Response.self, from: await request("/mt5/symbols?q=\(q)&limit=150")).symbols
+    }
+
+    /// Bars of `symbol`; the newest is still forming unless `before` is given.
+    func mt5Candles(symbol: String, interval: BinanceClient.Interval, count: Int, before: Date? = nil) async throws -> [Candle] {
+        struct Response: Decodable { var candles: [[Double]] }
+        let s = Self.queryValue(symbol)
+        var path = "/mt5/candles?symbol=\(s)&interval=\(interval.rawValue)&count=\(count)"
+        if let before { path += "&before=\(Int(before.timeIntervalSince1970))" }
+        let rows = try JSONDecoder().decode(Response.self, from: await request(path, timeout: 15)).candles
+        return rows.compactMap { r in
+            guard r.count >= 5 else { return nil }
+            return Candle(time: Date(timeIntervalSince1970: r[0]), open: r[1], high: r[2], low: r[3], close: r[4],
+                          volume: r.count > 5 ? r[5] : 0)
+        }
+    }
+}
+
+/// The MT5 account logged in on the VPS.
+struct MT5AccountStatus: Decodable {
+    var connected: Bool
+    var error: String?
+    var login: Int?
+    var server: String?
+    var name: String?
+    var company: String?
+    var currency: String?
+    var balance: Double?
+    var equity: Double?
+    var leverage: Int?
+    var mode: String?
+    var tradeAllowed: Bool?
+    var terminal: String?
+    var remembered: Bool?
+}
+
+struct MT5Symbol: Decodable, Identifiable, Hashable {
+    var name: String
+    var description: String
+    var path: String
+    var digits: Int?
+    var id: String { name }
 }
 
 /// The VPS bot as seen from the app, refreshed while its screen is open.

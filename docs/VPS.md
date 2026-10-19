@@ -110,6 +110,21 @@ Bot kiểm tra tín hiệu mỗi khi một nến đóng, SL/TP kiểm tra mỗi 
 
 Lệnh của bot trên MT5 có magic number `20260` và ghi chú `GoldBot`; bot chỉ quản lý lệnh của chính nó, không đụng lệnh tay.
 
+## Xem giá realtime Exness / sàn MT5 khác trên iPhone
+
+Sau khi cài MT5 trên VPS (mục 6, bước 1):
+
+1. App → **Giao dịch → Đăng nhập sàn**.
+2. Chọn **Exness** (hoặc **Sàn MT5 khác**), nhập **server** (ví dụ `Exness-MT5Trial7`), **số tài khoản** và **mật khẩu**.
+   Mật khẩu investor (chỉ đọc) là đủ để xem giá.
+3. **Mở biểu đồ realtime** → tìm mã (Exness Standard: `XAUUSDm`, `XAGUSDm`, `US30m`…) → biểu đồ Live chạy giá Exness, cập nhật mỗi giây.
+   Mã được thêm vào danh sách mã với nguồn **MT5 (VPS)**.
+
+"Ghi nhớ trên VPS" lưu đăng nhập vào `C:\GoldBot\config.json` để tự đăng nhập lại khi VPS khởi động lại.
+"Lưu vào danh sách trên iPhone" giữ tài khoản (mật khẩu trong Keychain) để chạm là đổi tài khoản.
+Đăng xuất trong app sẽ xoá mật khẩu đã lưu trên VPS. Mỗi lúc MT5 trên VPS chỉ đăng nhập một tài khoản.
+Giờ nến được đổi về UTC tự động (nhiều sàn để giờ máy chủ UTC+2/+3).
+
 ## Gỡ lỗi
 
 | Hiện tượng | Cách xử lý |

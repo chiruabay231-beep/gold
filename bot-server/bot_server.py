@@ -75,6 +75,14 @@ INTERVALS = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 144
 SOURCES = ("binance_futures", "binance_spot", "mt5", "sample")
 
 
+class _NoLock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
 def now():
     return time.time()
 
@@ -308,24 +316,47 @@ class Mt5:
             cls.error = ""
             return mt5
 
+    # Brokers stamp bars in their server time (Exness: UTC, many others UTC+2/+3).
+    offset_seconds = 0
+
+    @classmethod
+    def detect_offset(cls, symbol):
+        """Server-time offset from a fresh tick; kept while the market is closed."""
+        tick = cls.module.symbol_info_tick(symbol) if cls.module else None
+        if tick is None or not tick.time:
+            return cls.offset_seconds
+        hours = (tick.time - now()) / 3600
+        # A tick from the last few minutes tells the offset; an old one (weekend) does not.
+        if abs(hours - round(hours)) < 0.1 and abs(round(hours)) <= 14:
+            cls.offset_seconds = int(round(hours)) * 3600
+        return cls.offset_seconds
+
+    @classmethod
+    def bars(cls, rates):
+        offset = cls.offset_seconds
+        return [[float(r["time"]) - offset, float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]),
+                 float(r["tick_volume"])] for r in rates]
+
+
+MT5_TIMEFRAMES = {"1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30", "1h": "H1", "4h": "H4", "1d": "D1", "1w": "W1"}
+
 
 class Mt5Feed:
     def __init__(self, cfg, symbol, interval):
         self.cfg = cfg
         self.symbol = symbol
         mt5 = Mt5.connect(cfg)
-        names = {"1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30", "1h": "H1", "4h": "H4", "1d": "D1"}
-        self.timeframe = getattr(mt5, "TIMEFRAME_" + names[interval])
+        self.timeframe = getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[interval])
         if not mt5.symbol_select(symbol, True):
             raise RuntimeError(f"MT5 không có mã {symbol} (Exness thường là XAUUSDm hoặc XAUUSD)")
 
     def _rates(self, count):
         mt5 = Mt5.connect(self.cfg)
+        Mt5.detect_offset(self.symbol)
         rates = mt5.copy_rates_from_pos(self.symbol, self.timeframe, 0, count)
         if rates is None:
             raise RuntimeError(f"MT5 copy_rates lỗi: {mt5.last_error()}")
-        return [[float(r["time"]), float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]),
-                 float(r["tick_volume"])] for r in rates]
+        return Mt5.bars(rates)
 
     def history(self, count):
         return self._rates(count)
@@ -341,6 +372,136 @@ class Mt5Feed:
 
     def close(self):
         pass
+
+
+class Mt5Account:
+    """MT5 login and market data for the app (Live chart source "MT5 (VPS)").
+
+    Every call holds Mt5.lock: the MetaTrader5 package is one connection per
+    process and the bot loop uses it too."""
+
+    def __init__(self, server):
+        self.server = server
+
+    @property
+    def cfg(self):
+        return self.server.config["mt5"]
+
+    def _mt5(self):
+        return Mt5.connect(self.cfg)
+
+    def status(self):
+        with Mt5.lock:
+            try:
+                mt5 = self._mt5()
+            except RuntimeError as e:
+                return {"ok": True, "connected": False, "error": str(e)}
+            a = mt5.account_info()
+            t = mt5.terminal_info()
+            if a is None:
+                return {"ok": True, "connected": False, "error": f"MT5 chưa đăng nhập tài khoản: {mt5.last_error()}",
+                        "terminal": t.name if t else None}
+            mode = {mt5.ACCOUNT_TRADE_MODE_DEMO: "demo", mt5.ACCOUNT_TRADE_MODE_REAL: "real"}.get(a.trade_mode, "contest")
+            return {"ok": True, "connected": bool(t.connected) if t else True, "login": a.login, "server": a.server,
+                    "name": a.name, "company": a.company, "currency": a.currency, "balance": a.balance,
+                    "equity": a.equity, "leverage": a.leverage, "mode": mode, "tradeAllowed": bool(a.trade_allowed),
+                    "terminal": t.name if t else None, "remembered": bool(self.cfg.get("login")),
+                    "offsetHours": Mt5.offset_seconds / 3600}
+
+    def login(self, body):
+        try:
+            login = int(str(body.get("login", "")).strip())
+        except ValueError:
+            raise ValueError("Số tài khoản MT5 phải là số")
+        password = str(body.get("password", ""))
+        server = str(body.get("server", "")).strip()
+        if not password or not server:
+            raise ValueError("Cần mật khẩu và tên máy chủ (server) MT5")
+        s = self.server.settings
+        if s.get("running") and s.get("broker") == "mt5" and int(self.cfg.get("login") or 0) != login:
+            raise ValueError("Bot đang đặt lệnh trên tài khoản MT5 hiện tại: dừng bot trước khi đổi tài khoản")
+        with Mt5.lock:
+            cfg = dict(self.cfg, login=login, password=password, server=server)
+            if body.get("path"):
+                cfg["path"] = str(body["path"])
+            mt5 = None
+            if Mt5.module is not None and Mt5.connected and Mt5.module.terminal_info() is not None:
+                mt5 = Mt5.module
+                if not mt5.login(login, password=password, server=server):
+                    raise ValueError(f"Đăng nhập thất bại ({mt5.last_error()}). Kiểm tra số tài khoản, mật khẩu, server.")
+            else:
+                Mt5.connected = False
+                try:
+                    mt5 = Mt5.connect(cfg)
+                except RuntimeError as e:
+                    raise ValueError(str(e))
+                if mt5.account_info() is None or mt5.account_info().login != login:
+                    raise ValueError(f"Đăng nhập thất bại ({mt5.last_error()}). Kiểm tra số tài khoản, mật khẩu, server.")
+            if body.get("remember", True):
+                self.cfg.update(login=login, password=password, server=server)
+                if body.get("path"):
+                    self.cfg["path"] = str(body["path"])
+            else:
+                self.cfg.update(login=0, password="", server="")
+            self.server.save_config()
+        self.server.log(f"🔑 Đăng nhập MT5 #{login} ({server})")
+        return self.status()
+
+    def logout(self):
+        s = self.server.settings
+        if s.get("running") and (s.get("broker") == "mt5" or s.get("source") == "mt5"):
+            raise ValueError("Bot đang dùng MT5: dừng bot trước khi đăng xuất")
+        with Mt5.lock:
+            self.cfg.update(login=0, password="", server="")
+            self.server.save_config()
+            if Mt5.module is not None:
+                Mt5.module.shutdown()
+            Mt5.connected = False
+        self.server.log("🔒 Đã đăng xuất MT5 và xoá mật khẩu đã lưu")
+        return {"ok": True, "connected": False}
+
+    def symbols(self, query, limit=150):
+        with Mt5.lock:
+            mt5 = self._mt5()
+            rows = mt5.symbols_get() or ()
+            q = query.strip().lower()
+            found = [r for r in rows if not q or q in r.name.lower() or q in (r.description or "").lower()]
+            # Symbols in Market Watch first, then by name.
+            found.sort(key=lambda r: (not r.visible, len(r.name), r.name))
+            return {"ok": True, "total": len(rows),
+                    "symbols": [{"name": r.name, "description": r.description or "", "path": r.path or "",
+                                 "digits": r.digits} for r in found[:limit]]}
+
+    def candles(self, symbol, interval, count, before=None):
+        if interval not in MT5_TIMEFRAMES:
+            raise ValueError("MT5 có khung 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w (không có khung giây)")
+        count = max(1, min(int(count), 5000))
+        with Mt5.lock:
+            mt5 = self._mt5()
+            if not mt5.symbol_select(symbol, True):
+                raise ValueError(f"MT5 không có mã {symbol}")
+            timeframe = getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[interval])
+            offset = Mt5.detect_offset(symbol)
+            if before:
+                import datetime
+                # Bars that opened before `before` (app time = UTC), in server time.
+                start = datetime.datetime.fromtimestamp(float(before) + offset - 1, tz=datetime.timezone.utc)
+                rates = mt5.copy_rates_from(symbol, timeframe, start, count)
+            else:
+                rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+            if rates is None:
+                raise ValueError(f"MT5 không trả nến {symbol}: {mt5.last_error()}")
+            bars = Mt5.bars(rates)
+            if before:
+                bars = [b for b in bars if b[0] < float(before)]
+            tick = mt5.symbol_info_tick(symbol)
+            info = mt5.symbol_info(symbol)
+            return {"ok": True, "symbol": symbol, "candles": bars,
+                    # Only the newest bar of a live request is still forming.
+                    "lastComplete": bool(before),
+                    "bid": tick.bid if tick else None, "ask": tick.ask if tick else None,
+                    "digits": info.digits if info else None,
+                    "description": info.description if info else ""}
 
 
 # --------------------------------------------------------------------------
@@ -793,6 +954,7 @@ class BotServer:
         self.started_at = now()
         self.last_poll = 0
         self.tunnel_url = ""
+        self.mt5_account = Mt5Account(self)
         self.telegram = Telegram(self)
         self.tunnel = Tunnel(self) if self.config.get("tunnel") else None
 
@@ -937,7 +1099,8 @@ class BotServer:
             time.sleep(max(0.2, float(self.config.get("poll_seconds", 2)) - (now() - started)))
 
     def tick(self):
-        with self.lock:
+        uses_mt5 = self.settings.get("source") == "mt5" or self.settings.get("broker") == "mt5"
+        with self.lock, (Mt5.lock if uses_mt5 else _NoLock()):
             s = self.settings
             has_positions = bool(self.broker.positions(s["symbol"]))
             if not s.get("running") and not has_positions:
@@ -1197,7 +1360,20 @@ def make_handler(server):
                         return self._send(200, {"ok": True, "history": server.broker.history()[:limit]})
                 if path == "/samples":
                     return self._send(200, run_botkit(server.config, {"command": "samples"}))
+                if path == "/mt5/status":
+                    return self._send(200, server.mt5_account.status())
+                if path == "/mt5/symbols":
+                    return self._send(200, server.mt5_account.symbols((params.get("q") or [""])[0], limit))
+                if path == "/mt5/candles":
+                    symbol = (params.get("symbol") or [""])[0]
+                    if not symbol:
+                        raise ValueError("Thiếu mã")
+                    return self._send(200, server.mt5_account.candles(
+                        symbol, (params.get("interval") or ["1m"])[0], (params.get("count") or ["500"])[0],
+                        (params.get("before") or [None])[0]))
                 self._send(404, {"ok": False, "error": "Không có đường dẫn này"})
+            except ValueError as e:
+                self._send(400, {"ok": False, "error": str(e)})
             except Exception as e:
                 self._send(500, {"ok": False, "error": str(e)})
 
@@ -1221,6 +1397,10 @@ def make_handler(server):
                         raise ValueError("Chỉ đặt lại được tài khoản demo VPS")
                     server.reset_paper(float(body.get("balance", server.config["paper_balance"])))
                     return self._send(200, server.status())
+                if path == "/mt5/login":
+                    return self._send(200, server.mt5_account.login(body))
+                if path == "/mt5/logout":
+                    return self._send(200, server.mt5_account.logout())
                 if path == "/telegram-test":
                     server.telegram.send("🔔 Thử thông báo từ máy chủ bot")
                     return self._send(200, {"ok": True})

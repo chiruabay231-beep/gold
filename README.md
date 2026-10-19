@@ -158,6 +158,8 @@ swift test
   bật/tắt, xem lệnh, đóng lệnh và nhật ký ngay trong app; báo lệnh qua Telegram.
   Giai đoạn 1 giá Binance + tài khoản demo trên VPS, giai đoạn 2 giá và lệnh MT5 Exness.
   Cài đặt một lệnh: xem [docs/VPS.md](docs/VPS.md).
+- **Đăng nhập sàn (tab Giao dịch)**: đăng nhập Exness hoặc sàn MT5 khác trên VPS để xem giá realtime
+  của tài khoản đó trên biểu đồ Live (nguồn "MT5 (VPS)"), lưu nhiều tài khoản để đổi nhanh; OANDA và Binance cũng ở đây.
 
 **Dữ liệu**
 - Nhập CSV xuất từ MT5/Exness (kể cả file UTF-16, cột `<DATE>` `<TIME>` riêng),

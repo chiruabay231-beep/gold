@@ -1176,7 +1176,7 @@ struct LiveView: View {
     }
 
     private func open(symbol: String, source: LiveSource = .binance) {
-        let cleaned = symbol.uppercased().filter { $0.isLetter || $0.isNumber }
+        let cleaned = WatchItem.clean(symbol, source: source)
         guard !cleaned.isEmpty else { return }
         if replay.isActive { endReplay() }
         viewport = ChartViewport()

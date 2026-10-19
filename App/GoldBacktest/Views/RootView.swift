@@ -9,7 +9,7 @@ struct RootView: View {
             NavigationStack { LiveView() }
                 .tabItem { Label("Live", systemImage: "waveform.path.ecg.rectangle") }
                 .tag(AppTab.live)
-            NavigationStack { TradePanelView() }
+            NavigationStack { TradeRootView() }
                 .tabItem { Label("Giao dịch", systemImage: "briefcase") }
                 .tag(AppTab.trade)
             NavigationStack { IndicatorListView() }

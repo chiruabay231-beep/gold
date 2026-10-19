@@ -12,12 +12,15 @@ enum LiveSource: String, Codable {
     case binanceFutures = "BINANCE_FUTURES"
     /// OANDA v20 API with the user's token; XAU_USD, forex, indices.
     case oanda = "OANDA"
+    /// MetaTrader 5 on the user's VPS (Exness or any MT5 broker), read through the bot server.
+    case mt5 = "MT5"
 
     var title: String {
         switch self {
         case .binance: return "Binance"
         case .binanceFutures: return "Binance Futures"
         case .oanda: return "OANDA"
+        case .mt5: return "MT5 (VPS)"
         }
     }
 }
@@ -108,6 +111,11 @@ final class LiveMarket {
         case (.oanda, "XAG_USD"): return "XAU_USD"
         case (.oanda, "EUR_USD"): return "GBP_USD"
         case (.oanda, "GBP_USD"): return "EUR_USD"
+        case (.mt5, _):
+            // Exness and most brokers name silver like gold: XAUUSDm ↔ XAGUSDm, XAUUSD.r ↔ XAGUSD.r.
+            if symbol.hasPrefix("XAU") { return "XAG" + symbol.dropFirst(3) }
+            if symbol.hasPrefix("XAG") { return "XAU" + symbol.dropFirst(3) }
+            return nil
         default: return nil
         }
     }
@@ -116,7 +124,9 @@ final class LiveMarket {
     /// keeps its last bars fresh every 2 seconds while it stays selected.
     /// nil stops it and clears the bars.
     func setComparison(symbol requested: String?) {
-        let wanted = requested?.trimmingCharacters(in: .whitespaces).uppercased()
+        // MT5 symbols are case-sensitive (XAUUSDm).
+        let trimmed = requested?.trimmingCharacters(in: .whitespaces)
+        let wanted = source == .mt5 ? trimmed : trimmed?.uppercased()
         let target = (wanted?.isEmpty ?? true) ? nil : wanted
         comparisonTask?.cancel()
         comparisonCandles = []
@@ -141,6 +151,9 @@ final class LiveMarket {
                     case .oanda:
                         guard let client = OandaSettings.client() else { return }
                         bars = try await client.fetchCandles(instrument: target, interval: interval, count: count).map(\.candle)
+                    case .mt5:
+                        guard let client = RemoteBotSettings.client() else { return }
+                        bars = try await client.mt5Candles(symbol: target, interval: interval, count: count)
                     }
                     guard let self, !Task.isCancelled, self.comparisonSymbol == target else { return }
                     self.mergeComparison(bars)
@@ -197,7 +210,8 @@ final class LiveMarket {
 
     func select(source: LiveSource? = nil, symbol: String? = nil, interval: BinanceClient.Interval? = nil) {
         let newSource = source ?? self.source
-        let newSymbol = symbol?.uppercased().trimmingCharacters(in: .whitespaces) ?? self.symbol
+        let trimmed = symbol?.trimmingCharacters(in: .whitespaces)
+        let newSymbol = (newSource == .mt5 ? trimmed : trimmed?.uppercased()) ?? self.symbol
         let newInterval = interval ?? self.interval
         guard newSource != self.source || newSymbol != self.symbol || newInterval != self.interval,
               !newSymbol.isEmpty else { return }
@@ -233,6 +247,9 @@ final class LiveMarket {
                 guard let client = OandaSettings.client() else { return [] }
                 older = try await client.fetchCandles(instrument: symbol, interval: interval, count: count, to: first.time)
                     .map(\.candle)
+            case .mt5:
+                guard let client = RemoteBotSettings.client() else { return [] }
+                older = try await client.mt5Candles(symbol: symbol, interval: interval, count: count, before: first.time)
             }
         } catch {
             return []
@@ -298,6 +315,22 @@ final class LiveMarket {
                     rescan(alert: false)
                     failures = 0
                     try await poll(client)
+                case .mt5:
+                    needsOandaToken = false
+                    guard let client = RemoteBotSettings.client() else {
+                        throw RemoteBotClient.ServerError(message: "Chưa kết nối máy chủ VPS (Giao dịch → Đăng nhập sàn)")
+                    }
+                    guard !interval.isSeconds else {
+                        throw RemoteBotClient.ServerError(message: "MT5 không có khung giây: chọn 1m trở lên")
+                    }
+                    let history = try await client.mt5Candles(symbol: symbol, interval: interval, count: 1000)
+                    guard !Task.isCancelled else { return }
+                    buffer = LiveCandleBuffer(candles: history, maxCount: LiveMarket.maxBars)
+                    lastBarClosed = false
+                    ticker = nil
+                    rescan(alert: false)
+                    failures = 0
+                    try await pollMT5(client)
                 }
             } catch is CancellationError {
                 return
@@ -393,6 +426,37 @@ final class LiveMarket {
             } else if var t = ticker, let close = buffer.candles.last?.close {
                 t.lastPrice = close
                 ticker = t
+            }
+        }
+        throw CancellationError()
+    }
+
+    /// MT5 through the VPS: the last bars are re-read every second, like OANDA.
+    private func pollMT5(_ client: RemoteBotClient) async throws {
+        var newestClosed = closedCandles.last?.time
+        var errors = 0
+        status = .live
+        while !Task.isCancelled {
+            try await Task.sleep(nanoseconds: 1_000_000_000)
+            let latest: [Candle]
+            do {
+                latest = try await client.mt5Candles(symbol: symbol, interval: interval, count: 3)
+                errors = 0
+                status = .live
+            } catch {
+                if Task.isCancelled { throw CancellationError() }
+                errors += 1
+                if errors >= 5 { throw error }
+                continue
+            }
+            guard !Task.isCancelled else { throw CancellationError() }
+            for bar in latest { buffer.apply(bar) }
+            lastBarClosed = false
+            if let close = latest.last?.close { onPrice?(symbolKey, close, Date()) }
+            // Every bar before the newest has closed.
+            if latest.count >= 2, latest[latest.count - 2].time != newestClosed {
+                newestClosed = latest[latest.count - 2].time
+                rescan(alert: true)
             }
         }
         throw CancellationError()

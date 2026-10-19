@@ -28,6 +28,10 @@ struct WatchItem: Codable, Hashable, Identifiable {
 
     /// Normalises what the user typed: upper case, OANDA names as "XAU_USD".
     static func clean(_ text: String, source: LiveSource) -> String {
+        // MT5 names keep their case and broker suffixes: XAUUSDm, XAUUSD.r, #US30.
+        if source == .mt5 {
+            return text.filter { $0.isLetter || $0.isNumber || "._#-+".contains($0) }
+        }
         let letters = text.uppercased().filter { $0.isLetter || $0.isNumber || $0 == "_" }
         guard source == .oanda else { return letters.replacingOccurrences(of: "_", with: "") }
         if letters.contains("_") { return letters }
@@ -120,12 +124,16 @@ struct AddSymbolView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var source = LiveSource.binanceFutures
     @State private var text = ""
+    /// Symbols of the MT5 account on the VPS matching `text`.
+    @State private var mt5Results: [MT5Symbol] = []
+    @State private var mt5Error: String?
 
     private var suggestions: [String] {
         switch source {
         case .binanceFutures: return ["XAUUSDT", "XAGUSDT", "BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]
         case .binance: return LiveMarket.popularSymbols
         case .oanda: return OandaClient.instruments
+        case .mt5: return ["XAUUSDm", "XAGUSDm", "EURUSDm", "GBPUSDm", "USTECm", "US30m", "BTCUSDm"]
         }
     }
 
@@ -137,12 +145,34 @@ struct AddSymbolView: View {
                         Text("Binance Futures (vàng, bạc)").tag(LiveSource.binanceFutures)
                         Text("Binance (crypto)").tag(LiveSource.binance)
                         Text("OANDA (cần token)").tag(LiveSource.oanda)
+                        Text("MT5 qua VPS (Exness, sàn khác)").tag(LiveSource.mt5)
                     }
-                    TextField(source == .oanda ? "VD: XAUUSD, EURUSD" : "VD: XAUUSDT, BTCUSDT", text: $text)
+                    TextField(source == .oanda ? "VD: XAUUSD, EURUSD" : (source == .mt5 ? "VD: XAUUSDm, US30m" : "VD: XAUUSDT, BTCUSDT"),
+                              text: $text)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
                     Button("Thêm \(WatchItem.clean(text, source: source))") { add(text) }
                         .disabled(WatchItem.clean(text, source: source).isEmpty)
+                }
+                if source == .mt5 {
+                    Section {
+                        if let mt5Error {
+                            Text(mt5Error).font(.footnote).foregroundColor(.orange)
+                        }
+                        ForEach(mt5Results) { item in
+                            Button { add(item.name) } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(item.name).foregroundColor(.primary)
+                                    Text(item.description.isEmpty ? item.path : item.description)
+                                        .font(.caption).foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    } header: {
+                        Text("Mã trên tài khoản MT5 của bạn")
+                    } footer: {
+                        Text("Lấy từ MT5 đang đăng nhập trên VPS (Giao dịch → Đăng nhập sàn). Tên mã phân biệt hoa/thường, ví dụ Exness Standard dùng đuôi m: XAUUSDm.")
+                    }
                 }
                 Section("Gợi ý") {
                     ForEach(suggestions, id: \.self) { symbol in
@@ -154,7 +184,26 @@ struct AddSymbolView: View {
             }
             .navigationTitle("Thêm mã")
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: "\(source.rawValue)|\(text)") { await searchMT5() }
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Huỷ") { dismiss() } } }
+        }
+    }
+
+    private func searchMT5() async {
+        guard source == .mt5 else { return }
+        guard let client = RemoteBotSettings.client() else {
+            mt5Error = "Chưa kết nối máy chủ VPS: vào Giao dịch → Đăng nhập sàn."
+            mt5Results = []
+            return
+        }
+        // Wait for typing to pause.
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        guard !Task.isCancelled else { return }
+        do {
+            mt5Results = try await client.mt5Symbols(query: text)
+            mt5Error = mt5Results.isEmpty ? "Không tìm thấy mã nào" : nil
+        } catch {
+            if !Task.isCancelled { mt5Error = error.localizedDescription }
         }
     }
 
