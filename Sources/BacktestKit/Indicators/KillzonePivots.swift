@@ -81,6 +81,8 @@ public enum KillzonePivots {
         public var showPivotLabels = true
         public var pivotExtension = PivotExtension.untilMitigated
         public var showMitigated = true
+        /// Draw the high/low of a session that is still open, moving with price until it closes.
+        public var livePivots = true
         public var showMidpoints = false
 
         public var opens: [TimeMark] = [
@@ -161,6 +163,7 @@ public enum KillzonePivots {
             showPivotLabels = try c.decodeIfPresent(Bool.self, forKey: .showPivotLabels) ?? d.showPivotLabels
             pivotExtension = try c.decodeIfPresent(PivotExtension.self, forKey: .pivotExtension) ?? d.pivotExtension
             showMitigated = try c.decodeIfPresent(Bool.self, forKey: .showMitigated) ?? d.showMitigated
+            livePivots = try c.decodeIfPresent(Bool.self, forKey: .livePivots) ?? d.livePivots
             showMidpoints = try c.decodeIfPresent(Bool.self, forKey: .showMidpoints) ?? d.showMidpoints
             opens = try c.decodeIfPresent([TimeMark].self, forKey: .opens) ?? d.opens
             timestamps = try c.decodeIfPresent([TimeMark].self, forKey: .timestamps) ?? d.timestamps
@@ -321,9 +324,22 @@ public enum KillzonePivots {
                 if config.showBoxes {
                     output.boxes.append(Box(session: s, range: window, high: high, low: low))
                 }
-                // Pivots are projected once the session has closed.
+                // Pivots are fixed once the session has closed; while it is open
+                // they can follow its running high/low.
                 let closed = window.upperBound < n - 1
-                guard closed else { continue }
+                guard closed else {
+                    if config.showPivots && config.livePivots {
+                        output.levels.append(Level(kind: .pivotHigh(session: s), price: high, start: highIndex, end: nil,
+                                                   label: session.highLabel, mitigated: false))
+                        output.levels.append(Level(kind: .pivotLow(session: s), price: low, start: lowIndex, end: nil,
+                                                   label: session.lowLabel, mitigated: false))
+                    }
+                    if config.showMidpoints && config.livePivots {
+                        output.levels.append(Level(kind: .midpoint(session: s), price: (high + low) / 2, start: window.lowerBound,
+                                                   end: window.upperBound, label: "", mitigated: false))
+                    }
+                    continue
+                }
                 if config.showPivots {
                     for isHigh in [true, false] {
                         let price = isHigh ? high : low

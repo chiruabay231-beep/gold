@@ -42,6 +42,23 @@ final class KillzonePivotsTests: XCTestCase {
             .levels.first { $0.kind == .pivotHigh(session: 1) && $0.price == 110 })
     }
 
+    func testLivePivotsFollowAnOpenSession() {
+        // Bars up to 03:15: London (02:00–05:00) is still open.
+        let data = Array(candles { c in c[12].high = 110 }.prefix(14))
+        let output = KillzonePivots.compute(candles: data, barInterval: 900, config: KillzonePivots.Config())
+        let live = output.levels.first { $0.kind == .pivotHigh(session: 1) }
+        XCTAssertEqual(live?.price, 110)
+        XCTAssertEqual(live?.start, 12)
+        XCTAssertNil(live?.end)
+        XCTAssertEqual(live?.label, "LO.H")
+        XCTAssertNotNil(output.levels.first { $0.kind == .pivotLow(session: 1) })
+
+        var off = KillzonePivots.Config()
+        off.livePivots = false
+        XCTAssertNil(KillzonePivots.compute(candles: data, barInterval: 900, config: off)
+            .levels.first { $0.kind == .pivotHigh(session: 1) })
+    }
+
     func testOpensCutoffStampsAndLimit() {
         let data = candles { c in c[96].open = 105 }   // Tuesday 00:00
         var config = KillzonePivots.Config()

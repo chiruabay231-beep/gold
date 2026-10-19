@@ -212,6 +212,7 @@ struct KillzonePivotsSettingsView: View {
         Section {
             Toggle("Hiện pivot (đỉnh/đáy phiên)", isOn: $settings.config.showPivots)
             Toggle("Nhãn pivot (AS.H, LO.L…)", isOn: $settings.config.showPivotLabels)
+            Toggle("Hiện đỉnh/đáy khi phiên đang chạy", isOn: $settings.config.livePivots)
             Picker("Kéo dài", selection: $settings.config.pivotExtension) {
                 Text("Đến khi bị phá").tag(KillzonePivots.PivotExtension.untilMitigated)
                 Text("Qua cả điểm bị phá").tag(KillzonePivots.PivotExtension.pastMitigation)
