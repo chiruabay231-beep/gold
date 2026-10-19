@@ -11,6 +11,10 @@ struct LiveView: View {
     @Environment(BotController.self) private var bot
     @Environment(NewsStore.self) private var news
     @AppStorage("news.vietnamese") private var newsVietnamese = false
+    /// Split view: this chart and the correlated market (gold / silver), with SMT on both.
+    @AppStorage("live.compare") private var compareMode = false
+    @State private var comparisonCache = KillzonePivotsCache()
+    @State private var comparisonPriceRange: ClosedRange<Double>?
     @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("live.theme") private var themeName = "tradingView"
@@ -70,7 +74,7 @@ struct LiveView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            chartPanel
+            charts
             bottomBar
         }
         .background(theme.background.ignoresSafeArea())
@@ -103,8 +107,8 @@ struct LiveView: View {
                 try? await Task.sleep(nanoseconds: 15 * 60 * 1_000_000_000)
             }
         }
-        .task(id: "\(market.symbolKey)|\(market.interval.rawValue)|\(smtTarget ?? "")") {
-            market.setComparison(symbol: smtTarget)
+        .task(id: "\(market.symbolKey)|\(market.interval.rawValue)|\(compareTarget ?? "")") {
+            market.setComparison(symbol: compareTarget)
         }
         .sheet(isPresented: $showAutoStopSettings) { AutoStopSettingsView() }
         .alert("Kết quả replay", isPresented: Binding(get: { replaySummary != nil }, set: { if !$0 { replaySummary = nil } })) {
@@ -175,7 +179,7 @@ struct LiveView: View {
         .fullScreenCover(isPresented: $fullScreen) {
             FullScreenChart(title: "\(Self.displayName(market.symbol)) · \(Self.label(market.interval))", theme: theme,
                             onClose: { fullScreen = false }) {
-                chartPanel
+                charts
             }
         }
     }
@@ -338,23 +342,112 @@ struct LiveView: View {
 
     private var killzoneSettings: KillzonePivotsSettings { killzoneCache.settings(json: killzonePivotsJSON) }
 
-    /// Market whose bars are loaded for SMT, when the layer and SMT are on.
-    private var smtTarget: String? {
-        let settings = killzoneSettings
-        guard showKillzonePivots, settings.config.showSMT else { return nil }
-        let custom = settings.smtSymbol.trimmingCharacters(in: .whitespaces)
+    /// Market shown beside the chart in compare mode (silver for gold, or the SMT symbol set in the indicator).
+    private var compareTarget: String? {
+        guard compareMode else { return nil }
+        let custom = killzoneSettings.smtSymbol.trimmingCharacters(in: .whitespaces)
         return custom.isEmpty ? market.defaultComparisonSymbol : custom
+    }
+
+    /// SMT is only drawn while the two markets are side by side.
+    private var smtComparison: [Candle] { compareMode ? comparisonChartCandles : [] }
+
+    /// The comparison bars, cut at the replayed bar so replay shows no future.
+    private var comparisonChartCandles: [Candle] {
+        guard replay.isActive, let last = chartCandles.last?.time else { return market.comparisonCandles }
+        return market.comparisonCandles.filter { $0.time <= last }
     }
 
     private var killzoneLayer: KillzonePivotsLayer {
         killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
-                            settings: killzoneSettings, enabled: showKillzonePivots, comparison: market.comparisonCandles)
+                            settings: killzoneSettings, enabled: showKillzonePivots, comparison: smtComparison)
+    }
+
+    /// One chart, or in compare mode the two markets stacked (side by side in landscape).
+    @ViewBuilder
+    private var charts: some View {
+        if compareMode {
+            GeometryReader { geometry in
+                let wide = geometry.size.width > geometry.size.height * 1.2
+                let layout = wide ? AnyLayout(HStackLayout(spacing: 1)) : AnyLayout(VStackLayout(spacing: 1))
+                layout {
+                    chartPanel
+                    comparisonPanel
+                }
+                .background(theme.grid)
+            }
+        } else {
+            chartPanel
+        }
+    }
+
+    /// Scroll and zoom follow the main chart; the price axis is its own.
+    private var comparisonViewport: Binding<ChartViewport> {
+        Binding(get: {
+            var shared = viewport
+            shared.manualPriceRange = comparisonPriceRange
+            return shared
+        }, set: { new in
+            if new.visibleCount != viewport.visibleCount { viewport.visibleCount = new.visibleCount }
+            if new.rightOffset != viewport.rightOffset { viewport.rightOffset = new.rightOffset }
+            comparisonPriceRange = new.manualPriceRange
+        })
+    }
+
+    private var comparisonPanel: some View {
+        let candles = comparisonChartCandles
+        let layer = comparisonCache.layer(candles: candles, barInterval: market.interval.seconds, settings: killzoneSettings,
+                                          enabled: showKillzonePivots, comparison: chartCandles)
+        let name = market.comparisonSymbol.map { Self.displayName($0) } ?? "—"
+        return ZStack(alignment: .topTrailing) {
+            if candles.count > 2 {
+                CandleChart(candles: candles,
+                            showVolume: false,
+                            countdownInterval: replay.isActive ? nil : market.interval.seconds,
+                            theme: theme,
+                            sessionBoxes: layer.boxes,
+                            segments: layer.segments,
+                            verticalLines: layer.verticalLines,
+                            notes: layer.notes,
+                            timeEvents: replay.isActive ? [] : newsTimeEvents,
+                            candleStyle: CandleStyle(rawValue: candleStyle) ?? .candles,
+                            candleColors: CandleColors.decode(candleColorsJSON),
+                            timeZone: ChartTimeZones.zone(timeZoneID),
+                            viewport: comparisonViewport)
+            } else {
+                VStack(spacing: 8) {
+                    if let error = market.comparisonError {
+                        Text(error).foregroundColor(theme.text)
+                    } else if market.comparisonSymbol == nil {
+                        Text("Không có mã so sánh cho \(Self.displayName(market.symbol)).\nChọn Binance Futures XAUUSDT hoặc OANDA XAU_USD, hoặc nhập mã trong cài đặt Killzones → SMT.")
+                            .multilineTextAlignment(.center)
+                            .foregroundColor(theme.text)
+                    } else {
+                        ProgressView()
+                        Text("Đang tải \(name)…").foregroundColor(theme.text)
+                    }
+                }
+                .font(.footnote)
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(theme.background)
+            }
+            Text(name)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(theme.primaryText)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Capsule().fill(theme.grid.opacity(0.9)))
+                .padding(.top, 6)
+                .padding(.trailing, 72)
+                .allowsHitTesting(false)
+        }
     }
 
     private var chartPanel: some View {
         let settings = killzoneSettings
         let layer = killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
-                                        settings: settings, enabled: showKillzonePivots, comparison: market.comparisonCandles)
+                                        settings: settings, enabled: showKillzonePivots, comparison: smtComparison)
         return ZStack(alignment: .trailing) {
             CandleChart(candles: chartCandles,
                         overlays: overlays,
@@ -803,8 +896,9 @@ struct LiveView: View {
     // MARK: - Bottom tool bar
 
     private var bottomBar: some View {
-        HStack(spacing: 0) {
-            sessionInfo
+        HStack(spacing: 6) {
+            compareButton
+            newsInfo
             Spacer(minLength: 4)
             toolbarButton("backward.end.alt", active: replay.isActive) { toggleReplay() }
             toolbarButton("pencil.tip", active: showDrawingBar) {
@@ -861,42 +955,44 @@ struct LiveView: View {
         return formatter.string(from: date)
     }
 
-    /// Current or next killzone with a countdown, and the next red news of the day.
-    private var sessionInfo: some View {
-        TimelineView(.periodic(from: .now, by: 30)) { context in
-            let now = context.date
-            let settings = killzoneSettings
-            let status = KillzoneStatus(config: settings.config, now: now)
-            let nextNews = todaysRedNews.first { $0.time > now }
-            Button { if nextNews != nil { store.selectedTab = .news } } label: {
-                VStack(alignment: .leading, spacing: 2) {
-                    if let status {
-                        HStack(spacing: 5) {
-                            Circle().fill(settings.sessionColor(status.session)).frame(width: 7, height: 7)
-                            Text(status.active
-                                 ? "\(status.name) · còn \(Self.duration(status.seconds))"
-                                 : "\(status.name) \(clockText(now.addingTimeInterval(status.seconds))) · sau \(Self.duration(status.seconds))")
-                                .foregroundColor(status.active ? theme.primaryText : theme.text)
-                        }
-                    }
-                    if let nextNews {
-                        HStack(spacing: 5) {
-                            Circle().fill(Self.newsRed).frame(width: 7, height: 7)
-                            Text("\(Self.shortNewsTitle(nextNews.events.first?.title ?? "")) \(clockText(nextNews.time))")
-                                .foregroundColor(theme.primaryText)
-                        }
-                    } else if status == nil || !news.events.isEmpty {
-                        Text(news.events.isEmpty ? "Đang tải lịch tin…" : "Hôm nay không có tin đỏ")
-                            .foregroundColor(theme.text)
-                    }
-                }
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                .lineLimit(1)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(RoundedRectangle(cornerRadius: 8).fill(theme.grid.opacity(theme.isLight ? 0.5 : 0.8)))
+    /// Splits the chart: this market and the correlated one (XAU / XAG), SMT on both.
+    private var compareButton: some View {
+        Button {
+            compareMode.toggle()
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: compareMode ? "rectangle.split.1x2.fill" : "rectangle.split.1x2")
+                Text("So sánh")
             }
-            .buttonStyle(.plain)
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundColor(compareMode ? .white : theme.primaryText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .background(RoundedRectangle(cornerRadius: 8).fill(compareMode ? theme.accent : theme.grid.opacity(theme.isLight ? 0.5 : 0.8)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// The next red news of the day; tap for the News tab.
+    @ViewBuilder
+    private var newsInfo: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            if let next = todaysRedNews.first(where: { $0.time > context.date }) {
+                Button { store.selectedTab = .news } label: {
+                    HStack(spacing: 5) {
+                        Circle().fill(Self.newsRed).frame(width: 7, height: 7)
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text(Self.shortNewsTitle(next.events.first?.title ?? ""))
+                                .foregroundColor(theme.primaryText)
+                            Text("\(clockText(next.time)) · sau \(Self.duration(next.time.timeIntervalSince(context.date)))")
+                                .foregroundColor(theme.text)
+                        }
+                    }
+                    .font(.system(size: 10, weight: .medium).monospacedDigit())
+                    .lineLimit(1)
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 

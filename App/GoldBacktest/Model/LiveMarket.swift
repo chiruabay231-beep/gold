@@ -94,8 +94,8 @@ final class LiveMarket {
     private(set) var comparisonCandles: [Candle] = []
     /// Symbol the comparison bars belong to; nil = none loaded.
     private(set) var comparisonSymbol: String?
+    private(set) var comparisonError: String?
     @ObservationIgnored private var comparisonTask: Task<Void, Never>?
-    @ObservationIgnored private var lastComparisonRefresh = Date.distantPast
 
     /// Correlated market for SMT on this chart: silver for gold and gold for silver.
     var defaultComparisonSymbol: String? {
@@ -112,40 +112,46 @@ final class LiveMarket {
         }
     }
 
-    /// Loads (or refreshes) the comparison market's bars; nil clears them.
+    /// Shows `requested` as the comparison market: loads its history, then
+    /// keeps its last bars fresh every 2 seconds while it stays selected.
+    /// nil stops it and clears the bars.
     func setComparison(symbol requested: String?) {
         let wanted = requested?.trimmingCharacters(in: .whitespaces).uppercased()
         let target = (wanted?.isEmpty ?? true) ? nil : wanted
-        guard target != comparisonSymbol || comparisonCandles.isEmpty || Date().timeIntervalSince(lastComparisonRefresh) > 20 else { return }
         comparisonTask?.cancel()
+        comparisonCandles = []
+        comparisonError = nil
         guard let target, target != symbol, !interval.isSeconds else {
             comparisonSymbol = nil
-            comparisonCandles = []
+            if target != nil, interval.isSeconds { comparisonError = "So sánh không dùng cho khung giây" }
             return
         }
-        if target != comparisonSymbol { comparisonCandles = [] }
         comparisonSymbol = target
-        lastComparisonRefresh = Date()
         let source = self.source, interval = self.interval, market = binanceMarket
-        let count = comparisonCandles.isEmpty ? 1000 : 5
         comparisonTask = Task { [weak self] in
-            let bars: [Candle]
-            do {
-                switch source {
-                case .binance, .binanceFutures:
-                    bars = try await BinanceClient.withFallback(market: market) { client in
-                        try await client.fetchCandles(symbol: target, interval: interval, count: count)
+            var count = 1000
+            while !Task.isCancelled {
+                do {
+                    let bars: [Candle]
+                    switch source {
+                    case .binance, .binanceFutures:
+                        bars = try await BinanceClient.withFallback(market: market) { client in
+                            try await client.fetchCandles(symbol: target, interval: interval, count: count)
+                        }
+                    case .oanda:
+                        guard let client = OandaSettings.client() else { return }
+                        bars = try await client.fetchCandles(instrument: target, interval: interval, count: count).map(\.candle)
                     }
-                case .oanda:
-                    guard let client = OandaSettings.client() else { return }
-                    bars = try await client.fetchCandles(instrument: target, interval: interval, count: count).map(\.candle)
+                    guard let self, !Task.isCancelled, self.comparisonSymbol == target else { return }
+                    self.mergeComparison(bars)
+                    self.comparisonError = nil
+                    count = 3
+                } catch {
+                    if Task.isCancelled { return }
+                    self?.comparisonError = count > 3 ? "Không tải được \(target)" : nil
                 }
-            } catch {
-                return
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
             }
-            guard let self, !Task.isCancelled, self.comparisonSymbol == target, self.interval == interval,
-                  self.source == source else { return }
-            self.mergeComparison(bars)
         }
     }
 
@@ -250,9 +256,6 @@ final class LiveMarket {
         signals = []
         plots = []
         alertedSignalIDs = []
-        comparisonTask?.cancel()
-        comparisonSymbol = nil
-        comparisonCandles = []
         let store = self.store
         stop()
         if let store { start(store: store) }
@@ -474,8 +477,6 @@ final class LiveMarket {
 
     func rescan(alert: Bool) {
         if alert { onBarClose?(symbolKey, closedCandles) }
-        // New bar: bring the SMT market up to date too.
-        if alert, let comparisonSymbol { setComparison(symbol: comparisonSymbol) }
         guard let store, let id = strategyID, let strategy = store.strategies.first(where: { $0.id == id }) else {
             signals = []
             plots = []

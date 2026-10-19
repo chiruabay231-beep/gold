@@ -191,7 +191,7 @@ struct KillzonePivotsSettingsView: View {
         } header: {
             Text("SMT divergence")
         } footer: {
-            Text("So 2 đỉnh (hoặc 2 đáy) liên tiếp với thị trường liên quan cùng khung: vàng tạo đỉnh cao hơn mà bạc không (SMT giảm), hoặc vàng tạo đáy thấp hơn mà bạc không (SMT tăng). Tự động: XAUUSDT ↔ XAGUSDT (Binance Futures), XAU_USD ↔ XAG_USD (OANDA), BTC ↔ ETH. Mã phải cùng nguồn dữ liệu với biểu đồ; không dùng cho khung giây.")
+            Text("So 2 đỉnh (hoặc 2 đáy) liên tiếp với thị trường liên quan cùng khung: vàng tạo đỉnh cao hơn mà bạc không (SMT giảm), hoặc vàng tạo đáy thấp hơn mà bạc không (SMT tăng). Tự động: XAUUSDT ↔ XAGUSDT (Binance Futures), XAU_USD ↔ XAG_USD (OANDA), BTC ↔ ETH. SMT chỉ hiện khi bấm nút \"So sánh\" dưới biểu đồ (chia 2 màn hình), trên cả 2 mã. Mã phải cùng nguồn dữ liệu với biểu đồ; không dùng cho khung giây.")
         }
     }
 
