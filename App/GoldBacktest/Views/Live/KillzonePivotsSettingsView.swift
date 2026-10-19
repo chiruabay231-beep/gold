@@ -54,7 +54,7 @@ struct KillzonePivotsSettingsView: View {
     // MARK: - Sections
 
     private var general: some View {
-        Section("Chung") {
+        Section {
             Picker("Múi giờ", selection: $settings.config.timeZoneID) {
                 ForEach(Self.zones, id: \.id) { Text($0.title).tag($0.id) }
             }
@@ -64,6 +64,10 @@ struct KillzonePivotsSettingsView: View {
                 }
             }
             Stepper("Số ngày hiển thị: \(settings.config.maxDays)", value: $settings.config.maxDays, in: 1...20)
+        } header: {
+            Text("Chung")
+        } footer: {
+            Text("Giờ các phiên nhập theo múi giờ ở trên (ICT dùng giờ New York); dòng \"VN\" là giờ Việt Nam tương ứng hôm nay. Trục thời gian của biểu đồ theo múi giờ trong Cài đặt biểu đồ. Phiên chỉ vẽ trên khung ≤ giới hạn ở trên, và cần màu khác màu nền biểu đồ.")
         }
     }
 
@@ -90,9 +94,15 @@ struct KillzonePivotsSettingsView: View {
                         Circle().fill(settings.sessionColor(index)).frame(width: 10, height: 10)
                         Text(settings.config.sessions[index].name)
                         Spacer()
-                        Text("\(Self.clock(settings.config.sessions[index].start)) – \(Self.clock(settings.config.sessions[index].end))")
-                            .font(.footnote.monospacedDigit())
-                            .foregroundColor(.secondary)
+                        VStack(alignment: .trailing, spacing: 1) {
+                            Text("\(Self.clock(settings.config.sessions[index].start)) – \(Self.clock(settings.config.sessions[index].end))")
+                                .font(.footnote.monospacedDigit())
+                                .foregroundColor(.secondary)
+                            if let vn = Self.vietnamRange(settings.config.sessions[index].start, settings.config.sessions[index].end,
+                                                          zoneID: settings.config.timeZoneID) {
+                                Text("VN \(vn)").font(.caption2.monospacedDigit()).foregroundColor(.secondary)
+                            }
+                        }
                     }
                 }
             }
@@ -321,6 +331,16 @@ struct KillzonePivotsSettingsView: View {
         Picker(title, selection: selection) {
             ForEach(LineStyle.allCases, id: \.self) { Text($0.title).tag($0) }
         }
+    }
+
+    /// The same hours in Vietnam time today (the gap changes with US daylight saving).
+    static func vietnamRange(_ start: Double, _ end: Double, zoneID: String) -> String? {
+        guard let vietnam = TimeZone(identifier: "Asia/Ho_Chi_Minh") else { return nil }
+        let zone = TimeZone(identifier: zoneID) ?? TimeZone(identifier: "America/New_York")!
+        let now = Date()
+        let shift = Double(vietnam.secondsFromGMT(for: now) - zone.secondsFromGMT(for: now)) / 3600
+        guard shift != 0 else { return nil }
+        return "\(clock(start + shift + 48)) – \(clock(end + shift + 48))"
     }
 
     static func clock(_ hour: Double) -> String {
