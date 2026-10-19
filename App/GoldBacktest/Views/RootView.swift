@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootView: View {
     @Environment(AppStore.self) private var store
+    @Environment(NewsStore.self) private var news
 
     var body: some View {
         @Bindable var store = store
@@ -22,6 +23,8 @@ struct RootView: View {
                 .tabItem { Label("Backtest", systemImage: "play.circle") }
                 .tag(AppTab.backtest)
         }
+        // Watches gold for sudden moves and their news while the app runs.
+        .task { await news.monitor() }
         .alert("Lỗi", isPresented: Binding(
             get: { store.lastError != nil },
             set: { if !$0 { store.lastError = nil } })

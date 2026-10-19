@@ -50,9 +50,31 @@ public enum MarketNews {
     /// Google News search for gold / XAUUSD headlines.
     public static func headlinesURL(vietnamese: Bool) -> URL {
         let query = vietnamese ? "giá vàng thế giới OR XAUUSD" : "gold price OR XAUUSD OR Fed"
+        return googleNewsURL(query: query + " when:2d", vietnamese: vietnamese)
+    }
+
+    /// Searches for news that moves gold besides the calendar: geopolitics,
+    /// tariffs, the Fed, US politics, the dollar and market stress (last day).
+    public static func breakingURLs(vietnamese: Bool) -> [URL] {
+        var queries = [
+            "gold OR XAUUSD OR bullion when:1d",
+            "Fed OR Powell OR tariff OR tariffs OR sanctions OR Trump when:1d",
+            "war OR missile OR attack OR Iran OR Israel OR Russia OR Ukraine OR Taiwan OR ceasefire when:1d",
+            "dollar OR treasury yields OR sell-off OR crisis when:1d",
+        ].map { googleNewsURL(query: $0, vietnamese: false) }
+        if vietnamese {
+            queries += [
+                "giá vàng when:1d",
+                "chiến sự OR xung đột OR thuế quan OR Fed OR lãi suất when:1d",
+            ].map { googleNewsURL(query: $0, vietnamese: true) }
+        }
+        return queries
+    }
+
+    static func googleNewsURL(query: String, vietnamese: Bool) -> URL {
         var components = URLComponents(string: "https://news.google.com/rss/search")!
         components.queryItems = [
-            URLQueryItem(name: "q", value: query + " when:2d"),
+            URLQueryItem(name: "q", value: query),
             URLQueryItem(name: "hl", value: vietnamese ? "vi" : "en-US"),
             URLQueryItem(name: "gl", value: vietnamese ? "VN" : "US"),
             URLQueryItem(name: "ceid", value: vietnamese ? "VN:vi" : "US:en"),

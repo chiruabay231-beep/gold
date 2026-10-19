@@ -7,11 +7,12 @@ struct NewsView: View {
     @Environment(NewsStore.self) private var news
 
     enum Page: String, CaseIterable, Identifiable {
-        case calendar = "Lịch kinh tế", headlines = "Tin vàng"
+        case moves = "Biến động", calendar = "Lịch kinh tế", headlines = "Tin vàng"
         var id: String { rawValue }
     }
 
-    @State private var page = Page.calendar
+    @AppStorage("news.page") private var page = Page.moves
+    @AppStorage(NewsStore.moveAlertsKey) private var moveAlerts = false
     @AppStorage("news.redOnly") private var redOnly = false
     @AppStorage("news.usdOnly") private var usdOnly = true
     @AppStorage("news.vietnamese") private var vietnamese = false
@@ -31,13 +32,21 @@ struct NewsView: View {
                 Section { Label(error, systemImage: "wifi.exclamationmark").foregroundColor(.orange) }
             }
             switch page {
+            case .moves: movesPage
             case .calendar: calendar
             case .headlines: headlineList
             }
         }
         .navigationTitle("Tin tức")
-        .refreshable { await news.refresh(vietnamese: vietnamese, force: true) }
-        .task { await news.refresh(vietnamese: vietnamese) }
+        .refreshable {
+            await news.refresh(vietnamese: vietnamese, force: true)
+            await news.refreshMoves(vietnamese: vietnamese, force: true)
+        }
+        .task {
+            await news.refresh(vietnamese: vietnamese)
+            await news.refreshMoves(vietnamese: vietnamese)
+        }
+        .onChange(of: moveAlerts) { _, on in if on { LiveMarket.requestNotificationPermission() } }
         .onChange(of: vietnamese) { _, value in Task { await news.refresh(vietnamese: value, force: true) } }
         .onChange(of: remind) { _, on in
             if on {
@@ -71,6 +80,97 @@ struct NewsView: View {
                         .foregroundColor(.secondary)
                 }
                 Toggle("Báo trước tin đỏ 15 phút", isOn: $remind)
+            }
+        }
+    }
+
+    // MARK: - Sudden moves and why
+
+    @ViewBuilder
+    private var movesPage: some View {
+        Section {
+            if let error = news.movesError {
+                Label(error, systemImage: "exclamationmark.triangle").foregroundColor(.orange).font(.footnote)
+            }
+            if news.moves.isEmpty {
+                Text(news.movesUpdatedAt == nil ? "Đang dò biến động…" : "12 giờ qua không có cú tăng/giảm đột ngột bất thường.")
+                    .foregroundColor(.secondary)
+            }
+            ForEach(news.moves) { move in moveRow(move) }
+            Toggle("Thông báo khi vàng chạy mạnh", isOn: $moveAlerts)
+        } header: {
+            Text("Biến động mạnh XAUUSD · 12 giờ qua")
+        } footer: {
+            Text("Dò mỗi 2 phút trên nến 1 phút XAUUSDT (Binance Futures): cú chạy trong vài phút lớn gấp 4 lần bình thường và trên 0,2%. Lý do ghép từ lịch kinh tế và tin tức quanh thời điểm đó (Google News). Đây là gợi ý tự động: tin trên báo thường chậm vài phút đến cả giờ, nên lý do có thể hiện sau.\(news.movesUpdatedAt.map { " Cập nhật " + $0.formatted(date: .omitted, time: .shortened) + "." } ?? "")")
+        }
+        Section {
+            let tagged = news.breaking.filter { $0.category != nil }
+            if tagged.isEmpty {
+                Text(news.movesUpdatedAt == nil ? "Đang tải…" : "Chưa có tin nổi bật.").foregroundColor(.secondary)
+            }
+            ForEach(tagged.prefix(60)) { item in headlineRow(item.headline, category: item.category) }
+        } header: {
+            Text("Tin nóng ảnh hưởng vàng · 24 giờ")
+        } footer: {
+            Text("⚔️ địa chính trị/chiến sự · 🚢 thuế quan/trừng phạt · 🏦 Fed, lãi suất · 📊 số liệu kinh tế · 🏛️ chính trị Mỹ · 💵 USD, lợi suất · 📉 bán tháo, khủng hoảng · 🪙 dòng tiền vàng.")
+        }
+    }
+
+    private func moveRow(_ move: MoveExplanation) -> some View {
+        let spike = move.spike
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: spike.isUp ? "arrow.up.right" : "arrow.down.right")
+                    .foregroundColor(spike.isUp ? .green : .red)
+                Text(String(format: "%+.1f$ (%+.2f%%)", spike.change, spike.percent))
+                    .font(.headline.monospacedDigit())
+                    .foregroundColor(spike.isUp ? .green : .red)
+                Spacer()
+                Text("\(spike.start.formatted(date: .omitted, time: .shortened))–\(spike.end.formatted(date: .omitted, time: .shortened))")
+                    .font(.caption.monospacedDigit())
+                    .foregroundColor(.secondary)
+            }
+            Text(NewsStore.causeText(move))
+                .font(.subheadline.weight(.medium))
+                .foregroundColor(move.cause == nil ? .secondary : .primary)
+            ForEach(move.headlines.dropFirst(move.events.isEmpty ? 1 : 0).prefix(3)) { item in
+                headlineRow(item.headline, category: item.category, compact: true)
+            }
+            if move.events.isEmpty, let top = move.headlines.first, let url = URL(string: top.headline.link) {
+                Link(destination: url) {
+                    Text("\(top.headline.source) · \(top.headline.date.map { $0.formatted(date: .omitted, time: .shortened) } ?? "") · Đọc tin")
+                        .font(.caption)
+                }
+            }
+        }
+        .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private func headlineRow(_ item: NewsHeadline, category: NewsCategory?, compact: Bool = false) -> some View {
+        if let url = URL(string: item.link) {
+            Link(destination: url) {
+                HStack(alignment: .top, spacing: 8) {
+                    if let category {
+                        Text(category.symbol).font(compact ? .caption : .body)
+                    }
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(item.title)
+                            .font(compact ? .caption : .subheadline)
+                            .foregroundColor(.primary)
+                            .multilineTextAlignment(.leading)
+                            .lineLimit(compact ? 2 : 4)
+                        HStack(spacing: 6) {
+                            if let category, !compact { Text(category.title) }
+                            Text(item.source).fontWeight(.semibold)
+                            if let date = item.date {
+                                Text(date.formatted(date: .omitted, time: .shortened))
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                    }
+                }
             }
         }
     }
