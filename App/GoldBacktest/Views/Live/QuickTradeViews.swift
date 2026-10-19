@@ -226,3 +226,47 @@ struct AutoStopSettingsView: View {
         }
     }
 }
+
+/// All timeframes in a grid: tap to switch, tick ☆ to keep it in the row
+/// under the price.
+struct IntervalPicker: View {
+    let current: BinanceClient.Interval
+    let favorites: Set<BinanceClient.Interval>
+    var onSelect: (BinanceClient.Interval) -> Void
+    var onToggleFavorite: (BinanceClient.Interval) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Khung thời gian").font(.headline)
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 4), spacing: 8) {
+                ForEach(LiveMarket.intervals, id: \.self) { interval in
+                    let selected = interval == current
+                    let favorite = favorites.contains(interval)
+                    Button { onSelect(interval) } label: {
+                        Text(LiveView.label(interval))
+                            .font(.system(size: 15, weight: .semibold))
+                            .frame(maxWidth: .infinity, minHeight: 36)
+                            .foregroundColor(selected ? .white : .primary)
+                            .background(selected ? Color.accentColor : Color(.secondarySystemBackground),
+                                        in: RoundedRectangle(cornerRadius: 8))
+                            .overlay(alignment: .topTrailing) {
+                                Button { onToggleFavorite(interval) } label: {
+                                    Image(systemName: favorite ? "star.fill" : "star")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(favorite ? .yellow : .secondary)
+                                        .padding(4)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            Text("Chạm để đổi khung. Bấm ☆ để hiện khung đó ở hàng ngang dưới giá.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .padding(14)
+        .frame(width: 300)
+    }
+}

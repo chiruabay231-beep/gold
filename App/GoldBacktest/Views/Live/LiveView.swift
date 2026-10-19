@@ -44,6 +44,9 @@ struct LiveView: View {
     @State private var replay = ReplaySession()
     @State private var replaySummary: String?
     @AppStorage("live.showTradeButtons") private var showTradeButtons = true
+    /// Timeframes shown in the row under the price; the rest are in the ▾ picker.
+    @AppStorage("live.favoriteIntervals") private var favoriteIntervalsText = "1m,5m,15m,1h,4h,1D"
+    @State private var showIntervalPicker = false
     @State private var showVoiceSettings = false
     /// Position drawing waiting for confirmation before it becomes a demo order.
     @State private var demoOrderDrawing: Drawing?
@@ -315,10 +318,6 @@ struct LiveView: View {
         var names: [String] = []
         if showKillzonePivots { names.append(Self.killzonePivotsName) }
         if showEMA200 { names.append("EMA 200") }
-        if tradesMT5, let state = mt5.state {
-            names.append("💼 Lệnh vào MT5 #\(state.login.map { String($0) } ?? "") \(state.mode == "real" ? "· TIỀN THẬT" : "· demo")"
-                         + (state.tradingEnabled ? "" : " · chưa bật đặt lệnh"))
-        }
         names += selectedIndicators.map(\.title)
         names += customIndicators.errors.map { "⚠︎ \($0)" }
         if bot.isRunning, let strategy = store.strategies.first(where: { $0.id == bot.strategyID }) {
@@ -364,11 +363,11 @@ struct LiveView: View {
                         .frame(width: 30, height: 22)
                         .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.grid, lineWidth: 1))
                 }
-                // Every timeframe, one tap to switch; swipe sideways for the rest.
+                // The chosen timeframes, one tap to switch; ▾ opens all of them.
                 ScrollViewReader { proxy in
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
-                            ForEach(LiveMarket.intervals, id: \.self) { interval in
+                            ForEach(rowIntervals, id: \.self) { interval in
                                 Button { selectInterval(interval) } label: {
                                     Text(Self.label(interval))
                                         .font(.system(size: 13, weight: .semibold))
@@ -386,8 +385,42 @@ struct LiveView: View {
                     }
                     .onAppear { proxy.scrollTo(market.interval, anchor: .center) }
                 }
+                Button { showIntervalPicker = true } label: {
+                    Image(systemName: "chevron.down.square")
+                        .font(.system(size: 18))
+                        .foregroundColor(theme.text)
+                        .frame(width: 30, height: 24)
+                }
+                .accessibilityLabel("Tất cả khung thời gian")
+                .popover(isPresented: $showIntervalPicker) {
+                    IntervalPicker(current: market.interval, favorites: favoriteIntervals,
+                                   onSelect: { interval in
+                                       selectInterval(interval)
+                                       showIntervalPicker = false
+                                   },
+                                   onToggleFavorite: toggleFavorite)
+                        .presentationCompactAdaptation(.popover)
+                }
             }
         }
+    }
+
+    /// Favourite timeframes, in the order of all timeframes.
+    private var favoriteIntervals: Set<BinanceClient.Interval> {
+        let labels = Set(favoriteIntervalsText.split(separator: ",").map(String.init))
+        return Set(LiveMarket.intervals.filter { labels.contains(Self.label($0)) })
+    }
+
+    /// The row: favourites plus the current timeframe.
+    private var rowIntervals: [BinanceClient.Interval] {
+        let favorites = favoriteIntervals
+        return LiveMarket.intervals.filter { favorites.contains($0) || $0 == market.interval }
+    }
+
+    private func toggleFavorite(_ interval: BinanceClient.Interval) {
+        var favorites = favoriteIntervals
+        if favorites.contains(interval) { favorites.remove(interval) } else { favorites.insert(interval) }
+        favoriteIntervalsText = LiveMarket.intervals.filter { favorites.contains($0) }.map(Self.label).joined(separator: ",")
     }
 
 
@@ -1387,7 +1420,9 @@ struct LiveView: View {
         if replay.isActive { endReplay() }
         viewport = ChartViewport()
         selectedDrawingID = nil
-        market.select(source: source, symbol: cleaned)
+        // MT5 has no second bars: fall back to 1m.
+        market.select(source: source, symbol: cleaned,
+                      interval: source == .mt5 && market.interval.isSeconds ? .m1 : nil)
     }
 
     private func open(oanda instrument: String) {

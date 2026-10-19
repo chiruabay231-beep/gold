@@ -114,26 +114,26 @@ Lệnh của bot trên MT5 có magic number `20260` và ghi chú `GoldBot`; bot 
 
 Sau khi cài MT5 trên VPS (mục 6, bước 1):
 
-1. App → **Giao dịch → Đăng nhập sàn**.
-2. Chọn **Exness** (hoặc **Sàn MT5 khác**), nhập **server** (ví dụ `Exness-MT5Trial7`), **số tài khoản** và **mật khẩu**.
+1. App → **Giao dịch → Đăng nhập**. Lần đầu: mục **Máy chủ VPS** ở cuối trang, nhập địa chỉ và mật khẩu máy chủ.
+2. Mục **Thêm tài khoản**: chọn **Exness** (hoặc **Sàn MT5 khác**), nhập **server** (ví dụ `Exness-MT5Trial7`), **số tài khoản** và **mật khẩu** → **Đăng nhập**.
    Mật khẩu investor (chỉ đọc) là đủ để xem giá.
-3. **Mở biểu đồ realtime** → tìm mã (Exness Standard: `XAUUSDm`, `XAGUSDm`, `US30m`…) → biểu đồ Live chạy giá Exness, cập nhật mỗi giây.
-   Mã được thêm vào danh sách mã với nguồn **MT5 (VPS)**.
+3. Tab **Live** → chạm tên mã ở góc trên → **Mở biểu đồ realtime MT5** → tìm mã (Exness Standard: `XAUUSDm`, `XAGUSDm`, `US30m`…)
+   → biểu đồ Live chạy giá Exness, cập nhật mỗi giây. Mã được thêm vào danh sách mã với nguồn **MT5 (VPS)**.
 
-"Ghi nhớ trên VPS" lưu đăng nhập vào `C:\GoldBot\config.json` để tự đăng nhập lại khi VPS khởi động lại.
-"Lưu vào danh sách trên iPhone" giữ tài khoản (mật khẩu trong Keychain) để chạm là đổi tài khoản.
+"Lưu tài khoản" giữ tài khoản trong mục **Tài khoản MT5** (mật khẩu trong Keychain iPhone và trên VPS để tự đăng nhập lại khi VPS khởi động lại).
+Chạm một tài khoản đã lưu để đăng nhập nó trên VPS; vuốt trái để đăng xuất hoặc xoá.
 Đăng xuất trong app sẽ xoá mật khẩu đã lưu trên VPS. Mỗi lúc MT5 trên VPS chỉ đăng nhập một tài khoản.
 Giờ nến được đổi về UTC tự động (nhiều sàn để giờ máy chủ UTC+2/+3).
 
 ## Giao dịch tài khoản Exness từ app
 
 1. Đăng nhập bằng **mật khẩu chính** (investor chỉ xem được giá). Trong MT5 trên VPS bật nút **Algo Trading**.
-2. App → **Giao dịch → Đăng nhập sàn → Giao dịch tài khoản này từ app**: bật **Cho phép đặt lệnh từ app**,
+2. App → **Giao dịch → Đăng nhập → Quyền đặt lệnh**: bật **Cho phép đặt lệnh từ app**,
    đặt **Tối đa … lot mỗi lệnh**. Tài khoản thật cần bật thêm **Cho phép tài khoản THẬT**.
-3. Mở biểu đồ mã MT5 (ví dụ `XAUUSDm`, nguồn **MT5 (VPS)**): nút **BUY/SELL**, lệnh **Limit**, kéo **SL/TP** và **✕**
-   gửi thẳng vào tài khoản Exness. Chú thích trên biểu đồ ghi "💼 Lệnh vào MT5 #… · demo / TIỀN THẬT".
+3. Mở biểu đồ mã MT5 (ví dụ `XAUUSDm`, nguồn **MT5 (VPS)**): nút **BUY/SELL** và bảng lệnh (Limit/Stop, SL, TP, lot),
+   kéo đường **SL/TP** và **✕** gửi thẳng vào tài khoản Exness.
    Tài khoản thật luôn hỏi xác nhận (có thể bỏ hỏi cho phiên đang mở).
-4. Lệnh đang mở, lệnh chờ và lệnh đã đóng 24 giờ cũng có trong trang **Đăng nhập sàn**; khớp lệnh, chạm TP/SL được đọc bằng giọng nói và thông báo.
+4. Lệnh đang mở, lệnh chờ và lệnh đã đóng 24 giờ có trong trang **Giao dịch → Sàn (MT5)**; khớp lệnh, chạm TP/SL được đọc bằng giọng nói và thông báo.
 
 Lệnh đặt tay có magic `20261` (ghi chú `GoldApp`); bot chỉ quản lý lệnh magic `20260` của nó.
 

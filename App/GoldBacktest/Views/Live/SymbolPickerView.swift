@@ -53,10 +53,30 @@ struct SymbolPickerView: View {
     @AppStorage("live.watchlist") private var watchlistJSON = ""
     @State private var items: [WatchItem] = []
     @State private var showAdd = false
+    @State private var showMT5 = false
 
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    Button { showMT5 = true } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "dot.radiowaves.left.and.right")
+                                .font(.title3).foregroundColor(.accentColor)
+                                .frame(width: 30)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Mở biểu đồ realtime MT5").font(.headline).foregroundColor(.primary)
+                                Text(RemoteBotSettings.client() == nil
+                                     ? "Exness / sàn MT5 khác · cần kết nối VPS"
+                                     : "Exness / sàn MT5 khác · tìm mã trên tài khoản")
+                                    .font(.caption).foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.caption).foregroundColor(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                }
                 Section {
                     ForEach(items) { item in
                         Button {
@@ -108,6 +128,16 @@ struct SymbolPickerView: View {
                 AddSymbolView { item in
                     if !items.contains(item) { items.append(item) }
                     save()
+                }
+            }
+            .sheet(isPresented: $showMT5) {
+                MT5SymbolSearchView { symbol in
+                    let item = WatchItem(source: .mt5, symbol: WatchItem.clean(symbol, source: .mt5))
+                    if !items.contains(item) { items.append(item) }
+                    save()
+                    onOpen(item)
+                    // Close the watchlist too once the search sheet has gone.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { dismiss() }
                 }
             }
         }
@@ -171,7 +201,7 @@ struct AddSymbolView: View {
                     } header: {
                         Text("Mã trên tài khoản MT5 của bạn")
                     } footer: {
-                        Text("Lấy từ MT5 đang đăng nhập trên VPS (Giao dịch → Đăng nhập sàn). Tên mã phân biệt hoa/thường, ví dụ Exness Standard dùng đuôi m: XAUUSDm.")
+                        Text("Lấy từ MT5 đang đăng nhập trên VPS (Giao dịch → Đăng nhập). Tên mã phân biệt hoa/thường, ví dụ Exness Standard dùng đuôi m: XAUUSDm.")
                     }
                 }
                 Section("Gợi ý") {
@@ -192,7 +222,7 @@ struct AddSymbolView: View {
     private func searchMT5() async {
         guard source == .mt5 else { return }
         guard let client = RemoteBotSettings.client() else {
-            mt5Error = "Chưa kết nối máy chủ VPS: vào Giao dịch → Đăng nhập sàn."
+            mt5Error = "Chưa kết nối máy chủ VPS: vào Giao dịch → Đăng nhập → Máy chủ VPS."
             mt5Results = []
             return
         }

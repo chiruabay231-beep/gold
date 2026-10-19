@@ -50,7 +50,7 @@ final class LiveMarket {
     /// Bars kept in memory, including older history loaded while scrolling back.
     static let maxBars = 20_000
     static let popularSymbols = ["BTCUSDT", "ETHUSDT", "PAXGUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
-    static let intervals: [BinanceClient.Interval] = [.s5, .s10, .s15, .s30, .m1, .m5, .m15, .h1, .h4, .d1]
+    static let intervals: [BinanceClient.Interval] = [.s5, .s10, .s15, .s30, .m1, .m5, .m15, .m30, .h1, .h4, .d1, .w1]
 
     private(set) var source: LiveSource = .binance
     private(set) var symbol = "PAXGUSDT"
@@ -354,7 +354,7 @@ final class LiveMarket {
                 case .mt5:
                     needsOandaToken = false
                     guard let client = RemoteBotSettings.client() else {
-                        throw RemoteBotClient.ServerError(message: "Chưa kết nối máy chủ VPS (Giao dịch → Đăng nhập sàn)")
+                        throw RemoteBotClient.ServerError(message: "Chưa kết nối máy chủ VPS (Giao dịch → Đăng nhập)")
                     }
                     guard !interval.isSeconds else {
                         throw RemoteBotClient.ServerError(message: "MT5 không có khung giây: chọn 1m trở lên")

@@ -73,7 +73,7 @@ final class MT5Trader {
 
     private func perform(_ action: (RemoteBotClient) async throws -> MT5TradingState) async {
         guard let client = RemoteBotSettings.client() else {
-            lastError = "Chưa kết nối máy chủ VPS (Giao dịch → Đăng nhập sàn)"
+            lastError = "Chưa kết nối máy chủ VPS (Giao dịch → Đăng nhập)"
             return
         }
         busy = true
