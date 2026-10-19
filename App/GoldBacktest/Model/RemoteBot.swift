@@ -194,6 +194,11 @@ struct RemoteBotClient {
         return url
     }
 
+    fileprivate func send(_ path: String, method: String = "GET", body: Data? = nil,
+                          timeout: TimeInterval = 25) async throws -> Data {
+        try await request(path, method: method, body: body, timeout: timeout)
+    }
+
     private func request(_ path: String, method: String = "GET", body: Data? = nil,
                          timeout: TimeInterval = 25) async throws -> Data {
         guard let url = URL(string: baseURL.absoluteString + path) else { throw ServerError(message: "Địa chỉ không hợp lệ") }
@@ -294,6 +299,110 @@ struct RemoteBotClient {
                           volume: r.count > 5 ? r[5] : 0)
         }
     }
+}
+
+extension RemoteBotClient {
+    // MARK: - Trading the MT5 account by hand
+
+    private func post<T: Decodable>(_ path: String, _ object: [String: Any], as type: T.Type) async throws -> T {
+        let body = try JSONSerialization.data(withJSONObject: object)
+        return try JSONDecoder().decode(T.self, from: await send(path, method: "POST", body: body))
+    }
+
+    func mt5Trading(symbol: String? = nil) async throws -> MT5TradingState {
+        let path = symbol.map { "/mt5/trading?symbol=\(Self.queryValue($0))" } ?? "/mt5/trading"
+        return try JSONDecoder().decode(MT5TradingState.self, from: await send(path, timeout: 15))
+    }
+
+    /// Market order, or a pending one at `price` (limit/stop chosen by the server from the side and price).
+    func mt5Order(symbol: String, side: PaperAccount.Side, lots: Double, price: Double? = nil,
+                  stop: Double?, target: Double?) async throws -> MT5TradingState {
+        var object: [String: Any] = ["symbol": symbol, "side": side.rawValue, "lots": lots,
+                                     "type": price == nil ? "market" : "pending"]
+        if let price { object["price"] = price }
+        if let stop { object["stop"] = stop }
+        if let target { object["target"] = target }
+        return try await post("/mt5/order", object, as: MT5TradingState.self)
+    }
+
+    func mt5Close(ticket: Int) async throws -> MT5TradingState {
+        try await post("/mt5/close", ["ticket": ticket], as: MT5TradingState.self)
+    }
+
+    /// New SL/TP of a position, or new entry/SL/TP of a pending order. nil removes SL or TP.
+    func mt5Modify(ticket: Int, price: Double? = nil, stop: Double?, target: Double?) async throws -> MT5TradingState {
+        var object: [String: Any] = ["ticket": ticket]
+        if let price { object["price"] = price }
+        if let stop { object["stop"] = stop }
+        if let target { object["target"] = target }
+        return try await post("/mt5/modify", object, as: MT5TradingState.self)
+    }
+
+    func mt5Cancel(ticket: Int) async throws -> MT5TradingState {
+        try await post("/mt5/cancel", ["ticket": ticket], as: MT5TradingState.self)
+    }
+
+    func mt5Settings(tradingEnabled: Bool, allowReal: Bool, maxLots: Double) async throws -> MT5TradingState {
+        try await post("/mt5/settings", ["trading_enabled": tradingEnabled, "allow_real_account": allowReal,
+                                         "max_lots": maxLots], as: MT5TradingState.self)
+    }
+}
+
+/// Positions, pending orders and today's closed deals of the MT5 account.
+struct MT5TradingState: Decodable {
+    struct Position: Decodable, Identifiable {
+        var ticket: Int
+        var symbol: String
+        var side: String
+        var lots: Double
+        var entry: Double
+        var price: Double?
+        var stop: Double?
+        var target: Double?
+        var profit: Double
+        var time: Double
+        var bot: Bool?
+        var id: Int { ticket }
+        var paperSide: PaperAccount.Side { side == "long" ? .long : .short }
+    }
+
+    struct Order: Decodable, Identifiable {
+        var ticket: Int
+        var symbol: String
+        var side: String
+        var kind: String
+        var lots: Double
+        var entry: Double
+        var stop: Double?
+        var target: Double?
+        var id: Int { ticket }
+        var paperSide: PaperAccount.Side { side == "long" ? .long : .short }
+    }
+
+    struct Deal: Decodable, Identifiable {
+        var ticket: Int
+        var position: Int
+        var symbol: String
+        var side: String
+        var lots: Double
+        var price: Double
+        var profit: Double
+        var time: Double
+        var reason: String
+        var id: Int { ticket }
+    }
+
+    var positions: [Position]
+    var orders: [Order]
+    var deals: [Deal]
+    var balance: Double?
+    var equity: Double?
+    var currency: String?
+    var login: Int?
+    var mode: String?
+    var tradingEnabled: Bool
+    var allowReal: Bool
+    var maxLots: Double
 }
 
 /// The MT5 account logged in on the VPS.

@@ -96,12 +96,19 @@ public struct PaperAccount: Codable, Hashable, Sendable {
 
     /// Units per lot: 100 oz for gold, 5 000 oz for silver, 100 000 for
     /// forex pairs, 1 for crypto and indices.
+    /// Accepts app keys ("BINANCE_FUTURES:XAUUSDT"), OANDA names (XAU_USD) and
+    /// broker suffixes (XAUUSDm, EURUSD.r, #EURUSD).
     public static func contractSize(for symbol: String) -> Double {
-        let s = symbol.uppercased().replacingOccurrences(of: "_", with: "")
+        var s = symbol.uppercased()
+        if let colon = s.lastIndex(of: ":") { s = String(s[s.index(after: colon)...]) }
+        s = s.filter { $0.isLetter || $0.isNumber }
         if s.hasPrefix("XAU") || s.hasPrefix("PAXG") { return 100 }
         if s.hasPrefix("XAG") { return 5_000 }
         let currencies = ["EUR", "GBP", "USD", "JPY", "AUD", "NZD", "CAD", "CHF"]
-        if s.count == 6, currencies.contains(String(s.prefix(3))), currencies.contains(String(s.suffix(3))) { return 100_000 }
+        let pair = s.prefix(6)
+        // A 6-letter pair, possibly with a short broker suffix (EURUSDm) but not a USDT/USDC coin pair.
+        if (6...8).contains(s.count), !s.hasSuffix("USDT"), !s.hasSuffix("USDC"),
+           currencies.contains(String(pair.prefix(3))), currencies.contains(String(pair.suffix(3))) { return 100_000 }
         return 1
     }
 

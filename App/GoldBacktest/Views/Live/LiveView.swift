@@ -10,6 +10,11 @@ struct LiveView: View {
     @Environment(PaperTrader.self) private var trader
     @Environment(BotController.self) private var bot
     @Environment(NewsStore.self) private var news
+    @Environment(MT5Trader.self) private var mt5
+    /// A real-money MT5 order waiting for confirmation.
+    @State private var pendingRealOrder: (() -> Void)?
+    /// Real orders confirmed once for this session.
+    @State private var realOrdersConfirmed = false
     @AppStorage("news.vietnamese") private var newsVietnamese = false
     /// Split view: this chart and the correlated market (gold / silver), with SMT on both.
     @AppStorage("live.compare") private var compareMode = false
@@ -110,6 +115,32 @@ struct LiveView: View {
                 await news.refresh(vietnamese: newsVietnamese)
                 try? await Task.sleep(nanoseconds: 15 * 60 * 1_000_000_000)
             }
+        }
+        .task(id: market.source == .mt5) {
+            // Orders on an MT5 chart go to the broker account: keep its positions fresh.
+            guard market.source == .mt5 else { return }
+            await mt5.watch()
+        }
+        .alert("Lệnh MT5", isPresented: Binding(get: { mt5.lastError != nil }, set: { if !$0 { mt5.lastError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(mt5.lastError ?? "")
+        }
+        .confirmationDialog("Đặt lệnh trên tài khoản THẬT \(mt5.state?.login.map { "#\($0)" } ?? "")?",
+                            isPresented: Binding(get: { pendingRealOrder != nil }, set: { if !$0 { pendingRealOrder = nil } }),
+                            titleVisibility: .visible) {
+            Button("Đặt lệnh", role: .destructive) {
+                pendingRealOrder?()
+                pendingRealOrder = nil
+            }
+            Button("Đặt lệnh và không hỏi lại lần này") {
+                realOrdersConfirmed = true
+                pendingRealOrder?()
+                pendingRealOrder = nil
+            }
+            Button("Huỷ", role: .cancel) { pendingRealOrder = nil }
+        } message: {
+            Text("Lệnh dùng tiền thật trên \(market.symbol).")
         }
         .task(id: "\(market.symbolKey)|\(market.interval.rawValue)|\(compareTarget ?? "")") {
             market.setComparison(symbol: compareTarget)
@@ -270,6 +301,10 @@ struct LiveView: View {
         var names: [String] = []
         if showKillzonePivots { names.append(Self.killzonePivotsName) }
         if showEMA200 { names.append("EMA 200") }
+        if tradesMT5, let state = mt5.state {
+            names.append("💼 Lệnh vào MT5 #\(state.login.map { String($0) } ?? "") \(state.mode == "real" ? "· TIỀN THẬT" : "· demo")"
+                         + (state.tradingEnabled ? "" : " · chưa bật đặt lệnh"))
+        }
         names += selectedIndicators.map(\.title)
         names += customIndicators.errors.map { "⚠︎ \($0)" }
         if bot.isRunning, let strategy = store.strategies.first(where: { $0.id == bot.strategyID }) {
@@ -641,6 +676,17 @@ struct LiveView: View {
         guard let levels = drawing.positionLevels, currentPrice > 0 else { return }
         let side: PaperAccount.Side = drawing.tool == .longPosition ? .long : .short
         let lots = demoLots(for: drawing)
+        if tradesMT5 {
+            let symbol = market.symbol
+            if useMarket {
+                sendMT5 { await mt5.market(symbol: symbol, side: side, lots: lots, stop: levels.stop, target: levels.target) }
+            } else {
+                sendMT5 { await mt5.pending(symbol: symbol, side: side, lots: lots, entry: levels.entry,
+                                            stop: levels.stop, target: levels.target) }
+            }
+            demoOrderDrawing = nil
+            return
+        }
         if useMarket {
             if side == .long {
                 trader.buy(symbol: market.symbolKey, lots: lots, price: currentPrice, stop: levels.stop, target: levels.target)
@@ -678,6 +724,19 @@ struct LiveView: View {
                                typicalRange: defaultDistance) ?? defaultDistance * 3
     }
 
+    /// On an MT5 chart orders go to the broker account on the VPS.
+    private var tradesMT5: Bool { market.source == .mt5 && !replay.isActive }
+
+    /// Runs an MT5 order, asking first on a real account.
+    private func sendMT5(_ order: @escaping () async -> Void) {
+        let run = { Task { await order() } }
+        if mt5.isReal && !realOrdersConfirmed {
+            pendingRealOrder = { _ = run() }
+        } else {
+            _ = run()
+        }
+    }
+
     /// One-click SELL/BUY, with automatic SL/TP when that option is on.
     private func marketOrder(_ side: PaperAccount.Side) {
         guard currentPrice > 0 else { return }
@@ -686,6 +745,11 @@ struct LiveView: View {
             let distance = autoStopDistance
             stop = currentPrice - side.sign * distance
             target = currentPrice + side.sign * distance * AutoStops.riskReward
+        }
+        if tradesMT5 {
+            let symbol = market.symbol, lots = defaultLots
+            sendMT5 { await mt5.market(symbol: symbol, side: side, lots: lots, stop: stop, target: target) }
+            return
         }
         if side == .long {
             trader.buy(symbol: market.symbolKey, lots: defaultLots, price: currentPrice, stop: stop, target: target)
@@ -699,6 +763,10 @@ struct LiveView: View {
         let parts = id.split(separator: "|").map(String.init)
         guard parts.count >= 2 else { return }
         switch parts[0] {
+        case "mpos":
+            if let ticket = Int(parts[1]) { sendMT5 { await mt5.close(ticket) } }
+        case "mord":
+            if let ticket = Int(parts[1]) { Task { await mt5.cancel(ticket) } }
         case "pos":
             if let p = trader.account.positions.first(where: { $0.id.uuidString == parts[1] }) { trader.close(p) }
         case "ord":
@@ -712,6 +780,13 @@ struct LiveView: View {
 
     private func sendLimitDraft() {
         guard let draft = limitDraft, currentPrice > 0 else { return }
+        if tradesMT5 {
+            let symbol = market.symbol, lots = defaultLots, side = draft.side(price: currentPrice)
+            let stop = draft.stop(price: currentPrice), target = draft.target(price: currentPrice), entry = draft.entry
+            sendMT5 { await mt5.pending(symbol: symbol, side: side, lots: lots, entry: entry, stop: stop, target: target) }
+            limitDraft = nil
+            return
+        }
         trader.placePending(symbol: market.symbolKey, side: draft.side(price: currentPrice), lots: defaultLots, entry: draft.entry,
                             stop: draft.stop(price: currentPrice), target: draft.target(price: currentPrice), currentPrice: currentPrice)
         limitDraft = nil
@@ -741,7 +816,10 @@ struct LiveView: View {
         func value(_ id: String, _ price: Double) -> Double { lineOverrides[id] ?? price }
         var lines: [ChartPriceLine] = []
 
-        for p in trader.account.positions where p.symbol == key {
+        if tradesMT5 {
+            lines += mt5Lines(value: value)
+        }
+        for p in trader.account.positions where p.symbol == key && !tradesMT5 {
             let id = "pos|\(p.id.uuidString)"
             let profit = trader.price(key).map { p.profit(at: $0) } ?? 0
             if let dragged = lineOverrides[id + "|entry"] {
@@ -770,7 +848,7 @@ struct LiveView: View {
             }
         }
 
-        for o in trader.account.pending where o.symbol == key {
+        for o in trader.account.pending where o.symbol == key && !tradesMT5 {
             let id = "ord|\(o.id.uuidString)"
             let entry = value(id + "|entry", o.entry)
             let kind = (entry > currentPrice) == (o.side == .long) ? "STOP" : "LIMIT"
@@ -817,6 +895,91 @@ struct LiveView: View {
         return lines
     }
 
+    /// The MT5 account's positions and pending orders on this symbol, like the demo lines.
+    private func mt5Lines(value: (String, Double) -> Double) -> [ChartPriceLine] {
+        let red = theme.down, green = theme.up, blue = Color(red: 0.161, green: 0.384, blue: 1.0)
+        let tag = mt5.isReal ? "" : " (demo)"
+        var lines: [ChartPriceLine] = []
+        for p in mt5.positions(market.symbol) {
+            let id = "mpos|\(p.ticket)"
+            let side = p.paperSide
+            lines.append(ChartPriceLine(id: id + "|entry", price: p.entry, color: side == .long ? blue : red,
+                                        label: "\(side == .long ? "BUY" : "SELL") \(QuickTradePanel.lotText(p.lots))\(tag)",
+                                        handleFraction: 0.42,
+                                        value: String(format: "%+.2f %@", p.profit, mt5.state?.currency ?? "USD"),
+                                        valueColor: p.profit >= 0 ? green : red,
+                                        markerIndex: openIndex(Date(timeIntervalSince1970: p.time)), closable: true))
+            if let stop = p.stop {
+                let price = value(id + "|sl", stop)
+                lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red, label: "SL", handleFraction: 0.42,
+                                            value: money(side: side, lots: p.lots, entry: p.entry, price: price),
+                                            valueColor: moneyColor(side: side, entry: p.entry, price: price)))
+            }
+            if let target = p.target {
+                let price = value(id + "|tp", target)
+                lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green, label: "TP", handleFraction: 0.42,
+                                            value: money(side: side, lots: p.lots, entry: p.entry, price: price),
+                                            valueColor: moneyColor(side: side, entry: p.entry, price: price)))
+            }
+        }
+        for o in mt5.orders(market.symbol) {
+            let id = "mord|\(o.ticket)"
+            let side = o.paperSide
+            let entry = value(id + "|entry", o.entry)
+            lines.append(ChartPriceLine(id: id + "|entry", price: entry, color: side == .long ? blue : red,
+                                        label: "\(side == .long ? "BUY" : "SELL") \(o.kind.uppercased()) \(QuickTradePanel.lotText(o.lots))\(tag)",
+                                        dash: [8, 4], handleFraction: 0.55, closable: true))
+            if let stop = o.stop {
+                let price = value(id + "|sl", stop + (entry - o.entry))
+                lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red, label: "SL", dash: [5, 3],
+                                            handleFraction: 0.55,
+                                            value: money(side: side, lots: o.lots, entry: entry, price: price),
+                                            valueColor: moneyColor(side: side, entry: entry, price: price)))
+            }
+            if let target = o.target {
+                let price = value(id + "|tp", target + (entry - o.entry))
+                lines.append(ChartPriceLine(id: id + "|tp", price: price, color: green, label: "TP", dash: [5, 3],
+                                            handleFraction: 0.55,
+                                            value: money(side: side, lots: o.lots, entry: entry, price: price),
+                                            valueColor: moneyColor(side: side, entry: entry, price: price)))
+            }
+        }
+        return lines
+    }
+
+    /// A dragged MT5 line: new SL/TP for a position, new entry/SL/TP for a pending order.
+    private func mt5LineDragged(kind: String, ticket: Int, field: String, price: Double) {
+        let rejected = { UINotificationFeedbackGenerator().notificationOccurred(.error) }
+        if kind == "mpos", let p = mt5.positions(market.symbol).first(where: { $0.ticket == ticket }) {
+            let lossSide = (price - currentPrice) * p.paperSide.sign < 0
+            var stop = p.stop, target = p.target
+            switch field {
+            case "sl": guard lossSide else { return rejected() }; stop = price
+            case "tp": guard !lossSide else { return rejected() }; target = price
+            case "entry": if lossSide { stop = price } else { target = price }
+            default: return
+            }
+            sendMT5 { await mt5.modify(ticket, stop: stop, target: target) }
+        } else if kind == "mord", let o = mt5.orders(market.symbol).first(where: { $0.ticket == ticket }) {
+            var entry = o.entry, stop = o.stop, target = o.target
+            switch field {
+            case "entry":
+                let shift = price - o.entry
+                entry = price
+                stop = stop.map { $0 + shift }
+                target = target.map { $0 + shift }
+            case "sl":
+                guard (price - o.entry) * o.paperSide.sign < 0 else { return rejected() }
+                stop = price
+            case "tp":
+                guard (price - o.entry) * o.paperSide.sign > 0 else { return rejected() }
+                target = price
+            default: return
+            }
+            sendMT5 { await mt5.modify(ticket, entry: entry, stop: stop, target: target) }
+        }
+    }
+
     /// Applies a dragged trade line: moves SL/TP, pending entries or the limit draft.
     private func tradeLineDragged(id: String, price: Double, ended: Bool) {
         guard ended else {
@@ -830,6 +993,8 @@ struct LiveView: View {
         let rejected = { UINotificationFeedbackGenerator().notificationOccurred(.error) }
 
         switch parts[0] {
+        case "mpos", "mord":
+            if let ticket = Int(parts[1]) { mt5LineDragged(kind: parts[0], ticket: ticket, field: field, price: price) }
         case "draft":
             guard var draft = limitDraft else { return }
             switch field {

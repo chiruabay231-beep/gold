@@ -125,6 +125,18 @@ Sau khi cài MT5 trên VPS (mục 6, bước 1):
 Đăng xuất trong app sẽ xoá mật khẩu đã lưu trên VPS. Mỗi lúc MT5 trên VPS chỉ đăng nhập một tài khoản.
 Giờ nến được đổi về UTC tự động (nhiều sàn để giờ máy chủ UTC+2/+3).
 
+## Giao dịch tài khoản Exness từ app
+
+1. Đăng nhập bằng **mật khẩu chính** (investor chỉ xem được giá). Trong MT5 trên VPS bật nút **Algo Trading**.
+2. App → **Giao dịch → Đăng nhập sàn → Giao dịch tài khoản này từ app**: bật **Cho phép đặt lệnh từ app**,
+   đặt **Tối đa … lot mỗi lệnh**. Tài khoản thật cần bật thêm **Cho phép tài khoản THẬT**.
+3. Mở biểu đồ mã MT5 (ví dụ `XAUUSDm`, nguồn **MT5 (VPS)**): nút **BUY/SELL**, lệnh **Limit**, kéo **SL/TP** và **✕**
+   gửi thẳng vào tài khoản Exness. Chú thích trên biểu đồ ghi "💼 Lệnh vào MT5 #… · demo / TIỀN THẬT".
+   Tài khoản thật luôn hỏi xác nhận (có thể bỏ hỏi cho phiên đang mở).
+4. Lệnh đang mở, lệnh chờ và lệnh đã đóng 24 giờ cũng có trong trang **Đăng nhập sàn**; khớp lệnh, chạm TP/SL được đọc bằng giọng nói và thông báo.
+
+Lệnh đặt tay có magic `20261` (ghi chú `GoldApp`); bot chỉ quản lý lệnh magic `20260` của nó.
+
 ## Gỡ lỗi
 
 | Hiện tượng | Cách xử lý |

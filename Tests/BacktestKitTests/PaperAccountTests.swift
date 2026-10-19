@@ -52,6 +52,14 @@ final class PaperAccountTests: XCTestCase {
         XCTAssertEqual(PaperAccount.contractSize(for: "XAGUSDT"), 5000)
         XCTAssertEqual(PaperAccount.contractSize(for: "EUR_USD"), 100_000)
         XCTAssertEqual(PaperAccount.contractSize(for: "BTCUSDT"), 1)
+        // App keys carry the data source in front; brokers add suffixes.
+        XCTAssertEqual(PaperAccount.contractSize(for: "BINANCE_FUTURES:XAUUSDT"), 100)
+        XCTAssertEqual(PaperAccount.contractSize(for: "OANDA:XAU_USD"), 100)
+        XCTAssertEqual(PaperAccount.contractSize(for: "MT5:XAUUSDm"), 100)
+        XCTAssertEqual(PaperAccount.contractSize(for: "MT5:EURUSDm"), 100_000)
+        XCTAssertEqual(PaperAccount.contractSize(for: "MT5:EURUSD.r"), 100_000)
+        XCTAssertEqual(PaperAccount.contractSize(for: "BINANCE:EURUSDT"), 1)
+        XCTAssertEqual(PaperAccount.contractSize(for: "MT5:US30m"), 1)
     }
 
     func testModifyPendingFlipsTrigger() {

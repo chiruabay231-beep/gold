@@ -8,6 +8,7 @@ struct GoldBacktestApp: App {
     @State private var trader = PaperTrader()
     @State private var bot = BotController()
     @State private var news = NewsStore()
+    @State private var mt5Trader = MT5Trader()
 
     init() {
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
@@ -22,6 +23,7 @@ struct GoldBacktestApp: App {
                 .environment(trader)
                 .environment(bot)
                 .environment(news)
+                .environment(mt5Trader)
                 .onAppear {
                     let trader = trader
                     market.onPrice = { symbol, price, time in trader.update(symbol: symbol, price: price, time: time) }

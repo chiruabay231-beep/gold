@@ -29,6 +29,8 @@ struct TradeRootView: View {
 struct BrokerLoginView: View {
     @Environment(AppStore.self) private var store
     @Environment(LiveMarket.self) private var market
+    @Environment(MT5Trader.self) private var mt5
+    @State private var confirmClose: MT5TradingState.Position?
 
     enum Broker: String, CaseIterable, Identifiable {
         case exness = "Exness"
@@ -58,6 +60,10 @@ struct BrokerLoginView: View {
             vpsSection
             if hasVPS {
                 accountSection
+                if status?.connected == true {
+                    tradingSection
+                    ordersSection
+                }
                 loginSection
                 if !saved.isEmpty { savedSection }
             }
@@ -65,6 +71,26 @@ struct BrokerLoginView: View {
         }
         .navigationTitle("Đăng nhập sàn")
         .task { await refresh() }
+        .task(id: status?.login) {
+            // Positions stay fresh while this page is open.
+            guard status?.connected == true else { return }
+            await mt5.watch()
+        }
+        .confirmationDialog("Đóng lệnh #\(confirmClose.map { String($0.ticket) } ?? "")?",
+                            isPresented: Binding(get: { confirmClose != nil }, set: { if !$0 { confirmClose = nil } }),
+                            titleVisibility: .visible) {
+            Button("Đóng lệnh", role: .destructive) {
+                if let ticket = confirmClose?.ticket { Task { await mt5.close(ticket) } }
+                confirmClose = nil
+            }
+        } message: {
+            Text("Lệnh đóng theo giá thị trường hiện tại trên MT5.")
+        }
+        .alert("Lệnh MT5", isPresented: Binding(get: { mt5.lastError != nil }, set: { if !$0 { mt5.lastError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(mt5.lastError ?? "")
+        }
         .refreshable { await refresh() }
         .sheet(isPresented: $showOanda) { OandaSettingsView {} }
         .sheet(isPresented: $showSymbols) {
@@ -127,6 +153,90 @@ struct BrokerLoginView: View {
             }
         } header: {
             Text("MT5 đang đăng nhập trên VPS")
+        }
+    }
+
+    private var tradingSection: some View {
+        let state = mt5.state
+        let enabled = state?.tradingEnabled ?? false
+        let allowReal = state?.allowReal ?? false
+        let maxLots = state?.maxLots ?? 0.1
+        return Section {
+            Toggle("Cho phép đặt lệnh từ app", isOn: Binding(get: { enabled }, set: { value in
+                Task { await mt5.settings(tradingEnabled: value, allowReal: allowReal, maxLots: maxLots) }
+            }))
+            Toggle("Cho phép tài khoản THẬT", isOn: Binding(get: { allowReal }, set: { value in
+                Task { await mt5.settings(tradingEnabled: enabled, allowReal: value, maxLots: maxLots) }
+            }))
+            .tint(.red)
+            Stepper("Tối đa \(String(format: "%.2f", maxLots)) lot mỗi lệnh", value: Binding(get: { maxLots }, set: { value in
+                Task { await mt5.settings(tradingEnabled: enabled, allowReal: allowReal, maxLots: value) }
+            }), in: 0.01...10, step: 0.01)
+            Button { showSymbols = true } label: {
+                Label("Mở biểu đồ để giao dịch", systemImage: "chart.xyaxis.line")
+            }
+        } header: {
+            Text("Giao dịch tài khoản này từ app")
+        } footer: {
+            Text("Khi bật, trên biểu đồ Live của mã MT5 (nguồn \"MT5 (VPS)\"): nút BUY/SELL, lệnh limit, kéo SL/TP và ✕ đóng lệnh đều gửi thẳng vào tài khoản này, như app MT5. Tài khoản THẬT luôn hỏi xác nhận. Cần mật khẩu chính (không phải investor) và nút Algo Trading bật trong MT5 trên VPS.")
+        }
+    }
+
+    @ViewBuilder
+    private var ordersSection: some View {
+        let state = mt5.state
+        Section {
+            if (state?.positions.isEmpty ?? true) && (state?.orders.isEmpty ?? true) {
+                Text("Không có lệnh đang mở").foregroundColor(.secondary)
+            }
+            ForEach(state?.positions ?? []) { p in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(p.side == "long" ? "MUA" : "BÁN") \(String(format: "%.2f", p.lots)) \(p.symbol)\(p.bot == true ? " · bot" : "")")
+                            .foregroundColor(p.side == "long" ? .blue : .red)
+                        Text("@ \(PaperTrader.spoken(p.entry)) · SL \(p.stop.map { PaperTrader.spoken($0) } ?? "—") · TP \(p.target.map { PaperTrader.spoken($0) } ?? "—")")
+                            .font(.caption.monospacedDigit()).foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Text(String(format: "%+.2f", p.profit))
+                        .font(.subheadline.monospacedDigit())
+                        .foregroundColor(p.profit >= 0 ? .green : .red)
+                    Button { confirmClose = p } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            ForEach(state?.orders ?? []) { o in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(o.side == "long" ? "BUY" : "SELL") \(o.kind.uppercased()) \(String(format: "%.2f", o.lots)) \(o.symbol)")
+                        Text("@ \(PaperTrader.spoken(o.entry))").font(.caption.monospacedDigit()).foregroundColor(.secondary)
+                    }
+                    Spacer()
+                    Button("Huỷ", role: .destructive) { Task { await mt5.cancel(o.ticket) } }
+                        .buttonStyle(.borderless)
+                }
+            }
+        } header: {
+            Text("Lệnh trên MT5")
+        }
+        if let deals = state?.deals, !deals.isEmpty {
+            Section("Đã đóng (24 giờ)") {
+                ForEach(deals.reversed()) { d in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("\(d.side == "long" ? "MUA" : "BÁN") \(String(format: "%.2f", d.lots)) \(d.symbol) · \(d.reason == "target" ? "TP" : (d.reason == "stop" ? "SL" : "đóng"))")
+                            Text(Date(timeIntervalSince1970: d.time).formatted(date: .omitted, time: .shortened))
+                                .font(.caption2).foregroundColor(.secondary)
+                        }
+                        Spacer()
+                        Text(String(format: "%+.2f", d.profit))
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundColor(d.profit >= 0 ? .green : .red)
+                    }
+                }
+            }
         }
     }
 

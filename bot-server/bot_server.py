@@ -374,6 +374,33 @@ class Mt5Feed:
         pass
 
 
+def mt5_send(mt5, request):
+    """order_send trying the symbol's filling modes; returns (result, error text)."""
+    info = mt5.symbol_info(request["symbol"]) if request.get("symbol") else None
+    modes = []
+    if info is not None:
+        if info.filling_mode & 1:
+            modes.append(mt5.ORDER_FILLING_FOK)
+        if info.filling_mode & 2:
+            modes.append(mt5.ORDER_FILLING_IOC)
+    modes.append(mt5.ORDER_FILLING_RETURN)
+    result = None
+    for mode in modes:
+        request["type_filling"] = mode
+        result = mt5.order_send(request)
+        if result is not None and result.retcode != mt5.TRADE_RETCODE_INVALID_FILL:
+            break
+    if result is None:
+        return None, f"order_send lỗi: {mt5.last_error()}"
+    if result.retcode not in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
+        return None, f"MT5 từ chối ({result.retcode}): {result.comment}"
+    return result, None
+
+
+# Orders placed by hand from the app; the bot only manages its own magic number.
+APP_MAGIC = 20261
+
+
 class Mt5Account:
     """MT5 login and market data for the app (Live chart source "MT5 (VPS)").
 
@@ -471,6 +498,187 @@ class Mt5Account:
             return {"ok": True, "total": len(rows),
                     "symbols": [{"name": r.name, "description": r.description or "", "path": r.path or "",
                                  "digits": r.digits} for r in found[:limit]]}
+
+    # ----- Trading by hand from the app -----
+
+    def _check_trading(self, mt5):
+        a = mt5.account_info()
+        if a is None:
+            raise ValueError("MT5 chưa đăng nhập tài khoản")
+        if not self.cfg.get("trading_enabled"):
+            raise ValueError("Chưa cho phép đặt lệnh: bật \"Cho phép đặt lệnh từ app\" ở Giao dịch → Đăng nhập sàn")
+        if a.trade_mode == mt5.ACCOUNT_TRADE_MODE_REAL and not self.cfg.get("allow_real_account"):
+            raise ValueError("Đây là tài khoản THẬT: bật \"Cho phép tài khoản thật\" ở Giao dịch → Đăng nhập sàn")
+        if not a.trade_allowed:
+            raise ValueError("Tài khoản không cho giao dịch (đang dùng mật khẩu investor? cần mật khẩu chính)")
+        t = mt5.terminal_info()
+        if t is not None and not t.trade_allowed:
+            raise ValueError("Bật nút Algo Trading trong MT5 trên VPS")
+        return a
+
+    def settings(self, body):
+        with Mt5.lock:
+            for key in ("trading_enabled", "allow_real_account"):
+                if key in body:
+                    self.cfg[key] = bool(body[key])
+            if "max_lots" in body:
+                self.cfg["max_lots"] = max(0.01, min(float(body["max_lots"]), 100.0))
+            self.server.save_config()
+        self.server.log(f"⚙︎ MT5: đặt lệnh từ app {'BẬT' if self.cfg.get('trading_enabled') else 'TẮT'}, "
+                        f"tài khoản thật {'cho phép' if self.cfg.get('allow_real_account') else 'chặn'}, "
+                        f"tối đa {self.cfg.get('max_lots')} lot")
+        return self.trading()
+
+    def _volume(self, mt5, info, lots):
+        max_lots = float(self.cfg.get("max_lots", 0.1))
+        if lots > max_lots + 1e-9:
+            raise ValueError(f"Khối lượng {lots} lớn hơn giới hạn {max_lots} lot (đổi ở Đăng nhập sàn)")
+        step = info.volume_step or 0.01
+        volume = max(info.volume_min, math.floor(lots / step + 1e-9) * step)
+        return round(volume, 8)
+
+    def trading(self, symbol=None):
+        """Positions, pending orders and today's closed deals of the account."""
+        with Mt5.lock:
+            mt5 = self._mt5()
+            a = mt5.account_info()
+            offset = Mt5.offset_seconds
+            positions = []
+            for r in (mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()) or ():
+                positions.append({"ticket": int(r.ticket), "symbol": r.symbol,
+                                  "side": "long" if r.type == mt5.POSITION_TYPE_BUY else "short", "lots": r.volume,
+                                  "entry": r.price_open, "price": r.price_current, "stop": r.sl or None,
+                                  "target": r.tp or None, "profit": r.profit + getattr(r, "swap", 0),
+                                  "time": float(r.time) - offset, "bot": r.magic == int(self.cfg.get("magic", 20260)),
+                                  "comment": r.comment})
+            orders = []
+            kinds = {mt5.ORDER_TYPE_BUY_LIMIT: ("long", "limit"), mt5.ORDER_TYPE_SELL_LIMIT: ("short", "limit"),
+                     mt5.ORDER_TYPE_BUY_STOP: ("long", "stop"), mt5.ORDER_TYPE_SELL_STOP: ("short", "stop")}
+            for o in (mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()) or ():
+                side, kind = kinds.get(o.type, ("long", "other"))
+                orders.append({"ticket": int(o.ticket), "symbol": o.symbol, "side": side, "kind": kind,
+                               "lots": o.volume_current, "entry": o.price_open, "stop": o.sl or None,
+                               "target": o.tp or None, "time": float(o.time_setup) - offset})
+            deals = []
+            for d in mt5.history_deals_get(now() - 86400 + offset, now() + 86400 + offset) or ():
+                if d.entry != mt5.DEAL_ENTRY_OUT or (symbol and d.symbol != symbol):
+                    continue
+                deals.append({"ticket": int(d.ticket), "position": int(d.position_id), "symbol": d.symbol,
+                              "side": "short" if d.type == mt5.DEAL_TYPE_BUY else "long", "lots": d.volume,
+                              "price": d.price, "profit": d.profit + d.commission + d.swap + getattr(d, "fee", 0),
+                              "time": float(d.time) - offset,
+                              "reason": {mt5.DEAL_REASON_SL: "stop", mt5.DEAL_REASON_TP: "target"}.get(d.reason, "manual")})
+            mode = None
+            if a is not None:
+                mode = {mt5.ACCOUNT_TRADE_MODE_DEMO: "demo", mt5.ACCOUNT_TRADE_MODE_REAL: "real"}.get(a.trade_mode, "contest")
+            return {"ok": True, "positions": positions, "orders": orders, "deals": deals[-30:],
+                    "balance": a.balance if a else None, "equity": a.equity if a else None,
+                    "currency": a.currency if a else None, "login": a.login if a else None, "mode": mode,
+                    "tradingEnabled": bool(self.cfg.get("trading_enabled")),
+                    "allowReal": bool(self.cfg.get("allow_real_account")),
+                    "maxLots": float(self.cfg.get("max_lots", 0.1))}
+
+    def order(self, body):
+        symbol = str(body.get("symbol", ""))
+        side = body.get("side")
+        kind = body.get("type", "market")
+        if side not in ("long", "short") or kind not in ("market", "pending"):
+            raise ValueError("Lệnh không hợp lệ")
+        with Mt5.lock:
+            mt5 = self._mt5()
+            self._check_trading(mt5)
+            info = mt5.symbol_info(symbol)
+            if info is None or not mt5.symbol_select(symbol, True):
+                raise ValueError(f"MT5 không có mã {symbol}")
+            tick = mt5.symbol_info_tick(symbol)
+            volume = self._volume(mt5, info, float(body.get("lots", 0.01)))
+            buy = side == "long"
+            request = {"symbol": symbol, "volume": volume, "magic": APP_MAGIC, "comment": "GoldApp",
+                       "deviation": int(self.cfg.get("deviation", 30)), "type_time": mt5.ORDER_TIME_GTC}
+            if kind == "market":
+                request.update(action=mt5.TRADE_ACTION_DEAL, type=mt5.ORDER_TYPE_BUY if buy else mt5.ORDER_TYPE_SELL,
+                               price=tick.ask if buy else tick.bid)
+            else:
+                price = round(float(body["price"]), info.digits)
+                below = price < (tick.ask if buy else tick.bid)
+                # Buy below / sell above the market = limit, otherwise stop.
+                order_type = (mt5.ORDER_TYPE_BUY_LIMIT if below else mt5.ORDER_TYPE_BUY_STOP) if buy else \
+                    (mt5.ORDER_TYPE_SELL_STOP if below else mt5.ORDER_TYPE_SELL_LIMIT)
+                request.update(action=mt5.TRADE_ACTION_PENDING, type=order_type, price=price)
+            if body.get("stop"):
+                request["sl"] = round(float(body["stop"]), info.digits)
+            if body.get("target"):
+                request["tp"] = round(float(body["target"]), info.digits)
+            result, error = mt5_send(mt5, request)
+            if error:
+                raise ValueError(error)
+        self.server.log(f"📱 Lệnh tay MT5: {'MUA' if buy else 'BÁN'} {volume} {symbol}"
+                        f"{' chờ @ ' + fmt(request['price']) if kind != 'market' else ''}", notify=True)
+        return dict(self.trading(), ticket=int(result.order))
+
+    def close(self, body):
+        ticket = int(body.get("ticket", 0))
+        with Mt5.lock:
+            mt5 = self._mt5()
+            self._check_trading(mt5)
+            rows = mt5.positions_get(ticket=ticket) or ()
+            if not rows:
+                raise ValueError("Không còn lệnh này")
+            r = rows[0]
+            tick = mt5.symbol_info_tick(r.symbol)
+            buy = r.type == mt5.POSITION_TYPE_BUY
+            volume = float(body.get("lots") or r.volume)
+            request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": r.symbol, "volume": min(volume, r.volume),
+                       "type": mt5.ORDER_TYPE_SELL if buy else mt5.ORDER_TYPE_BUY, "position": r.ticket,
+                       "price": tick.bid if buy else tick.ask, "deviation": int(self.cfg.get("deviation", 30)),
+                       "magic": r.magic, "comment": "GoldApp close", "type_time": mt5.ORDER_TIME_GTC}
+            _, error = mt5_send(mt5, request)
+            if error:
+                raise ValueError(error)
+        self.server.log(f"📱 Đóng lệnh MT5 #{ticket} ({r.symbol}, lãi/lỗ {money(r.profit)})", notify=True)
+        return self.trading()
+
+    def modify(self, body):
+        ticket = int(body.get("ticket", 0))
+        with Mt5.lock:
+            mt5 = self._mt5()
+            self._check_trading(mt5)
+            rows = mt5.positions_get(ticket=ticket) or ()
+            if rows:
+                r = rows[0]
+                info = mt5.symbol_info(r.symbol)
+                request = {"action": mt5.TRADE_ACTION_SLTP, "symbol": r.symbol, "position": r.ticket,
+                           "sl": round(float(body["stop"]), info.digits) if body.get("stop") else 0.0,
+                           "tp": round(float(body["target"]), info.digits) if body.get("target") else 0.0}
+            else:
+                orders = mt5.orders_get(ticket=ticket) or ()
+                if not orders:
+                    raise ValueError("Không còn lệnh này")
+                o = orders[0]
+                info = mt5.symbol_info(o.symbol)
+                price = float(body.get("price") or o.price_open)
+                request = {"action": mt5.TRADE_ACTION_MODIFY, "symbol": o.symbol, "order": o.ticket,
+                           "price": round(price, info.digits), "type_time": mt5.ORDER_TIME_GTC,
+                           "sl": round(float(body["stop"]), info.digits) if body.get("stop") else 0.0,
+                           "tp": round(float(body["target"]), info.digits) if body.get("target") else 0.0}
+            _, error = mt5_send(mt5, request)
+            if error:
+                raise ValueError(error)
+        return self.trading()
+
+    def cancel(self, body):
+        ticket = int(body.get("ticket", 0))
+        with Mt5.lock:
+            mt5 = self._mt5()
+            self._check_trading(mt5)
+            orders = mt5.orders_get(ticket=ticket) or ()
+            if not orders:
+                raise ValueError("Không còn lệnh chờ này")
+            _, error = mt5_send(mt5, {"action": mt5.TRADE_ACTION_REMOVE, "order": ticket, "symbol": orders[0].symbol})
+            if error:
+                raise ValueError(error)
+        self.server.log(f"📱 Huỷ lệnh chờ MT5 #{ticket}")
+        return self.trading()
 
     def candles(self, symbol, interval, count, before=None):
         if interval not in MT5_TIMEFRAMES:
@@ -617,25 +825,7 @@ class Mt5Broker:
         return [self._position(r) for r in self._mine(symbol)]
 
     def _send(self, request):
-        info = self.mt5.symbol_info(request["symbol"])
-        modes = []
-        if info is not None:
-            if info.filling_mode & 1:
-                modes.append(self.mt5.ORDER_FILLING_FOK)
-            if info.filling_mode & 2:
-                modes.append(self.mt5.ORDER_FILLING_IOC)
-        modes.append(self.mt5.ORDER_FILLING_RETURN)
-        result = None
-        for mode in modes:
-            request["type_filling"] = mode
-            result = self.mt5.order_send(request)
-            if result is not None and result.retcode != self.mt5.TRADE_RETCODE_INVALID_FILL:
-                break
-        if result is None:
-            return None, f"order_send lỗi: {self.mt5.last_error()}"
-        if result.retcode not in (self.mt5.TRADE_RETCODE_DONE, self.mt5.TRADE_RETCODE_PLACED):
-            return None, f"MT5 từ chối ({result.retcode}): {result.comment}"
-        return result, None
+        return mt5_send(self.mt5, request)
 
     def open(self, symbol, side, lots, price, stop, target):
         max_lots = float(self.cfg.get("max_lots", 0.1))
@@ -1364,6 +1554,9 @@ def make_handler(server):
                     return self._send(200, server.mt5_account.status())
                 if path == "/mt5/symbols":
                     return self._send(200, server.mt5_account.symbols((params.get("q") or [""])[0], limit))
+                if path == "/mt5/trading":
+                    symbol = (params.get("symbol") or [None])[0]
+                    return self._send(200, server.mt5_account.trading(symbol))
                 if path == "/mt5/candles":
                     symbol = (params.get("symbol") or [""])[0]
                     if not symbol:
@@ -1401,6 +1594,16 @@ def make_handler(server):
                     return self._send(200, server.mt5_account.login(body))
                 if path == "/mt5/logout":
                     return self._send(200, server.mt5_account.logout())
+                if path == "/mt5/settings":
+                    return self._send(200, server.mt5_account.settings(body))
+                if path == "/mt5/order":
+                    return self._send(200, server.mt5_account.order(body))
+                if path == "/mt5/close":
+                    return self._send(200, server.mt5_account.close(body))
+                if path == "/mt5/modify":
+                    return self._send(200, server.mt5_account.modify(body))
+                if path == "/mt5/cancel":
+                    return self._send(200, server.mt5_account.cancel(body))
                 if path == "/telegram-test":
                     server.telegram.send("🔔 Thử thông báo từ máy chủ bot")
                     return self._send(200, {"ok": True})
