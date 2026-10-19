@@ -62,6 +62,9 @@ struct LiveView: View {
     @State private var fullScreen = false
     @State private var confirmClear = false
     @State private var killzoneCache = KillzonePivotsCache()
+    /// Custom indicators (tab Chỉ báo) ticked for the Live chart.
+    @AppStorage(LiveIndicators.storageKey) private var liveIndicatorIDs = ""
+    @State private var indicatorCache = LiveIndicatorCache()
     @State private var showKillzoneSettings = false
     @State private var showOandaSettings = false
     /// OANDA instrument to open once a token has been saved.
@@ -75,6 +78,7 @@ struct LiveView: View {
         VStack(spacing: 0) {
             header
             charts
+            indicatorPanes
             bottomBar
         }
         .background(theme.background.ignoresSafeArea())
@@ -266,6 +270,8 @@ struct LiveView: View {
         var names: [String] = []
         if showKillzonePivots { names.append(Self.killzonePivotsName) }
         if showEMA200 { names.append("EMA 200") }
+        names += selectedIndicators.map(\.title)
+        names += customIndicators.errors.map { "⚠︎ \($0)" }
         if bot.isRunning, let strategy = store.strategies.first(where: { $0.id == bot.strategyID }) {
             names.append("🤖 Bot: \(strategy.name)")
         }
@@ -349,6 +355,12 @@ struct LiveView: View {
         return custom.isEmpty ? market.defaultComparisonSymbol : custom
     }
 
+    /// Last bar on screen when scrolled back into history; nil at the live edge.
+    private var focusIndex: Int? {
+        guard viewport.rightOffset > 1 else { return nil }
+        return viewport.range(total: chartCandles.count).upperBound - 1
+    }
+
     /// SMT is only drawn while the two markets are side by side.
     private var smtComparison: [Candle] { compareMode ? comparisonChartCandles : [] }
 
@@ -360,7 +372,8 @@ struct LiveView: View {
 
     private var killzoneLayer: KillzonePivotsLayer {
         killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
-                            settings: killzoneSettings, enabled: showKillzonePivots, comparison: smtComparison)
+                            settings: killzoneSettings, enabled: showKillzonePivots, comparison: smtComparison,
+                            focusIndex: focusIndex)
     }
 
     /// One chart, or in compare mode the two markets stacked (side by side in landscape).
@@ -397,7 +410,8 @@ struct LiveView: View {
     private var comparisonPanel: some View {
         let candles = comparisonChartCandles
         let layer = comparisonCache.layer(candles: candles, barInterval: market.interval.seconds, settings: killzoneSettings,
-                                          enabled: showKillzonePivots, comparison: chartCandles)
+                                          enabled: showKillzonePivots, comparison: chartCandles,
+                                          focusIndex: viewport.rightOffset > 1 ? viewport.range(total: candles.count).upperBound - 1 : nil)
         let name = market.comparisonSymbol.map { Self.displayName($0) } ?? "—"
         return ZStack(alignment: .topTrailing) {
             if candles.count > 2 {
@@ -447,7 +461,8 @@ struct LiveView: View {
     private var chartPanel: some View {
         let settings = killzoneSettings
         let layer = killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
-                                        settings: settings, enabled: showKillzonePivots, comparison: smtComparison)
+                                        settings: settings, enabled: showKillzonePivots, comparison: smtComparison,
+                                        focusIndex: focusIndex)
         return ZStack(alignment: .trailing) {
             CandleChart(candles: chartCandles,
                         overlays: overlays,
@@ -890,7 +905,48 @@ struct LiveView: View {
             lines.append(ChartLine(title: "EMA(200)", values: TA.ema(closes, 200),
                                    color: Color(red: 1.0, green: 0.596, blue: 0.0)))
         }
-        return lines
+        return lines + customIndicators.overlays
+    }
+
+    private var selectedIndicators: [CustomIndicator] {
+        let ids = LiveIndicators.ids(liveIndicatorIDs)
+        return store.indicators.filter { ids.contains($0.id) }
+    }
+
+    /// The ticked custom indicators computed on the chart's bars.
+    private var customIndicators: IndicatorRenderer {
+        indicatorCache.render(selectedIndicators, candles: chartCandles, library: store.library,
+                              timeZone: store.config.timeZone)
+    }
+
+    /// Indicators that draw in their own panel (RSI-like), under the chart.
+    @ViewBuilder
+    private var indicatorPanes: some View {
+        let rendered = customIndicators
+        if !rendered.panes.isEmpty, chartCandles.count > 2 {
+            let times = chartCandles.map(\.time)
+            let range = viewport.range(total: chartCandles.count)
+            VStack(spacing: 0) {
+                ForEach(rendered.panes.prefix(3)) { pane in
+                    ZStack(alignment: .topLeading) {
+                        PaneChartView(times: times, lines: pane.lines, range: range)
+                            .padding(.leading, 4)
+                            .padding(.top, 14)
+                        Button { store.selectedTab = .indicators } label: {
+                            Text(pane.title)
+                                .font(.system(size: 11, weight: .medium))
+                                .foregroundColor(theme.primaryText)
+                        }
+                        .buttonStyle(.plain)
+                        .padding(.leading, 6)
+                        .padding(.top, 2)
+                    }
+                    .frame(height: 96)
+                    .overlay(alignment: .top) { Rectangle().fill(theme.grid).frame(height: 1) }
+                }
+            }
+            .background(theme.background)
+        }
     }
 
     // MARK: - Bottom tool bar
@@ -1028,6 +1084,18 @@ struct LiveView: View {
                     showKillzoneSettings = true
                 } label: {
                     Label("Cài đặt Killzones + Pivots…", systemImage: "gearshape")
+                }
+            }
+            Section("Chỉ báo của bạn (tab Chỉ báo)") {
+                ForEach(store.indicators) { indicator in
+                    Toggle(indicator.title, isOn: Binding(
+                        get: { LiveIndicators.ids(liveIndicatorIDs).contains(indicator.id) },
+                        set: { _ in liveIndicatorIDs = LiveIndicators.toggled(indicator.id, in: liveIndicatorIDs) }))
+                }
+                Button {
+                    store.selectedTab = .indicators
+                } label: {
+                    Label(store.indicators.isEmpty ? "Viết chỉ báo mới…" : "Quản lý / sửa chỉ báo…", systemImage: "square.and.pencil")
                 }
             }
             Section("Khác") {

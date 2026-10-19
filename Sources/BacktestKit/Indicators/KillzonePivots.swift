@@ -331,8 +331,10 @@ public enum KillzonePivots {
     }
 
     /// `comparison` holds the bars of the SMT market (same timeframe); empty = no SMT.
+    /// `focusIndex` is the bar the "days to show" count back from (the right edge of
+    /// the screen when scrolled into history); nil = the last bar.
     public static func compute(candles: [Candle], barInterval: TimeInterval, config: Config,
-                               comparison: [Candle] = []) -> Output {
+                               comparison: [Candle] = [], focusIndex: Int? = nil) -> Output {
         var output = Output()
         guard candles.count > 2 else { return output }
         if config.showSMT, !comparison.isEmpty {
@@ -352,7 +354,7 @@ public enum KillzonePivots {
         let zone = TimeZone(identifier: config.timeZoneID) ?? TimeZone(identifier: "America/New_York")!
         let clock = ICT.NewYorkClock(time: candles.map(\.time), zone: zone)
         let n = candles.count
-        let lastDay = clock.day[n - 1]
+        let lastDay = clock.day[min(max(focusIndex ?? n - 1, 0), n - 1)]
         let firstDay = lastDay - max(config.maxDays, 1) + 1
         let cutoffs = config.cutoffEnabled ? cutoffIndexes(clock: clock, hour: config.cutoffHour) : []
 

@@ -59,6 +59,17 @@ final class KillzonePivotsTests: XCTestCase {
             .levels.first { $0.kind == .pivotHigh(session: 1) })
     }
 
+    func testDaysCountBackFromTheFocusedBar() {
+        let data = candles()   // three days of 15-minute bars
+        var config = KillzonePivots.Config()
+        config.maxDays = 1
+        let latest = KillzonePivots.compute(candles: data, barInterval: 900, config: config)
+        XCTAssertTrue(latest.boxes.allSatisfy { $0.range.lowerBound >= 192 })
+        // Scrolled back to the first day: its sessions are drawn too.
+        let scrolled = KillzonePivots.compute(candles: data, barInterval: 900, config: config, focusIndex: 50)
+        XCTAssertTrue(scrolled.boxes.contains { $0.range.lowerBound < 96 })
+    }
+
     func testLiquiditySweepNeedsCloseBackInside() {
         let swept = candles { c in
             c[12].high = 110   // London high

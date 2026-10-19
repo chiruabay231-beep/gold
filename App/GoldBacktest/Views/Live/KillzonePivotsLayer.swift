@@ -99,9 +99,11 @@ struct KillzonePivotsLayer {
 
     init() {}
 
-    init(candles: [Candle], barInterval: TimeInterval, settings: KillzonePivotsSettings, comparison: [Candle] = []) {
+    init(candles: [Candle], barInterval: TimeInterval, settings: KillzonePivotsSettings, comparison: [Candle] = [],
+         focusIndex: Int? = nil) {
         let config = settings.config
-        output = KillzonePivots.compute(candles: candles, barInterval: barInterval, config: config, comparison: comparison)
+        output = KillzonePivots.compute(candles: candles, barInterval: barInterval, config: config, comparison: comparison,
+                                        focusIndex: focusIndex)
         for box in output.boxes {
             let session = config.sessions[box.session]
             boxes.append(SessionBox(id: "kz-\(box.session)-\(box.range.lowerBound)", range: box.range, high: box.high, low: box.low,
@@ -191,17 +193,23 @@ final class KillzonePivotsCache {
         return cachedSettings
     }
 
+    /// `focusIndex`: right edge of the screen when scrolled back, so the "days to show"
+    /// follow the bars being looked at. It only changes the key every few hours of bars,
+    /// so scrolling doesn't recompute on every frame.
     func layer(candles: [Candle], barInterval: TimeInterval, settings: KillzonePivotsSettings, enabled: Bool,
-               comparison: [Candle] = []) -> KillzonePivotsLayer {
+               comparison: [Candle] = [], focusIndex: Int? = nil) -> KillzonePivotsLayer {
         guard enabled else { return KillzonePivotsLayer() }
+        let focus = focusIndex.flatMap { candles.indices.contains($0) ? $0 : nil }
+        let focusBucket = focus.map { Int(candles[$0].time.timeIntervalSince1970 / 21_600) } ?? -1
         // The forming bar's high/low can mitigate pivots, so it is part of the key.
         let last = candles.last
         let other = comparison.last
         let newKey = "\(candles.count)-\(candles.first?.time.timeIntervalSince1970 ?? 0)-\(last?.high ?? 0)-\(last?.low ?? 0)-\(barInterval)-\(settings.hashValue)"
-            + "-\(comparison.count)-\(other?.time.timeIntervalSince1970 ?? 0)-\(other?.high ?? 0)-\(other?.low ?? 0)"
+            + "-\(comparison.count)-\(other?.time.timeIntervalSince1970 ?? 0)-\(other?.high ?? 0)-\(other?.low ?? 0)-\(focusBucket)"
         if newKey != key {
             key = newKey
-            cached = KillzonePivotsLayer(candles: candles, barInterval: barInterval, settings: settings, comparison: comparison)
+            cached = KillzonePivotsLayer(candles: candles, barInterval: barInterval, settings: settings, comparison: comparison,
+                                         focusIndex: focus)
         }
         return cached
     }

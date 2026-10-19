@@ -248,6 +248,8 @@ struct CandleChart: View {
     /// Order whose lines are shown fully (tapped recently); others are faint.
     @State private var activeLineGroup: String?
     @State private var activeLineToken = 0
+    /// Where a long press without moving was released: shows the reset menu there.
+    @State private var menuPoint: CGPoint?
 
     private let axisWidth: CGFloat = 66
     private let timeAxisHeight: CGFloat = 18
@@ -268,6 +270,11 @@ struct CandleChart: View {
                     header(layout: layout)
                         .padding(.horizontal, 6)
                         .padding(.top, 2)
+                }
+                if let point = menuPoint {
+                    chartMenu
+                        .position(x: min(max(point.x, 110), geometry.size.width - 110),
+                                  y: min(max(point.y, 70), geometry.size.height - 70))
                 }
             }
             .background(theme.background)
@@ -1256,6 +1263,17 @@ struct CandleChart: View {
     // MARK: - Gestures
 
     private func handleTap(at location: CGPoint, layout: Layout) {
+        // Taps on the reset menu belong to its buttons; a tap elsewhere closes it.
+        if let point = menuPoint {
+            let width = layout.axisX + axisWidth, height = layout.timeAxis.maxY
+            let center = CGPoint(x: min(max(point.x, 110), width - 110), y: min(max(point.y, 70), height - 70))
+            if CGRect(x: center.x - 105, y: center.y - 100, width: 210, height: 200).contains(location) { return }
+            if Date().timeIntervalSince(pressEndedAt) > 0.3 {
+                menuPoint = nil
+                crosshair = nil
+            }
+            return
+        }
         // The release of a long press also ends as a tap; keep that crosshair.
         guard location.x < layout.axisX, Date().timeIntervalSince(pressEndedAt) > 0.3 else { return }
         let s = scale(layout: layout)
@@ -1440,7 +1458,55 @@ struct CandleChart: View {
                     crosshair = drag.location
                 }
             }
-            .onEnded { _ in pressEndedAt = Date() }
+            .onEnded { value in
+                pressEndedAt = Date()
+                // Held still: offer to reset the view (TradingView's chart context menu).
+                if drawingTool == nil, onPickBar == nil, dragMode != .moveHandle, dragMode != .moveDrawing,
+                   dragMode != .priceLine, case .second(true, let drag?) = value,
+                   hypot(drag.translation.width, drag.translation.height) < 10 {
+                    menuPoint = drag.location
+                }
+            }
+    }
+
+    /// Reset choices shown after a long press.
+    private var chartMenu: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            menuButton("Đặt lại thang giá", systemImage: "arrow.up.and.down") {
+                viewport.manualPriceRange = nil
+            }
+            Divider()
+            menuButton("Đặt lại biểu đồ", systemImage: "arrow.counterclockwise") {
+                viewport.manualPriceRange = nil
+                viewport.rightOffset = 0
+                viewport.visibleCount = ChartViewport().visibleCount
+            }
+            Divider()
+            menuButton("Về nến mới nhất", systemImage: "arrow.right.to.line") {
+                viewport.rightOffset = 0
+            }
+            Divider()
+            menuButton("Đóng", systemImage: "xmark") {}
+        }
+        .frame(width: 210)
+        .background(RoundedRectangle(cornerRadius: 12).fill(.regularMaterial))
+        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
+    }
+
+    private func menuButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            menuPoint = nil
+            crosshair = nil
+        } label: {
+            Label(title, systemImage: systemImage)
+                .font(.system(size: 14))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 11)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - Formatting
