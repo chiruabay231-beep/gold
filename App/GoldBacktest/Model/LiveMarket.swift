@@ -90,6 +90,71 @@ final class LiveMarket {
 
     var candles: [Candle] { buffer.candles }
 
+    /// Bars of the SMT comparison market (e.g. silver for gold), same timeframe.
+    private(set) var comparisonCandles: [Candle] = []
+    /// Symbol the comparison bars belong to; nil = none loaded.
+    private(set) var comparisonSymbol: String?
+    @ObservationIgnored private var comparisonTask: Task<Void, Never>?
+    @ObservationIgnored private var lastComparisonRefresh = Date.distantPast
+
+    /// Correlated market for SMT on this chart: silver for gold and gold for silver.
+    var defaultComparisonSymbol: String? {
+        switch (source, symbol) {
+        case (.binanceFutures, "XAUUSDT"): return "XAGUSDT"
+        case (.binanceFutures, "XAGUSDT"): return "XAUUSDT"
+        case (.binanceFutures, "BTCUSDT"), (.binance, "BTCUSDT"): return "ETHUSDT"
+        case (.binanceFutures, "ETHUSDT"), (.binance, "ETHUSDT"): return "BTCUSDT"
+        case (.oanda, "XAU_USD"): return "XAG_USD"
+        case (.oanda, "XAG_USD"): return "XAU_USD"
+        case (.oanda, "EUR_USD"): return "GBP_USD"
+        case (.oanda, "GBP_USD"): return "EUR_USD"
+        default: return nil
+        }
+    }
+
+    /// Loads (or refreshes) the comparison market's bars; nil clears them.
+    func setComparison(symbol requested: String?) {
+        let wanted = requested?.trimmingCharacters(in: .whitespaces).uppercased()
+        let target = (wanted?.isEmpty ?? true) ? nil : wanted
+        guard target != comparisonSymbol || comparisonCandles.isEmpty || Date().timeIntervalSince(lastComparisonRefresh) > 20 else { return }
+        comparisonTask?.cancel()
+        guard let target, target != symbol, !interval.isSeconds else {
+            comparisonSymbol = nil
+            comparisonCandles = []
+            return
+        }
+        if target != comparisonSymbol { comparisonCandles = [] }
+        comparisonSymbol = target
+        lastComparisonRefresh = Date()
+        let source = self.source, interval = self.interval, market = binanceMarket
+        let count = comparisonCandles.isEmpty ? 1000 : 5
+        comparisonTask = Task { [weak self] in
+            let bars: [Candle]
+            do {
+                switch source {
+                case .binance, .binanceFutures:
+                    bars = try await BinanceClient.withFallback(market: market) { client in
+                        try await client.fetchCandles(symbol: target, interval: interval, count: count)
+                    }
+                case .oanda:
+                    guard let client = OandaSettings.client() else { return }
+                    bars = try await client.fetchCandles(instrument: target, interval: interval, count: count).map(\.candle)
+                }
+            } catch {
+                return
+            }
+            guard let self, !Task.isCancelled, self.comparisonSymbol == target, self.interval == interval,
+                  self.source == source else { return }
+            self.mergeComparison(bars)
+        }
+    }
+
+    private func mergeComparison(_ bars: [Candle]) {
+        var merged = LiveCandleBuffer(candles: comparisonCandles, maxCount: LiveMarket.maxBars)
+        for bar in bars { merged.apply(bar) }
+        comparisonCandles = merged.candles
+    }
+
     init() {
         let defaults = UserDefaults.standard
         if let source = defaults.string(forKey: "live.source").flatMap(LiveSource.init),
@@ -185,6 +250,9 @@ final class LiveMarket {
         signals = []
         plots = []
         alertedSignalIDs = []
+        comparisonTask?.cancel()
+        comparisonSymbol = nil
+        comparisonCandles = []
         let store = self.store
         stop()
         if let store { start(store: store) }
@@ -406,6 +474,8 @@ final class LiveMarket {
 
     func rescan(alert: Bool) {
         if alert { onBarClose?(symbolKey, closedCandles) }
+        // New bar: bring the SMT market up to date too.
+        if alert, let comparisonSymbol { setComparison(symbol: comparisonSymbol) }
         guard let store, let id = strategyID, let strategy = store.strategies.first(where: { $0.id == id }) else {
             signals = []
             plots = []

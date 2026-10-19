@@ -29,6 +29,11 @@ struct KillzonePivotsSettings: Codable, Hashable {
     var fvgOpacity = 0.22
     var mssBullColor = RGBAColor(red: 0.031, green: 0.6, blue: 0.506)
     var mssBearColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
+    var sweepColor = RGBAColor(red: 0.98, green: 0.6, blue: 0.0)
+    var smtBullColor = RGBAColor(red: 0.031, green: 0.6, blue: 0.506)
+    var smtBearColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
+    /// Market compared for SMT; empty = automatic (silver for gold…).
+    var smtSymbol = ""
 
     static let storageKey = "live.killzonePivots"
 
@@ -57,6 +62,10 @@ struct KillzonePivotsSettings: Codable, Hashable {
         fvgOpacity = try c.decodeIfPresent(Double.self, forKey: .fvgOpacity) ?? d.fvgOpacity
         mssBullColor = try c.decodeIfPresent(RGBAColor.self, forKey: .mssBullColor) ?? d.mssBullColor
         mssBearColor = try c.decodeIfPresent(RGBAColor.self, forKey: .mssBearColor) ?? d.mssBearColor
+        sweepColor = try c.decodeIfPresent(RGBAColor.self, forKey: .sweepColor) ?? d.sweepColor
+        smtBullColor = try c.decodeIfPresent(RGBAColor.self, forKey: .smtBullColor) ?? d.smtBullColor
+        smtBearColor = try c.decodeIfPresent(RGBAColor.self, forKey: .smtBearColor) ?? d.smtBearColor
+        smtSymbol = try c.decodeIfPresent(String.self, forKey: .smtSymbol) ?? d.smtSymbol
     }
 
     static func decode(_ json: String) -> KillzonePivotsSettings {
@@ -90,9 +99,9 @@ struct KillzonePivotsLayer {
 
     init() {}
 
-    init(candles: [Candle], barInterval: TimeInterval, settings: KillzonePivotsSettings) {
+    init(candles: [Candle], barInterval: TimeInterval, settings: KillzonePivotsSettings, comparison: [Candle] = []) {
         let config = settings.config
-        output = KillzonePivots.compute(candles: candles, barInterval: barInterval, config: config)
+        output = KillzonePivots.compute(candles: candles, barInterval: barInterval, config: config, comparison: comparison)
         for box in output.boxes {
             let session = config.sessions[box.session]
             boxes.append(SessionBox(id: "kz-\(box.session)-\(box.range.lowerBound)", range: box.range, high: box.high, low: box.low,
@@ -115,6 +124,17 @@ struct KillzonePivotsLayer {
             segments.append(ChartSegment(start: Double(brk.start), end: Double(brk.end), price: brk.price, color: color,
                                          width: brk.shift ? 1.4 : 1, dash: brk.shift ? [] : [4, 3],
                                          label: brk.shift ? "MSS" : "BOS"))
+        }
+        for sweep in output.sweeps {
+            // A short dashed line from the level to the bar that took it.
+            segments.append(ChartSegment(start: Double(max(sweep.levelStart, sweep.index - 12)), end: Double(sweep.index) + 0.5,
+                                         price: sweep.price, color: settings.sweepColor.color, width: 1.2, dash: [2, 2],
+                                         label: "$ \(sweep.label)"))
+        }
+        for div in output.smt {
+            let color = (div.bullish ? settings.smtBullColor : settings.smtBearColor).color
+            segments.append(ChartSegment(start: Double(div.start), end: Double(div.end), price: div.startPrice, color: color,
+                                         width: 1.4, label: "SMT", endPrice: div.endPrice))
         }
         for box in output.macroBoxes {
             let macro = config.macros[box.macro]
@@ -171,14 +191,17 @@ final class KillzonePivotsCache {
         return cachedSettings
     }
 
-    func layer(candles: [Candle], barInterval: TimeInterval, settings: KillzonePivotsSettings, enabled: Bool) -> KillzonePivotsLayer {
+    func layer(candles: [Candle], barInterval: TimeInterval, settings: KillzonePivotsSettings, enabled: Bool,
+               comparison: [Candle] = []) -> KillzonePivotsLayer {
         guard enabled else { return KillzonePivotsLayer() }
         // The forming bar's high/low can mitigate pivots, so it is part of the key.
         let last = candles.last
+        let other = comparison.last
         let newKey = "\(candles.count)-\(candles.first?.time.timeIntervalSince1970 ?? 0)-\(last?.high ?? 0)-\(last?.low ?? 0)-\(barInterval)-\(settings.hashValue)"
+            + "-\(comparison.count)-\(other?.time.timeIntervalSince1970 ?? 0)-\(other?.high ?? 0)-\(other?.low ?? 0)"
         if newKey != key {
             key = newKey
-            cached = KillzonePivotsLayer(candles: candles, barInterval: barInterval, settings: settings)
+            cached = KillzonePivotsLayer(candles: candles, barInterval: barInterval, settings: settings, comparison: comparison)
         }
         return cached
     }
@@ -216,5 +239,45 @@ struct KillzoneRangeTable: View {
             .background(theme.background.opacity(0.9), in: .rect(cornerRadius: 6))
             .overlay(RoundedRectangle(cornerRadius: 6).stroke(theme.grid, lineWidth: 1))
         }
+    }
+}
+
+/// The killzone running now, or else the next one to start, with the seconds
+/// left in it or until it starts.
+struct KillzoneStatus {
+    var session: Int
+    var name: String
+    var active: Bool
+    var seconds: TimeInterval
+
+    init?(config: KillzonePivots.Config, now: Date) {
+        let zone = TimeZone(identifier: config.timeZoneID) ?? TimeZone(identifier: "America/New_York")!
+        let local = now.timeIntervalSince1970 + Double(zone.secondsFromGMT(for: now))
+        let hour = local.truncatingRemainder(dividingBy: 86_400) / 3600
+        var current: (index: Int, left: Double)?
+        var next: (index: Int, until: Double)?
+        for (i, session) in config.sessions.enumerated() where session.enabled {
+            let start = session.start.truncatingRemainder(dividingBy: 24)
+            let end = session.end.truncatingRemainder(dividingBy: 24)
+            guard start != end else { continue }
+            let inside = start < end ? (hour >= start && hour < end) : (hour >= start || hour < end)
+            if inside, current == nil {
+                current = (i, (end - hour + 24).truncatingRemainder(dividingBy: 24))
+            }
+            let until = (start - hour + 24).truncatingRemainder(dividingBy: 24)
+            if !inside, next.map({ until < $0.until }) ?? true { next = (i, until) }
+        }
+        if let current {
+            session = current.index
+            active = true
+            seconds = current.left * 3600
+        } else if let next {
+            session = next.index
+            active = false
+            seconds = next.until * 3600
+        } else {
+            return nil
+        }
+        name = config.sessions[session].name
     }
 }

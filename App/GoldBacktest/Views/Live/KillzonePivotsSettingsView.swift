@@ -23,6 +23,8 @@ struct KillzonePivotsSettingsView: View {
                 killzones
                 fvgSection
                 structureSection
+                liquiditySection
+                smtSection
                 macros
                 boxes
                 pivots
@@ -150,6 +152,46 @@ struct KillzonePivotsSettingsView: View {
             Text("Cấu trúc thị trường")
         } footer: {
             Text("Đường ngang từ đỉnh/đáy swing tới cây nến đóng cửa phá qua. MSS: phá ngược xu hướng trước đó (nét liền); BOS: phá cùng xu hướng (nét đứt).")
+        }
+    }
+
+    private var liquiditySection: some View {
+        Section {
+            Toggle("Hiện quét thanh khoản", isOn: $settings.config.showSweeps)
+            if settings.config.showSweeps {
+                Stepper("Giữ \(settings.config.sweepCount) lần quét gần nhất", value: $settings.config.sweepCount, in: 2...100, step: 2)
+                colorRow("Màu", color: $settings.sweepColor)
+            }
+        } header: {
+            Text("Quét thanh khoản (Liquidity sweep)")
+        } footer: {
+            Text("Giá râu nến vượt đỉnh/đáy phiên (AS.H, LO.L…) hoặc đỉnh/đáy ngày trước (PDH/PDL) rồi đóng cửa quay lại: nét đứt ngắn có nhãn \"$ LO.H\" tại cây nến quét. Quét đỉnh thường báo giảm, quét đáy báo tăng.")
+        }
+    }
+
+    private var smtSection: some View {
+        Section {
+            Toggle("Hiện SMT", isOn: $settings.config.showSMT)
+            if settings.config.showSMT {
+                HStack {
+                    Text("So với mã")
+                    TextField("Tự động (XAG cho vàng)", text: $settings.smtSymbol)
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                }
+                Toggle("Mã so sánh chạy ngược chiều (DXY)", isOn: $settings.config.smtInverse)
+                Stepper("Swing: \(settings.config.smtSwingLength) nến mỗi bên", value: $settings.config.smtSwingLength, in: 1...10)
+                Stepper("Hai đỉnh/đáy cách tối đa \(settings.config.smtLookback) nến", value: $settings.config.smtLookback,
+                        in: 10...300, step: 10)
+                Stepper("Giữ \(settings.config.smtCount) SMT gần nhất", value: $settings.config.smtCount, in: 2...50, step: 2)
+                colorRow("Màu SMT tăng", color: $settings.smtBullColor)
+                colorRow("Màu SMT giảm", color: $settings.smtBearColor)
+            }
+        } header: {
+            Text("SMT divergence")
+        } footer: {
+            Text("So 2 đỉnh (hoặc 2 đáy) liên tiếp với thị trường liên quan cùng khung: vàng tạo đỉnh cao hơn mà bạc không (SMT giảm), hoặc vàng tạo đáy thấp hơn mà bạc không (SMT tăng). Tự động: XAUUSDT ↔ XAGUSDT (Binance Futures), XAU_USD ↔ XAG_USD (OANDA), BTC ↔ ETH. Mã phải cùng nguồn dữ liệu với biểu đồ; không dùng cho khung giây.")
         }
     }
 

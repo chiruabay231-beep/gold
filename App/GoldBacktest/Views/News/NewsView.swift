@@ -4,7 +4,7 @@ import BacktestKit
 /// The News tab: this week's economic calendar (red / orange USD events
 /// that move XAUUSD) and today's gold headlines.
 struct NewsView: View {
-    @State private var news = NewsStore()
+    @Environment(NewsStore.self) private var news
 
     enum Page: String, CaseIterable, Identifiable {
         case calendar = "Lịch kinh tế", headlines = "Tin vàng"

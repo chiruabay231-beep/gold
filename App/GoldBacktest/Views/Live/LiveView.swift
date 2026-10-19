@@ -9,6 +9,8 @@ struct LiveView: View {
     @Environment(LiveMarket.self) private var market
     @Environment(PaperTrader.self) private var trader
     @Environment(BotController.self) private var bot
+    @Environment(NewsStore.self) private var news
+    @AppStorage("news.vietnamese") private var newsVietnamese = false
     @Environment(\.scenePhase) private var scenePhase
 
     @AppStorage("live.theme") private var themeName = "tradingView"
@@ -94,6 +96,16 @@ struct LiveView: View {
             }
         }
         .onChange(of: keepAwake) { _, value in UIApplication.shared.isIdleTimerDisabled = value }
+        .task {
+            // The calendar feed asks for few requests; NewsStore refreshes at most every 15 minutes.
+            while !Task.isCancelled {
+                await news.refresh(vietnamese: newsVietnamese)
+                try? await Task.sleep(nanoseconds: 15 * 60 * 1_000_000_000)
+            }
+        }
+        .task(id: "\(market.symbolKey)|\(market.interval.rawValue)|\(smtTarget ?? "")") {
+            market.setComparison(symbol: smtTarget)
+        }
         .sheet(isPresented: $showAutoStopSettings) { AutoStopSettingsView() }
         .alert("Kết quả replay", isPresented: Binding(get: { replaySummary != nil }, set: { if !$0 { replaySummary = nil } })) {
             Button("OK", role: .cancel) {}
@@ -326,15 +338,23 @@ struct LiveView: View {
 
     private var killzoneSettings: KillzonePivotsSettings { killzoneCache.settings(json: killzonePivotsJSON) }
 
+    /// Market whose bars are loaded for SMT, when the layer and SMT are on.
+    private var smtTarget: String? {
+        let settings = killzoneSettings
+        guard showKillzonePivots, settings.config.showSMT else { return nil }
+        let custom = settings.smtSymbol.trimmingCharacters(in: .whitespaces)
+        return custom.isEmpty ? market.defaultComparisonSymbol : custom
+    }
+
     private var killzoneLayer: KillzonePivotsLayer {
         killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
-                            settings: killzoneSettings, enabled: showKillzonePivots)
+                            settings: killzoneSettings, enabled: showKillzonePivots, comparison: market.comparisonCandles)
     }
 
     private var chartPanel: some View {
         let settings = killzoneSettings
         let layer = killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
-                                        settings: settings, enabled: showKillzonePivots)
+                                        settings: settings, enabled: showKillzonePivots, comparison: market.comparisonCandles)
         return ZStack(alignment: .trailing) {
             CandleChart(candles: chartCandles,
                         overlays: overlays,
@@ -345,6 +365,7 @@ struct LiveView: View {
                         segments: layer.segments,
                         verticalLines: layer.verticalLines,
                         notes: layer.notes,
+                        timeEvents: replay.isActive ? [] : newsTimeEvents,
                         priceLines: tradeLines,
                         onPriceLineDrag: { id, price, ended in tradeLineDragged(id: id, price: price, ended: ended) },
                         onPriceLineClose: { id in tradeLineClosed(id: id) },
@@ -783,6 +804,7 @@ struct LiveView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 0) {
+            sessionInfo
             Spacer(minLength: 4)
             toolbarButton("backward.end.alt", active: replay.isActive) { toggleReplay() }
             toolbarButton("pencil.tip", active: showDrawingBar) {
@@ -798,10 +820,89 @@ struct LiveView: View {
                 fullScreen = true
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.leading, 10)
+        .padding(.trailing, 6)
+        .padding(.vertical, 6)
         .background(theme.background)
         .overlay(alignment: .top) { Rectangle().fill(theme.grid).frame(height: 1) }
+    }
+
+    // MARK: - Session and news info
+
+    /// Red USD news of today (chart time zone), grouped by time, for the time axis.
+    private var todaysRedNews: [(time: Date, events: [EconomicEvent])] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = ChartTimeZones.zone(timeZoneID)
+        let today = MarketNews.goldEvents(news.events, minimum: .high).filter { calendar.isDateInToday($0.date) }
+        let grouped = Dictionary(grouping: today, by: \.date)
+        return grouped.keys.sorted().map { ($0, grouped[$0] ?? []) }
+    }
+
+    private var newsTimeEvents: [ChartTimeEvent] {
+        todaysRedNews.map { item in
+            var label = Self.shortNewsTitle(item.events.first?.title ?? "")
+            if item.events.count > 1 { label += " +\(item.events.count - 1)" }
+            label += " " + clockText(item.time)
+            let past = item.time < Date()
+            return ChartTimeEvent(time: item.time, label: label, color: Self.newsRed.opacity(past ? 0.55 : 1))
+        }
+    }
+
+    static let newsRed = Color(red: 0.91, green: 0.2, blue: 0.24)
+
+    static func shortNewsTitle(_ title: String) -> String {
+        title.count > 16 ? String(title.prefix(15)) + "…" : title
+    }
+
+    private func clockText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm"
+        formatter.timeZone = ChartTimeZones.zone(timeZoneID)
+        return formatter.string(from: date)
+    }
+
+    /// Current or next killzone with a countdown, and the next red news of the day.
+    private var sessionInfo: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            let now = context.date
+            let settings = killzoneSettings
+            let status = KillzoneStatus(config: settings.config, now: now)
+            let nextNews = todaysRedNews.first { $0.time > now }
+            Button { if nextNews != nil { store.selectedTab = .news } } label: {
+                VStack(alignment: .leading, spacing: 2) {
+                    if let status {
+                        HStack(spacing: 5) {
+                            Circle().fill(settings.sessionColor(status.session)).frame(width: 7, height: 7)
+                            Text(status.active
+                                 ? "\(status.name) · còn \(Self.duration(status.seconds))"
+                                 : "\(status.name) \(clockText(now.addingTimeInterval(status.seconds))) · sau \(Self.duration(status.seconds))")
+                                .foregroundColor(status.active ? theme.primaryText : theme.text)
+                        }
+                    }
+                    if let nextNews {
+                        HStack(spacing: 5) {
+                            Circle().fill(Self.newsRed).frame(width: 7, height: 7)
+                            Text("\(Self.shortNewsTitle(nextNews.events.first?.title ?? "")) \(clockText(nextNews.time))")
+                                .foregroundColor(theme.primaryText)
+                        }
+                    } else if status == nil || !news.events.isEmpty {
+                        Text(news.events.isEmpty ? "Đang tải lịch tin…" : "Hôm nay không có tin đỏ")
+                            .foregroundColor(theme.text)
+                    }
+                }
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 8).fill(theme.grid.opacity(theme.isLight ? 0.5 : 0.8)))
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    static func duration(_ seconds: TimeInterval) -> String {
+        let minutes = max(0, Int(seconds / 60))
+        return minutes >= 60 ? "\(minutes / 60)g\(String(format: "%02d", minutes % 60))" : "\(minutes)p"
     }
 
     private var symbolMenu: some View {
@@ -886,9 +987,10 @@ struct LiveView: View {
 
     private func toolbarIcon(_ systemName: String, active: Bool) -> some View {
         Image(systemName: systemName)
-            .font(.system(size: 18, weight: .regular))
+            .font(.system(size: 17, weight: .regular))
             .foregroundColor(active ? theme.accent : theme.primaryText)
-            .frame(width: 42, height: 36)
+            .frame(width: 38, height: 34)
+            .background(RoundedRectangle(cornerRadius: 8).fill(active ? theme.accent.opacity(0.14) : .clear))
     }
 
     private func toolbarButton(_ systemName: String, active: Bool, action: @escaping () -> Void) -> some View {

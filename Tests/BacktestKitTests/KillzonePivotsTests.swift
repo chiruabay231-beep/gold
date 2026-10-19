@@ -59,6 +59,56 @@ final class KillzonePivotsTests: XCTestCase {
             .levels.first { $0.kind == .pivotHigh(session: 1) })
     }
 
+    func testLiquiditySweepNeedsCloseBackInside() {
+        let swept = candles { c in
+            c[12].high = 110   // London high
+            c[40].high = 111   // wick through it, close stays at 100
+        }
+        let sweep = KillzonePivots.compute(candles: swept, barInterval: 900, config: KillzonePivots.Config())
+            .sweeps.first { $0.label == "LO.H" }
+        XCTAssertEqual(sweep?.index, 40)
+        XCTAssertEqual(sweep?.levelStart, 12)
+        XCTAssertEqual(sweep?.bullish, false)
+        XCTAssertEqual(sweep?.price, 110)
+
+        let broken = candles { c in
+            c[12].high = 110
+            c[40].high = 112
+            c[40].close = 111   // closes above: a break, not a sweep
+        }
+        XCTAssertNil(KillzonePivots.compute(candles: broken, barInterval: 900, config: KillzonePivots.Config())
+            .sweeps.first { $0.label == "LO.H" })
+    }
+
+    func testSMTDivergence() {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        func bars(_ highs: [Int: Double], lows: [Int: Double] = [:]) -> [Candle] {
+            (0..<40).map { i in
+                Candle(time: t0.addingTimeInterval(Double(i) * 300), open: 100, high: highs[i] ?? 100.5,
+                       low: lows[i] ?? 99.5, close: 100)
+            }
+        }
+        // Gold makes a higher high, silver a lower high: bearish SMT.
+        let gold = bars([10: 105, 20: 106])
+        let silver = bars([10: 105, 20: 104])
+        let smt = KillzonePivots.smtDivergences(gold, silver, config: KillzonePivots.Config())
+        XCTAssertEqual(smt.count, 1)
+        XCTAssertEqual(smt.first?.bullish, false)
+        XCTAssertEqual(smt.first?.start, 10)
+        XCTAssertEqual(smt.first?.end, 20)
+        // Both make higher highs: no divergence.
+        XCTAssertTrue(KillzonePivots.smtDivergences(gold, bars([10: 105, 20: 107]), config: KillzonePivots.Config()).isEmpty)
+
+        // Inverse market (DXY): gold lower low while DXY makes a lower high = bullish SMT.
+        var inverse = KillzonePivots.Config()
+        inverse.smtInverse = true
+        let goldLows = bars([:], lows: [10: 95, 20: 94])
+        let dxy = bars([10: 105, 20: 104])
+        let bullish = KillzonePivots.smtDivergences(goldLows, dxy, config: inverse)
+        XCTAssertEqual(bullish.first?.bullish, true)
+        XCTAssertEqual(bullish.first?.end, 20)
+    }
+
     func testOpensCutoffStampsAndLimit() {
         let data = candles { c in c[96].open = 105 }   // Tuesday 00:00
         var config = KillzonePivots.Config()

@@ -146,6 +146,24 @@ public enum KillzonePivots {
         /// Most recent breaks kept.
         public var structureCount = 20
 
+        /// Liquidity sweeps: a wick through a session high/low or the previous
+        /// day's high/low that closes back on the other side.
+        public var showSweeps = true
+        /// Most recent sweeps kept.
+        public var sweepCount = 20
+
+        /// SMT divergence against a correlated market (gold vs silver): one makes
+        /// a higher high / lower low and the other does not.
+        public var showSMT = true
+        /// The other market moves the opposite way (e.g. DXY against gold).
+        public var smtInverse = false
+        /// Bars left and right of a swing used for SMT.
+        public var smtSwingLength = 3
+        /// The two swings compared are at most this many bars apart.
+        public var smtLookback = 60
+        /// Most recent divergences kept.
+        public var smtCount = 10
+
         public init() {}
 
         // Missing keys keep their defaults, so settings saved by an older
@@ -190,6 +208,13 @@ public enum KillzonePivots {
             showBOS = try c.decodeIfPresent(Bool.self, forKey: .showBOS) ?? d.showBOS
             swingLength = try c.decodeIfPresent(Int.self, forKey: .swingLength) ?? d.swingLength
             structureCount = try c.decodeIfPresent(Int.self, forKey: .structureCount) ?? d.structureCount
+            showSweeps = try c.decodeIfPresent(Bool.self, forKey: .showSweeps) ?? d.showSweeps
+            sweepCount = try c.decodeIfPresent(Int.self, forKey: .sweepCount) ?? d.sweepCount
+            showSMT = try c.decodeIfPresent(Bool.self, forKey: .showSMT) ?? d.showSMT
+            smtInverse = try c.decodeIfPresent(Bool.self, forKey: .smtInverse) ?? d.smtInverse
+            smtSwingLength = try c.decodeIfPresent(Int.self, forKey: .smtSwingLength) ?? d.smtSwingLength
+            smtLookback = try c.decodeIfPresent(Int.self, forKey: .smtLookback) ?? d.smtLookback
+            smtCount = try c.decodeIfPresent(Int.self, forKey: .smtCount) ?? d.smtCount
         }
     }
 
@@ -267,7 +292,30 @@ public enum KillzonePivots {
         public var end: Int
     }
 
+    /// Price wicked through a liquidity level at `index` and closed back.
+    /// `bullish` = sell-side liquidity (a low) was taken.
+    public struct Sweep: Hashable, Sendable {
+        public var bullish: Bool
+        public var price: Double
+        /// Bar that formed the level and the sweeping bar.
+        public var levelStart: Int
+        public var index: Int
+        public var label: String
+    }
+
+    /// Divergence between two swing highs (bearish) or lows (bullish) of this
+    /// market and the comparison market.
+    public struct SMTDivergence: Hashable, Sendable {
+        public var bullish: Bool
+        public var start: Int
+        public var end: Int
+        public var startPrice: Double
+        public var endPrice: Double
+    }
+
     public struct Output: Sendable {
+        public var sweeps: [Sweep] = []
+        public var smt: [SMTDivergence] = []
         public var fvgs: [FairValueGap] = []
         public var breaks: [StructureBreak] = []
         public var boxes: [Box] = []
@@ -282,9 +330,14 @@ public enum KillzonePivots {
         public init() {}
     }
 
-    public static func compute(candles: [Candle], barInterval: TimeInterval, config: Config) -> Output {
+    /// `comparison` holds the bars of the SMT market (same timeframe); empty = no SMT.
+    public static func compute(candles: [Candle], barInterval: TimeInterval, config: Config,
+                               comparison: [Candle] = []) -> Output {
         var output = Output()
         guard candles.count > 2 else { return output }
+        if config.showSMT, !comparison.isEmpty {
+            output.smt = smtDivergences(candles, comparison, config: config)
+        }
         // FVG and structure have their own timeframe rules.
         if config.showFVG, barInterval >= config.fvgMinTimeframeMinutes * 60 - 1 {
             output.fvgs = fairValueGaps(candles, config: config)
@@ -340,14 +393,14 @@ public enum KillzonePivots {
                     }
                     continue
                 }
-                if config.showPivots {
-                    for isHigh in [true, false] {
-                        let price = isHigh ? high : low
-                        var mitigation: Int?
-                        for j in (window.upperBound + 1)..<n where isHigh ? candles[j].high > price : candles[j].low < price {
-                            mitigation = j
-                            break
-                        }
+                for isHigh in [true, false] {
+                    let price = isHigh ? high : low
+                    let mitigation = firstBreak(candles, price: price, isHigh: isHigh, from: window.upperBound + 1)
+                    if config.showSweeps, let j = mitigation, isHigh ? candles[j].close < price : candles[j].close > price {
+                        output.sweeps.append(Sweep(bullish: !isHigh, price: price, levelStart: isHigh ? highIndex : lowIndex,
+                                                   index: j, label: isHigh ? session.highLabel : session.lowLabel))
+                    }
+                    if config.showPivots {
                         if mitigation != nil && !config.showMitigated { continue }
                         var end: Int? = config.pivotExtension == .untilMitigated ? mitigation : nil
                         if let cut = cutoff(after: window.upperBound), end.map({ cut < $0 }) ?? true { end = cut }
@@ -398,20 +451,37 @@ public enum KillzonePivots {
         }
 
         // Previous day / week / month highs and lows, drawn across the current period.
-        func previousPeriod(_ id: (Int) -> Int, kind: Level.Kind, labels: (String, String)) {
+        /// High/low of the period before the current one and the first bar of the current period.
+        func previousRange(_ id: (Int) -> Int) -> (start: Int, high: Double, highIndex: Int, low: Double, lowIndex: Int)? {
             let current = id(n - 1)
-            guard let start = (0..<n).first(where: { id($0) == current }), start > 0 else { return }
+            guard let start = (0..<n).first(where: { id($0) == current }), start > 0 else { return nil }
             let previous = id(start - 1)
             var high = -Double.infinity, low = Double.infinity
+            var highIndex = start - 1, lowIndex = start - 1
             var i = start - 1
             while i >= 0, id(i) == previous {
-                high = max(high, candles[i].high)
-                low = min(low, candles[i].low)
+                if candles[i].high > high { high = candles[i].high; highIndex = i }
+                if candles[i].low < low { low = candles[i].low; lowIndex = i }
                 i -= 1
             }
-            guard high.isFinite, low.isFinite else { return }
-            output.levels.append(Level(kind: kind, price: high, start: start, end: nil, label: labels.0, mitigated: false))
-            output.levels.append(Level(kind: kind, price: low, start: start, end: nil, label: labels.1, mitigated: false))
+            guard high.isFinite, low.isFinite else { return nil }
+            return (start, high, highIndex, low, lowIndex)
+        }
+        func previousPeriod(_ id: (Int) -> Int, kind: Level.Kind, labels: (String, String)) {
+            guard let range = previousRange(id) else { return }
+            output.levels.append(Level(kind: kind, price: range.high, start: range.start, end: nil, label: labels.0, mitigated: false))
+            output.levels.append(Level(kind: kind, price: range.low, start: range.start, end: nil, label: labels.1, mitigated: false))
+        }
+        // Sweeps of the previous day's high/low (the classic ICT liquidity), shown with or without its lines.
+        if config.showSweeps, let range = previousRange({ clock.day[$0] }) {
+            for isHigh in [true, false] {
+                let price = isHigh ? range.high : range.low
+                if let j = firstBreak(candles, price: price, isHigh: isHigh, from: range.start),
+                   isHigh ? candles[j].close < price : candles[j].close > price {
+                    output.sweeps.append(Sweep(bullish: !isHigh, price: price, levelStart: isHigh ? range.highIndex : range.lowIndex,
+                                               index: j, label: isHigh ? "PDH" : "PDL"))
+                }
+            }
         }
         if config.showPreviousDay { previousPeriod({ clock.day[$0] }, kind: .previousDay, labels: ("PDH", "PDL")) }
         if config.showPreviousWeek { previousPeriod({ clock.week[$0] }, kind: .previousWeek, labels: ("PWH", "PWL")) }
@@ -432,7 +502,53 @@ public enum KillzonePivots {
                 output.dayLabels.append(DayLabel(index: index, weekday: calendar.component(.weekday, from: candles[index].time)))
             }
         }
+        output.sweeps = Array(output.sweeps.sorted { $0.index < $1.index }.suffix(max(config.sweepCount, 1)))
         return output
+    }
+
+    /// First bar from `from` that trades beyond `price`.
+    static func firstBreak(_ c: [Candle], price: Double, isHigh: Bool, from: Int) -> Int? {
+        guard from < c.count else { return nil }
+        return (from..<c.count).first { isHigh ? c[$0].high > price : c[$0].low < price }
+    }
+
+    /// SMT divergences between `a` (the chart) and `b` (the comparison market),
+    /// matched bar by bar on time. Swings are confirmed `smtSwingLength` bars later.
+    public static func smtDivergences(_ a: [Candle], _ b: [Candle], config: Config) -> [SMTDivergence] {
+        let length = max(config.smtSwingLength, 1)
+        let n = a.count
+        guard n > length * 2 + 2, !b.isEmpty else { return [] }
+        let other = Dictionary(b.map { ($0.time, $0) }, uniquingKeysWith: { _, new in new })
+        // The other market's extreme on the bar and its neighbours, so a swing one bar apart still matches.
+        func otherExtreme(_ p: Int, high: Bool) -> Double? {
+            let values = (max(0, p - 1)...min(n - 1, p + 1)).compactMap { other[a[$0].time] }.map { high ? $0.high : $0.low }
+            return high ? values.max() : values.min()
+        }
+        var highs: [Int] = [], lows: [Int] = []
+        for p in length..<(n - length) {
+            let window = (p - length)...(p + length)
+            if window.allSatisfy({ $0 == p || a[$0].high < a[p].high }) { highs.append(p) }
+            if window.allSatisfy({ $0 == p || a[$0].low > a[p].low }) { lows.append(p) }
+        }
+        var result: [SMTDivergence] = []
+        // Highs: inverse markets are compared at their lows.
+        for (i1, i2) in zip(highs, highs.dropFirst()) where i2 - i1 <= config.smtLookback {
+            guard let b1 = otherExtreme(i1, high: !config.smtInverse), let b2 = otherExtreme(i2, high: !config.smtInverse) else { continue }
+            let higher = a[i2].high > a[i1].high
+            let otherHigher = config.smtInverse ? b2 < b1 : b2 > b1
+            if higher != otherHigher {
+                result.append(SMTDivergence(bullish: false, start: i1, end: i2, startPrice: a[i1].high, endPrice: a[i2].high))
+            }
+        }
+        for (i1, i2) in zip(lows, lows.dropFirst()) where i2 - i1 <= config.smtLookback {
+            guard let b1 = otherExtreme(i1, high: config.smtInverse), let b2 = otherExtreme(i2, high: config.smtInverse) else { continue }
+            let lower = a[i2].low < a[i1].low
+            let otherLower = config.smtInverse ? b2 > b1 : b2 < b1
+            if lower != otherLower {
+                result.append(SMTDivergence(bullish: true, start: i1, end: i2, startPrice: a[i1].low, endPrice: a[i2].low))
+            }
+        }
+        return Array(result.sorted { $0.end < $1.end }.suffix(max(config.smtCount, 1)))
     }
 
     /// 3-candle imbalances: a bullish gap when a candle's low is above the high two

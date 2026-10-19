@@ -126,6 +126,8 @@ struct ChartSegment {
     var width: CGFloat = 1
     var dash: [CGFloat] = []
     var label = ""
+    /// Price at `end` for a sloped line (SMT); nil = horizontal.
+    var endPrice: Double? = nil
 }
 
 /// A full-width price line that can be dragged up and down (order entry,
@@ -156,6 +158,13 @@ struct ChartVerticalLine {
     var label = ""
 }
 
+/// A moment marked on the time axis (economic news), possibly after the last bar.
+struct ChartTimeEvent {
+    var time: Date
+    var label: String
+    var color: Color
+}
+
 /// Text at the bottom of the plot under a bar (day-of-week labels).
 struct ChartNote {
     var index: Int
@@ -182,6 +191,8 @@ struct CandleChart: View {
     var segments: [ChartSegment] = []
     var verticalLines: [ChartVerticalLine] = []
     var notes: [ChartNote] = []
+    /// News flags on the time axis.
+    var timeEvents: [ChartTimeEvent] = []
     var priceLines: [ChartPriceLine] = []
     /// A price line was dragged to a price; `true` when the finger lifts.
     var onPriceLineDrag: ((String, Double, Bool) -> Void)?
@@ -421,6 +432,52 @@ struct CandleChart: View {
 
     // MARK: - Drawing
 
+    /// Fractional bar index of a time; times after the last bar continue at the bar length.
+    private func barPosition(of time: Date) -> Double? {
+        guard let first = candles.first, let last = candles.last, time >= first.time else { return nil }
+        if time >= last.time {
+            let step = countdownInterval
+                ?? (candles.count > 1 ? last.time.timeIntervalSince(candles[candles.count - 2].time) : 60)
+            return Double(candles.count - 1) + time.timeIntervalSince(last.time) / max(step, 1)
+        }
+        var low = 0, high = candles.count - 1
+        while low < high {
+            let mid = (low + high + 1) / 2
+            if candles[mid].time <= time { low = mid } else { high = mid - 1 }
+        }
+        return Double(low)
+    }
+
+    /// News flags: a faint dashed line through the chart and a coloured tag on the time axis.
+    /// Events to the right of the screen are pinned to its right edge.
+    private func drawTimeEvents(in context: inout GraphicsContext, layout: Layout, s: Scale) {
+        var used: [CGRect] = []
+        for event in timeEvents.sorted(by: { $0.time < $1.time }) {
+            guard let position = barPosition(of: event.time) else { continue }
+            let x = s.x(position)
+            guard x >= 0 else { continue }
+            let offscreen = x > layout.axisX
+            if !offscreen {
+                var line = Path()
+                line.move(to: CGPoint(x: x, y: layout.plot.minY))
+                line.addLine(to: CGPoint(x: x, y: layout.timeAxis.minY))
+                context.stroke(line, with: .color(event.color.opacity(0.45)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+            }
+            let text = Text(offscreen ? "\(event.label) ›" : event.label)
+                .font(.system(size: 9, weight: .semibold)).foregroundColor(.white)
+            let resolved = context.resolve(text)
+            let size = resolved.measure(in: CGSize(width: 200, height: 20))
+            let width = size.width + 10
+            var rect = CGRect(x: x - width / 2, y: layout.timeAxis.minY + 1.5, width: width, height: layout.timeAxis.height - 3)
+            rect.origin.x = min(max(rect.minX, 2), layout.axisX - width - 2)
+            // Skip a tag that would cover one already drawn.
+            if used.contains(where: { $0.insetBy(dx: -2, dy: 0).intersects(rect) }) { continue }
+            used.append(rect)
+            context.fill(Path(roundedRect: rect, cornerRadius: rect.height / 2), with: .color(event.color))
+            context.draw(resolved, at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
+        }
+    }
+
     private func draw(in context: inout GraphicsContext, layout: Layout, now: Date) {
         guard !candles.isEmpty else { return }
         let s = scale(layout: layout)
@@ -458,6 +515,7 @@ struct CandleChart: View {
 
         var plotContext = context
         plotContext.clip(to: Path(layout.plot))
+        drawTimeEvents(in: &context, layout: layout, s: s)
 
         // Session boxes (behind candles).
         for box in sessionBoxes where box.range.upperBound >= range.lowerBound && box.range.lowerBound < range.upperBound {
@@ -497,14 +555,23 @@ struct CandleChart: View {
             let endX = segment.end.map { s.x($0) } ?? layout.axisX
             guard endX >= 0, startX <= layout.axisX else { continue }
             let y = s.y(segment.price)
+            let endY = segment.endPrice.map { s.y($0) } ?? y
             var path = Path()
             path.move(to: CGPoint(x: startX, y: y))
-            path.addLine(to: CGPoint(x: endX, y: y))
+            path.addLine(to: CGPoint(x: endX, y: endY))
             plotContext.stroke(path, with: .color(segment.color), style: StrokeStyle(lineWidth: segment.width, dash: segment.dash))
             if !segment.label.isEmpty {
                 let labelX = min(endX, layout.axisX - 4)
-                plotContext.draw(Text(segment.label).font(.system(size: 9, weight: .medium)).foregroundColor(segment.color),
-                                 at: CGPoint(x: labelX, y: y - 6), anchor: .trailing)
+                if segment.endPrice != nil {
+                    // Sloped lines: label in the middle, on the outer side of the swing.
+                    let above = endY <= y
+                    plotContext.draw(Text(segment.label).font(.system(size: 9, weight: .semibold)).foregroundColor(segment.color),
+                                     at: CGPoint(x: (startX + endX) / 2, y: min(y, endY) + (above ? -7 : abs(endY - y) + 7)),
+                                     anchor: .center)
+                } else {
+                    plotContext.draw(Text(segment.label).font(.system(size: 9, weight: .medium)).foregroundColor(segment.color),
+                                     at: CGPoint(x: labelX, y: y - 6), anchor: .trailing)
+                }
             }
         }
         for note in notes where range.contains(note.index) {
