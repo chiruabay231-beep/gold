@@ -207,7 +207,7 @@ struct BrokerLoginView: View {
             }
             vpsSection
         }
-        .navigationTitle("Đăng nhập sàn")
+        .navigationTitle("Đăng nhập")
         .navigationBarTitleDisplayMode(.inline)
         .task { await refresh() }
         .task(id: status?.login) {
