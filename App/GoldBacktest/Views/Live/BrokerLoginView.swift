@@ -91,9 +91,14 @@ struct BrokerTradeView: View {
                         }
                     }
                 }
+                Section {
+                    NavigationLink { TradeHistoryView(source: .mt5) } label: {
+                        Label("Lịch sử (vị thế, lệnh, giao dịch)", systemImage: "clock.arrow.circlepath")
+                    }
+                }
                 if !state.deals.isEmpty {
                     Section("Đã đóng (24 giờ)") {
-                        ForEach(state.deals.reversed()) { d in
+                        ForEach(state.deals.reversed().prefix(5)) { d in
                             OrderRow(symbol: d.symbol, detail: "\(d.side == "long" ? "buy" : "sell") \(Self.lots(d.lots))",
                                      isBuy: d.side == "long",
                                      line: "\(Self.price(d.price)) · \(d.reason == "target" ? "TP" : (d.reason == "stop" ? "SL" : "đóng")) · \(Date(timeIntervalSince1970: d.time).formatted(date: .omitted, time: .shortened))",

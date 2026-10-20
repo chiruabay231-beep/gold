@@ -114,7 +114,7 @@ struct TradePanelView: View {
             }
             Section {
                 NavigationLink {
-                    DemoHistoryView()
+                    TradeHistoryView(source: .demo)
                 } label: {
                     Label("Lịch sử lệnh · \(account.history.count)", systemImage: "clock.arrow.circlepath")
                 }

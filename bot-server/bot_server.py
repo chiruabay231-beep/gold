@@ -29,7 +29,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.1"
+VERSION = "1.2"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -703,6 +703,70 @@ class Mt5Account:
                 raise ValueError(error)
         self.server.log(f"📱 Huỷ lệnh chờ MT5 #{ticket}")
         return self.trading()
+
+    def history(self, start, end):
+        """Closed positions, orders and deals of the account between two UTC times (MT5 History)."""
+        import datetime
+        with Mt5.lock:
+            mt5 = self._mt5()
+            # The server-time offset comes from a live tick: any symbol of the account will do.
+            probe = next(iter(mt5.positions_get() or ()), None)
+            symbol = probe.symbol if probe else next((r.name for r in (mt5.symbols_get() or ()) if r.visible), None)
+            offset = Mt5.detect_offset(symbol) if symbol else Mt5.offset_seconds
+            # MT5 wants server-time datetimes.
+            frm = datetime.datetime.fromtimestamp(float(start) + offset, tz=datetime.timezone.utc)
+            to = datetime.datetime.fromtimestamp(float(end) + offset, tz=datetime.timezone.utc)
+            deals_raw = list(mt5.history_deals_get(frm, to) or ())
+            orders_raw = list(mt5.history_orders_get(frm, to) or ()) if hasattr(mt5, "history_orders_get") else []
+            a = mt5.account_info()
+            deal_names = {mt5.DEAL_TYPE_BUY: "buy", mt5.DEAL_TYPE_SELL: "sell"}
+            balance_type = getattr(mt5, "DEAL_TYPE_BALANCE", 2)
+            deals, by_position = [], {}
+            summary = {"profit": 0.0, "deposit": 0.0, "withdrawal": 0.0, "swap": 0.0, "commission": 0.0}
+            for d in deals_raw:
+                fee = getattr(d, "fee", 0) or 0
+                kind = deal_names.get(d.type, "balance" if d.type == balance_type else "other")
+                entry = {getattr(mt5, "DEAL_ENTRY_IN", 0): "in", getattr(mt5, "DEAL_ENTRY_OUT", 1): "out"}.get(d.entry, "inout")
+                deals.append({"ticket": int(d.ticket), "position": int(d.position_id), "symbol": d.symbol or "",
+                              "type": kind, "entry": entry, "lots": d.volume, "price": d.price,
+                              "profit": d.profit, "swap": d.swap, "commission": d.commission + fee,
+                              "time": float(d.time) - offset, "comment": getattr(d, "comment", "") or ""})
+                if kind == "balance":
+                    summary["deposit" if d.profit >= 0 else "withdrawal"] += d.profit
+                    continue
+                summary["profit"] += d.profit
+                summary["swap"] += d.swap
+                summary["commission"] += d.commission + fee
+                if d.position_id:
+                    by_position.setdefault(int(d.position_id), []).append(d)
+            positions = []
+            for pid, rows in by_position.items():
+                ins = [r for r in rows if r.entry == getattr(mt5, "DEAL_ENTRY_IN", 0)]
+                outs = [r for r in rows if r.entry != getattr(mt5, "DEAL_ENTRY_IN", 0)]
+                if not ins or not outs:
+                    continue
+                first = ins[0]
+                lots = sum(r.volume for r in outs)
+                exit_price = sum(r.price * r.volume for r in outs) / lots if lots else outs[-1].price
+                positions.append({"ticket": pid, "symbol": first.symbol,
+                                  "side": "long" if first.type == mt5.DEAL_TYPE_BUY else "short",
+                                  "lots": lots, "entry": first.price, "exit": exit_price,
+                                  "openTime": float(first.time) - offset, "closeTime": float(outs[-1].time) - offset,
+                                  "profit": sum(r.profit + r.swap + r.commission + (getattr(r, "fee", 0) or 0) for r in rows),
+                                  "reason": {mt5.DEAL_REASON_SL: "stop", mt5.DEAL_REASON_TP: "target"}.get(outs[-1].reason, "manual")})
+            order_names = {mt5.ORDER_TYPE_BUY: "buy", mt5.ORDER_TYPE_SELL: "sell", mt5.ORDER_TYPE_BUY_LIMIT: "buy limit",
+                           mt5.ORDER_TYPE_SELL_LIMIT: "sell limit", mt5.ORDER_TYPE_BUY_STOP: "buy stop",
+                           mt5.ORDER_TYPE_SELL_STOP: "sell stop"}
+            states = {getattr(mt5, "ORDER_STATE_FILLED", 4): "filled", getattr(mt5, "ORDER_STATE_CANCELED", 2): "canceled",
+                      getattr(mt5, "ORDER_STATE_EXPIRED", 6): "expired", getattr(mt5, "ORDER_STATE_REJECTED", 5): "rejected"}
+            orders = [{"ticket": int(o.ticket), "symbol": o.symbol, "type": order_names.get(o.type, "other"),
+                       "lots": o.volume_initial, "filled": o.volume_initial - o.volume_current,
+                       "price": o.price_open or getattr(o, "price_current", 0), "stop": o.sl or None, "target": o.tp or None,
+                       "state": states.get(o.state, "other"), "time": float(o.time_setup) - offset,
+                       "doneTime": float(o.time_done or o.time_setup) - offset} for o in orders_raw]
+            summary["balance"] = a.balance if a else None
+            summary["currency"] = a.currency if a else None
+            return {"ok": True, "positions": positions, "orders": orders, "deals": deals, "summary": summary}
 
     def candles(self, symbol, interval, count, before=None):
         if interval not in MT5_TIMEFRAMES:
@@ -2201,6 +2265,10 @@ def make_handler(server):
                     return self._send(200, server.mt5_account.symbols((params.get("q") or [""])[0], limit))
                 if path == "/copy/status":
                     return self._send(200, server.copier.status())
+                if path == "/mt5/history":
+                    end = float((params.get("to") or [now()])[0])
+                    start = float((params.get("from") or [end - 86400])[0])
+                    return self._send(200, server.mt5_account.history(start, end))
                 if path == "/mt5/trading":
                     symbol = (params.get("symbol") or [None])[0]
                     return self._send(200, server.mt5_account.trading(symbol))
