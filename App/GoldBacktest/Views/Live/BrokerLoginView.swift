@@ -35,6 +35,7 @@ struct BrokerTradeView: View {
     @Environment(LiveMarket.self) private var market
     @State private var closing: MT5TradingState.Position?
     @State private var showSymbols = false
+    @State private var showCopy = false
 
     var body: some View {
         List {
@@ -112,6 +113,7 @@ struct BrokerTradeView: View {
                     Button { showSymbols = true } label: { Label("Mở biểu đồ để giao dịch…", systemImage: "chart.xyaxis.line") }
                     Button { Task { await mt5.refresh() } } label: { Label("Làm mới", systemImage: "arrow.clockwise") }
                     Button { page = 2 } label: { Label("Tài khoản & quyền đặt lệnh…", systemImage: "person.badge.key") }
+                    Button { showCopy = true } label: { Label("Copy trade…", systemImage: "doc.on.doc") }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -119,6 +121,7 @@ struct BrokerTradeView: View {
         }
         .task { await mt5.watch() }
         .refreshable { await mt5.refresh() }
+        .navigationDestination(isPresented: $showCopy) { CopyTradeView() }
         .sheet(isPresented: $showSymbols) {
             MT5SymbolSearchView { symbol in
                 market.select(source: .mt5, symbol: symbol, interval: market.interval.isSeconds ? .m1 : nil)
@@ -204,6 +207,13 @@ struct BrokerLoginView: View {
                 accountsSection
                 loginSection
                 if current != nil { tradingSection }
+                Section {
+                    NavigationLink { CopyTradeView() } label: {
+                        Label("Copy trade sang tài khoản khác", systemImage: "doc.on.doc")
+                    }
+                } footer: {
+                    Text("Một lệnh trên tài khoản đang dùng được mở trên nhiều tài khoản MT5 khác.")
+                }
             }
             vpsSection
         }

@@ -721,6 +721,560 @@ class Mt5Account:
 # ("skip", text): a signal that was not traded, logged without a notification.
 # --------------------------------------------------------------------------
 
+# --------------------------------------------------------------------------
+# Copy trade: every position of the main MT5 account (the one logged in for
+# the app) is opened on the follower accounts, with its SL/TP kept in step and
+# closed when the main one closes. The MetaTrader5 package drives one terminal
+# per process, so each follower runs in its own process (--copy-worker) with
+# its own copy of the MT5 terminal (portable mode).
+
+COPY_MAGIC = 20262
+COPY_PREFIX = "GC"
+
+
+def copy_comment(ticket):
+    return f"{COPY_PREFIX}{ticket}"
+
+
+def copy_master_ticket(comment):
+    m = re.match(rf"{COPY_PREFIX}(\d+)", comment or "")
+    return int(m.group(1)) if m else None
+
+
+def base_symbol(symbol):
+    """XAUUSDm, XAUUSD.r, #XAUUSD → XAUUSD (broker suffixes and prefixes off)."""
+    m = re.match(r"[#.]?([A-Z0-9]+)", symbol or "")
+    return m.group(1) if m else symbol
+
+
+class CopyWorker:
+    """Follower side, inside the --copy-worker process."""
+
+    def __init__(self, mt5):
+        self.mt5 = mt5
+        self.symbols = {}
+
+    def connect(self, cfg):
+        mt5 = self.mt5
+        kwargs = {"timeout": 60000}
+        if cfg.get("path"):
+            kwargs["path"] = cfg["path"]
+            kwargs["portable"] = bool(cfg.get("portable"))
+        kwargs.update(login=int(cfg["login"]), password=str(cfg["password"]), server=str(cfg["server"]))
+        if not mt5.initialize(**kwargs):
+            return {"ok": False, "error": f"Không đăng nhập được #{cfg['login']} ({mt5.last_error()})"}
+        a = mt5.account_info()
+        if a is None or a.login != int(cfg["login"]):
+            return {"ok": False, "error": f"MT5 không vào được tài khoản #{cfg['login']} ({mt5.last_error()})"}
+        return self.account()
+
+    def account(self):
+        mt5 = self.mt5
+        a = mt5.account_info()
+        if a is None:
+            return {"ok": False, "error": f"MT5 mất đăng nhập ({mt5.last_error()})"}
+        mode = {mt5.ACCOUNT_TRADE_MODE_DEMO: "demo", mt5.ACCOUNT_TRADE_MODE_REAL: "real"}.get(a.trade_mode, "contest")
+        mine = [p for p in (mt5.positions_get() or ()) if p.magic == COPY_MAGIC]
+        return {"ok": True, "login": a.login, "server": a.server, "balance": a.balance, "equity": a.equity,
+                "currency": a.currency, "mode": mode, "positions": len(mine),
+                "profit": sum(p.profit + getattr(p, "swap", 0) for p in mine)}
+
+    def resolve(self, symbol, mapping):
+        """The follower's name for the main account's symbol."""
+        if mapping.get(symbol):
+            return mapping[symbol]
+        if symbol in self.symbols:
+            return self.symbols[symbol]
+        mt5 = self.mt5
+        found = symbol if mt5.symbol_info(symbol) is not None else None
+        if found is None:
+            base = base_symbol(symbol)
+            pattern = re.compile(rf"[#.]?{re.escape(base)}([^A-Z0-9].*|[a-z].*)?$")
+            names = [s.name for s in (mt5.symbols_get() or ()) if pattern.match(s.name)]
+            names.sort(key=lambda n: (len(n), n))
+            found = names[0] if names else None
+        if found is not None:
+            mt5.symbol_select(found, True)
+            self.symbols[symbol] = found
+        return found
+
+    def volume(self, info, lots, f):
+        fixed = float(f.get("fixedLots") or 0)
+        wanted = fixed if fixed > 0 else lots * float(f.get("multiplier") or 1)
+        wanted = min(wanted, float(f.get("maxLots") or 0.1))
+        step = info.volume_step or 0.01
+        volume = math.floor(wanted / step + 1e-9) * step
+        if volume < info.volume_min - 1e-9:
+            if info.volume_min > float(f.get("maxLots") or 0.1) + 1e-9:
+                return None
+            volume = info.volume_min
+        return round(volume, 8)
+
+    def sync(self, msg):
+        mt5 = self.mt5
+        f = msg.get("follower", {})
+        state = self.account()
+        if not state["ok"]:
+            return state
+        if state["mode"] == "real" and not f.get("allowReal"):
+            return dict(state, ok=False, error="Tài khoản THẬT: bật 'Cho phép tài khoản thật' cho tài khoản copy này")
+        terminal = mt5.terminal_info()
+        if terminal is not None and not terminal.trade_allowed:
+            return dict(state, ok=False, error="Bật nút Algo Trading trong MT5 của tài khoản copy này")
+        master = {int(m["ticket"]): m for m in msg.get("positions", [])}
+        skip = set(int(t) for t in msg.get("skip", []))
+        mapping = f.get("symbolMap") or {}
+        deviation = int(f.get("deviation") or 30)
+        mine = {}
+        for p in mt5.positions_get() or ():
+            if p.magic == COPY_MAGIC and copy_master_ticket(p.comment) is not None:
+                mine[copy_master_ticket(p.comment)] = p
+        actions = []
+        errors = []
+        # Closed on the main account → close here.
+        for ticket, p in mine.items():
+            if ticket in master:
+                continue
+            tick = mt5.symbol_info_tick(p.symbol)
+            buy = p.type == mt5.POSITION_TYPE_BUY
+            _, error = mt5_send(mt5, {"action": mt5.TRADE_ACTION_DEAL, "symbol": p.symbol, "volume": p.volume,
+                                      "type": mt5.ORDER_TYPE_SELL if buy else mt5.ORDER_TYPE_BUY, "position": p.ticket,
+                                      "price": tick.bid if buy else tick.ask, "deviation": deviation,
+                                      "magic": COPY_MAGIC, "comment": copy_comment(ticket),
+                                      "type_time": mt5.ORDER_TIME_GTC})
+            if error:
+                errors.append(f"Đóng {p.symbol}: {error}")
+            else:
+                actions.append({"kind": "closed", "master": ticket, "symbol": p.symbol, "lots": p.volume,
+                                "profit": p.profit + getattr(p, "swap", 0)})
+        for ticket, m in master.items():
+            p = mine.get(ticket)
+            if p is not None:
+                # Keep SL/TP in step with the main account.
+                info = mt5.symbol_info(p.symbol)
+                digits = info.digits if info else 5
+                sl = round(float(m.get("sl") or 0), digits)
+                tp = round(float(m.get("tp") or 0), digits)
+                half = (10 ** -digits) / 2
+                if abs((p.sl or 0) - sl) > half or abs((p.tp or 0) - tp) > half:
+                    _, error = mt5_send(mt5, {"action": mt5.TRADE_ACTION_SLTP, "symbol": p.symbol,
+                                              "position": p.ticket, "sl": sl, "tp": tp})
+                    if error:
+                        errors.append(f"SL/TP {p.symbol}: {error}")
+                    else:
+                        actions.append({"kind": "modified", "master": ticket, "symbol": p.symbol, "sl": sl, "tp": tp})
+                continue
+            if ticket in skip:
+                continue
+            symbol = self.resolve(m["symbol"], mapping)
+            if symbol is None:
+                errors.append(f"Không có mã tương ứng với {m['symbol']} (đặt 'Đổi tên mã')")
+                actions.append({"kind": "skipped", "master": ticket, "symbol": m["symbol"]})
+                continue
+            info = mt5.symbol_info(symbol)
+            volume = self.volume(info, float(m["lots"]), f)
+            if volume is None:
+                errors.append(f"{symbol}: lot tối thiểu {info.volume_min} lớn hơn giới hạn")
+                actions.append({"kind": "skipped", "master": ticket, "symbol": symbol})
+                continue
+            buy = m["side"] == "long"
+            tick = mt5.symbol_info_tick(symbol)
+            request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": volume,
+                       "type": mt5.ORDER_TYPE_BUY if buy else mt5.ORDER_TYPE_SELL,
+                       "price": tick.ask if buy else tick.bid, "deviation": deviation, "magic": COPY_MAGIC,
+                       "comment": copy_comment(ticket), "type_time": mt5.ORDER_TIME_GTC}
+            if m.get("sl"):
+                request["sl"] = round(float(m["sl"]), info.digits)
+            if m.get("tp"):
+                request["tp"] = round(float(m["tp"]), info.digits)
+            result, error = mt5_send(mt5, dict(request))
+            if error and ("sl" in request or "tp" in request):
+                # Stops already passed on this broker: open, SL/TP are retried on the next sync.
+                request.pop("sl", None)
+                request.pop("tp", None)
+                result, error = mt5_send(mt5, request)
+            if error:
+                errors.append(f"Mở {symbol}: {error}")
+                actions.append({"kind": "failed", "master": ticket, "symbol": symbol, "error": error})
+            else:
+                actions.append({"kind": "opened", "master": ticket, "symbol": symbol, "side": m["side"],
+                                "lots": volume, "price": getattr(result, "price", 0) or request["price"]})
+        state = self.account()
+        state.update(actions=actions, error="; ".join(errors[:3]),
+                     copied=sorted(set(mine) | {a["master"] for a in actions if a["kind"] == "opened"}))
+        return state
+
+    def close_all(self):
+        mt5 = self.mt5
+        closed = 0
+        for p in mt5.positions_get() or ():
+            if p.magic != COPY_MAGIC:
+                continue
+            tick = mt5.symbol_info_tick(p.symbol)
+            buy = p.type == mt5.POSITION_TYPE_BUY
+            _, error = mt5_send(mt5, {"action": mt5.TRADE_ACTION_DEAL, "symbol": p.symbol, "volume": p.volume,
+                                      "type": mt5.ORDER_TYPE_SELL if buy else mt5.ORDER_TYPE_BUY, "position": p.ticket,
+                                      "price": tick.bid if buy else tick.ask, "deviation": 30, "magic": COPY_MAGIC,
+                                      "comment": p.comment, "type_time": mt5.ORDER_TIME_GTC})
+            closed += 0 if error else 1
+        return dict(self.account(), closed=closed)
+
+
+def copy_worker_main():
+    """--copy-worker: one JSON request per stdin line, one JSON reply per stdout line."""
+    out = sys.stdout
+    sys.stdout = sys.stderr  # nothing else may write to the reply channel
+    try:
+        import MetaTrader5
+    except ImportError:
+        MetaTrader5 = None
+    worker = CopyWorker(MetaTrader5) if MetaTrader5 else None
+    for line in sys.stdin:
+        try:
+            msg = json.loads(line)
+            if worker is None:
+                reply = {"ok": False, "error": "Chưa cài MetaTrader5 (pip install MetaTrader5)"}
+            elif msg.get("cmd") == "connect":
+                reply = worker.connect(msg["cfg"])
+            elif msg.get("cmd") == "sync":
+                reply = worker.sync(msg)
+            elif msg.get("cmd") == "close_all":
+                reply = worker.close_all()
+            else:
+                reply = worker.account()
+        except Exception as e:
+            reply = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        out.write(json.dumps(reply) + "\n")
+        out.flush()
+    # stdin closed: the server stopped.
+    if MetaTrader5 is not None:
+        MetaTrader5.shutdown()
+
+
+class CopyProcess:
+    """A --copy-worker child process, talked to over its stdin/stdout."""
+
+    def __init__(self):
+        import queue
+        self.replies = queue.Queue()
+        self.proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--copy-worker"],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                     text=True, encoding="utf-8", bufsize=1, creationflags=NO_WINDOW)
+        threading.Thread(target=self._read, daemon=True).start()
+
+    def _read(self):
+        for line in self.proc.stdout:
+            try:
+                self.replies.put(json.loads(line))
+            except ValueError:
+                pass
+        self.replies.put(None)
+
+    def alive(self):
+        return self.proc.poll() is None
+
+    def request(self, msg, timeout=60):
+        import queue
+        if not self.alive():
+            raise RuntimeError("Tiến trình copy đã dừng")
+        while not self.replies.empty():
+            self.replies.get_nowait()
+        self.proc.stdin.write(json.dumps(msg) + "\n")
+        self.proc.stdin.flush()
+        try:
+            reply = self.replies.get(timeout=timeout)
+        except queue.Empty:
+            self.close()
+            raise RuntimeError("MT5 của tài khoản copy không trả lời")
+        if reply is None:
+            raise RuntimeError("Tiến trình copy đã dừng")
+        return reply
+
+    def close(self):
+        try:
+            self.proc.kill()
+        except OSError:
+            pass
+
+
+def clone_terminal(follower_id, master_cfg):
+    """A portable copy of the main MT5 terminal for one follower (terminals/<id>)."""
+    import shutil
+    dest = os.path.join(HERE, "terminals", follower_id)
+    exe = os.path.join(dest, "terminal64.exe")
+    if os.path.exists(exe):
+        return exe
+    source = os.path.dirname(master_cfg.get("path") or "")
+    data_path = None
+    with Mt5.lock:
+        try:
+            info = Mt5.connect(master_cfg).terminal_info()
+            source = source or getattr(info, "path", "") or ""
+            data_path = getattr(info, "data_path", None)
+        except RuntimeError:
+            pass
+    if not source or not os.path.exists(os.path.join(source, "terminal64.exe")):
+        raise ValueError("Không tìm thấy MT5 trên VPS để sao chép: cài MT5 trước, hoặc nhập đường dẫn terminal64.exe")
+    shutil.copytree(source, dest, ignore=shutil.ignore_patterns("Bases", "logs", "Logs", "Tester", "*.log"))
+    config_dir = os.path.join(dest, "Config")
+    os.makedirs(config_dir, exist_ok=True)
+    # The broker's server list, so the copy finds e.g. Exness-MT5Trial7.
+    if data_path:
+        for name in ("servers.dat",):
+            src = os.path.join(data_path, "config", name)
+            if os.path.exists(src):
+                shutil.copy2(src, os.path.join(config_dir, name))
+    common = os.path.join(config_dir, "common.ini")
+    if not os.path.exists(common):
+        # Algo Trading on, so the copy can trade.
+        with open(common, "w", encoding="utf-16") as f:
+            f.write("[Experts]\nAllowLiveTrading=1\nAllowDllImport=0\nEnabled=1\nAccount=0\nProfile=0\n")
+    return exe
+
+
+DEFAULT_FOLLOWER = {"id": "", "name": "", "login": 0, "password": "", "server": "", "path": "", "multiplier": 1.0,
+                    "fixedLots": 0.0, "maxLots": 0.1, "allowReal": False, "enabled": True, "symbolMap": {}}
+
+
+class CopyTrader:
+    """Main side: reads the main account's positions and drives one worker per follower."""
+
+    def __init__(self, server):
+        self.server = server
+        self.lock = threading.RLock()
+        self.master = {"connected": False}
+        self.snapshot = None
+        self.snapshot_time = 0
+        self.runtime = {}  # follower id → {"proc", "status", "key", "thread"}
+        self.events = []
+        threading.Thread(target=self._master_loop, daemon=True).start()
+
+    @property
+    def cfg(self):
+        c = self.server.config.setdefault("copy", {})
+        c.setdefault("enabled", False)
+        c.setdefault("followers", [])
+        return c
+
+    def state(self, fid):
+        return self.server.copy_state.setdefault(fid, {"seen": []})
+
+    def event(self, text, notify=True):
+        with self.lock:
+            self.events.insert(0, {"time": now(), "text": text})
+            del self.events[50:]
+        self.server.log(text, notify=notify)
+
+    # ----- main account -----
+
+    def _master_loop(self):
+        while True:
+            try:
+                if self.cfg["enabled"] and any(f.get("enabled") for f in self.cfg["followers"]):
+                    self._read_master()
+                    self._ensure_threads()
+            except Exception as e:
+                self.master = {"connected": False, "error": str(e)}
+            time.sleep(1)
+
+    def _read_master(self):
+        with Mt5.lock:
+            mt5 = Mt5.connect(self.server.config["mt5"])
+            a = mt5.account_info()
+            if a is None:
+                self.master = {"connected": False, "error": "Tài khoản chính chưa đăng nhập MT5 (Giao dịch → Đăng nhập)"}
+                return
+            rows = mt5.positions_get() or ()
+            positions = [{"ticket": int(r.ticket), "symbol": r.symbol,
+                          "side": "long" if r.type == mt5.POSITION_TYPE_BUY else "short",
+                          "lots": r.volume, "sl": r.sl or 0, "tp": r.tp or 0}
+                         for r in rows if r.magic != COPY_MAGIC]
+        with self.lock:
+            self.master = {"connected": True, "login": a.login, "server": a.server, "positions": len(positions),
+                           "balance": a.balance, "currency": a.currency}
+            self.snapshot = positions
+            self.snapshot_time = time.time()
+
+    # ----- followers -----
+
+    def _ensure_threads(self):
+        for f in self.cfg["followers"]:
+            rt = self.runtime.setdefault(f["id"], {"status": {}, "proc": None, "key": None})
+            if rt.get("thread") is None or not rt["thread"].is_alive():
+                rt["thread"] = threading.Thread(target=self._follower_loop, args=(f["id"],), daemon=True)
+                rt["thread"].start()
+
+    def follower(self, fid):
+        return next((f for f in self.cfg["followers"] if f["id"] == fid), None)
+
+    def _stop_proc(self, rt):
+        if rt.get("proc") is not None:
+            rt["proc"].close()
+            rt["proc"] = None
+            rt["key"] = None
+
+    def _follower_loop(self, fid):
+        backoff = 0
+        while True:
+            f = self.follower(fid)
+            rt = self.runtime.get(fid)
+            if f is None or rt is None:
+                if rt is not None:
+                    self._stop_proc(rt)
+                return
+            if not (self.cfg["enabled"] and f.get("enabled")):
+                self._stop_proc(rt)
+                rt["status"] = {"connected": False, "error": "Đang tắt"}
+                time.sleep(2)
+                continue
+            if backoff > time.time():
+                time.sleep(1)
+                continue
+            try:
+                self._sync_follower(f, rt)
+            except Exception as e:
+                rt["status"] = dict(rt.get("status") or {}, connected=False, error=str(e))
+                self._stop_proc(rt)
+                backoff = time.time() + 15
+            time.sleep(1)
+
+    def _sync_follower(self, f, rt):
+        key = f"{f['login']}|{f['server']}|{f.get('path')}|{f.get('password')}"
+        if rt.get("proc") is None or not rt["proc"].alive() or rt.get("key") != key:
+            self._stop_proc(rt)
+            path = f.get("path") or clone_terminal(f["id"], self.server.config["mt5"])
+            proc = CopyProcess()
+            reply = proc.request({"cmd": "connect", "cfg": {"path": path, "portable": not f.get("path"),
+                                                            "login": f["login"], "password": f["password"],
+                                                            "server": f["server"]}}, timeout=120)
+            if not reply.get("ok"):
+                proc.close()
+                raise RuntimeError(reply.get("error") or "Không kết nối được")
+            rt["proc"], rt["key"] = proc, key
+            self.event(f"🔗 Copy: đã kết nối #{f['login']} ({f.get('name') or f['server']})", notify=False)
+        with self.lock:
+            snapshot = self.snapshot
+            fresh = time.time() - self.snapshot_time < 10
+            master_login = self.master.get("login")
+        if snapshot is None or not fresh:
+            rt["status"] = dict(rt.get("status") or {}, error="Chờ tài khoản chính")
+            return
+        if int(f["login"]) == int(master_login or 0):
+            raise RuntimeError("Tài khoản copy trùng tài khoản chính")
+        st = self.state(f["id"])
+        if not st.get("baseline"):
+            # Positions already open when copying starts are not copied.
+            st["seen"] = sorted(set(st.get("seen", [])) | {p["ticket"] for p in snapshot})
+            st["baseline"] = True
+            self.server.save_state()
+        reply = rt["proc"].request({"cmd": "sync", "positions": snapshot, "skip": st["seen"], "follower": f})
+        rt["status"] = dict(reply, connected=reply.get("login") is not None, lastSync=now())
+        rt["status"].pop("actions", None)
+        rt["status"].pop("copied", None)
+        name = f.get("name") or f"#{f['login']}"
+        for a in reply.get("actions", []):
+            if a["kind"] == "opened":
+                self.event(f"📋 Copy {name}: {'MUA' if a['side'] == 'long' else 'BÁN'} {a['lots']} {a['symbol']} "
+                           f"@ {fmt(a['price'])} (lệnh chính #{a['master']})")
+            elif a["kind"] == "closed":
+                self.event(f"📋 Copy {name}: đóng {a['symbol']} {a['lots']} lot, lãi/lỗ {money(a['profit'])}")
+            elif a["kind"] == "failed":
+                self.event(f"⚠︎ Copy {name}: không mở được {a['symbol']}: {a['error']}")
+        copied = set(reply.get("copied", []))
+        tried = {a["master"] for a in reply.get("actions", []) if a["kind"] in ("failed", "skipped")}
+        new_seen = set(st["seen"]) | copied | tried
+        if new_seen != set(st["seen"]):
+            # Keep only tickets still open on the main account plus recent ones.
+            st["seen"] = sorted(new_seen)[-500:]
+            self.server.save_state()
+
+    # ----- API -----
+
+    def status(self):
+        followers = []
+        for f in self.cfg["followers"]:
+            rt = self.runtime.get(f["id"], {})
+            row = {k: v for k, v in f.items() if k != "password"}
+            row["hasPassword"] = bool(f.get("password"))
+            row["status"] = rt.get("status") or {"connected": False}
+            followers.append(row)
+        with self.lock:
+            return {"ok": True, "enabled": bool(self.cfg["enabled"]), "master": dict(self.master),
+                    "followers": followers, "events": self.events[:30]}
+
+    def settings(self, body):
+        enabled = bool(body.get("enabled"))
+        if enabled and not self.cfg["enabled"]:
+            # Turning copying on: only positions opened from now are copied.
+            for f in self.cfg["followers"]:
+                self.state(f["id"])["baseline"] = False
+        self.cfg["enabled"] = enabled
+        self.server.save_config()
+        self.event(f"📋 Copy trade {'BẬT' if enabled else 'TẮT'}")
+        return self.status()
+
+    def save_follower(self, body):
+        fid = str(body.get("id") or "")
+        current = self.follower(fid) if fid else None
+        f = dict(current or DEFAULT_FOLLOWER)
+        if not current:
+            f["id"] = uuid.uuid4().hex[:8]
+        try:
+            f["login"] = int(str(body.get("login", f["login"])).strip())
+        except ValueError:
+            raise ValueError("Số tài khoản phải là số")
+        f["server"] = str(body.get("server", f["server"])).strip()
+        if body.get("password"):
+            f["password"] = str(body["password"])
+        for key, cast in (("name", str), ("path", str), ("multiplier", float), ("fixedLots", float),
+                          ("maxLots", float), ("allowReal", bool), ("enabled", bool)):
+            if key in body:
+                f[key] = cast(body[key])
+        if isinstance(body.get("symbolMap"), dict):
+            f["symbolMap"] = {str(k): str(v) for k, v in body["symbolMap"].items() if k and v}
+        if not f["login"] or not f["server"] or not f.get("password"):
+            raise ValueError("Cần số tài khoản, server và mật khẩu (mật khẩu chính, không phải investor)")
+        if f["multiplier"] <= 0 or f["maxLots"] <= 0:
+            raise ValueError("Hệ số lot và lot tối đa phải lớn hơn 0")
+        if int(f["login"]) == int(self.server.config["mt5"].get("login") or 0):
+            raise ValueError("Đây là tài khoản chính; tài khoản copy phải là tài khoản khác")
+        if any(o["login"] == f["login"] and o["id"] != f["id"] for o in self.cfg["followers"]):
+            raise ValueError("Tài khoản này đã có trong danh sách copy")
+        if current:
+            current.update(f)
+        else:
+            self.cfg["followers"].append(f)
+            self.state(f["id"])["baseline"] = False
+        self.server.save_config()
+        self.event(f"📋 Copy: {'cập nhật' if current else 'thêm'} tài khoản #{f['login']} ({f['server']})", notify=False)
+        return self.status()
+
+    def remove_follower(self, body):
+        fid = str(body.get("id") or "")
+        f = self.follower(fid)
+        if f is None:
+            raise ValueError("Không có tài khoản copy này")
+        rt = self.runtime.get(fid) or {}
+        closed = 0
+        if body.get("closePositions") and rt.get("proc") is not None:
+            closed = rt["proc"].request({"cmd": "close_all"}).get("closed", 0)
+        self.cfg["followers"] = [o for o in self.cfg["followers"] if o["id"] != fid]
+        self.server.copy_state.pop(fid, None)
+        self.server.save_config()
+        self.runtime.pop(fid, None)
+        self._stop_proc(rt)
+        self.event(f"📋 Copy: đã xoá tài khoản #{f['login']}" + (f", đóng {closed} lệnh" if closed else ""), notify=False)
+        return self.status()
+
+    def close_follower(self, body):
+        rt = self.runtime.get(str(body.get("id") or "")) or {}
+        if rt.get("proc") is None:
+            raise ValueError("Tài khoản copy chưa kết nối")
+        reply = rt["proc"].request({"cmd": "close_all"})
+        self.event(f"📋 Copy: đóng {reply.get('closed', 0)} lệnh copy")
+        return self.status()
+
+
 class PaperBroker:
     name = "paper"
 
@@ -1136,6 +1690,7 @@ class BotServer:
         self.settings = merge(DEFAULT_SETTINGS, state.get("settings"))
         self.paper = state.get("paper") or {"balance": float(self.config["paper_balance"]), "positions": [], "history": []}
         self.mt5_memory = state.get("mt5Memory") or {}
+        self.copy_state = state.get("copy") or {}
         self.log_entries = state.get("log") or []
         self.feed = None
         self.feed_key = None
@@ -1148,6 +1703,7 @@ class BotServer:
         self.last_poll = 0
         self.tunnel_url = ""
         self.mt5_account = Mt5Account(self)
+        self.copier = CopyTrader(self)
         self.telegram = Telegram(self)
         self.tunnel = Tunnel(self) if self.config.get("tunnel") else None
 
@@ -1159,7 +1715,7 @@ class BotServer:
     def save_state(self):
         with self.lock:
             write_json(STATE_PATH, {"settings": self.settings, "paper": self.paper, "mt5Memory": self.mt5_memory,
-                                    "log": self.log_entries[:300]})
+                                    "copy": self.copy_state, "log": self.log_entries[:300]})
 
     def log(self, text, notify=False):
         with self.lock:
@@ -1557,6 +2113,8 @@ def make_handler(server):
                     return self._send(200, server.mt5_account.status())
                 if path == "/mt5/symbols":
                     return self._send(200, server.mt5_account.symbols((params.get("q") or [""])[0], limit))
+                if path == "/copy/status":
+                    return self._send(200, server.copier.status())
                 if path == "/mt5/trading":
                     symbol = (params.get("symbol") or [None])[0]
                     return self._send(200, server.mt5_account.trading(symbol))
@@ -1607,6 +2165,14 @@ def make_handler(server):
                     return self._send(200, server.mt5_account.modify(body))
                 if path == "/mt5/cancel":
                     return self._send(200, server.mt5_account.cancel(body))
+                if path == "/copy/settings":
+                    return self._send(200, server.copier.settings(body))
+                if path == "/copy/follower":
+                    return self._send(200, server.copier.save_follower(body))
+                if path == "/copy/remove":
+                    return self._send(200, server.copier.remove_follower(body))
+                if path == "/copy/close":
+                    return self._send(200, server.copier.close_follower(body))
                 if path == "/telegram-test":
                     server.telegram.send("🔔 Thử thông báo từ máy chủ bot")
                     return self._send(200, {"ok": True})
@@ -1651,6 +2217,8 @@ def selftest():
 
 
 def main():
+    if "--copy-worker" in sys.argv:
+        return copy_worker_main()
     if "--selftest" in sys.argv:
         sys.exit(selftest())
     server = BotServer()

@@ -194,7 +194,7 @@ struct RemoteBotClient {
         return url
     }
 
-    fileprivate func send(_ path: String, method: String = "GET", body: Data? = nil,
+    func send(_ path: String, method: String = "GET", body: Data? = nil,
                           timeout: TimeInterval = 25) async throws -> Data {
         try await request(path, method: method, body: body, timeout: timeout)
     }

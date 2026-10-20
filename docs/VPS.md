@@ -137,6 +137,25 @@ Giờ nến được đổi về UTC tự động (nhiều sàn để giờ máy
 
 Lệnh đặt tay có magic `20261` (ghi chú `GoldApp`); bot chỉ quản lý lệnh magic `20260` của nó.
 
+## Copy trade sang nhiều tài khoản
+
+Mọi lệnh **mới** trên tài khoản MT5 chính (tài khoản đang đăng nhập ở **Giao dịch → Đăng nhập**, đặt từ app, từ bot hay ngay trong MT5)
+được VPS mở trên các tài khoản copy: SL/TP sửa theo, đóng lệnh chính thì lệnh copy đóng theo.
+
+1. App → **Giao dịch → Đăng nhập → Copy trade sang tài khoản khác** → **+**.
+2. Nhập số tài khoản, server và **mật khẩu chính** của tài khoản copy (investor không đặt lệnh được).
+   Chọn khối lượng: **theo lệnh chính × hệ số** (vd × 2) hoặc **lot cố định**, và **lot tối đa** mỗi lệnh.
+3. Bật **Copy trade**. Lệnh đang mở từ trước không được copy, chỉ lệnh mở sau khi bật.
+
+* Mỗi tài khoản copy chạy **một MT5 riêng**: máy chủ tự sao chép MT5 đã cài vào `C:\GoldBot\terminals\<id>` (chế độ portable).
+  Mỗi MT5 tốn khoảng 200–300 MB RAM: VPS 4 GB chạy thoải mái tài khoản chính + 3–4 tài khoản copy.
+* Tài khoản copy là tài khoản **thật** chỉ được đặt lệnh khi bật **Cho phép tài khoản THẬT** cho riêng nó.
+* Mã khác tên giữa hai tài khoản (XAUUSDm ↔ XAUUSD) được tự tìm; nếu không, điền **Đổi tên mã**, ví dụ `XAUUSDm=XAUUSD`.
+* Lệnh chờ (Limit/Stop) được copy khi nó **khớp** trên tài khoản chính, bằng lệnh thị trường; giá có thể lệch vài điểm.
+* Lệnh copy có magic `20262` và ghi chú `GC<số lệnh chính>`. Đóng tay một lệnh copy thì nó không bị mở lại.
+* Lần đầu, nếu MT5 sao chép báo chưa bật Algo Trading: vào VPS, mở `C:\GoldBot\terminals\<id>\terminal64.exe`, bấm **Algo Trading**.
+* Máy chủ cần đang chạy bản mới: chạy lại lệnh cài ở mục 3 để cập nhật.
+
 ## Gỡ lỗi
 
 | Hiện tượng | Cách xử lý |
