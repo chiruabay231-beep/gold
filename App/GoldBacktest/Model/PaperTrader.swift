@@ -129,13 +129,16 @@ final class PaperTrader {
         save()
     }
 
+    /// `quiet`: no voice (bots placing orders on every candle).
+    @discardableResult
     func placePending(symbol: String, side: PaperAccount.Side, lots: Double, entry: Double, stop: Double?, target: Double?,
-                      currentPrice: Double) {
-        account.placePending(symbol: symbol, side: side, lots: lots, entry: entry, stop: stop, target: target,
-                             currentPrice: currentPrice, time: now)
+                      currentPrice: Double, quiet: Bool = false) -> PaperAccount.PendingOrder {
+        let order = account.placePending(symbol: symbol, side: side, lots: lots, entry: entry, stop: stop, target: target,
+                                         currentPrice: currentPrice, time: now)
         prices[symbol] = currentPrice
-        VoiceAnnouncer.shared.speak(VoiceSettings.language.hasPrefix("vi") ? "Đã đặt lệnh chờ" : "Order placed")
+        if !quiet { VoiceAnnouncer.shared.speak(VoiceSettings.language.hasPrefix("vi") ? "Đã đặt lệnh chờ" : "Order placed") }
         save()
+        return order
     }
 
     func close(_ position: PaperAccount.Position) {

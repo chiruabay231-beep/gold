@@ -33,6 +33,14 @@ struct BotView: View {
             }
 
             Section {
+                NavigationLink { StopBotView() } label: {
+                    Label("Bot Buy/Sell Stop theo nến", systemImage: "arrow.up.and.down.square")
+                }
+            } footer: {
+                Text("Bot có sẵn: mỗi nến đóng đặt Buy Stop trên đỉnh và Sell Stop dưới đáy nến, có test nhanh trên biểu đồ.")
+            }
+
+            Section {
                 NavigationLink { RemoteBotView() } label: {
                     Label("Bot trên VPS (chạy 24/7)", systemImage: "server.rack")
                 }

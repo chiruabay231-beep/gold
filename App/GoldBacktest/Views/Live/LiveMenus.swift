@@ -129,19 +129,22 @@ struct LiveBotControl: View {
 
     @Environment(AppStore.self) private var store
     @Environment(BotController.self) private var bot
+    @Environment(StopBotController.self) private var stopBot
     @State private var remote = RemoteBot()
     @State private var confirmResume = false
     /// Why the last tap on the VPS bot failed.
     @State private var actionError: String?
 
-    private enum Target { case app, vps }
+    private enum Target { case app, stop, vps }
 
     private var target: Target? {
         let vps = remote.status
         let vpsHasStrategy = !(vps?.settings?.strategyName ?? "").isEmpty
         if bot.isRunning { return .app }
+        if stopBot.isRunning { return .stop }
         if vps?.running == true { return .vps }
         if bot.hasSession, bot.strategyID != nil { return .app }
+        if stopBot.hasSession { return .stop }
         if vpsHasStrategy { return .vps }
         return nil
     }
@@ -149,6 +152,7 @@ struct LiveBotControl: View {
     private var running: Bool {
         switch target {
         case .app: return bot.isRunning
+        case .stop: return stopBot.isRunning
         case .vps: return remote.status?.running == true
         case nil: return false
         }
@@ -165,7 +169,7 @@ struct LiveBotControl: View {
                             Image(systemName: running ? "pause.fill" : "play.fill")
                                 .font(.system(size: 20, weight: .bold))
                         }
-                        Text(target == .vps ? "VPS" : "Bot")
+                        Text(target == .vps ? "VPS" : (target == .stop ? "Stop" : "Bot"))
                             .font(.system(size: 10, weight: .heavy))
                     }
                     .frame(width: 48, height: height)
@@ -212,6 +216,8 @@ struct LiveBotControl: View {
             } else if let name = store.strategies.first(where: { $0.id == bot.strategyID })?.name {
                 bot.start(strategyName: name)
             }
+        case .stop:
+            if stopBot.isRunning { stopBot.stop() } else { stopBot.start() }
         case .vps:
             if remote.status?.running == true {
                 Task { await remote.stop(); actionError = remote.error }
