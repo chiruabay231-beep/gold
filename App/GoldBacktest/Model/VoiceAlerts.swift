@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import UserNotifications
 
 /// Voice alert settings, stored in UserDefaults (read by @AppStorage in views).
 enum VoiceSettings {
@@ -33,6 +34,26 @@ enum VoiceSettings {
     static func phrase(_ key: String, default value: String) -> String {
         let text = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespaces) ?? ""
         return text.isEmpty ? value : text
+    }
+}
+
+/// Phone notifications, each kind with its own on/off switch.
+enum AlertSettings {
+    /// Fills, TP/SL and closes (demo, Exness/MT5, bot).
+    static let ordersKey = "notify.orders"
+    /// Buy/sell signals of strategies on the live chart.
+    static let signalsKey = "notify.signals"
+
+    static var orders: Bool { UserDefaults.standard.object(forKey: ordersKey) as? Bool ?? true }
+    static var signals: Bool { UserDefaults.standard.object(forKey: signalsKey) as? Bool ?? true }
+
+    static func post(title: String, body: String, id: String = UUID().uuidString, signal: Bool = false) {
+        guard signal ? signals : orders else { return }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil))
     }
 }
 

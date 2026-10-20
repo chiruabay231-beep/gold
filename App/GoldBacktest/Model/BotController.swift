@@ -15,6 +15,8 @@ final class BotController {
     }
 
     private(set) var isRunning = false
+    /// Started at least once since the app opened (paused when not running).
+    private(set) var hasSession = false
     var strategyID: UUID? {
         didSet { UserDefaults.standard.set(strategyID?.uuidString, forKey: "bot.strategy") }
     }
@@ -49,6 +51,7 @@ final class BotController {
     func start(strategyName: String) {
         guard let strategyID, let market else { return }
         isRunning = true
+        hasSession = true
         market.track(strategy: strategyID)
         add("▶︎ Bắt đầu \(strategyName) trên \(LiveView.displayName(market.symbol)) \(LiveView.label(market.interval))")
         if let error = market.strategyError { add("⚠︎ Lỗi chiến lược: \(error)") }
@@ -129,11 +132,7 @@ final class BotController {
     }
 
     private func notify(title: String, body: String) {
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        content.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        AlertSettings.post(title: title, body: body)
     }
 
     private func orderLots(entry: Double, stop: Double?) -> Double {

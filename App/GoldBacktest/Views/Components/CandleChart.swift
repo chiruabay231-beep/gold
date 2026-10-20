@@ -226,6 +226,8 @@ struct CandleChart: View {
     var drawingsLocked = false
     /// Shows the lot size on long/short position drawings.
     var positionSizing: PositionSizing?
+    /// A border around the plot (candles, volume): the chart sits in its own frame.
+    var framed = false
     @Binding var viewport: ChartViewport
 
     private enum DragMode { case pan, axis, crosshair, moveDrawing, moveHandle, create, priceLine }
@@ -517,10 +519,16 @@ struct CandleChart: View {
             context.draw(Text(candles[i].time.formatted(timeFormat)).font(.system(size: 10)).foregroundColor(theme.text),
                          at: CGPoint(x: x, y: layout.timeAxis.midY), anchor: .center)
         }
-        var separator = Path()
-        separator.move(to: CGPoint(x: layout.axisX, y: layout.plot.minY))
-        separator.addLine(to: CGPoint(x: layout.axisX, y: layout.timeAxis.minY))
-        context.stroke(separator, with: .color(theme.grid), lineWidth: 1)
+        if framed {
+            let frame = CGRect(x: 0.5, y: layout.plot.minY + 0.5, width: layout.axisX - 0.5,
+                               height: layout.timeAxis.minY - layout.plot.minY - 1)
+            context.stroke(Path(frame), with: .color(theme.text.opacity(0.45)), lineWidth: 1)
+        } else {
+            var separator = Path()
+            separator.move(to: CGPoint(x: layout.axisX, y: layout.plot.minY))
+            separator.addLine(to: CGPoint(x: layout.axisX, y: layout.timeAxis.minY))
+            context.stroke(separator, with: .color(theme.grid), lineWidth: 1)
+        }
 
         var plotContext = context
         plotContext.clip(to: Path(layout.plot))

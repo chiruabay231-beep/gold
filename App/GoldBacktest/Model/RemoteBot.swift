@@ -234,6 +234,11 @@ struct RemoteBotClient {
         return try JSONDecoder().decode(RemoteStatus.self, from: await request("/start", method: "POST", body: body))
     }
 
+    /// Starts again with the settings the VPS bot last ran with.
+    func resume() async throws -> RemoteStatus {
+        try JSONDecoder().decode(RemoteStatus.self, from: await request("/start", method: "POST", body: Data("{}".utf8)))
+    }
+
     func stop() async throws -> RemoteStatus {
         try JSONDecoder().decode(RemoteStatus.self, from: await request("/stop", method: "POST", body: Data("{}".utf8)))
     }
@@ -502,7 +507,22 @@ final class RemoteBot {
     }
 
     func start(_ settings: RemoteStartRequest) async { await perform { try await $0.start(settings) } }
+    func resume() async { await perform { try await $0.resume() } }
     func stop() async { await perform { try await $0.stop() } }
+
+    /// Only the status, for the bot button on the chart.
+    func refreshStatus() async {
+        guard let client = RemoteBotSettings.client() else {
+            status = nil
+            return
+        }
+        do {
+            status = try await client.status()
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
     func close(_ position: RemoteStatus.Position?) async { await perform { try await $0.close(positionID: position?.id) } }
 
     func testTelegram() async {

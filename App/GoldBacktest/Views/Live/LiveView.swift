@@ -48,6 +48,10 @@ struct LiveView: View {
     @AppStorage("live.favoriteIntervals") private var favoriteIntervalsText = "1m,5m,15m,1h,4h,1D"
     @State private var showIntervalPicker = false
     @State private var showVoiceSettings = false
+    @State private var showIndicatorSheet = false
+    @State private var showMoreSheet = false
+    /// Opens another sheet once the f(x) / ••• sheet has gone.
+    @State private var afterSheet: (() -> Void)?
     /// Position drawing waiting for confirmation before it becomes a demo order.
     @State private var demoOrderDrawing: Drawing?
     /// Limit order being placed by dragging its line on the chart.
@@ -161,6 +165,17 @@ struct LiveView: View {
             Text(replaySummary ?? "")
         }
         .sheet(isPresented: $showVoiceSettings) { VoiceSettingsView() }
+        .sheet(isPresented: $showIndicatorSheet, onDismiss: runAfterSheet) {
+            LiveIndicatorSheet(onKillzoneSettings: { afterSheet = { showKillzoneSettings = true } },
+                               onManage: { afterSheet = { store.selectedTab = .indicators } })
+        }
+        .sheet(isPresented: $showMoreSheet, onDismiss: runAfterSheet) {
+            LiveMoreSheet(onChartSettings: { afterSheet = { showChartSettings = true } },
+                          onVoiceSettings: { afterSheet = { showVoiceSettings = true } },
+                          onDemo: { afterSheet = { store.selectedTab = .trade } },
+                          onAutoFit: { viewport.manualPriceRange = nil },
+                          onClearDrawings: { afterSheet = { confirmClear = true } })
+        }
         .sheet(isPresented: Binding(get: { orderTicket != nil }, set: { if !$0 { orderTicket = nil } })) {
             OrderTicketSheet(ticket: $orderTicket, lots: $defaultLots, bid: liveQuote.bid, ask: liveQuote.ask,
                              decimals: currentDecimals, contractSize: PaperAccount.contractSize(for: market.symbolKey),
@@ -245,67 +260,79 @@ struct LiveView: View {
         let changeAbs = last - last / (1 + changePct / 100)
         let decimals = priceDecimals ?? CandleChart.decimals(for: last)
         let changeColor = changePct >= 0 ? theme.up : theme.down
-        return VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                // Tap the symbol to switch market.
-                symbolMenu
-                Text(market.source.title)
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.text)
-                    .lineLimit(1)
-                    .layoutPriority(-1)
-                statusDot
-                if replay.isActive {
-                    Text("REPLAY")
-                        .font(.system(size: 10, weight: .heavy))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(Color.orange, in: Capsule())
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        // Tap the symbol to switch market.
+                        symbolMenu
+                        Text(market.source.title)
+                            .font(.system(size: 11))
+                            .foregroundColor(theme.text)
+                            .lineLimit(1)
+                            .layoutPriority(-1)
+                        statusDot
+                        if replay.isActive {
+                            Text("REPLAY")
+                                .font(.system(size: 10, weight: .heavy))
+                                .foregroundColor(.white)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.orange, in: Capsule())
+                        }
+                    }
+                    HStack(spacing: 8) {
+                        Text(CandleChart.format(last, decimals))
+                            .foregroundColor(theme.primaryText)
+                            .contentTransition(.numericText())
+                        Text(String(format: "%+.\(decimals)f (%+.2f%%)", changeAbs, changePct))
+                            .foregroundColor(changeColor)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
+                    .font(.system(size: 14).monospacedDigit())
+                    if market.needsOandaToken {
+                        Button("Nhập token OANDA") { showOandaSettings = true }
+                            .font(.system(size: 12))
+                            .foregroundColor(theme.accent)
+                    } else if case .reconnecting(let reason) = market.status {
+                        Text(reason).font(.system(size: 12)).foregroundColor(theme.down).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 6)
-                // Shows or hides the SELL | lot | BUY bar under the chart.
-                Button { showTradeButtons.toggle() } label: {
-                    Label("BUY/SELL", systemImage: showTradeButtons ? "chevron.down.circle.fill" : "arrow.left.arrow.right")
-                        .font(.system(size: 11, weight: .semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 5)
-                        .foregroundColor(showTradeButtons ? .white : theme.accent)
-                        .background(Capsule().fill(showTradeButtons ? theme.accent : Color.clear))
-                        .overlay(Capsule().stroke(theme.accent.opacity(0.6), lineWidth: 1))
+                LiveBotControl(theme: theme)
+                VStack(spacing: 6) {
+                    // Shows or hides the SELL | lot | BUY bar under the chart.
+                    headerButton("BUY/SELL", systemImage: showTradeButtons ? "chevron.down" : "arrow.left.arrow.right",
+                                 filled: showTradeButtons) { showTradeButtons.toggle() }
+                        .accessibilityLabel(showTradeButtons ? "Ẩn nút giao dịch" : "Hiện nút giao dịch")
+                    headerButton(orderTicket != nil ? "Đóng" : "Lệnh chờ",
+                                 systemImage: orderTicket != nil ? "xmark" : "plus.forwardslash.minus",
+                                 filled: orderTicket != nil) { toggleTicket() }
                 }
-                .accessibilityLabel(showTradeButtons ? "Ẩn nút giao dịch" : "Hiện nút giao dịch")
             }
-            HStack(spacing: 8) {
-                Text(CandleChart.format(last, decimals))
-                    .foregroundColor(theme.primaryText)
-                    .contentTransition(.numericText())
-                Text(String(format: "%+.\(decimals)f (%+.2f%%)", changeAbs, changePct))
-                    .foregroundColor(changeColor)
-                if market.needsOandaToken {
-                    Button("Nhập token OANDA") { showOandaSettings = true }
-                        .foregroundColor(theme.accent)
-                } else if case .reconnecting(let reason) = market.status {
-                    Text(reason).foregroundColor(theme.down).lineLimit(1)
-                }
-                Spacer(minLength: 4)
-                Button { toggleTicket() } label: {
-                    Label(orderTicket != nil ? "Đóng lệnh chờ" : "Lệnh chờ", systemImage: orderTicket != nil ? "xmark" : "plus.forwardslash.minus")
-                        .font(.system(size: 11, weight: .semibold))
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .foregroundColor(orderTicket != nil ? .white : theme.accent)
-                        .background(Capsule().fill(orderTicket != nil ? theme.accent : Color.clear))
-                        .overlay(Capsule().stroke(theme.accent.opacity(0.5), lineWidth: 1))
-                }
-                .fixedSize()
-            }
-            .font(.system(size: 14).monospacedDigit())
             legend
         }
         .padding(.horizontal, 14)
         .padding(.top, 6)
         .padding(.bottom, 2)
+    }
+
+    private func headerButton(_ title: String, systemImage: String, filled: Bool,
+                              action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: systemImage).font(.system(size: 12, weight: .bold))
+                Text(title).font(.system(size: 14, weight: .bold))
+            }
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+            .frame(width: 112, height: 30)
+            .foregroundColor(filled ? .white : theme.accent)
+            .background(RoundedRectangle(cornerRadius: 9).fill(filled ? theme.accent : theme.accent.opacity(0.08)))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke(theme.accent.opacity(0.6), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
     }
 
     private var statusDot: some View {
@@ -509,6 +536,7 @@ struct LiveView: View {
                             candleStyle: CandleStyle(rawValue: candleStyle) ?? .candles,
                             candleColors: CandleColors.decode(candleColorsJSON),
                             timeZone: ChartTimeZones.zone(timeZoneID),
+                            framed: true,
                             viewport: comparisonViewport)
             } else {
                 VStack(spacing: 8) {
@@ -576,6 +604,7 @@ struct LiveView: View {
                         timeZone: ChartTimeZones.zone(timeZoneID),
                         drawingsLocked: lockDrawings,
                         positionSizing: positionSizing,
+                        framed: true,
                         viewport: $viewport)
         }
         .overlay(alignment: .leading) {
@@ -1200,8 +1229,8 @@ struct LiveView: View {
                 showDrawingBar.toggle()
                 if !showDrawingBar { activeTool = nil }
             }
-            indicatorMenu
-            moreMenu
+            toolbarButton("function", active: false) { showIndicatorSheet = true }
+            toolbarButton("ellipsis", active: false) { showMoreSheet = true }
             toolbarButton("briefcase", active: !trader.account.positions.isEmpty) {
                 store.selectedTab = .trade
             }
@@ -1315,77 +1344,10 @@ struct LiveView: View {
         }
     }
 
-    private var indicatorMenu: some View {
-        Menu {
-            Section("ICT") {
-                Toggle(Self.killzonePivotsName, isOn: $showKillzonePivots)
-                Button {
-                    showKillzoneSettings = true
-                } label: {
-                    Label("Cài đặt Killzones + Pivots…", systemImage: "gearshape")
-                }
-            }
-            Section("Chỉ báo của bạn (tab Chỉ báo)") {
-                ForEach(store.indicators) { indicator in
-                    Toggle(indicator.title, isOn: Binding(
-                        get: { LiveIndicators.ids(liveIndicatorIDs).contains(indicator.id) },
-                        set: { _ in liveIndicatorIDs = LiveIndicators.toggled(indicator.id, in: liveIndicatorIDs) }))
-                }
-                Button {
-                    store.selectedTab = .indicators
-                } label: {
-                    Label(store.indicators.isEmpty ? "Viết chỉ báo mới…" : "Quản lý / sửa chỉ báo…", systemImage: "square.and.pencil")
-                }
-            }
-            Section("Khác") {
-                Toggle("EMA 200", isOn: $showEMA200)
-                Toggle("Khối lượng", isOn: $showVolume)
-                Toggle("Nhãn Cao / Thấp", isOn: $showHighLow)
-            }
-        } label: {
-            toolbarIcon("function", active: false)
-        }
-    }
-
-    private var moreMenu: some View {
-        Menu {
-            Picker("Giao diện", selection: $themeName) {
-                Text("TradingView (sáng)").tag("tradingView")
-                Text("Binance (tối)").tag("binance")
-            }
-            Picker("Kiểu nến", selection: $candleStyle) {
-                ForEach(CandleStyle.allCases) { style in
-                    Text(style.title).tag(style.rawValue)
-                }
-            }
-            Button {
-                showChartSettings = true
-            } label: {
-                Label("Cài đặt biểu đồ (màu nến…)", systemImage: "gearshape")
-            }
-            Button {
-                store.selectedTab = .trade
-            } label: {
-                Label("Giao dịch demo…", systemImage: "briefcase")
-            }
-            Button {
-                showVoiceSettings = true
-            } label: {
-                Label("Cảnh báo giọng nói…", systemImage: "speaker.wave.2")
-            }
-            Button {
-                viewport.manualPriceRange = nil
-            } label: {
-                Label("Tự động căn thang giá", systemImage: "arrow.up.and.down")
-            }
-            Button(role: .destructive) {
-                confirmClear = true
-            } label: {
-                Label("Xoá tất cả hình vẽ", systemImage: "trash")
-            }
-        } label: {
-            toolbarIcon("ellipsis", active: false)
-        }
+    private func runAfterSheet() {
+        let action = afterSheet
+        afterSheet = nil
+        action?()
     }
 
     private func toolbarIcon(_ systemName: String, active: Bool) -> some View {

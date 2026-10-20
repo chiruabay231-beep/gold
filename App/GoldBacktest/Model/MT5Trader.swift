@@ -17,6 +17,12 @@ final class MT5Trader {
 
     @ObservationIgnored private var knownDeals: Set<Int>?
     @ObservationIgnored private var knownPositions: Set<Int>?
+    /// Login@server the known tickets belong to.
+    @ObservationIgnored private var accountKey: String?
+    /// After a (new) account appears, its orders are taken in silently until
+    /// then: MT5 loads an account's history over a few seconds after login.
+    @ObservationIgnored private var quietUntil = Date.distantPast
+    @ObservationIgnored private var baselineTime = Date()
 
     var isReal: Bool { state?.mode == "real" }
 
@@ -90,14 +96,28 @@ final class MT5Trader {
     // MARK: - Fills
 
     private func apply(_ new: MT5TradingState) {
-        let deals = Set(new.deals.map(\.ticket))
-        let positions = Set(new.positions.map(\.ticket))
-        // Announce only changes after the first look, not the history.
-        if let knownDeals {
-            for deal in new.deals where !knownDeals.contains(deal.ticket) { announceClose(deal) }
+        let key = "\(new.login.map { String($0) } ?? "")@\(new.server ?? "")"
+        if key != accountKey {
+            // Another account (or the first look): its orders so far are history.
+            accountKey = key
+            knownDeals = nil
+            knownPositions = nil
+            quietUntil = Date().addingTimeInterval(10)
+            baselineTime = Date()
         }
-        if let knownPositions {
-            for p in new.positions where !knownPositions.contains(p.ticket) { announceOpen(p) }
+        var deals = knownDeals ?? []
+        var positions = knownPositions ?? []
+        let announce = knownDeals != nil && Date() > quietUntil
+        // Only orders filled since this account was first seen; older ones
+        // can still show up late while MT5 loads its history.
+        let since = baselineTime.timeIntervalSince1970 - 600
+        for deal in new.deals where !deals.contains(deal.ticket) {
+            if announce, deal.time >= since { announceClose(deal) }
+            deals.insert(deal.ticket)
+        }
+        for p in new.positions where !positions.contains(p.ticket) {
+            if announce, p.time >= since { announceOpen(p) }
+            positions.insert(p.ticket)
         }
         knownDeals = deals
         knownPositions = positions
@@ -125,10 +145,6 @@ final class MT5Trader {
     }
 
     private func notify(title: String, body: String) {
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        content.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        AlertSettings.post(title: title, body: body)
     }
 }

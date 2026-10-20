@@ -626,15 +626,11 @@ final class LiveMarket {
                 : VoiceSettings.phrase(VoiceSettings.sellKey, default: VoiceSettings.defaultSell))
         }
         guard notificationsEnabled else { return }
-        let content = UNMutableNotificationContent()
-        content.title = "\(LiveView.displayName(symbol)) · \(signal.kind.label)"
+        let title = "\(LiveView.displayName(symbol)) · \(signal.kind.label)"
         var body = "\(strategy) · giá \(CandleChart.format(signal.price, CandleChart.decimals(for: signal.price)))"
         if let stop = signal.stop { body += " · SL \(CandleChart.format(stop, CandleChart.decimals(for: stop)))" }
         if let target = signal.target { body += " · TP \(CandleChart.format(target, CandleChart.decimals(for: target)))" }
-        content.body = body
-        content.sound = .default
-        let request = UNNotificationRequest(identifier: signal.id, content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
+        AlertSettings.post(title: title, body: body, id: signal.id, signal: true)
     }
 
     static func requestNotificationPermission() {

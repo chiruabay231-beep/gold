@@ -239,11 +239,7 @@ final class PaperTrader {
     }
 
     private func notify(title: String, body: String) {
-        let content = UNMutableNotificationContent()
-        content.title = title
-        content.body = body
-        content.sound = .default
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        AlertSettings.post(title: title, body: body)
     }
 
     private func save() {

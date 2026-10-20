@@ -130,7 +130,7 @@ struct TradePanelView: View {
                 Menu {
                     Button { store.selectedTab = .live } label: { Label("Mở biểu đồ Live", systemImage: "chart.xyaxis.line") }
                     Button { showAutoStops = true } label: { Label("SL/TP tự động & quản lý lệnh…", systemImage: "slider.horizontal.3") }
-                    Button { showVoiceSettings = true } label: { Label("Cảnh báo giọng nói…", systemImage: "speaker.wave.2") }
+                    Button { showVoiceSettings = true } label: { Label("Thông báo & giọng nói…", systemImage: "bell") }
                     NavigationLink {
                         DatasetListView()
                     } label: {
@@ -228,11 +228,21 @@ struct VoiceSettingsView: View {
     @AppStorage(VoiceSettings.detailsKey) private var details = false
     @AppStorage(VoiceSettings.backgroundKey) private var background = false
     @AppStorage(VoiceSettings.keepAwakeKey) private var keepAwake = false
+    @AppStorage(AlertSettings.ordersKey) private var notifyOrders = true
+    @AppStorage(AlertSettings.signalsKey) private var notifySignals = true
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
+                    Toggle("Thông báo lệnh (khớp, TP/SL, đóng)", isOn: $notifyOrders)
+                    Toggle("Thông báo tín hiệu chiến lược", isOn: $notifySignals)
+                } header: {
+                    Text("Thông báo")
+                } footer: {
+                    Text("Áp dụng cho demo, tài khoản Exness/MT5 và bot. Khi đăng nhập tài khoản khác, lệnh cũ của tài khoản đó không được báo lại; chỉ lệnh mới khớp mới có thông báo.")
+                }
+                Section("Giọng nói") {
                     Toggle("Đọc cảnh báo bằng giọng nói", isOn: $enabled)
                     Picker("Giọng", selection: $language) {
                         Text("Tiếng Anh").tag("en-US")
@@ -258,7 +268,7 @@ struct VoiceSettingsView: View {
                     Button { VoiceAnnouncer.shared.speak(stop, force: true) } label: { Label("Nghe thử: \(stop)", systemImage: "play.circle") }
                 }
             }
-            .navigationTitle("Cảnh báo giọng nói")
+            .navigationTitle("Thông báo & giọng nói")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Xong") { dismiss() } } }
         }
