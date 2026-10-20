@@ -9,8 +9,11 @@ struct ChartPoint: Codable, Hashable {
 
 enum DrawingTool: String, Codable, CaseIterable, Identifiable {
     case trendLine, trendRay, horizontalLine, horizontalRay, verticalLine
-    case fibRetracement, rectangle, priceRange
-    case longPosition, shortPosition, text
+    case fibRetracement, fibExtension
+    case elliottImpulse, elliottCorrection, headShoulders, trianglePattern
+    case longPosition, shortPosition, fixedRangeVolume, anchoredVolume, priceRange
+    case brush, rectangle, arrow, ellipse, path, arrowMarker
+    case text
 
     var id: String { rawValue }
 
@@ -18,15 +21,27 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
         switch self {
         case .trendLine: return "Đường xu hướng"
         case .trendRay: return "Tia xu hướng"
-        case .horizontalLine: return "Đường ngang"
-        case .horizontalRay: return "Tia ngang"
-        case .verticalLine: return "Đường dọc"
-        case .fibRetracement: return "Fibonacci (OTE)"
-        case .rectangle: return "Hộp vùng giá"
+        case .horizontalLine: return "Đường nằm ngang"
+        case .horizontalRay: return "Tia nằm ngang"
+        case .verticalLine: return "Đường thẳng đứng"
+        case .fibRetracement: return "Hồi quy Fib (OTE)"
+        case .fibExtension: return "Phần mở rộng fib dựa trên xu hướng"
+        case .elliottImpulse: return "Sóng đẩy Elliott (1·2·3·4·5)"
+        case .elliottCorrection: return "Sóng điều chỉnh Elliott (A·B·C)"
+        case .headShoulders: return "Mô hình Đầu Vai"
+        case .trianglePattern: return "Mô hình tam giác"
+        case .longPosition: return "Vị thế Mua"
+        case .shortPosition: return "Vị thế Bán"
+        case .fixedRangeVolume: return "Khối lượng giao dịch phạm vi cố định"
+        case .anchoredVolume: return "Khối lượng giao dịch được neo"
         case .priceRange: return "Đo giá"
-        case .longPosition: return "Vị thế Long"
-        case .shortPosition: return "Vị thế Short"
-        case .text: return "Chữ"
+        case .brush: return "Cọ vẽ"
+        case .rectangle: return "Hình chữ nhật"
+        case .arrow: return "Mũi tên"
+        case .ellipse: return "Hình elip"
+        case .path: return "Đường dẫn"
+        case .arrowMarker: return "Mũi tên đánh dấu"
+        case .text: return "Văn bản"
         }
     }
 
@@ -38,29 +53,60 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
         case .horizontalRay: return "arrow.right.to.line"
         case .verticalLine: return "poweron"
         case .fibRetracement: return "line.3.horizontal"
-        case .rectangle: return "rectangle"
-        case .priceRange: return "ruler"
+        case .fibExtension: return "line.3.horizontal.decrease"
+        case .elliottImpulse: return "chart.line.uptrend.xyaxis"
+        case .elliottCorrection: return "chart.line.downtrend.xyaxis"
+        case .headShoulders: return "mountain.2"
+        case .trianglePattern: return "triangle"
         case .longPosition: return "arrow.up.square"
         case .shortPosition: return "arrow.down.square"
+        case .fixedRangeVolume: return "align.horizontal.left"
+        case .anchoredVolume: return "align.horizontal.left.fill"
+        case .priceRange: return "ruler"
+        case .brush: return "paintbrush.pointed"
+        case .rectangle: return "rectangle"
+        case .arrow: return "arrow.up.right"
+        case .ellipse: return "oval"
+        case .path: return "point.topleft.down.to.point.bottomright.curvepath"
+        case .arrowMarker: return "arrowshape.turn.up.right"
         case .text: return "textformat"
         }
     }
 
     /// Points that define the drawing. Positions: entry, then stop loss.
+    /// The brush takes any number (the finger's path); a path ends when its
+    /// last point is tapped again or at this many points.
     var pointsNeeded: Int {
         switch self {
-        case .horizontalLine, .horizontalRay, .verticalLine, .text: return 1
+        case .horizontalLine, .horizontalRay, .verticalLine, .text, .anchoredVolume: return 1
+        case .fibExtension: return 3
+        case .elliottCorrection, .trianglePattern: return 4
+        case .elliottImpulse: return 6
+        case .headShoulders: return 7
+        case .path: return 12
         default: return 2
         }
     }
+
+    /// Placed point by point (taps, or one drag per point).
+    var isMultiPoint: Bool { pointsNeeded > 2 }
 
     var hint: String {
         switch self {
         case .longPosition, .shortPosition: return "Kéo từ giá vào lệnh đến giá cắt lỗ"
         case .fibRetracement: return "Kéo từ đáy/đỉnh đầu sóng đến cuối sóng"
-        case .rectangle: return "Kéo từ góc này sang góc đối diện"
+        case .fibExtension: return "Chạm 3 điểm: đầu sóng, cuối sóng, điểm hồi"
+        case .elliottImpulse: return "Chạm 6 điểm: 0, 1, 2, 3, 4, 5"
+        case .elliottCorrection: return "Chạm 4 điểm: 0, A, B, C"
+        case .headShoulders: return "Chạm 7 điểm: đầu, vai trái, cổ, đầu, cổ, vai phải, cuối"
+        case .trianglePattern: return "Chạm 4 điểm: A, B, C, D"
+        case .fixedRangeVolume: return "Kéo từ nến đầu đến nến cuối của vùng"
+        case .anchoredVolume: return "Chạm vào nến bắt đầu"
+        case .rectangle, .ellipse: return "Kéo từ góc này sang góc đối diện"
         case .priceRange: return "Kéo từ điểm đầu đến điểm cuối để đo"
-        case .trendLine, .trendRay: return "Kéo từ điểm đầu đến điểm cuối"
+        case .trendLine, .trendRay, .arrow, .arrowMarker: return "Kéo từ điểm đầu đến điểm cuối"
+        case .brush: return "Kéo ngón tay để vẽ"
+        case .path: return "Chạm từng điểm, chạm lại điểm cuối để xong"
         default: return "Chạm hoặc kéo tới chỗ cần đặt"
         }
     }
@@ -68,10 +114,28 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
     /// Lines whose width and dash can be changed and that can carry a label.
     var isLine: Bool {
         switch self {
-        case .trendLine, .trendRay, .horizontalLine, .horizontalRay, .verticalLine, .rectangle: return true
+        case .trendLine, .trendRay, .horizontalLine, .horizontalRay, .verticalLine, .rectangle,
+             .arrow, .path, .brush, .ellipse, .elliottImpulse, .elliottCorrection, .headShoulders, .trianglePattern:
+            return true
         default: return false
         }
     }
+
+    /// Sections of the drawing tools sheet, like TradingView's.
+    struct Category: Identifiable {
+        var id: String { title }
+        var title: String
+        var tools: [DrawingTool]
+    }
+
+    static let categories: [Category] = [
+        Category(title: "Công cụ xu hướng", tools: [.trendLine, .trendRay, .horizontalLine, .horizontalRay, .verticalLine]),
+        Category(title: "Gann và Fibonacci", tools: [.fibRetracement, .fibExtension]),
+        Category(title: "Mô hình", tools: [.elliottImpulse, .elliottCorrection, .headShoulders, .trianglePattern]),
+        Category(title: "Dự đoán và đo lường", tools: [.longPosition, .shortPosition, .fixedRangeVolume, .anchoredVolume, .priceRange]),
+        Category(title: "Hình học", tools: [.brush, .rectangle, .arrow, .ellipse, .path, .arrowMarker]),
+        Category(title: "Lưu ý", tools: [.text]),
+    ]
 }
 
 enum LineStyle: String, Codable, CaseIterable {
@@ -114,7 +178,9 @@ struct Drawing: Codable, Identifiable, Hashable {
         self.points = points
         if tool == .longPosition { colorIndex = 2 }
         if tool == .shortPosition { colorIndex = 1 }
-        if tool == .fibRetracement { colorIndex = 5 }
+        if tool == .fibRetracement || tool == .fibExtension { colorIndex = 5 }
+        if tool == .headShoulders || tool == .trianglePattern { colorIndex = 4 }
+        if tool == .fixedRangeVolume || tool == .anchoredVolume { colorIndex = 0 }
     }
 
     // Fields added later are optional when reading drawings saved by older versions.
@@ -153,6 +219,14 @@ struct Drawing: Codable, Identifiable, Hashable {
 
     /// Fibonacci levels with ICT's OTE zone (0.62 – 0.79) and targets below 0.
     static let fibLevels: [Double] = [1, 0.79, 0.705, 0.62, 0.5, 0, -0.27, -0.62, -1]
+
+    /// Trend-based extension: levels from the third point by the first leg.
+    static let fibExtensionLevels: [Double] = [0, 0.618, 1, 1.272, 1.618, 2, 2.618]
+
+    func fibExtensionPrice(_ level: Double) -> Double? {
+        guard points.count >= 3 else { return nil }
+        return points[2].price + (points[1].price - points[0].price) * level
+    }
 
     /// Price of a Fibonacci level: 0 at the second point, 1 at the first.
     func fibPrice(_ level: Double) -> Double? {

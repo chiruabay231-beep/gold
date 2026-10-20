@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Drawing panel on the left of the chart, grouped like TradingView's:
-/// each category opens a list of its tools, then magnet, stay in drawing
-/// mode, lock all, hide all and remove all.
+/// Drawing panel on the left of the chart: the favourite tools, a button for
+/// all of them (the "Bản vẽ" sheet), then magnet, stay in drawing mode, lock
+/// all, hide all and remove all.
 struct DrawingToolbar: View {
     @Binding var activeTool: DrawingTool?
     /// Snap points to the bar's open/high/low/close.
@@ -12,27 +12,13 @@ struct DrawingToolbar: View {
     @Binding var lockAll: Bool
     @Binding var hideDrawings: Bool
     let theme: ChartTheme
+    /// Opens the "Bản vẽ" sheet with every tool.
+    var onAllTools: () -> Void = {}
     var onUndo: () -> Void
     var onRemoveAll: () -> Void
     var onClose: () -> Void
 
-    struct Group: Identifiable {
-        var id: String { title }
-        var title: String
-        var tools: [DrawingTool]
-    }
-
-    static let groups: [Group] = [
-        Group(title: "Đường", tools: [.trendLine, .trendRay, .horizontalLine, .horizontalRay, .verticalLine]),
-        Group(title: "Fibonacci", tools: [.fibRetracement]),
-        Group(title: "Hình", tools: [.rectangle]),
-        Group(title: "Dự báo", tools: [.longPosition, .shortPosition]),
-        Group(title: "Chú thích", tools: [.text]),
-        Group(title: "Đo", tools: [.priceRange]),
-    ]
-
-    /// Tool last picked in each group, shown as the group's icon.
-    @State private var lastUsed: [String: DrawingTool] = [:]
+    @AppStorage(DrawingFavorites.key) private var favoritesText = DrawingFavorites.defaultText
 
     var body: some View {
         ScrollView(showsIndicators: false) {
@@ -40,9 +26,19 @@ struct DrawingToolbar: View {
                 Button { activeTool = nil } label: { icon("cursorarrow", active: activeTool == nil) }
                     .accessibilityLabel("Con trỏ")
                 separator
-                ForEach(Self.groups) { group in
-                    groupButton(group)
+                // Favourite tools, then the sheet with all of them.
+                ForEach(DrawingFavorites.decode(favoritesText)) { tool in
+                    Button { activeTool = activeTool == tool ? nil : tool } label: {
+                        icon(tool.systemImage, active: activeTool == tool)
+                    }
+                    .accessibilityLabel(tool.title)
                 }
+                if let tool = activeTool, !DrawingFavorites.decode(favoritesText).contains(tool) {
+                    Button { activeTool = nil } label: { icon(tool.systemImage, active: true) }
+                        .accessibilityLabel(tool.title)
+                }
+                Button(action: onAllTools) { icon("square.grid.2x2", active: false) }
+                    .accessibilityLabel("Tất cả công cụ vẽ")
                 separator
                 Button { magnet.toggle() } label: { icon("scope", active: magnet) }
                     .accessibilityLabel("Nam châm")
@@ -70,42 +66,6 @@ struct DrawingToolbar: View {
         .frame(maxHeight: 560)
         .background(theme.background, in: .rect(cornerRadius: 12))
         .shadow(color: .black.opacity(0.18), radius: 8, y: 2)
-    }
-
-    @ViewBuilder
-    private func groupButton(_ group: Group) -> some View {
-        let current = group.tools.first { $0 == activeTool } ?? lastUsed[group.title] ?? group.tools[0]
-        let active = activeTool.map { group.tools.contains($0) } ?? false
-        if group.tools.count == 1 {
-            Button { toggle(current, in: group) } label: { icon(current.systemImage, active: active) }
-                .accessibilityLabel(current.title)
-        } else {
-            Menu {
-                Section(group.title) {
-                    ForEach(group.tools) { tool in
-                        Button { toggle(tool, in: group, forceOn: true) } label: {
-                            Label(tool.title, systemImage: activeTool == tool ? "checkmark" : tool.systemImage)
-                        }
-                    }
-                }
-            } label: {
-                icon(current.systemImage, active: active)
-                    .overlay(alignment: .bottomTrailing) {
-                        // Small corner mark: this button has more tools.
-                        Image(systemName: "arrowtriangle.down.fill")
-                            .font(.system(size: 5))
-                            .rotationEffect(.degrees(-45))
-                            .foregroundColor(active ? .white : theme.text)
-                            .padding(4)
-                    }
-            }
-            .accessibilityLabel(group.title)
-        }
-    }
-
-    private func toggle(_ tool: DrawingTool, in group: Group, forceOn: Bool = false) {
-        lastUsed[group.title] = tool
-        activeTool = (activeTool == tool && !forceOn) ? nil : tool
     }
 
     private var separator: some View {

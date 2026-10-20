@@ -71,6 +71,9 @@ struct LiveView: View {
     @State private var viewport = ChartViewport()
     @State private var showSymbolPicker = false
     @State private var showDrawingBar = false
+    /// The "Bản vẽ" sheet with every drawing tool.
+    @State private var showDrawingTools = false
+    @AppStorage(DrawingFavorites.onChartKey) private var favoritesOnChart = false
     @State private var activeTool: DrawingTool?
     @State private var selectedDrawingID: UUID?
     @State private var editingTextDrawing: Drawing?
@@ -169,6 +172,13 @@ struct LiveView: View {
             Text(replaySummary ?? "")
         }
         .sheet(isPresented: $showVoiceSettings) { VoiceSettingsView() }
+        .sheet(isPresented: $showDrawingTools) {
+            DrawingToolsSheet(activeTool: activeTool) { tool in
+                activeTool = tool
+                selectedDrawingID = nil
+                showDrawingBar = true
+            }
+        }
         .sheet(isPresented: $showIndicatorSheet, onDismiss: runAfterSheet) {
             LiveIndicatorSheet(onKillzoneSettings: { afterSheet = { showKillzoneSettings = true } },
                                onManage: { afterSheet = { store.selectedTab = .indicators } })
@@ -615,6 +625,7 @@ struct LiveView: View {
             if showDrawingBar {
                 DrawingToolbar(activeTool: $activeTool, magnet: $magnet, keepTool: $keepTool,
                                lockAll: $lockDrawings, hideDrawings: $hideDrawings, theme: theme,
+                               onAllTools: { showDrawingTools = true },
                                onUndo: {
                                    store.undoDrawing(key: drawingKey)
                                    selectedDrawingID = nil
@@ -624,6 +635,14 @@ struct LiveView: View {
                     activeTool = nil
                 }
                 .padding(.leading, 6)
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            // Bản vẽ → Hiển thị mục yêu thích trên Biểu đồ.
+            if favoritesOnChart, !showDrawingBar {
+                FavoriteToolsBar(activeTool: $activeTool, theme: theme) { showDrawingTools = true }
+                    .padding(.leading, 6)
+                    .padding(.top, 40)
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -1231,8 +1250,12 @@ struct LiveView: View {
             Spacer(minLength: 4)
             toolbarButton("backward.end.alt", active: replay.isActive) { toggleReplay() }
             toolbarButton("pencil.tip", active: showDrawingBar) {
-                showDrawingBar.toggle()
-                if !showDrawingBar { activeTool = nil }
+                if showDrawingBar {
+                    showDrawingBar = false
+                    activeTool = nil
+                } else {
+                    showDrawingTools = true
+                }
             }
             toolbarButton("function", active: false) { showIndicatorSheet = true }
             toolbarButton("ellipsis", active: false) { showMoreSheet = true }

@@ -412,8 +412,11 @@ struct CandleChart: View {
         return candles[lower].time.addingTimeInterval(fraction * candles[lower + 1].time.timeIntervalSince(candles[lower].time))
     }
 
-    private func chartPoint(at location: CGPoint, layout: Layout) -> ChartPoint {
+    private func chartPoint(at location: CGPoint, layout: Layout, snap: Bool = true) -> ChartPoint {
         let s = scale(layout: layout)
+        if !snap {
+            return ChartPoint(time: time(forIndex: s.fractionalIndex(atX: location.x)), price: s.price(atY: location.y))
+        }
         // Snap to the nearest bar like TradingView.
         let index = s.fractionalIndex(atX: location.x).rounded()
         var price = s.price(atY: location.y)
@@ -708,6 +711,10 @@ struct CandleChart: View {
         if let preview = creatingPreview {
             drawDrawing(preview, in: &plotContext, s: s, layout: layout, decimals: decimals,
                         selected: true, axisLabels: &axisLabels)
+        }
+        if creatingPreview == nil, let tool = drawingTool, pendingPoints.count >= 2 {
+            drawDrawing(makeDrawing(tool, points: pendingPoints), in: &plotContext, s: s, layout: layout, decimals: decimals,
+                        selected: false, axisLabels: &axisLabels)
         }
         for point in pendingPoints {
             let center = CGPoint(x: s.x(index(for: point.time)), y: s.y(point.price))
@@ -1025,6 +1032,103 @@ struct CandleChart: View {
             label(stopText, at: CGPoint(x: left + 4, y: stopY + (stopY < entryY ? 8 : -8)), color: theme.down)
             label("Vào \(Self.format(levels.entry, decimals))", at: CGPoint(x: right - 4, y: entryY - 8), anchor: .trailing,
                   color: theme.primaryText)
+        case .fibExtension:
+            var legs = Path()
+            legs.addLines(points)
+            context.stroke(legs, with: .color(color.opacity(0.6)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            guard points.count > 2 else { break }
+            let left = points[2].x
+            let right = max(left + s.barWidth * 20, points.map(\.x).max() ?? left)
+            for level in Drawing.fibExtensionLevels {
+                guard let price = d.fibExtensionPrice(level) else { continue }
+                let y = s.y(price)
+                let levelColor = level == 1 || level == 1.618 ? DrawingPalette.colors[3] : color
+                var path = Path()
+                path.move(to: CGPoint(x: left, y: y))
+                path.addLine(to: CGPoint(x: right, y: y))
+                context.stroke(path, with: .color(levelColor), lineWidth: level == 1.618 ? 1.4 : 1)
+                label("\(String(format: "%g", level)) (\(Self.format(price, decimals)))", at: CGPoint(x: left + 3, y: y - 6),
+                      color: levelColor)
+            }
+        case .elliottImpulse, .elliottCorrection:
+            var path = Path()
+            path.addLines(points)
+            context.stroke(path, with: .color(color), style: stroke)
+            let names = d.tool == .elliottImpulse ? ["(0)", "(1)", "(2)", "(3)", "(4)", "(5)"] : ["(0)", "(A)", "(B)", "(C)"]
+            for (i, p) in points.enumerated() where i < names.count {
+                let peak = Self.isPeak(i, points)
+                label(names[i], at: CGPoint(x: p.x, y: p.y + (peak ? -10 : 10)), anchor: .center)
+            }
+        case .headShoulders:
+            if points.count > 2 {
+                var area = Path()
+                area.addLines(points)
+                area.closeSubpath()
+                context.fill(area, with: .color(color.opacity(0.12)))
+            }
+            var path = Path()
+            path.addLines(points)
+            context.stroke(path, with: .color(color), style: stroke)
+            if points.count > 4 {
+                // Neckline through the two troughs, across the whole pattern.
+                let a = points[2], b = points[4]
+                let slope = b.x != a.x ? (b.y - a.y) / (b.x - a.x) : 0
+                let x0 = points[0].x, x1 = points[points.count - 1].x
+                var neck = Path()
+                neck.move(to: CGPoint(x: x0, y: a.y + (x0 - a.x) * slope))
+                neck.addLine(to: CGPoint(x: x1, y: a.y + (x1 - a.x) * slope))
+                context.stroke(neck, with: .color(color), style: StrokeStyle(lineWidth: 1, dash: [5, 3]))
+            }
+            for (i, name) in [(1, "Vai trái"), (3, "Đầu"), (5, "Vai phải")] where i < points.count {
+                let peak = Self.isPeak(i, points)
+                label(name, at: CGPoint(x: points[i].x, y: points[i].y + (peak ? -10 : 10)), anchor: .center)
+            }
+        case .trianglePattern:
+            if points.count > 3 {
+                var area = Path()
+                area.addLines(points)
+                area.closeSubpath()
+                context.fill(area, with: .color(color.opacity(0.12)))
+            }
+            var path = Path()
+            path.addLines(points)
+            context.stroke(path, with: .color(color), style: stroke)
+            // The converging sides: A–C and B–D.
+            for (i, j) in [(0, 2), (1, 3)] where j < points.count {
+                var side = Path()
+                side.move(to: points[i])
+                side.addLine(to: points[j])
+                context.stroke(side, with: .color(color), style: StrokeStyle(lineWidth: 1, dash: [5, 3]))
+            }
+            for (i, p) in points.enumerated() where i < 4 {
+                let peak = Self.isPeak(i, points)
+                label(["A", "B", "C", "D"][i], at: CGPoint(x: p.x, y: p.y + (peak ? -10 : 10)), anchor: .center)
+            }
+        case .fixedRangeVolume, .anchoredVolume:
+            drawVolumeProfile(d, in: &context, s: s, decimals: decimals, color: color, selected: selected)
+        case .brush:
+            var path = Path()
+            path.addLines(points)
+            context.stroke(path, with: .color(color),
+                           style: StrokeStyle(lineWidth: width + 0.5, lineCap: .round, lineJoin: .round, dash: d.lineStyle.dash))
+        case .arrow, .path:
+            guard points.count > 1 else { break }
+            var path = Path()
+            path.addLines(points)
+            context.stroke(path, with: .color(color), style: stroke)
+            context.stroke(Self.arrowHead(from: points[points.count - 2], to: points[points.count - 1], size: 10 + width * 2),
+                           with: .color(color), style: StrokeStyle(lineWidth: width, lineCap: .round))
+            label(d.text, at: CGPoint(x: points[points.count - 1].x + 8, y: points[points.count - 1].y))
+        case .ellipse:
+            guard points.count > 1 else { break }
+            let rect = CGRect(x: min(p0.x, points[1].x), y: min(p0.y, points[1].y),
+                              width: abs(points[1].x - p0.x), height: abs(points[1].y - p0.y))
+            context.fill(Path(ellipseIn: rect), with: .color(color.opacity(0.15)))
+            context.stroke(Path(ellipseIn: rect), with: .color(color), style: stroke)
+            label(d.text, at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
+        case .arrowMarker:
+            guard points.count > 1 else { break }
+            context.fill(Self.arrowShape(from: p0, to: points[1]), with: .color(color))
         case .text:
             let text = d.text.isEmpty ? "Ghi chú" : d.text
             context.draw(Text(text).font(.system(size: 12, weight: .medium)).foregroundColor(color),
@@ -1041,6 +1145,8 @@ struct CandleChart: View {
 
     /// Draggable points of a drawing on screen; for positions the target is the third.
     private func handlePoints(of d: Drawing, s: Scale) -> [CGPoint] {
+        // A brush stroke is moved as a whole.
+        if d.tool == .brush { return [] }
         var points = d.points.map { CGPoint(x: s.x(index(for: $0.time)), y: s.y($0.price)) }
         if let levels = d.positionLevels, points.count > 1 {
             points.append(CGPoint(x: points[1].x, y: s.y(levels.target)))
@@ -1132,6 +1238,100 @@ struct CandleChart: View {
         return path
     }
 
+    /// True when point `i` is above its neighbours (a high), for label placement.
+    private static func isPeak(_ i: Int, _ points: [CGPoint]) -> Bool {
+        let y = points[i].y
+        let neighbours = [i - 1, i + 1].filter { points.indices.contains($0) }.map { points[$0].y }
+        guard !neighbours.isEmpty else { return points.count > 1 ? y < points[1].y : true }
+        return neighbours.allSatisfy { y <= $0 }
+    }
+
+    /// Two strokes of an arrow head at `b`, pointing away from `a`.
+    private static func arrowHead(from a: CGPoint, to b: CGPoint, size: CGFloat) -> Path {
+        let angle = atan2(b.y - a.y, b.x - a.x)
+        var path = Path()
+        for side in [-0.45, 0.45] {
+            path.move(to: b)
+            path.addLine(to: CGPoint(x: b.x - size * cos(angle + side), y: b.y - size * sin(angle + side)))
+        }
+        return path
+    }
+
+    /// A filled block arrow from `a` to `b` (arrow marker).
+    private static func arrowShape(from a: CGPoint, to b: CGPoint) -> Path {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let length = max(hypot(dx, dy), 1)
+        let u = CGPoint(x: dx / length, y: dy / length)
+        let n = CGPoint(x: -u.y, y: u.x)
+        let head = min(22, length * 0.5), body: CGFloat = 4, wing: CGFloat = 11
+        func at(_ along: CGFloat, _ across: CGFloat) -> CGPoint {
+            CGPoint(x: a.x + u.x * along + n.x * across, y: a.y + u.y * along + n.y * across)
+        }
+        var path = Path()
+        path.addLines([at(0, -body), at(length - head, -body), at(length - head, -wing), at(length, 0),
+                       at(length - head, wing), at(length - head, body), at(0, body)])
+        path.closeSubpath()
+        return path
+    }
+
+    /// Bars covered by a volume profile drawing (anchored: from the anchor to the last bar).
+    private func volumeRange(_ d: Drawing) -> ClosedRange<Int>? {
+        guard !candles.isEmpty, let first = d.points.first else { return nil }
+        let i0 = Int(index(for: first.time).rounded())
+        let i1 = d.tool == .anchoredVolume || d.points.count < 2 ? candles.count - 1 : Int(index(for: d.points[1].time).rounded())
+        let lo = max(0, min(i0, i1)), hi = min(candles.count - 1, max(i0, i1))
+        return lo <= hi ? lo...hi : nil
+    }
+
+    /// Volume at price over the drawing's bars: 24 rows, buying (up bars) and
+    /// selling (down bars) volume, and the point of control (busiest row).
+    private func drawVolumeProfile(_ d: Drawing, in context: inout GraphicsContext, s: Scale, decimals: Int,
+                                   color: Color, selected: Bool) {
+        guard let range = volumeRange(d) else { return }
+        let bars = candles[range]
+        guard let low = bars.map(\.low).min(), let high = bars.map(\.high).max(), high > low else { return }
+        let rows = 24
+        var up = [Double](repeating: 0, count: rows), down = up
+        // Without volume (some forex feeds) every bar counts once.
+        let useVolume = bars.contains { $0.volume > 0 }
+        for c in bars {
+            let first = min(rows - 1, max(0, Int((c.low - low) / (high - low) * Double(rows))))
+            let last = min(rows - 1, max(0, Int((c.high - low) / (high - low) * Double(rows))))
+            let share = (useVolume ? c.volume : 1) / Double(last - first + 1)
+            for r in first...last {
+                if c.close >= c.open { up[r] += share } else { down[r] += share }
+            }
+        }
+        let totals = zip(up, down).map { $0 + $1 }
+        guard let busiest = totals.indices.max(by: { totals[$0] < totals[$1] }), totals[busiest] > 0 else { return }
+        let left = s.x(range.lowerBound) - s.barWidth / 2
+        let right = s.x(range.upperBound) + s.barWidth / 2
+        let top = s.y(high), bottom = s.y(low)
+        let box = CGRect(x: left, y: top, width: max(right - left, 1), height: bottom - top)
+        context.fill(Path(box), with: .color(color.opacity(selected ? 0.10 : 0.05)))
+        if selected { context.stroke(Path(box), with: .color(color.opacity(0.6)), lineWidth: 1) }
+        let widest = max(box.width * 0.35, 60)
+        let rowHeight = box.height / CGFloat(rows)
+        for r in 0..<rows where totals[r] > 0 {
+            let y = bottom - CGFloat(r + 1) * rowHeight
+            let upWidth = CGFloat(up[r] / totals[busiest]) * widest
+            let downWidth = CGFloat(down[r] / totals[busiest]) * widest
+            context.fill(Path(CGRect(x: left, y: y + 0.5, width: upWidth, height: max(rowHeight - 1, 0.5))),
+                         with: .color(theme.up.opacity(0.45)))
+            context.fill(Path(CGRect(x: left + upWidth, y: y + 0.5, width: downWidth, height: max(rowHeight - 1, 0.5))),
+                         with: .color(theme.down.opacity(0.45)))
+        }
+        let pocPrice = low + (Double(busiest) + 0.5) / Double(rows) * (high - low)
+        let pocY = s.y(pocPrice)
+        var poc = Path()
+        poc.move(to: CGPoint(x: left, y: pocY))
+        poc.addLine(to: CGPoint(x: right, y: pocY))
+        context.stroke(poc, with: .color(DrawingPalette.colors[1]), lineWidth: 1.2)
+        context.draw(Text("POC \(Self.format(pocPrice, decimals))").font(.system(size: 9, weight: .semibold))
+                        .foregroundColor(DrawingPalette.colors[1]),
+                     at: CGPoint(x: right - 2, y: pocY - 7), anchor: .trailing)
+    }
+
     // MARK: - Hit testing
 
     private func hitDrawing(at location: CGPoint, layout: Layout) -> Drawing? {
@@ -1183,6 +1383,38 @@ struct CandleChart: View {
                     let top = min(s.y(levels.stop), s.y(levels.target))
                     let bottom = max(s.y(levels.stop), s.y(levels.target))
                     if CGRect(x: left, y: top, width: right - left, height: bottom - top).contains(location) { return d }
+                }
+            case .fibExtension:
+                if points.count > 2 {
+                    let left = points[2].x
+                    let right = max(left + s.barWidth * 20, points.map(\.x).max() ?? left)
+                    let ys = Drawing.fibExtensionLevels.compactMap { d.fibExtensionPrice($0) }.map { s.y($0) } + points.map(\.y)
+                    if location.x > min(left, points.map(\.x).min() ?? left) - tolerance, location.x < right + tolerance,
+                       let top = ys.min(), let bottom = ys.max(), location.y > top - tolerance, location.y < bottom + tolerance {
+                        return d
+                    }
+                }
+            case .elliottImpulse, .elliottCorrection, .headShoulders, .trianglePattern, .brush, .arrow, .path:
+                if zip(points, points.dropFirst()).contains(where: { Self.distance(from: location, toSegment: $0, $1) < tolerance }) {
+                    return d
+                }
+            case .arrowMarker:
+                if points.count > 1, Self.distance(from: location, toSegment: p0, points[1]) < tolerance + 6 { return d }
+            case .ellipse:
+                if points.count > 1 {
+                    let rect = CGRect(x: min(p0.x, points[1].x), y: min(p0.y, points[1].y),
+                                      width: abs(points[1].x - p0.x), height: abs(points[1].y - p0.y))
+                    if rect.insetBy(dx: -tolerance, dy: -tolerance).contains(location) { return d }
+                }
+            case .fixedRangeVolume, .anchoredVolume:
+                if let range = volumeRange(d) {
+                    let bars = candles[range]
+                    if let low = bars.map(\.low).min(), let high = bars.map(\.high).max() {
+                        let box = CGRect(x: s.x(range.lowerBound) - s.barWidth / 2, y: s.y(high),
+                                         width: s.x(range.upperBound) - s.x(range.lowerBound) + s.barWidth,
+                                         height: s.y(low) - s.y(high))
+                        if box.insetBy(dx: -tolerance, dy: -tolerance).contains(location) { return d }
+                    }
                 }
             case .text:
                 if CGRect(x: p0.x - 6, y: p0.y - 14, width: 160, height: 28).contains(location) { return d }
@@ -1361,6 +1593,18 @@ struct CandleChart: View {
             return
         }
         if let tool = drawingTool {
+            // The brush draws with a drag only.
+            if tool == .brush { return }
+            // A path ends when its last point is tapped again.
+            if tool == .path, pendingPoints.count >= 2, let last = pendingPoints.last {
+                let p = screenPoint(last, layout: layout)
+                if hypot(p.x - location.x, p.y - location.y) < 24 {
+                    let drawing = makeDrawing(tool, points: pendingPoints)
+                    pendingPoints = []
+                    onDrawingCreated?(drawing)
+                    return
+                }
+            }
             // Tapping works too: one tap per point.
             pendingPoints.append(chartPoint(at: location, layout: layout))
             if pendingPoints.count >= tool.pointsNeeded {
@@ -1444,9 +1688,26 @@ struct CandleChart: View {
                     onPriceLineDrag?(line.id, price, false)
                 case .create:
                     guard let tool = drawingTool else { return }
+                    if tool == .brush {
+                        // Free hand: a point every few pixels.
+                        var stroke = creatingPreview?.points ?? [chartPoint(at: value.startLocation, layout: layout, snap: false)]
+                        if let last = stroke.last {
+                            let p = screenPoint(last, layout: layout)
+                            if hypot(p.x - value.location.x, p.y - value.location.y) > 3 {
+                                stroke.append(chartPoint(at: value.location, layout: layout, snap: false))
+                            }
+                        }
+                        creatingPreview = Drawing(tool: .brush, points: stroke)
+                        guidePoint = nil
+                        return
+                    }
                     let end = chartPoint(at: value.location, layout: layout)
                     if tool.pointsNeeded == 1 {
                         creatingPreview = makeDrawing(tool, points: [end])
+                    } else if tool.isMultiPoint {
+                        // One drag per point: from the last placed point to the finger.
+                        let placed = pendingPoints.isEmpty ? [chartPoint(at: value.startLocation, layout: layout)] : pendingPoints
+                        creatingPreview = makeDrawing(tool, points: placed + [end])
                     } else {
                         let start = pendingPoints.first ?? chartPoint(at: value.startLocation, layout: layout)
                         creatingPreview = makeDrawing(tool, points: [start, end])
@@ -1487,8 +1748,13 @@ struct CandleChart: View {
                 // Keep the order highlighted for 2 s after letting go.
                 if let releasedLine { activateLines(of: releasedLine.id) }
                 if dragMode == .create, let created = creatingPreview {
-                    pendingPoints = []
-                    onDrawingCreated?(created)
+                    if let tool = drawingTool, tool.isMultiPoint, created.points.count < tool.pointsNeeded {
+                        // Not all points yet: keep them and wait for the next one.
+                        pendingPoints = created.points
+                    } else {
+                        pendingPoints = []
+                        onDrawingCreated?(created)
+                    }
                 }
                 creatingPreview = nil
                 guidePoint = nil
