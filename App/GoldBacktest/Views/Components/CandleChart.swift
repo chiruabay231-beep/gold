@@ -232,6 +232,8 @@ struct CandleChart: View {
     var positionSizing: PositionSizing?
     /// A border around the plot (candles, volume): the chart sits in its own frame.
     var framed = false
+    /// The crosshair shows only in this mode (Thước ngắm button): a tap places it, a drag moves it.
+    var crosshairMode = false
     @Binding var viewport: ChartViewport
 
     private enum DragMode { case pan, axis, crosshair, moveDrawing, moveHandle, create, priceLine }
@@ -309,6 +311,7 @@ struct CandleChart: View {
             }
         }
         .onChange(of: drawingTool) { _, _ in pendingPoints = [] }
+        .onChange(of: crosshairMode) { _, on in if !on { crosshair = nil } }
     }
 
     // MARK: - Layout
@@ -472,8 +475,8 @@ struct CandleChart: View {
     private func drawCenterLabeled(_ segment: ChartSegment, from startX: CGFloat, to endX: CGFloat, y: CGFloat,
                                    in context: inout GraphicsContext) {
         guard endX > startX else { return }
-        let text = context.resolve(Text(segment.label).font(.system(size: 10, weight: .medium)).foregroundColor(theme.primaryText))
-        let size = text.measure(in: CGSize(width: 200, height: 40))
+        let text = Text(segment.label).font(.system(size: 10, weight: .medium)).foregroundColor(theme.primaryText)
+        let size = CGSize(width: CGFloat(segment.label.count) * 6.5 + 2, height: 12)
         let midX = (startX + endX) / 2
         let style = StrokeStyle(lineWidth: segment.width, dash: segment.dash)
         // Too short for the name: just the line.
@@ -1626,7 +1629,7 @@ struct CandleChart: View {
             onSelectDrawing?(nil)
             return
         }
-        crosshair = crosshair == nil ? location : nil
+        if crosshairMode { crosshair = location }
     }
 
     /// One drag gesture for everything: on the price axis it stretches the
@@ -1789,7 +1792,7 @@ struct CandleChart: View {
         LongPressGesture(minimumDuration: 0.3)
             .sequenced(before: DragGesture(minimumDistance: 0))
             .onChanged { value in
-                if drawingTool == nil, dragMode != .moveHandle, dragMode != .moveDrawing, dragMode != .priceLine,
+                if crosshairMode, drawingTool == nil, dragMode != .moveHandle, dragMode != .moveDrawing, dragMode != .priceLine,
                    case .second(true, let drag?) = value {
                     crosshair = drag.location
                 }

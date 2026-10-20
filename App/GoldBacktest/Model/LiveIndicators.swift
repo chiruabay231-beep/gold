@@ -38,3 +38,42 @@ final class LiveIndicatorCache {
         return cached
     }
 }
+
+/// Small results the Live chart needs on every frame (dragging redraws the
+/// whole screen): computed again only when their input changes.
+@MainActor
+final class LiveFrameCache {
+    private var emaKey = ""
+    private var ema: [Double] = []
+    private var colorsJSON: String?
+    private var colors: CandleColors?
+    private var formatters: [String: DateFormatter] = [:]
+
+    func ema200(_ closes: @autoclosure () -> [Double], candles: [Candle]) -> [Double] {
+        let key = "\(candles.count)|\(candles.first?.time.timeIntervalSince1970 ?? 0)|\(candles.last?.close ?? 0)"
+        if key != emaKey {
+            emaKey = key
+            ema = TA.ema(closes(), 200)
+        }
+        return ema
+    }
+
+    func candleColors(_ json: String) -> CandleColors? {
+        if json != colorsJSON {
+            colorsJSON = json
+            colors = CandleColors.decode(json)
+        }
+        return colors
+    }
+
+    func clock(_ date: Date, zone: String) -> String {
+        let formatter = formatters[zone] ?? {
+            let f = DateFormatter()
+            f.dateFormat = "HH:mm"
+            f.timeZone = ChartTimeZones.zone(zone)
+            formatters[zone] = f
+            return f
+        }()
+        return formatter.string(from: date)
+    }
+}

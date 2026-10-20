@@ -5,6 +5,8 @@ import SwiftUI
 /// all, hide all and remove all.
 struct DrawingToolbar: View {
     @Binding var activeTool: DrawingTool?
+    /// Thước ngắm (crosshair) mode.
+    @Binding var crosshair: Bool
     /// Snap points to the bar's open/high/low/close.
     @Binding var magnet: Bool
     /// Stay on the tool after placing a drawing.
@@ -23,8 +25,13 @@ struct DrawingToolbar: View {
     var body: some View {
         ScrollView(showsIndicators: false) {
             VStack(spacing: 2) {
-                Button { activeTool = nil } label: { icon("cursorarrow", active: activeTool == nil) }
+                Button {
+                    activeTool = nil
+                    crosshair = false
+                } label: { icon("cursorarrow", active: activeTool == nil && !crosshair) }
                     .accessibilityLabel("Con trỏ")
+                Button { crosshair.toggle() } label: { icon("plus.viewfinder", active: crosshair) }
+                    .accessibilityLabel("Thước ngắm")
                 separator
                 // Favourite tools, then the sheet with all of them.
                 ForEach(DrawingFavorites.decode(favoritesText)) { tool in

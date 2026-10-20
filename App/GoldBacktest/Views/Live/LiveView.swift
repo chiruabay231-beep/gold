@@ -73,7 +73,9 @@ struct LiveView: View {
     @State private var showDrawingBar = false
     /// The "Bản vẽ" sheet with every drawing tool.
     @State private var showDrawingTools = false
-    @AppStorage(DrawingFavorites.onChartKey) private var favoritesOnChart = false
+    @AppStorage(DrawingFavorites.onChartKey) private var favoritesOnChart = true
+    /// Thước ngắm: the crosshair shows only while this is on.
+    @State private var crosshairMode = false
     @State private var activeTool: DrawingTool?
     @State private var selectedDrawingID: UUID?
     @State private var editingTextDrawing: Drawing?
@@ -85,6 +87,8 @@ struct LiveView: View {
     /// Custom indicators (tab Chỉ báo) ticked for the Live chart.
     @AppStorage(LiveIndicators.storageKey) private var liveIndicatorIDs = ""
     @State private var indicatorCache = LiveIndicatorCache()
+    /// Results reused between frames while the chart is dragged.
+    @State private var frameCache = LiveFrameCache()
     @State private var showKillzoneSettings = false
     @State private var showOandaSettings = false
     /// OANDA instrument to open once a token has been saved.
@@ -173,7 +177,7 @@ struct LiveView: View {
         }
         .sheet(isPresented: $showVoiceSettings) { VoiceSettingsView() }
         .sheet(isPresented: $showDrawingTools) {
-            DrawingToolsSheet(activeTool: activeTool) { tool in
+            DrawingToolsSheet(activeTool: activeTool, crosshair: $crosshairMode) { tool in
                 activeTool = tool
                 selectedDrawingID = nil
                 showDrawingBar = true
@@ -548,9 +552,10 @@ struct LiveView: View {
                             notes: layer.notes,
                             timeEvents: replay.isActive ? [] : newsTimeEvents,
                             candleStyle: CandleStyle(rawValue: candleStyle) ?? .candles,
-                            candleColors: CandleColors.decode(candleColorsJSON),
+                            candleColors: frameCache.candleColors(candleColorsJSON),
                             timeZone: ChartTimeZones.zone(timeZoneID),
                             framed: true,
+                            crosshairMode: crosshairMode,
                             viewport: comparisonViewport)
             } else {
                 VStack(spacing: 8) {
@@ -613,17 +618,18 @@ struct LiveView: View {
                         onSelectDrawing: { id in selectedDrawingID = id },
                         candleStyle: CandleStyle(rawValue: candleStyle) ?? .candles,
                         magnet: magnet,
-                        candleColors: CandleColors.decode(candleColorsJSON),
+                        candleColors: frameCache.candleColors(candleColorsJSON),
                         priceDecimals: priceDecimals,
                         timeZone: ChartTimeZones.zone(timeZoneID),
                         drawingsLocked: lockDrawings,
                         positionSizing: positionSizing,
                         framed: true,
+                        crosshairMode: crosshairMode,
                         viewport: $viewport)
         }
         .overlay(alignment: .leading) {
             if showDrawingBar {
-                DrawingToolbar(activeTool: $activeTool, magnet: $magnet, keepTool: $keepTool,
+                DrawingToolbar(activeTool: $activeTool, crosshair: $crosshairMode, magnet: $magnet, keepTool: $keepTool,
                                lockAll: $lockDrawings, hideDrawings: $hideDrawings, theme: theme,
                                onAllTools: { showDrawingTools = true },
                                onUndo: {
@@ -640,7 +646,7 @@ struct LiveView: View {
         .overlay(alignment: .topLeading) {
             // Bản vẽ → Hiển thị mục yêu thích trên Biểu đồ.
             if favoritesOnChart, !showDrawingBar {
-                FavoriteToolsBar(activeTool: $activeTool, theme: theme) { showDrawingTools = true }
+                FavoriteToolsBar(activeTool: $activeTool, crosshair: $crosshairMode, theme: theme) { showDrawingTools = true }
                     .padding(.leading, 6)
                     .padding(.top, 40)
             }
@@ -1204,8 +1210,7 @@ struct LiveView: View {
     private var overlays: [ChartLine] {
         var lines: [ChartLine] = []
         if showEMA200 {
-            let closes = chartCandles.map { $0.close }
-            lines.append(ChartLine(title: "EMA(200)", values: TA.ema(closes, 200),
+            lines.append(ChartLine(title: "EMA(200)", values: frameCache.ema200(chartCandles.map { $0.close }, candles: chartCandles),
                                    color: Color(red: 1.0, green: 0.596, blue: 0.0)))
         }
         return lines + customIndicators.overlays
@@ -1312,10 +1317,7 @@ struct LiveView: View {
     }
 
     private func clockText(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "HH:mm"
-        formatter.timeZone = ChartTimeZones.zone(timeZoneID)
-        return formatter.string(from: date)
+        frameCache.clock(date, zone: timeZoneID)
     }
 
     /// Splits the chart: this market and the correlated one (XAU / XAG), SMT on both.

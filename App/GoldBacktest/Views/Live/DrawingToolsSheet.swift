@@ -25,11 +25,13 @@ enum DrawingFavorites {
 /// Favourites / all / one section, search, ☆ to favourite.
 struct DrawingToolsSheet: View {
     let activeTool: DrawingTool?
+    /// Thước ngắm (crosshair) mode of the chart.
+    @Binding var crosshair: Bool
     var onPick: (DrawingTool) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @AppStorage(DrawingFavorites.key) private var favoritesText = DrawingFavorites.defaultText
-    @AppStorage(DrawingFavorites.onChartKey) private var showOnChart = false
+    @AppStorage(DrawingFavorites.onChartKey) private var showOnChart = true
     @AppStorage("drawing.sheetTab") private var tab = Self.favoritesTab
     @State private var query = ""
 
@@ -81,6 +83,15 @@ struct DrawingToolsSheet: View {
                 Divider()
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
+                        if query.isEmpty, tab == Self.favoritesTab || tab == Self.allTab {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("CON TRỎ").font(.subheadline.weight(.semibold)).foregroundColor(.secondary)
+                                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                                    cursorTile("Mũi tên", "cursorarrow", selected: !crosshair) { crosshair = false }
+                                    cursorTile("Thước ngắm", "plus.viewfinder", selected: crosshair) { crosshair = true }
+                                }
+                            }
+                        }
                         if sections.isEmpty {
                             Text(query.isEmpty ? "Chưa có công cụ yêu thích. Bấm ☆ trên một công cụ ở tab Tất cả để thêm."
                                  : "Không tìm thấy công cụ")
@@ -119,6 +130,23 @@ struct DrawingToolsSheet: View {
         }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    private func cursorTile(_ title: String, _ image: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            dismiss()
+        } label: {
+            VStack(spacing: 8) {
+                Image(systemName: image).font(.system(size: 24)).frame(height: 30)
+                Text(title).font(.system(size: 13))
+            }
+            .foregroundColor(.primary)
+            .frame(maxWidth: .infinity, minHeight: 96)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(selected ? Color.accentColor : .clear, lineWidth: 2))
+        }
+        .buttonStyle(.plain)
     }
 
     private func tile(_ tool: DrawingTool) -> some View {
@@ -162,6 +190,7 @@ struct DrawingToolsSheet: View {
 /// Favourite tools in a strip on the chart (Bản vẽ → Hiển thị mục yêu thích trên Biểu đồ).
 struct FavoriteToolsBar: View {
     @Binding var activeTool: DrawingTool?
+    @Binding var crosshair: Bool
     let theme: ChartTheme
     var onMore: () -> Void
 
@@ -170,6 +199,16 @@ struct FavoriteToolsBar: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 2) {
+                // Thước ngắm: the crosshair only shows while this is on.
+                Button { crosshair.toggle() } label: {
+                    Image(systemName: "plus.viewfinder")
+                        .font(.system(size: 15))
+                        .frame(width: 34, height: 32)
+                        .foregroundColor(crosshair ? .white : theme.primaryText)
+                        .background(crosshair ? theme.accent : .clear, in: .rect(cornerRadius: 7))
+                }
+                .accessibilityLabel("Thước ngắm")
+                Divider().frame(height: 20)
                 ForEach(DrawingFavorites.decode(favoritesText)) { tool in
                     Button { activeTool = activeTool == tool ? nil : tool } label: {
                         Image(systemName: tool.systemImage)
