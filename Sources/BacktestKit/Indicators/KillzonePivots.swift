@@ -140,6 +140,17 @@ public enum KillzonePivots {
         public var fvgMidline = true
         /// Most recent FVGs kept.
         public var fvgCount = 40
+        /// Only gaps made by a strong displacement candle: its body at least
+        /// `fvgDisplacement` × the average body of the 20 bars before, in the
+        /// gap's direction and at least half of its range.
+        public var fvgStrongOnly = true
+        public var fvgDisplacement = 1.5
+
+        /// Volume imbalances: two candles in the same direction whose bodies
+        /// leave a gap while their wicks overlap. Drawn like FVGs, until touched.
+        public var showVI = true
+        public var viCount = 20
+        public var viHideTouched = false
 
         /// Market structure: MSS (break against the trend) and optionally BOS.
         public var showMSS = true
@@ -208,6 +219,11 @@ public enum KillzonePivots {
             fvgHideFilled = try c.decodeIfPresent(Bool.self, forKey: .fvgHideFilled) ?? d.fvgHideFilled
             fvgMidline = try c.decodeIfPresent(Bool.self, forKey: .fvgMidline) ?? d.fvgMidline
             fvgCount = try c.decodeIfPresent(Int.self, forKey: .fvgCount) ?? d.fvgCount
+            fvgStrongOnly = try c.decodeIfPresent(Bool.self, forKey: .fvgStrongOnly) ?? d.fvgStrongOnly
+            fvgDisplacement = try c.decodeIfPresent(Double.self, forKey: .fvgDisplacement) ?? d.fvgDisplacement
+            showVI = try c.decodeIfPresent(Bool.self, forKey: .showVI) ?? d.showVI
+            viCount = try c.decodeIfPresent(Int.self, forKey: .viCount) ?? d.viCount
+            viHideTouched = try c.decodeIfPresent(Bool.self, forKey: .viHideTouched) ?? d.viHideTouched
             showMSS = try c.decodeIfPresent(Bool.self, forKey: .showMSS) ?? d.showMSS
             showBOS = try c.decodeIfPresent(Bool.self, forKey: .showBOS) ?? d.showBOS
             swingLength = try c.decodeIfPresent(Int.self, forKey: .swingLength) ?? d.swingLength
@@ -326,6 +342,7 @@ public enum KillzonePivots {
         public var sweeps: [Sweep] = []
         public var smt: [SMTDivergence] = []
         public var fvgs: [FairValueGap] = []
+        public var volumeImbalances: [FairValueGap] = []
         public var breaks: [StructureBreak] = []
         public var boxes: [Box] = []
         public var macroBoxes: [MacroBox] = []
@@ -352,6 +369,7 @@ public enum KillzonePivots {
         // FVG and structure have their own timeframe rules.
         if config.showFVG, barInterval >= config.fvgFromMinutes * 60 - 1, barInterval <= config.fvgToMinutes * 60 + 1 {
             output.fvgs = fairValueGaps(candles, barInterval: barInterval, config: config)
+            if config.showVI { output.volumeImbalances = volumeImbalances(candles, config: config) }
         }
         if config.showMSS || config.showBOS {
             output.breaks = structureBreaks(candles, config: config)
@@ -571,7 +589,8 @@ public enum KillzonePivots {
         let count = max(config.fvgCount, 1)
         var gaps: [FairValueGap] = []
         // Newest first, so only the gaps that are kept are followed to their touch.
-        for raw in rawGaps(c, minSize: config.fvgMinSize).reversed() {
+        let displacement = config.fvgStrongOnly ? max(config.fvgDisplacement, 0) : nil
+        for raw in rawGaps(c, minSize: config.fvgMinSize, displacement: displacement).reversed() {
             let gap = followed(raw, start: raw.start, formed: raw.start + 1, in: c)
             if gap.touched && config.fvgHideFilled { continue }
             gaps.append(gap)
@@ -599,21 +618,62 @@ public enum KillzonePivots {
         return gaps
     }
 
-    /// Gaps on `c` (bar indexes of `c`): middle candle and zone.
-    private static func rawGaps(_ c: [Candle], minSize: Double) -> [FairValueGap] {
+    /// Gaps on `c` (bar indexes of `c`): middle candle and zone. With
+    /// `displacement`, only gaps whose middle candle is a strong move (see Config.fvgStrongOnly).
+    private static func rawGaps(_ c: [Candle], minSize: Double, displacement: Double? = nil) -> [FairValueGap] {
         let n = c.count
         guard n > 2 else { return [] }
         let averageRange = c.suffix(100).reduce(0) { $0 + ($1.high - $1.low) } / Double(min(n, 100))
         let minimum = averageRange * max(minSize, 0)
+        // Running sums of bodies for the average body before each bar.
+        var bodySums = [0.0]
+        for bar in c { bodySums.append(bodySums[bodySums.count - 1] + abs(bar.close - bar.open)) }
+        func strong(_ m: Int, bullish: Bool) -> Bool {
+            guard let displacement else { return true }
+            let bar = c[m]
+            let body = abs(bar.close - bar.open)
+            guard (bar.close > bar.open) == bullish, body >= (bar.high - bar.low) * 0.5 else { return false }
+            let from = max(0, m - 20)
+            guard m > from else { return true }
+            let average = (bodySums[m] - bodySums[from]) / Double(m - from)
+            return body >= average * displacement
+        }
         var gaps: [FairValueGap] = []
         for i in 2..<n {
-            if c[i].low > c[i - 2].high, c[i].low - c[i - 2].high > minimum {
+            if c[i].low > c[i - 2].high, c[i].low - c[i - 2].high > minimum, strong(i - 1, bullish: true) {
                 gaps.append(FairValueGap(bullish: true, top: c[i].low, bottom: c[i - 2].high, start: i - 1, end: i - 1))
-            } else if c[i].high < c[i - 2].low, c[i - 2].low - c[i].high > minimum {
+            } else if c[i].high < c[i - 2].low, c[i - 2].low - c[i].high > minimum, strong(i - 1, bullish: false) {
                 gaps.append(FairValueGap(bullish: false, top: c[i - 2].low, bottom: c[i].high, start: i - 1, end: i - 1))
             }
         }
         return gaps
+    }
+
+    /// Volume imbalances: a bullish one when two up candles leave a gap between the
+    /// first close and the second open while their wicks overlap (bearish the other way).
+    /// Each runs from the first candle until a later wick touches it.
+    static func volumeImbalances(_ c: [Candle], config: Config) -> [FairValueGap] {
+        let n = c.count
+        guard n > 2 else { return [] }
+        let averageRange = c.suffix(100).reduce(0) { $0 + ($1.high - $1.low) } / Double(min(n, 100))
+        // Ignore gaps of a tick or two.
+        let minimum = averageRange * 0.03
+        var found: [FairValueGap] = []
+        for i in stride(from: n - 1, through: 1, by: -1) {
+            let a = c[i - 1], b = c[i]
+            var raw: FairValueGap?
+            if a.close > a.open, b.close > b.open, b.open - a.close > minimum, b.low <= a.high {
+                raw = FairValueGap(bullish: true, top: b.open, bottom: a.close, start: i - 1, end: i - 1)
+            } else if a.close < a.open, b.close < b.open, a.close - b.open > minimum, b.high >= a.low {
+                raw = FairValueGap(bullish: false, top: a.close, bottom: b.open, start: i - 1, end: i - 1)
+            }
+            guard let raw else { continue }
+            let gap = followed(raw, start: i - 1, formed: i, in: c)
+            if gap.touched && config.viHideTouched { continue }
+            found.append(gap)
+            if found.count >= max(config.viCount, 1) { break }
+        }
+        return found.reversed()
     }
 
     /// The gap placed on the chart bars `c` from `start`, ending at the first bar

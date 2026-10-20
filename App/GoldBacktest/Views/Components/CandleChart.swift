@@ -978,7 +978,8 @@ struct CandleChart: View {
                 var path = Path()
                 path.move(to: CGPoint(x: left, y: y))
                 path.addLine(to: CGPoint(x: right, y: y))
-                context.stroke(path, with: .color(levelColor), lineWidth: level == 0.705 ? 1.4 : 1)
+                context.stroke(path, with: .color(levelColor),
+                               style: StrokeStyle(lineWidth: CGFloat(d.lineWidth) * (level == 0.705 ? 0.95 : 0.7), dash: d.lineStyle.dash))
                 let name = level == 0.705 ? "0.705 OTE" : String(format: "%g", level)
                 label("\(name) (\(Self.format(price, decimals)))", at: CGPoint(x: left + 3, y: y - 6), color: levelColor)
             }
@@ -996,7 +997,7 @@ struct CandleChart: View {
             var arrow = Path()
             arrow.move(to: CGPoint(x: rect.midX, y: p0.y))
             arrow.addLine(to: CGPoint(x: rect.midX, y: points[1].y))
-            context.stroke(arrow, with: .color(rangeColor), lineWidth: 1.2)
+            context.stroke(arrow, with: .color(rangeColor), lineWidth: CGFloat(d.lineWidth) * 0.8)
             context.fill(triangle(tip: CGPoint(x: rect.midX, y: points[1].y), pointingUp: change >= 0), with: .color(rangeColor))
             let bars = Int((index(for: d.points[1].time) - index(for: d.points[0].time)).rounded())
             let seconds = abs(d.points[1].time.timeIntervalSince(d.points[0].time))
@@ -1048,7 +1049,8 @@ struct CandleChart: View {
                 var path = Path()
                 path.move(to: CGPoint(x: left, y: y))
                 path.addLine(to: CGPoint(x: right, y: y))
-                context.stroke(path, with: .color(levelColor), lineWidth: level == 1.618 ? 1.4 : 1)
+                context.stroke(path, with: .color(levelColor),
+                               style: StrokeStyle(lineWidth: CGFloat(d.lineWidth) * (level == 1.618 ? 0.95 : 0.7), dash: d.lineStyle.dash))
                 label("\(String(format: "%g", level)) (\(Self.format(price, decimals)))", at: CGPoint(x: left + 3, y: y - 6),
                       color: levelColor)
             }

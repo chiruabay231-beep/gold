@@ -198,6 +198,39 @@ final class KillzonePivotsTests: XCTestCase {
         XCTAssertTrue(KillzonePivots.compute(candles: data, barInterval: 604_800, config: config).fvgs.isEmpty)
     }
 
+    func testStrongFairValueGapsOnlyAndVolumeImbalance() {
+        let data = candles { c in
+            // Weak gap: the middle candle has a small body.
+            c[100].high = 101; c[101].open = 101.2; c[101].close = 101.4; c[101].low = 100.9; c[101].high = 103.1
+            c[102].low = 103; c[102].high = 104
+            for j in 103..<150 { c[j].low = 104; c[j].high = 105; c[j].open = 104.5; c[j].close = 104.5 }
+            // Strong gap: a big up candle 105 → 112.
+            c[150].high = 105.2; c[151].open = 105; c[151].close = 112; c[151].low = 104.9; c[151].high = 112.2
+            c[152].low = 108; c[152].high = 113; c[152].open = 112; c[152].close = 112.5
+            for j in 153..<288 { c[j].low = 112; c[j].high = 113; c[j].open = 112.5; c[j].close = 112.5 }
+        }
+        var config = KillzonePivots.Config()
+        config.showVI = false
+        let strong = KillzonePivots.compute(candles: data, barInterval: 900, config: config).fvgs
+        XCTAssertNotNil(strong.first { $0.start == 151 })
+        XCTAssertNil(strong.first { $0.start == 101 }, "weak gap filtered")
+        config.fvgStrongOnly = false
+        XCTAssertNotNil(KillzonePivots.compute(candles: data, barInterval: 900, config: config).fvgs.first { $0.start == 101 })
+
+        // Volume imbalance: two up candles, gap between the first close and the second open, wicks overlapping.
+        var vi = data
+        vi[200].open = 112.2; vi[200].close = 112.6; vi[200].low = 112.1; vi[200].high = 113
+        vi[201].open = 112.9; vi[201].close = 113.5; vi[201].low = 112.8; vi[201].high = 113.6
+        config.showVI = true
+        let imbalance = KillzonePivots.compute(candles: vi, barInterval: 900, config: config).volumeImbalances.first { $0.start == 200 }
+        XCTAssertEqual(imbalance?.bullish, true)
+        XCTAssertEqual(imbalance?.bottom, 112.6)
+        XCTAssertEqual(imbalance?.top, 112.9)
+        // The next bars trade down to 112: touched at bar 202.
+        XCTAssertEqual(imbalance?.touched, true)
+        XCTAssertEqual(imbalance?.end, 202)
+    }
+
     func testFairValueGapConfluenceWithHigherTimeframe() {
         // M1 bars from a 5-minute boundary.
         let t0 = Date(timeIntervalSince1970: 1_700_000_100)

@@ -115,7 +115,8 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
     var isLine: Bool {
         switch self {
         case .trendLine, .trendRay, .horizontalLine, .horizontalRay, .verticalLine, .rectangle,
-             .arrow, .path, .brush, .ellipse, .elliottImpulse, .elliottCorrection, .headShoulders, .trianglePattern:
+             .arrow, .path, .brush, .ellipse, .elliottImpulse, .elliottCorrection, .headShoulders, .trianglePattern,
+             .fibRetracement, .fibExtension, .priceRange:
             return true
         default: return false
         }
@@ -245,4 +246,66 @@ enum DrawingPalette {
         Color(red: 0.612, green: 0.153, blue: 0.69),    // purple
         Color(red: 0.471, green: 0.482, blue: 0.525),   // grey
     ]
+}
+
+/// The look of a drawing: kept per tool for the next drawing, and as named templates.
+struct DrawingStyle: Codable, Hashable {
+    var colorIndex: Int
+    var customColor: RGBAColor?
+    var lineWidth: Double
+    var lineStyle: LineStyle
+    var riskReward: Double
+}
+
+extension Drawing {
+    var style: DrawingStyle {
+        get { DrawingStyle(colorIndex: colorIndex, customColor: customColor, lineWidth: lineWidth, lineStyle: lineStyle,
+                           riskReward: riskReward) }
+        set {
+            colorIndex = newValue.colorIndex
+            customColor = newValue.customColor
+            lineWidth = newValue.lineWidth
+            lineStyle = newValue.lineStyle
+            riskReward = newValue.riskReward
+        }
+    }
+}
+
+/// Last style used per tool (new drawings start with it) and named templates per tool.
+enum DrawingStyles {
+    struct Template: Codable, Identifiable, Hashable {
+        var id = UUID()
+        var name: String
+        var style: DrawingStyle
+    }
+
+    private static func defaultKey(_ tool: DrawingTool) -> String { "drawing.style.\(tool.rawValue)" }
+    private static func templatesKey(_ tool: DrawingTool) -> String { "drawing.templates.\(tool.rawValue)" }
+
+    static func defaultStyle(for tool: DrawingTool) -> DrawingStyle? {
+        UserDefaults.standard.data(forKey: defaultKey(tool)).flatMap { try? JSONDecoder().decode(DrawingStyle.self, from: $0) }
+    }
+
+    static func setDefault(_ style: DrawingStyle?, for tool: DrawingTool) {
+        if let style, let data = try? JSONEncoder().encode(style) {
+            UserDefaults.standard.set(data, forKey: defaultKey(tool))
+        } else {
+            UserDefaults.standard.removeObject(forKey: defaultKey(tool))
+        }
+    }
+
+    static func templates(for tool: DrawingTool) -> [Template] {
+        UserDefaults.standard.data(forKey: templatesKey(tool)).flatMap { try? JSONDecoder().decode([Template].self, from: $0) } ?? []
+    }
+
+    static func saveTemplate(name: String, style: DrawingStyle, for tool: DrawingTool) {
+        var list = templates(for: tool).filter { $0.name != name }
+        list.insert(Template(name: name, style: style), at: 0)
+        UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: templatesKey(tool))
+    }
+
+    static func deleteTemplate(_ template: Template, for tool: DrawingTool) {
+        let list = templates(for: tool).filter { $0.id != template.id }
+        UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: templatesKey(tool))
+    }
 }

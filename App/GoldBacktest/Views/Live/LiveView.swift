@@ -255,7 +255,7 @@ struct LiveView: View {
         .sheet(item: $settingsDrawing) { drawing in
             DrawingSettingsView(drawing: drawing, decimals: priceDecimals ?? CandleChart.decimals(for: market.candles.last?.close ?? 1),
                                 sizing: positionSizing) { changed in
-                store.updateDrawing(changed, key: drawingKey)
+                drawingChanged(changed)
             }
         }
         .fullScreenCover(isPresented: $fullScreen) {
@@ -676,7 +676,7 @@ struct LiveView: View {
                 }
                 if let drawing = selectedDrawing {
                     DrawingActionsBar(drawing: drawing, theme: theme,
-                                      onChange: { changed in store.updateDrawing(changed, key: drawingKey) },
+                                      onChange: { changed in drawingChanged(changed) },
                                       onEditText: {
                                           drawingText = drawing.text
                                           editingTextDrawing = drawing
@@ -1178,7 +1178,10 @@ struct LiveView: View {
         return drawings.first { $0.id == id }
     }
 
-    private func drawingCreated(_ drawing: Drawing) {
+    private func drawingCreated(_ new: Drawing) {
+        // Starts with the look last used for this tool.
+        var drawing = new
+        if let style = DrawingStyles.defaultStyle(for: drawing.tool) { drawing.style = style }
         if drawing.tool == .text {
             drawingText = ""
             editingTextDrawing = drawing
@@ -1188,6 +1191,14 @@ struct LiveView: View {
         }
         if !keepTool || drawing.tool == .text { activeTool = nil }
         hideDrawings = false
+    }
+
+    /// Saves an edited drawing; a new look becomes the default for its tool.
+    private func drawingChanged(_ changed: Drawing) {
+        if let old = drawings.first(where: { $0.id == changed.id }), old.style != changed.style {
+            DrawingStyles.setDefault(changed.style, for: changed.tool)
+        }
+        store.updateDrawing(changed, key: drawingKey)
     }
 
     private var overlays: [ChartLine] {

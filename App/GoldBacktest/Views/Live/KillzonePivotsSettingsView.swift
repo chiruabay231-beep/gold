@@ -231,7 +231,18 @@ struct KillzonePivotsSettingsView: View {
                 Picker("Đến khung", selection: $settings.config.fvgToMinutes) {
                     ForEach(Self.fvgTimeframes, id: \.self) { minutes in Text(Self.timeframeName(minutes)).tag(minutes) }
                 }
+                Toggle("Chỉ vẽ FVG mạnh (lọc FVG yếu)", isOn: $settings.config.fvgStrongOnly)
+                if settings.config.fvgStrongOnly {
+                    Stepper("Nến tạo FVG ≥ \(String(format: "%.2g", settings.config.fvgDisplacement)) × thân nến TB",
+                            value: $settings.config.fvgDisplacement, in: 1...4, step: 0.25)
+                }
                 Toggle("Tô nền khi trùng FVG khung lớn hơn", isOn: $settings.config.fvgConfluence)
+                Toggle("Hiện VI (Volume Imbalance)", isOn: $settings.config.showVI)
+                if settings.config.showVI {
+                    Stepper("Giữ \(settings.config.viCount) VI gần nhất", value: $settings.config.viCount, in: 5...100, step: 5)
+                    Toggle("Ẩn VI đã bị chạm", isOn: $settings.config.viHideTouched)
+                    colorRow("Màu VI", color: $settings.viColor)
+                }
                 Toggle("Đường giữa 50% (chữ FVG)", isOn: $settings.config.fvgMidline)
                 Toggle("Ẩn FVG đã bị chạm", isOn: $settings.config.fvgHideFilled)
                 Stepper("Lọc FVG nhỏ: \(String(format: "%.1f", settings.config.fvgMinSize)) × biên độ nến",
@@ -249,7 +260,7 @@ struct KillzonePivotsSettingsView: View {
         } header: {
             Text("FVG (Fair Value Gap)")
         } footer: {
-            Text("Khoảng trống giữa nến 1 và nến 3: hai đường cạnh và đường giữa có chữ FVG, kéo dài tới khi có nến chạm vào (chưa chạm thì kéo tới nến đang chạy). FVG trùng với FVG cùng chiều của khung lớn hơn (M1↔M5, M5↔M15, M15↔H1, M30/H1↔H4, H4↔D1, D1↔W1) được tô nền. FVG đã bị chạm vẽ mờ hơn.")
+            Text("Khoảng trống giữa nến 1 và nến 3: hai đường cạnh và đường giữa có chữ FVG, kéo dài tới khi có nến chạm vào. FVG mạnh: nến giữa là nến đẩy mạnh (thân lớn hơn nhiều lần thân nến trung bình 20 cây trước, cùng chiều khoảng trống); FVG yếu bị lọc. FVG trùng FVG cùng chiều của khung lớn hơn được tô nền. VI: hai nến cùng chiều, thân cách nhau còn râu chồng lên nhau; vẽ nét đứt mảnh, kéo tới khi bị chạm.")
         }
     }
 

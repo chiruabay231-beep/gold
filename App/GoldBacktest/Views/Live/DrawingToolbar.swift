@@ -252,6 +252,9 @@ struct DrawingSettingsView: View {
     var onSave: (Drawing) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var templates: [DrawingStyles.Template] = []
+    @State private var naming = false
+    @State private var templateName = ""
 
     var body: some View {
         NavigationStack {
@@ -274,6 +277,48 @@ struct DrawingSettingsView: View {
                     Toggle("Khoá (không cho kéo)", isOn: $drawing.locked)
                 }
 
+                Section {
+                    ForEach(templates) { template in
+                        Button {
+                            drawing.style = template.style
+                        } label: {
+                            HStack {
+                                Circle().fill(template.style.customColor?.color
+                                              ?? DrawingPalette.colors[template.style.colorIndex % DrawingPalette.colors.count])
+                                    .frame(width: 14, height: 14)
+                                Text(template.name).foregroundColor(.primary)
+                                Spacer()
+                                Text(String(format: "%gpx · %@", template.style.lineWidth, template.style.lineStyle.title))
+                                    .font(.caption).foregroundColor(.secondary)
+                            }
+                        }
+                    }
+                    .onDelete { offsets in
+                        for index in offsets { DrawingStyles.deleteTemplate(templates[index], for: drawing.tool) }
+                        templates = DrawingStyles.templates(for: drawing.tool)
+                    }
+                    Button {
+                        templateName = ""
+                        naming = true
+                    } label: {
+                        Label("Lưu kiểu này thành mẫu…", systemImage: "square.and.arrow.down")
+                    }
+                    Button {
+                        DrawingStyles.setDefault(drawing.style, for: drawing.tool)
+                    } label: {
+                        Label("Dùng kiểu này cho hình mới", systemImage: "checkmark.seal")
+                    }
+                    Button(role: .destructive) {
+                        DrawingStyles.setDefault(nil, for: drawing.tool)
+                    } label: {
+                        Label("Về kiểu gốc cho hình mới", systemImage: "arrow.counterclockwise")
+                    }
+                } header: {
+                    Text("Mẫu kiểu \(drawing.tool.title)")
+                } footer: {
+                    Text("Hình mới của công cụ này tự dùng kiểu bạn chỉnh lần gần nhất. Lưu mẫu để có nhiều kiểu (vd: kháng cự đỏ 0.5px, hỗ trợ xanh), chạm để áp dụng, vuốt trái để xoá.")
+                }
+
                 if drawing.positionLevels != nil {
                     positionSection
                 } else {
@@ -294,6 +339,17 @@ struct DrawingSettingsView: View {
             }
             .navigationTitle(drawing.tool.title)
             .navigationBarTitleDisplayMode(.inline)
+            .onAppear { templates = DrawingStyles.templates(for: drawing.tool) }
+            .alert("Lưu mẫu kiểu", isPresented: $naming) {
+                TextField("Tên mẫu, vd: Kháng cự", text: $templateName)
+                Button("Huỷ", role: .cancel) {}
+                Button("Lưu") {
+                    let name = templateName.trimmingCharacters(in: .whitespaces)
+                    guard !name.isEmpty else { return }
+                    DrawingStyles.saveTemplate(name: name, style: drawing.style, for: drawing.tool)
+                    templates = DrawingStyles.templates(for: drawing.tool)
+                }
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Hủy bỏ") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {

@@ -33,6 +33,7 @@ struct KillzonePivotsSettings: Codable, Hashable {
     /// Gaps that line up with a higher-timeframe gap: background and 50% line.
     var fvgZoneColor = RGBAColor(red: 0.55, green: 0.56, blue: 0.6)
     var fvgZoneMidColor = RGBAColor(red: 0.612, green: 0.153, blue: 0.69)
+    var viColor = RGBAColor(red: 0.98, green: 0.6, blue: 0.0)
     var mssBullColor = RGBAColor(red: 0.031, green: 0.6, blue: 0.506)
     var mssBearColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
     var sweepColor = RGBAColor(red: 0.98, green: 0.6, blue: 0.0)
@@ -70,6 +71,7 @@ struct KillzonePivotsSettings: Codable, Hashable {
         fvgOpacity = try c.decodeIfPresent(Double.self, forKey: .fvgOpacity) ?? d.fvgOpacity
         fvgZoneColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgZoneColor) ?? d.fvgZoneColor
         fvgZoneMidColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgZoneMidColor) ?? d.fvgZoneMidColor
+        viColor = try c.decodeIfPresent(RGBAColor.self, forKey: .viColor) ?? d.viColor
         mssBullColor = try c.decodeIfPresent(RGBAColor.self, forKey: .mssBullColor) ?? d.mssBullColor
         mssBearColor = try c.decodeIfPresent(RGBAColor.self, forKey: .mssBearColor) ?? d.mssBearColor
         sweepColor = try c.decodeIfPresent(RGBAColor.self, forKey: .sweepColor) ?? d.sweepColor
@@ -142,6 +144,16 @@ struct KillzonePivotsLayer {
                                              width: scale, dash: gap.confluence ? [5, 4] : [1.5, 3],
                                              label: "FVG", centerLabel: true))
             }
+        }
+        for gap in output.volumeImbalances {
+            // VI: two thin dashed edges and the name in the middle, until a candle touches it.
+            let color = settings.viColor.color.opacity(gap.touched ? 0.55 : 1)
+            let start = Double(gap.start) - 0.5
+            let end = Double(max(gap.start, gap.end)) + 0.5
+            segments.append(ChartSegment(start: start, end: end, price: gap.top, color: color, width: 0.8 * scale, dash: [3, 2]))
+            segments.append(ChartSegment(start: start, end: end, price: gap.bottom, color: color, width: 0.8 * scale, dash: [3, 2]))
+            segments.append(ChartSegment(start: start, end: end, price: gap.mid, color: color.opacity(0.0), width: 0.5,
+                                         label: "VI", centerLabel: true))
         }
         for brk in output.breaks {
             let color = (brk.bullish ? settings.mssBullColor : settings.mssBearColor).color
