@@ -15,6 +15,9 @@ struct KillzonePivotsSettings: Codable, Hashable {
     var boxOpacity = 0.12
     var showBoxBorder = false
     var pivotWidth = 1.0
+    /// Thickness of every other line of the indicator (FVG, MSS, sweeps, SMT, opens…), × 1 = normal.
+    var lineScale = 1.0
+    var boxBorderWidth = 1.0
     var pivotStyle = LineStyle.solid
     var mitigatedStyle = LineStyle.dotted
     var openColors: [RGBAColor] = Array(repeating: RGBAColor(red: 0.471, green: 0.482, blue: 0.525), count: 4)
@@ -51,6 +54,8 @@ struct KillzonePivotsSettings: Codable, Hashable {
         boxOpacity = try c.decodeIfPresent(Double.self, forKey: .boxOpacity) ?? d.boxOpacity
         showBoxBorder = try c.decodeIfPresent(Bool.self, forKey: .showBoxBorder) ?? d.showBoxBorder
         pivotWidth = try c.decodeIfPresent(Double.self, forKey: .pivotWidth) ?? d.pivotWidth
+        lineScale = try c.decodeIfPresent(Double.self, forKey: .lineScale) ?? d.lineScale
+        boxBorderWidth = try c.decodeIfPresent(Double.self, forKey: .boxBorderWidth) ?? d.boxBorderWidth
         pivotStyle = try c.decodeIfPresent(LineStyle.self, forKey: .pivotStyle) ?? d.pivotStyle
         mitigatedStyle = try c.decodeIfPresent(LineStyle.self, forKey: .mitigatedStyle) ?? d.mitigatedStyle
         openColors = try c.decodeIfPresent([RGBAColor].self, forKey: .openColors) ?? d.openColors
@@ -107,13 +112,15 @@ struct KillzonePivotsLayer {
     init(candles: [Candle], barInterval: TimeInterval, settings: KillzonePivotsSettings, comparison: [Candle] = [],
          focusIndex: Int? = nil) {
         let config = settings.config
+        let scale = CGFloat(settings.lineScale)
         output = KillzonePivots.compute(candles: candles, barInterval: barInterval, config: config, comparison: comparison,
                                         focusIndex: focusIndex)
         for box in output.boxes {
             let session = config.sessions[box.session]
             boxes.append(SessionBox(id: "kz-\(box.session)-\(box.range.lowerBound)", range: box.range, high: box.high, low: box.low,
                                     label: config.showBoxLabels ? session.name : "", color: settings.sessionColor(box.session),
-                                    style: .filled, fillOpacity: settings.boxOpacity, showBorder: settings.showBoxBorder))
+                                    style: .filled, fillOpacity: settings.boxOpacity, showBorder: settings.showBoxBorder,
+                                    borderWidth: CGFloat(settings.boxBorderWidth)))
         }
         for (k, gap) in output.fvgs.enumerated() {
             // Edges from the gap to the candle that touched it (or the forming one);
@@ -126,32 +133,32 @@ struct KillzonePivotsLayer {
                                         low: gap.bottom, label: "", color: settings.fvgZoneColor.color, style: .filled,
                                         fillOpacity: settings.fvgOpacity))
             }
-            segments.append(ChartSegment(start: start, end: end, price: gap.top, color: color, width: 1.2))
-            segments.append(ChartSegment(start: start, end: end, price: gap.bottom, color: color, width: 1.2))
+            segments.append(ChartSegment(start: start, end: end, price: gap.top, color: color, width: 1.2 * scale))
+            segments.append(ChartSegment(start: start, end: end, price: gap.bottom, color: color, width: 1.2 * scale))
             if config.fvgMidline {
                 // 50% (consequent encroachment) line with the name in the middle.
                 segments.append(ChartSegment(start: start, end: end, price: gap.mid,
                                              color: gap.confluence ? settings.fvgZoneMidColor.color : color,
-                                             width: 1, dash: gap.confluence ? [5, 4] : [1.5, 3],
+                                             width: scale, dash: gap.confluence ? [5, 4] : [1.5, 3],
                                              label: "FVG", centerLabel: true))
             }
         }
         for brk in output.breaks {
             let color = (brk.bullish ? settings.mssBullColor : settings.mssBearColor).color
             segments.append(ChartSegment(start: Double(brk.start), end: Double(brk.end), price: brk.price, color: color,
-                                         width: brk.shift ? 1.4 : 1, dash: brk.shift ? [] : [4, 3],
+                                         width: (brk.shift ? 1.4 : 1) * scale, dash: brk.shift ? [] : [4, 3],
                                          label: brk.shift ? "MSS" : "BOS"))
         }
         for sweep in output.sweeps {
             // A short dashed line from the level to the bar that took it.
             segments.append(ChartSegment(start: Double(max(sweep.levelStart, sweep.index - 12)), end: Double(sweep.index) + 0.5,
-                                         price: sweep.price, color: settings.sweepColor.color, width: 1.2, dash: [2, 2],
+                                         price: sweep.price, color: settings.sweepColor.color, width: 1.2 * scale, dash: [2, 2],
                                          label: "$ \(sweep.label)"))
         }
         for div in output.smt {
             let color = (div.bullish ? settings.smtBullColor : settings.smtBearColor).color
             segments.append(ChartSegment(start: Double(div.start), end: Double(div.end), price: div.startPrice, color: color,
-                                         width: 1.4, label: "SMT", endPrice: div.endPrice))
+                                         width: 1.4 * scale, label: "SMT", endPrice: div.endPrice))
         }
         for box in output.macroBoxes {
             let macro = config.macros[box.macro]
@@ -159,11 +166,12 @@ struct KillzonePivotsLayer {
                 ? "\(KillzonePivotsSettingsView.clock(macro.start))–\(KillzonePivotsSettingsView.clock(macro.end))"
                 : macro.name
             boxes.append(SessionBox(id: "macro-\(box.macro)-\(box.range.lowerBound)", range: box.range, high: box.high,
-                                    low: box.low, label: label, color: settings.macroColor.color, style: .dotted))
+                                    low: box.low, label: label, color: settings.macroColor.color, style: .dotted,
+                                    borderWidth: CGFloat(settings.boxBorderWidth)))
         }
         for level in output.levels {
             var segment = ChartSegment(start: Double(level.start), end: level.end.map(Double.init), price: level.price,
-                                       color: .gray, label: level.label)
+                                       color: .gray, width: scale, label: level.label)
             switch level.kind {
             case .pivotHigh(let s), .pivotLow(let s):
                 segment.color = settings.sessionColor(s)
@@ -184,7 +192,8 @@ struct KillzonePivotsLayer {
         }
         for stamp in output.stamps {
             verticalLines.append(ChartVerticalLine(index: stamp.index, color: settings.timestampColor.color.opacity(0.8),
-                                                   dash: settings.timestampStyle.dash.isEmpty ? [] : settings.timestampStyle.dash))
+                                                   dash: settings.timestampStyle.dash.isEmpty ? [] : settings.timestampStyle.dash,
+                                                   width: scale))
         }
         for label in output.dayLabels {
             notes.append(ChartNote(index: label.index, text: Self.weekdays[label.weekday], color: settings.labelColor.color))

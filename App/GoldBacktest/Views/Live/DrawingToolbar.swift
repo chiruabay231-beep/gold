@@ -119,17 +119,17 @@ struct DrawingActionsBar: View {
                 }
                 if drawing.tool.isLine {
                     Menu {
-                        ForEach([1.0, 2.0, 3.0, 4.0], id: \.self) { width in
+                        ForEach([0.5, 1.0, 1.5, 2.0, 3.0, 4.0], id: \.self) { width in
                             Button {
                                 var d = drawing
                                 d.lineWidth = width
                                 onChange(d)
                             } label: {
-                                Label("\(Int(width))px", systemImage: Int(drawing.lineWidth) == Int(width) ? "checkmark" : "line.horizontal.3")
+                                Label(String(format: "%gpx", width), systemImage: drawing.lineWidth == width ? "checkmark" : "line.horizontal.3")
                             }
                         }
                     } label: {
-                        item { Text("\(max(1, Int(drawing.lineWidth)))px").font(.system(size: 13, weight: .semibold).monospacedDigit()) }
+                        item { Text(String(format: "%gpx", drawing.lineWidth)).font(.system(size: 13, weight: .semibold).monospacedDigit()) }
                     }
                     Menu {
                         ForEach(LineStyle.allCases, id: \.self) { style in
@@ -262,7 +262,7 @@ struct DrawingSettingsView: View {
                                 supportsOpacity: true)
                     if drawing.tool.isLine {
                         Picker("Độ dày", selection: $drawing.lineWidth) {
-                            ForEach([1.0, 2.0, 3.0, 4.0], id: \.self) { Text("\(Int($0))px").tag($0) }
+                            ForEach([0.5, 1.0, 1.5, 2.0, 3.0, 4.0], id: \.self) { Text(String(format: "%gpx", $0)).tag($0) }
                         }
                         Picker("Nét", selection: $drawing.lineStyle) {
                             ForEach(LineStyle.allCases, id: \.self) { Text($0.title).tag($0) }

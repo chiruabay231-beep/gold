@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import BacktestKit
 
 /// Inputs of "ICT Killzones + Pivots [TFO]", grouped like the indicator's
@@ -7,6 +8,13 @@ struct KillzonePivotsSettingsView: View {
     @Binding var json: String
     @Environment(\.dismiss) private var dismiss
     @State private var settings = KillzonePivotsSettings()
+    @State private var cancelled = false
+    @State private var presets = IndicatorPresets.all(Self.presetKey)
+    @State private var naming = false
+    @State private var presetName = ""
+    @State private var notice: String?
+
+    static let presetKey = "killzonePivots"
 
     private static let zones: [(id: String, title: String)] = [
         ("America/New_York", "New York (mặc định ICT)"),
@@ -19,6 +27,7 @@ struct KillzonePivotsSettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                presetsSection
                 general
                 killzones
                 fvgSection
@@ -28,6 +37,7 @@ struct KillzonePivotsSettingsView: View {
                 macros
                 boxes
                 pivots
+                lineWidths
                 opens
                 timestamps
                 cutoff
@@ -40,7 +50,12 @@ struct KillzonePivotsSettingsView: View {
             .navigationTitle("ICT Killzones + Pivots")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Hủy bỏ") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Hủy bỏ") {
+                        cancelled = true
+                        dismiss()
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Ok") {
                         json = settings.json
@@ -51,6 +66,95 @@ struct KillzonePivotsSettingsView: View {
             }
         }
         .onAppear { settings = KillzonePivotsSettings.decode(json) }
+        // Swiping the sheet down keeps the changes too; only "Hủy bỏ" drops them.
+        .onDisappear { if !cancelled { json = settings.json } }
+        .alert("Lưu thành mẫu", isPresented: $naming) {
+            TextField("Tên mẫu, vd: Scalp M1", text: $presetName)
+            Button("Huỷ", role: .cancel) {}
+            Button("Lưu") {
+                let name = presetName.trimmingCharacters(in: .whitespaces)
+                guard !name.isEmpty else { return }
+                IndicatorPresets.save(name: name, json: settings.json, indicator: Self.presetKey)
+                presets = IndicatorPresets.all(Self.presetKey)
+            }
+        } message: {
+            Text("Lưu toàn bộ cài đặt hiện tại để dùng lại sau.")
+        }
+        .alert("Cài đặt", isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(notice ?? "")
+        }
+    }
+
+    private var presetsSection: some View {
+        Section {
+            ForEach(presets) { preset in
+                Button {
+                    settings = KillzonePivotsSettings.decode(preset.json)
+                    notice = "Đã dùng mẫu \"\(preset.name)\". Bấm Ok để áp dụng lên biểu đồ."
+                } label: {
+                    HStack {
+                        Label(preset.name, systemImage: "square.stack.3d.up")
+                        Spacer()
+                        Text(preset.date.formatted(date: .abbreviated, time: .omitted))
+                            .font(.caption).foregroundColor(.secondary)
+                    }
+                }
+            }
+            .onDelete { offsets in
+                for index in offsets { IndicatorPresets.delete(presets[index], indicator: Self.presetKey) }
+                presets = IndicatorPresets.all(Self.presetKey)
+            }
+            Button {
+                presetName = ""
+                naming = true
+            } label: {
+                Label("Lưu cài đặt hiện tại thành mẫu…", systemImage: "square.and.arrow.down")
+            }
+            Button {
+                UIPasteboard.general.string = settings.json
+                notice = "Đã sao chép cài đặt. Dán vào Ghi chú để giữ, kể cả khi cài lại app hoặc dùng máy khác."
+            } label: {
+                Label("Sao chép cài đặt (sao lưu)", systemImage: "doc.on.doc")
+            }
+            Button {
+                let text = UIPasteboard.general.string ?? ""
+                if let data = text.data(using: .utf8),
+                   let pasted = try? JSONDecoder().decode(KillzonePivotsSettings.self, from: data) {
+                    settings = pasted
+                    notice = "Đã dán cài đặt. Bấm Ok để áp dụng."
+                } else {
+                    notice = "Trong bộ nhớ tạm không có cài đặt chỉ báo này."
+                }
+            } label: {
+                Label("Dán cài đặt đã sao chép", systemImage: "doc.on.clipboard")
+            }
+        } header: {
+            Text("Mẫu cài đặt")
+        } footer: {
+            Text("Cài đặt luôn được giữ tự động cho lần sau. Mẫu giúp đổi nhanh giữa các kiểu cài đặt; vuốt trái để xoá một mẫu.")
+        }
+    }
+
+    private var lineWidths: some View {
+        Section {
+            Picker("Đường pivot", selection: $settings.pivotWidth) {
+                ForEach([0.5, 0.75, 1.0, 1.5, 2.0, 3.0], id: \.self) { Text(String(format: "%gpx", $0)).tag($0) }
+            }
+            Picker("Các đường khác (FVG, MSS, SMT…)", selection: $settings.lineScale) {
+                Text("Rất mỏng").tag(0.5)
+                Text("Mỏng").tag(0.75)
+                Text("Vừa").tag(1.0)
+                Text("Dày").tag(1.5)
+                Text("Rất dày").tag(2.0)
+            }
+            Picker("Viền hộp phiên / macro", selection: $settings.boxBorderWidth) {
+                ForEach([0.5, 1.0, 1.5, 2.0], id: \.self) { Text(String(format: "%gpx", $0)).tag($0) }
+            }
+        } header: {
+            Text("Độ dày đường kẻ")
+        }
     }
 
     // MARK: - Sections
@@ -271,9 +375,6 @@ struct KillzonePivotsSettingsView: View {
             Toggle("Giữ pivot đã bị phá", isOn: $settings.config.showMitigated)
             stylePicker("Nét pivot", selection: $settings.pivotStyle)
             stylePicker("Nét pivot đã bị phá", selection: $settings.mitigatedStyle)
-            Picker("Độ dày", selection: $settings.pivotWidth) {
-                ForEach([1.0, 1.5, 2.0, 3.0], id: \.self) { Text(String(format: "%gpx", $0)).tag($0) }
-            }
             Toggle("Đường giữa phiên (50%)", isOn: $settings.config.showMidpoints)
         } header: {
             Text("Pivots")

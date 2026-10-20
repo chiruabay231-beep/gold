@@ -114,6 +114,7 @@ struct SessionBox: Identifiable {
     var style: Style
     var fillOpacity = 0.10
     var showBorder = false
+    var borderWidth: CGFloat = 1
 }
 
 /// A horizontal line between two bars with a small label at its right end;
@@ -158,6 +159,7 @@ struct ChartVerticalLine {
     var color: Color
     var dash: [CGFloat] = [4, 4]
     var label = ""
+    var width: CGFloat = 1
 }
 
 /// A moment marked on the time axis (economic news), possibly after the last bar.
@@ -573,11 +575,11 @@ struct CandleChart: View {
             case .filled:
                 plotContext.fill(Path(rect), with: .color(box.color.opacity(box.fillOpacity)))
                 if box.showBorder {
-                    plotContext.stroke(Path(rect), with: .color(box.color.opacity(0.7)), lineWidth: 1)
+                    plotContext.stroke(Path(rect), with: .color(box.color.opacity(0.7)), lineWidth: box.borderWidth)
                 }
             case .dotted:
                 plotContext.stroke(Path(rect), with: .color(box.color.opacity(0.8)),
-                                   style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                                   style: StrokeStyle(lineWidth: box.borderWidth, dash: [2, 3]))
             }
             if !box.label.isEmpty {
                 plotContext.draw(Text(box.label).font(.system(size: 9)).foregroundColor(box.color),
@@ -591,7 +593,7 @@ struct CandleChart: View {
             var path = Path()
             path.move(to: CGPoint(x: x, y: layout.plot.minY))
             path.addLine(to: CGPoint(x: x, y: layout.plot.maxY))
-            plotContext.stroke(path, with: .color(line.color), style: StrokeStyle(lineWidth: 1, dash: line.dash))
+            plotContext.stroke(path, with: .color(line.color), style: StrokeStyle(lineWidth: line.width, dash: line.dash))
             if !line.label.isEmpty {
                 plotContext.draw(Text(line.label).font(.system(size: 9)).foregroundColor(line.color),
                                  at: CGPoint(x: x + 3, y: layout.plot.minY + 8), anchor: .leading)
