@@ -63,6 +63,7 @@ struct TradeHistory {
     var summary: Summary
 
     /// The demo account's closed trades as an MT5 history.
+    @MainActor
     static func demo(_ account: PaperAccount, from: Date, to: Date) -> TradeHistory {
         let trades = account.history.filter { $0.closeTime >= from && $0.closeTime <= to }
         var positions: [Position] = [], orders: [Order] = [], deals: [Deal] = []
