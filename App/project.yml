@@ -37,7 +37,7 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         # Extra keys merged into the generated Info.plist (background audio for voice alerts).
         INFOPLIST_FILE: Info.plist
-        INFOPLIST_KEY_CFBundleDisplayName: Gold Backtest
+        INFOPLIST_KEY_CFBundleDisplayName: Aurum Pro
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight

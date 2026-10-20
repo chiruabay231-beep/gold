@@ -1,4 +1,4 @@
-# Gold Backtest — app iOS backtest & chỉ báo tự phát triển
+# Aurum Pro — app iOS giao dịch vàng: biểu đồ ICT, bot, backtest, copy trade
 
 App iOS (SwiftUI) để chạy backtest chiến lược giao dịch (XAUUSD, BTC, …) và tự
 viết thêm chỉ báo ngay trên điện thoại, không cần build lại app.
