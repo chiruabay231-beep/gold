@@ -111,32 +111,41 @@ struct KillzonePivotsSettingsView: View {
         }
     }
 
+    static let fvgTimeframes: [Double] = [1, 5, 15, 30, 60, 240, 1440]
+
+    static func timeframeName(_ minutes: Double) -> String {
+        minutes >= 1440 ? "D1" : (minutes >= 60 ? "H\(Int(minutes / 60))" : "M\(Int(minutes))")
+    }
+
     private var fvgSection: some View {
         Section {
             Toggle("Hiện FVG", isOn: $settings.config.showFVG)
             if settings.config.showFVG {
-                Picker("Chỉ hiện trên khung ≥", selection: $settings.config.fvgMinTimeframeMinutes) {
-                    ForEach([1.0, 5.0, 15.0, 30.0, 60.0, 240.0], id: \.self) { minutes in
-                        Text(minutes >= 60 ? "H\(Int(minutes / 60))" : "M\(Int(minutes))").tag(minutes)
-                    }
+                Picker("Từ khung", selection: $settings.config.fvgFromMinutes) {
+                    ForEach(Self.fvgTimeframes, id: \.self) { minutes in Text(Self.timeframeName(minutes)).tag(minutes) }
                 }
-                Stepper("Dài \(settings.config.fvgBoxBars) cây nến", value: $settings.config.fvgBoxBars, in: 1...30)
-                Toggle("Đường giữa 50%", isOn: $settings.config.fvgMidline)
-                Toggle("Ẩn FVG đã bị lấp", isOn: $settings.config.fvgHideFilled)
+                Picker("Đến khung", selection: $settings.config.fvgToMinutes) {
+                    ForEach(Self.fvgTimeframes, id: \.self) { minutes in Text(Self.timeframeName(minutes)).tag(minutes) }
+                }
+                Toggle("Tô nền khi trùng FVG khung lớn hơn", isOn: $settings.config.fvgConfluence)
+                Toggle("Đường giữa 50% (chữ FVG)", isOn: $settings.config.fvgMidline)
+                Toggle("Ẩn FVG đã bị chạm", isOn: $settings.config.fvgHideFilled)
                 Stepper("Lọc FVG nhỏ: \(String(format: "%.1f", settings.config.fvgMinSize)) × biên độ nến",
                         value: $settings.config.fvgMinSize, in: 0...2, step: 0.1)
                 Stepper("Giữ \(settings.config.fvgCount) FVG gần nhất", value: $settings.config.fvgCount, in: 5...200, step: 5)
                 colorRow("Màu FVG tăng", color: $settings.fvgBullColor)
                 colorRow("Màu FVG giảm", color: $settings.fvgBearColor)
+                colorRow("Nền FVG trùng khung", color: $settings.fvgZoneColor)
+                colorRow("Đường giữa FVG trùng khung", color: $settings.fvgZoneMidColor)
                 HStack {
-                    Text("Độ đậm")
+                    Text("Độ đậm nền")
                     Slider(value: $settings.fvgOpacity, in: 0.05...0.6)
                 }
             }
         } header: {
             Text("FVG (Fair Value Gap)")
         } footer: {
-            Text("Khoảng trống giữa nến 1 và nến 3. Hộp chỉ kẻ ngang qua các nến tạo FVG; FVG đã bị lấp được vẽ mờ hơn.")
+            Text("Khoảng trống giữa nến 1 và nến 3: hai đường cạnh và đường giữa có chữ FVG, kéo dài tới khi có nến chạm vào (chưa chạm thì kéo tới nến đang chạy). FVG trùng với FVG cùng chiều của khung lớn hơn (M1↔M5, M5↔M15, M15↔H1, M30/H1↔H4, H4↔D1, D1↔W1) được tô nền. FVG đã bị chạm vẽ mờ hơn.")
         }
     }
 

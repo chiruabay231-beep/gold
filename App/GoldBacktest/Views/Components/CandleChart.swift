@@ -128,6 +128,8 @@ struct ChartSegment {
     var label = ""
     /// Price at `end` for a sloped line (SMT); nil = horizontal.
     var endPrice: Double? = nil
+    /// The label sits in the middle of the line, which breaks around it (FVG).
+    var centerLabel = false
 }
 
 /// A full-width price line that can be dragged up and down (order entry,
@@ -461,6 +463,31 @@ struct CandleChart: View {
 
     /// News flags: a faint dashed line through the chart and a coloured tag on the time axis.
     /// Events to the right of the screen are pinned to its right edge.
+    /// A horizontal line broken in the middle of its visible part by its label.
+    private func drawCenterLabeled(_ segment: ChartSegment, from startX: CGFloat, to endX: CGFloat, y: CGFloat,
+                                   in context: inout GraphicsContext) {
+        guard endX > startX else { return }
+        let text = context.resolve(Text(segment.label).font(.system(size: 10, weight: .medium)).foregroundColor(theme.primaryText))
+        let size = text.measure(in: CGSize(width: 200, height: 40))
+        let midX = (startX + endX) / 2
+        let style = StrokeStyle(lineWidth: segment.width, dash: segment.dash)
+        // Too short for the name: just the line.
+        guard endX - startX > size.width + 16 else {
+            var path = Path()
+            path.move(to: CGPoint(x: startX, y: y))
+            path.addLine(to: CGPoint(x: endX, y: y))
+            context.stroke(path, with: .color(segment.color), style: style)
+            return
+        }
+        var path = Path()
+        path.move(to: CGPoint(x: startX, y: y))
+        path.addLine(to: CGPoint(x: midX - size.width / 2 - 4, y: y))
+        path.move(to: CGPoint(x: midX + size.width / 2 + 4, y: y))
+        path.addLine(to: CGPoint(x: endX, y: y))
+        context.stroke(path, with: .color(segment.color), style: style)
+        context.draw(text, at: CGPoint(x: midX, y: y), anchor: .center)
+    }
+
     private func drawTimeEvents(in context: inout GraphicsContext, layout: Layout, s: Scale) {
         var used: [CGRect] = []
         for event in timeEvents.sorted(by: { $0.time < $1.time }) {
@@ -573,6 +600,10 @@ struct CandleChart: View {
             guard endX >= 0, startX <= layout.axisX else { continue }
             let y = s.y(segment.price)
             let endY = segment.endPrice.map { s.y($0) } ?? y
+            if segment.centerLabel, !segment.label.isEmpty {
+                drawCenterLabeled(segment, from: max(startX, 0), to: min(endX, layout.axisX), y: y, in: &plotContext)
+                continue
+            }
             var path = Path()
             path.move(to: CGPoint(x: startX, y: y))
             path.addLine(to: CGPoint(x: endX, y: endY))

@@ -125,14 +125,17 @@ public enum KillzonePivots {
             Macro(name: "Last Hour", start: 15.25, end: 15.75),
         ]
 
-        /// Fair value gaps (3-candle imbalances), drawn as short boxes with a 50% line.
+        /// Fair value gaps (3-candle imbalances): two edge lines and a 50% line,
+        /// running from the gap until a candle touches it (or to the last bar).
         public var showFVG = true
-        /// FVGs only on bars of at least this many minutes (e.g. 5 = M5 and higher).
-        public var fvgMinTimeframeMinutes = 5.0
-        /// Box length in bars, starting at the candle that makes the gap.
-        public var fvgBoxBars = 2
+        /// FVGs on chart timeframes from … to … minutes (M1 to D1 by default).
+        public var fvgFromMinutes = 1.0
+        public var fvgToMinutes = 1440.0
+        /// Marks gaps that overlap a gap of the next higher timeframe (drawn filled).
+        public var fvgConfluence = true
         /// Gaps smaller than this fraction of the average bar range are skipped.
         public var fvgMinSize = 0.0
+        /// Hide gaps a candle has already touched.
         public var fvgHideFilled = false
         public var fvgMidline = true
         /// Most recent FVGs kept.
@@ -198,8 +201,9 @@ public enum KillzonePivots {
             macroTimeLabels = try c.decodeIfPresent(Bool.self, forKey: .macroTimeLabels) ?? d.macroTimeLabels
             macros = try c.decodeIfPresent([Macro].self, forKey: .macros) ?? d.macros
             showFVG = try c.decodeIfPresent(Bool.self, forKey: .showFVG) ?? d.showFVG
-            fvgMinTimeframeMinutes = try c.decodeIfPresent(Double.self, forKey: .fvgMinTimeframeMinutes) ?? d.fvgMinTimeframeMinutes
-            fvgBoxBars = try c.decodeIfPresent(Int.self, forKey: .fvgBoxBars) ?? d.fvgBoxBars
+            fvgFromMinutes = try c.decodeIfPresent(Double.self, forKey: .fvgFromMinutes) ?? d.fvgFromMinutes
+            fvgToMinutes = try c.decodeIfPresent(Double.self, forKey: .fvgToMinutes) ?? d.fvgToMinutes
+            fvgConfluence = try c.decodeIfPresent(Bool.self, forKey: .fvgConfluence) ?? d.fvgConfluence
             fvgMinSize = try c.decodeIfPresent(Double.self, forKey: .fvgMinSize) ?? d.fvgMinSize
             fvgHideFilled = try c.decodeIfPresent(Bool.self, forKey: .fvgHideFilled) ?? d.fvgHideFilled
             fvgMidline = try c.decodeIfPresent(Bool.self, forKey: .fvgMidline) ?? d.fvgMidline
@@ -274,11 +278,16 @@ public enum KillzonePivots {
         public var bullish: Bool
         public var top: Double
         public var bottom: Double
-        /// Bar where the box starts (the middle, displacement candle).
+        /// Bar where the lines start (the middle, displacement candle).
         public var start: Int
+        /// The bar that first touched the gap, or the last bar while untouched.
         public var end: Int
-        /// Price later traded through the whole gap.
-        public var filled: Bool
+        /// A candle after the gap traded into it.
+        public var touched = false
+        /// That candle went through the whole gap.
+        public var filled = false
+        /// The gap overlaps a same-direction gap of the next higher timeframe.
+        public var confluence = false
         public var mid: Double { (top + bottom) / 2 }
     }
 
@@ -341,8 +350,8 @@ public enum KillzonePivots {
             output.smt = smtDivergences(candles, comparison, config: config)
         }
         // FVG and structure have their own timeframe rules.
-        if config.showFVG, barInterval >= config.fvgMinTimeframeMinutes * 60 - 1 {
-            output.fvgs = fairValueGaps(candles, config: config)
+        if config.showFVG, barInterval >= config.fvgFromMinutes * 60 - 1, barInterval <= config.fvgToMinutes * 60 + 1 {
+            output.fvgs = fairValueGaps(candles, barInterval: barInterval, config: config)
         }
         if config.showMSS || config.showBOS {
             output.breaks = structureBreaks(candles, config: config)
@@ -554,33 +563,117 @@ public enum KillzonePivots {
     }
 
     /// 3-candle imbalances: a bullish gap when a candle's low is above the high two
-    /// candles before, a bearish one the other way round.
-    static func fairValueGaps(_ c: [Candle], config: Config) -> [FairValueGap] {
+    /// candles before, a bearish one the other way round. Each runs until a later
+    /// candle touches it; `confluence` when it overlaps a gap of the next timeframe.
+    static func fairValueGaps(_ c: [Candle], barInterval: TimeInterval = 0, config: Config) -> [FairValueGap] {
         let n = c.count
         guard n > 3 else { return [] }
-        let averageRange = c.suffix(100).reduce(0) { $0 + ($1.high - $1.low) } / Double(min(n, 100))
-        let minimum = averageRange * max(config.fvgMinSize, 0)
+        let count = max(config.fvgCount, 1)
         var gaps: [FairValueGap] = []
-        for i in 2..<n {
-            var gap: FairValueGap?
-            if c[i].low > c[i - 2].high, c[i].low - c[i - 2].high > minimum {
-                gap = FairValueGap(bullish: true, top: c[i].low, bottom: c[i - 2].high, start: i - 1,
-                                   end: min(n - 1, i - 1 + max(config.fvgBoxBars, 1) - 1), filled: false)
-            } else if c[i].high < c[i - 2].low, c[i - 2].low - c[i].high > minimum {
-                gap = FairValueGap(bullish: false, top: c[i - 2].low, bottom: c[i].high, start: i - 1,
-                                   end: min(n - 1, i - 1 + max(config.fvgBoxBars, 1) - 1), filled: false)
+        // Newest first, so only the gaps that are kept are followed to their touch.
+        for raw in rawGaps(c, minSize: config.fvgMinSize).reversed() {
+            let gap = followed(raw, start: raw.start, formed: raw.start + 1, in: c)
+            if gap.touched && config.fvgHideFilled { continue }
+            gaps.append(gap)
+            if gaps.count == count { break }
+        }
+        gaps.reverse()
+        if config.fvgConfluence, !gaps.isEmpty, let seconds = higherTimeframe(barInterval) {
+            let (bars, first) = aggregate(c, seconds: seconds)
+            let earliest = gaps[0].start
+            var higher: [FairValueGap] = []
+            for raw in rawGaps(bars, minSize: config.fvgMinSize) {
+                // First chart bar of the middle candle; last chart bar of the third one.
+                let start = first[raw.start]
+                let formed = raw.start + 3 < first.count ? first[raw.start + 3] - 1 : n - 1
+                let gap = followed(raw, start: start, formed: formed, in: c)
+                if gap.end >= earliest { higher.append(gap) }
             }
-            guard var found = gap else { continue }
-            if i + 1 < n {
-                for j in (i + 1)..<n where found.bullish ? c[j].low <= found.bottom : c[j].high >= found.top {
-                    found.filled = true
-                    break
+            for k in gaps.indices {
+                let g = gaps[k]
+                gaps[k].confluence = higher.contains { h in
+                    h.bullish == g.bullish && h.bottom < g.top && g.bottom < h.top && h.start <= g.end && g.start <= h.end
                 }
             }
-            if found.filled && config.fvgHideFilled { continue }
-            gaps.append(found)
         }
-        return Array(gaps.suffix(max(config.fvgCount, 1)))
+        return gaps
+    }
+
+    /// Gaps on `c` (bar indexes of `c`): middle candle and zone.
+    private static func rawGaps(_ c: [Candle], minSize: Double) -> [FairValueGap] {
+        let n = c.count
+        guard n > 2 else { return [] }
+        let averageRange = c.suffix(100).reduce(0) { $0 + ($1.high - $1.low) } / Double(min(n, 100))
+        let minimum = averageRange * max(minSize, 0)
+        var gaps: [FairValueGap] = []
+        for i in 2..<n {
+            if c[i].low > c[i - 2].high, c[i].low - c[i - 2].high > minimum {
+                gaps.append(FairValueGap(bullish: true, top: c[i].low, bottom: c[i - 2].high, start: i - 1, end: i - 1))
+            } else if c[i].high < c[i - 2].low, c[i - 2].low - c[i].high > minimum {
+                gaps.append(FairValueGap(bullish: false, top: c[i - 2].low, bottom: c[i].high, start: i - 1, end: i - 1))
+            }
+        }
+        return gaps
+    }
+
+    /// The gap placed on the chart bars `c` from `start`, ending at the first bar
+    /// after `formed` (the gap's third candle) whose wick reaches it.
+    private static func followed(_ raw: FairValueGap, start: Int, formed: Int, in c: [Candle]) -> FairValueGap {
+        var gap = raw
+        gap.start = start
+        gap.end = c.count - 1
+        var j = formed + 1
+        while j < c.count {
+            if raw.bullish ? c[j].low <= raw.top : c[j].high >= raw.bottom {
+                gap.touched = true
+                gap.filled = raw.bullish ? c[j].low <= raw.bottom : c[j].high >= raw.top
+                gap.end = j
+                break
+            }
+            j += 1
+        }
+        return gap
+    }
+
+    /// The timeframe whose gaps are compared with the chart's (M1 → M5, M5 → M15,
+    /// M15 → H1, M30 → H4, H1 → H4, H4 → D1, D1 → W1).
+    static func higherTimeframe(_ barInterval: TimeInterval) -> TimeInterval? {
+        switch barInterval {
+        case 59...61: return 300
+        case 299...301: return 900
+        case 899...901: return 3600
+        case 1799...1801: return 14_400
+        case 3599...3601: return 14_400
+        case 14_399...14_401: return 86_400
+        case 86_399...86_401: return 604_800
+        default: return nil
+        }
+    }
+
+    /// Bars of `seconds` built from `c` (UTC buckets; weeks start Monday) and the
+    /// index in `c` of each one's first bar.
+    static func aggregate(_ c: [Candle], seconds: TimeInterval) -> (bars: [Candle], first: [Int]) {
+        // 1970-01-01 was a Thursday: shift weeks by 4 days so they start on Monday.
+        let shift: TimeInterval = seconds >= 604_800 ? 345_600 : 0
+        var bars: [Candle] = []
+        var first: [Int] = []
+        var bucket = -Double.infinity
+        for (i, bar) in c.enumerated() {
+            let b = ((bar.time.timeIntervalSince1970 - shift) / seconds).rounded(.down)
+            if b != bucket {
+                bucket = b
+                bars.append(bar)
+                first.append(i)
+            } else {
+                var last = bars[bars.count - 1]
+                last.high = max(last.high, bar.high)
+                last.low = min(last.low, bar.low)
+                last.close = bar.close
+                last.volume += bar.volume
+                bars[bars.count - 1] = last
+            }
+        }
+        return (bars, first)
     }
 
     /// Breaks of swing highs/lows by a close. MSS when the break goes against the

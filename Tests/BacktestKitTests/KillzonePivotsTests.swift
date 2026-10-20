@@ -163,7 +163,7 @@ final class KillzonePivotsTests: XCTestCase {
         XCTAssertTrue(KillzonePivots.compute(candles: data, barInterval: 900, config: config).macroBoxes.isEmpty)
     }
 
-    func testFairValueGapsAndTimeframeRule() {
+    func testFairValueGapsRunUntilTouched() {
         let data = candles { c in
             // Bullish gap: bar 102 low (103) above bar 100 high (101).
             c[100].high = 101; c[101].high = 104; c[101].close = 104; c[102].low = 103; c[102].high = 105
@@ -171,19 +171,61 @@ final class KillzonePivotsTests: XCTestCase {
         }
         var config = KillzonePivots.Config()
         config.fvgMinSize = 0.5
-        let gaps = KillzonePivots.compute(candles: data, barInterval: 900, config: config).fvgs
-        let gap = gaps.first { $0.bullish && $0.start == 101 }
+        let gap = KillzonePivots.compute(candles: data, barInterval: 900, config: config).fvgs.first { $0.bullish && $0.start == 101 }
         XCTAssertEqual(gap?.bottom, 101)
         XCTAssertEqual(gap?.top, 103)
-        XCTAssertEqual(gap?.end, 102)       // 2-bar box
         XCTAssertEqual(gap?.mid, 102)
-        XCTAssertEqual(gap?.filled, false)
-        // M1 is below the M5 minimum.
-        XCTAssertTrue(KillzonePivots.compute(candles: data, barInterval: 60, config: config).fvgs.isEmpty)
-        // FVG still drawn above the killzone timeframe limit.
+        // Never touched: runs to the forming bar.
+        XCTAssertEqual(gap?.end, 287)
+        XCTAssertEqual(gap?.touched, false)
+
+        // A wick into the gap ends it at that bar.
+        var touched = data
+        touched[150].low = 102.5
+        let ended = KillzonePivots.compute(candles: touched, barInterval: 900, config: config).fvgs.first { $0.start == 101 }
+        XCTAssertEqual(ended?.end, 150)
+        XCTAssertEqual(ended?.touched, true)
+        XCTAssertEqual(ended?.filled, false)
+        config.fvgHideFilled = true
+        XCTAssertNil(KillzonePivots.compute(candles: touched, barInterval: 900, config: config).fvgs.first { $0.start == 101 })
+        config.fvgHideFilled = false
+
+        // M1 to D1 by default; not on weekly bars. Still drawn above the killzone limit.
+        XCTAssertFalse(KillzonePivots.compute(candles: data, barInterval: 60, config: config).fvgs.isEmpty)
         let hourly = KillzonePivots.compute(candles: data, barInterval: 3600, config: config)
         XCTAssertTrue(hourly.hiddenByTimeframe)
         XCTAssertFalse(hourly.fvgs.isEmpty)
+        XCTAssertTrue(KillzonePivots.compute(candles: data, barInterval: 604_800, config: config).fvgs.isEmpty)
+    }
+
+    func testFairValueGapConfluenceWithHigherTimeframe() {
+        // M1 bars from a 5-minute boundary.
+        let t0 = Date(timeIntervalSince1970: 1_700_000_100)
+        var ranges: [(Double, Double)] = Array(repeating: (100, 101), count: 5)
+        ranges += [(100.5, 102), (101.5, 106), (103, 107), (104, 110), (104, 109)]
+        ranges += Array(repeating: (105, 108), count: 5)
+        ranges += Array(repeating: (106, 107), count: 45)
+        let data = ranges.enumerated().map { i, r in
+            Candle(time: t0.addingTimeInterval(Double(i) * 60), open: r.0, high: r.1, low: r.0, close: r.1)
+        }
+        XCTAssertEqual(KillzonePivots.higherTimeframe(60), 300)
+        let fiveMinute = KillzonePivots.aggregate(data, seconds: 300)
+        XCTAssertEqual(fiveMinute.bars.count, 12)
+        XCTAssertEqual(fiveMinute.first[1], 5)
+        XCTAssertEqual(fiveMinute.bars[1].high, 110)
+
+        var config = KillzonePivots.Config()
+        let gaps = KillzonePivots.compute(candles: data, barInterval: 60, config: config).fvgs
+        // M1 gaps [101, 101.5] and [102, 103] sit inside the M5 gap [101, 105].
+        let inner = gaps.first { $0.start == 6 }
+        XCTAssertEqual(inner?.bottom, 102)
+        XCTAssertEqual(inner?.top, 103)
+        XCTAssertEqual(inner?.confluence, true)
+        XCTAssertEqual(inner?.end, 59)
+        XCTAssertEqual(gaps.first { $0.start == 5 }?.confluence, true)
+
+        config.fvgConfluence = false
+        XCTAssertTrue(KillzonePivots.compute(candles: data, barInterval: 60, config: config).fvgs.allSatisfy { !$0.confluence })
     }
 
     func testMarketStructureShift() {

@@ -27,6 +27,9 @@ struct KillzonePivotsSettings: Codable, Hashable {
     var fvgBullColor = RGBAColor(red: 0.031, green: 0.6, blue: 0.506)
     var fvgBearColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
     var fvgOpacity = 0.22
+    /// Gaps that line up with a higher-timeframe gap: background and 50% line.
+    var fvgZoneColor = RGBAColor(red: 0.55, green: 0.56, blue: 0.6)
+    var fvgZoneMidColor = RGBAColor(red: 0.612, green: 0.153, blue: 0.69)
     var mssBullColor = RGBAColor(red: 0.031, green: 0.6, blue: 0.506)
     var mssBearColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
     var sweepColor = RGBAColor(red: 0.98, green: 0.6, blue: 0.0)
@@ -60,6 +63,8 @@ struct KillzonePivotsSettings: Codable, Hashable {
         fvgBullColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgBullColor) ?? d.fvgBullColor
         fvgBearColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgBearColor) ?? d.fvgBearColor
         fvgOpacity = try c.decodeIfPresent(Double.self, forKey: .fvgOpacity) ?? d.fvgOpacity
+        fvgZoneColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgZoneColor) ?? d.fvgZoneColor
+        fvgZoneMidColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgZoneMidColor) ?? d.fvgZoneMidColor
         mssBullColor = try c.decodeIfPresent(RGBAColor.self, forKey: .mssBullColor) ?? d.mssBullColor
         mssBearColor = try c.decodeIfPresent(RGBAColor.self, forKey: .mssBearColor) ?? d.mssBearColor
         sweepColor = try c.decodeIfPresent(RGBAColor.self, forKey: .sweepColor) ?? d.sweepColor
@@ -111,14 +116,24 @@ struct KillzonePivotsLayer {
                                     style: .filled, fillOpacity: settings.boxOpacity, showBorder: settings.showBoxBorder))
         }
         for (k, gap) in output.fvgs.enumerated() {
-            let color = (gap.bullish ? settings.fvgBullColor : settings.fvgBearColor).color
-            boxes.append(SessionBox(id: "fvg-\(k)-\(gap.start)", range: gap.start...max(gap.start, gap.end), high: gap.top,
-                                    low: gap.bottom, label: "", color: color, style: .filled,
-                                    fillOpacity: gap.filled ? settings.fvgOpacity * 0.45 : settings.fvgOpacity))
+            // Edges from the gap to the candle that touched it (or the forming one);
+            // a gap shared with the higher timeframe also gets a background.
+            let color = (gap.bullish ? settings.fvgBullColor : settings.fvgBearColor).color.opacity(gap.touched ? 0.6 : 1)
+            let start = Double(gap.start) - 0.5
+            let end = Double(max(gap.start, gap.end)) + 0.5
+            if gap.confluence {
+                boxes.append(SessionBox(id: "fvg-\(k)-\(gap.start)", range: gap.start...max(gap.start, gap.end), high: gap.top,
+                                        low: gap.bottom, label: "", color: settings.fvgZoneColor.color, style: .filled,
+                                        fillOpacity: settings.fvgOpacity))
+            }
+            segments.append(ChartSegment(start: start, end: end, price: gap.top, color: color, width: 1.2))
+            segments.append(ChartSegment(start: start, end: end, price: gap.bottom, color: color, width: 1.2))
             if config.fvgMidline {
-                // 50% (consequent encroachment) line across the same candles.
-                segments.append(ChartSegment(start: Double(gap.start) - 0.5, end: Double(max(gap.start, gap.end)) + 0.5,
-                                             price: gap.mid, color: color, width: 1, dash: [3, 2]))
+                // 50% (consequent encroachment) line with the name in the middle.
+                segments.append(ChartSegment(start: start, end: end, price: gap.mid,
+                                             color: gap.confluence ? settings.fvgZoneMidColor.color : color,
+                                             width: 1, dash: gap.confluence ? [5, 4] : [1.5, 3],
+                                             label: "FVG", centerLabel: true))
             }
         }
         for brk in output.breaks {
