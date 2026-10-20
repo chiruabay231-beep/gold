@@ -130,6 +130,8 @@ struct LiveBotControl: View {
     @Environment(AppStore.self) private var store
     @Environment(BotController.self) private var bot
     @Environment(StopBotController.self) private var stopBot
+    @Environment(MT5Trader.self) private var mt5
+    @State private var confirmRealStop = false
     @State private var remote = RemoteBot()
     @State private var confirmResume = false
     /// Why the last tap on the VPS bot failed.
@@ -189,6 +191,11 @@ struct LiveBotControl: View {
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
             }
         }
+        .confirmationDialog("Bot Stop đặt lệnh TIỀN THẬT?", isPresented: $confirmRealStop, titleVisibility: .visible) {
+            Button("Chạy bot trên tài khoản thật", role: .destructive) { stopBot.start() }
+        } message: {
+            Text("Mỗi nến đóng bot đặt Buy Stop / Sell Stop \(PaperTrader.lots(stopBot.config.lots)) lot vào tài khoản MT5 #\(mt5.state?.login.map { String($0) } ?? "").")
+        }
         .confirmationDialog("Chạy lại bot trên VPS?", isPresented: $confirmResume, titleVisibility: .visible) {
             Button("Chạy bot") { Task { await remote.resume(); actionError = remote.error } }
         } message: {
@@ -217,7 +224,13 @@ struct LiveBotControl: View {
                 bot.start(strategyName: name)
             }
         case .stop:
-            if stopBot.isRunning { stopBot.stop() } else { stopBot.start() }
+            if stopBot.isRunning {
+                stopBot.stop()
+            } else if stopBot.plannedDestination == .mt5, mt5.isReal {
+                confirmRealStop = true
+            } else {
+                stopBot.start()
+            }
         case .vps:
             if remote.status?.running == true {
                 Task { await remote.stop(); actionError = remote.error }

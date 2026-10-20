@@ -29,7 +29,10 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.0"
+VERSION = "1.1"
+RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
+# Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
+UPDATE_EXIT_CODE = 3
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 STATE_PATH = os.path.join(HERE, "state.json")
@@ -107,6 +110,24 @@ def contract_size(symbol):
     if len(s) == 6 and s[:3] in cur and s[3:] in cur:
         return 100000.0
     return 1.0
+
+
+def pid_alive(pid):
+    if IS_WINDOWS:
+        import ctypes
+        kernel = ctypes.windll.kernel32
+        handle = kernel.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        code = ctypes.c_ulong()
+        ok = kernel.GetExitCodeProcess(handle, ctypes.byref(code))
+        kernel.CloseHandle(handle)
+        return bool(ok) and code.value == 259  # STILL_ACTIVE
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except OSError:
+        return False
 
 
 def merge(defaults, values):
@@ -1627,8 +1648,28 @@ class Tunnel:
         local = os.path.join(HERE, name)
         return local if os.path.exists(local) else name
 
+    def _adopt(self):
+        """Right after an update the old cloudflared is still running: keep it and its address."""
+        flag = os.path.join(HERE, "update.flag")
+        try:
+            fresh = now() - os.path.getmtime(flag) < 300
+            os.remove(flag)
+            pid = int(open(os.path.join(HERE, "tunnel.pid")).read().strip())
+            url = open(os.path.join(HERE, "tunnel.txt"), encoding="utf-8").read().strip()
+        except (OSError, ValueError):
+            return
+        if not fresh or not url or not pid_alive(pid):
+            return
+        self.url = url
+        self.server.tunnel_url = url
+        self.server.log(f"🌐 Giữ địa chỉ máy chủ sau khi cập nhật: {url}")
+        while pid_alive(pid):
+            time.sleep(10)
+        self.url = ""
+
     def _run(self):
         port = int(self.server.config.get("port", 8787))
+        self._adopt()
         while True:
             try:
                 self.process = subprocess.Popen(
@@ -1637,6 +1678,11 @@ class Tunnel:
             except FileNotFoundError:
                 self.error = "Không tìm thấy cloudflared"
                 return
+            try:
+                with open(os.path.join(HERE, "tunnel.pid"), "w") as f:
+                    f.write(str(self.process.pid))
+            except OSError:
+                pass
             for raw in self.process.stdout:
                 line = raw.decode("utf-8", "replace")
                 match = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
@@ -2010,6 +2056,46 @@ class BotServer:
             self.save_state()
             return len([e for e in events if e[0] == "closed"])
 
+    def self_update(self):
+        """Downloads the latest bot (bot-latest release), replaces the files and restarts
+        through run.ps1, keeping config.json, state.json and the tunnel address."""
+        import io
+        import zipfile
+        with urllib.request.urlopen(RELEASE_ZIP, timeout=180) as response:
+            data = response.read()
+        archive = zipfile.ZipFile(io.BytesIO(data))
+        names = [n for n in archive.namelist() if not n.endswith("/")]
+        if "bot_server.py" not in names:
+            raise ValueError("Bản tải về không hợp lệ")
+        source = archive.read("bot_server.py").decode("utf-8")
+        match = re.search(r'VERSION = "([^"]+)"', source)
+        version = match.group(1) if match else "?"
+        for name in names:
+            if name in ("config.json", "state.json"):
+                continue
+            target = os.path.join(HERE, name)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            for attempt in range(5):
+                try:
+                    with open(target, "wb") as f:
+                        f.write(archive.read(name))
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(1)
+        with open(os.path.join(HERE, "update.flag"), "w") as f:
+            f.write(str(now()))
+        self.log(f"⬆︎ Đã tải bản {version}, máy chủ khởi động lại…", notify=True)
+        self.save_state()
+
+        def restart():
+            time.sleep(1.5)
+            os._exit(UPDATE_EXIT_CODE)
+
+        threading.Thread(target=restart, daemon=True).start()
+        return {"ok": True, "version": version, "current": VERSION, "restarting": True}
+
     def reset_paper(self, balance):
         with self.lock:
             self.paper.clear()
@@ -2165,6 +2251,8 @@ def make_handler(server):
                     return self._send(200, server.mt5_account.modify(body))
                 if path == "/mt5/cancel":
                     return self._send(200, server.mt5_account.cancel(body))
+                if path == "/update":
+                    return self._send(200, server.self_update())
                 if path == "/copy/settings":
                     return self._send(200, server.copier.settings(body))
                 if path == "/copy/follower":

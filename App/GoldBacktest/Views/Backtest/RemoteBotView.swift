@@ -48,6 +48,9 @@ struct RemoteBotView: View {
             connectionSection
             if let status = remote.status {
                 statusSection(status)
+                if ServerUpdate.isOlder(status.version) {
+                    ServerUpdateSection(message: "Máy chủ đang chạy bản \(status.version ?? "cũ"), đã có bản \(ServerUpdate.latestVersion).")
+                }
                 if !running { settingsSection }
                 controlSection(status)
                 positionsSection(status)

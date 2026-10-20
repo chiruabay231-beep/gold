@@ -29,7 +29,7 @@ struct GoldBacktestApp: App {
                 .onAppear {
                     let trader = trader
                     let stopBot = stopBot
-                    stopBot.attach(market: market, trader: trader)
+                    stopBot.attach(market: market, trader: trader, mt5: mt5Trader)
                     market.onPrice = { symbol, bid, ask, time in
                         trader.update(symbol: symbol, bid: bid, ask: ask, time: time)
                         stopBot.priceUpdated(symbol: symbol)

@@ -425,6 +425,8 @@ struct MT5TradingState: Decodable {
     var tradingEnabled: Bool
     var allowReal: Bool
     var maxLots: Double
+    /// The order just sent (answer to /mt5/order).
+    var ticket: Int?
 }
 
 /// The MT5 account logged in on the VPS.

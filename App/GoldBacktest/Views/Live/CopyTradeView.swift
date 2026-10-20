@@ -9,11 +9,15 @@ struct CopyTradeView: View {
     @State private var editing: CopyFollowerDraft?
     @State private var removing: CopyTradeStatus.Follower?
     @State private var confirmEnable = false
+    /// The VPS runs a server version without copy trade.
+    @State private var outdated = false
 
     var body: some View {
         List {
             if RemoteBotSettings.client() == nil {
                 Text("Kết nối máy chủ VPS trước (Giao dịch → Đăng nhập → Máy chủ VPS).").foregroundColor(.secondary)
+            } else if outdated {
+                ServerUpdateSection(message: "Máy chủ VPS đang chạy bản cũ, chưa có Copy trade. Cập nhật máy chủ rồi quay lại trang này.")
             } else {
                 mainSection
                 followersSection
@@ -25,7 +29,7 @@ struct CopyTradeView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button { editing = CopyFollowerDraft() } label: { Image(systemName: "plus") }
-                    .disabled(RemoteBotSettings.client() == nil)
+                    .disabled(RemoteBotSettings.client() == nil || outdated)
             }
         }
         .task {
@@ -168,8 +172,13 @@ struct CopyTradeView: View {
         guard let client = RemoteBotSettings.client() else { return }
         do {
             status = try await client.copyStatus()
+            outdated = false
         } catch {
-            if status == nil { self.error = error.localizedDescription }
+            if ServerUpdate.isOutdated(error) {
+                outdated = true
+            } else if status == nil {
+                self.error = error.localizedDescription
+            }
         }
     }
 

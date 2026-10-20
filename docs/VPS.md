@@ -51,7 +51,8 @@ Cuối cùng màn hình hiện:
 Mật khẩu máy chủ: ••••••••••••••••
 ```
 
-Chạy lại đúng lệnh trên để **cập nhật** bot; `config.json` và lịch sử lệnh được giữ.
+Chạy lại đúng lệnh trên để **cập nhật** bot; `config.json` và lịch sử lệnh được giữ (bản đã cài kiểu MT5 tự giữ chế độ MT5).
+Từ bản máy chủ 1.1: cập nhật ngay trong app (**Bot trên VPS** hoặc **Copy trade** → **Cập nhật máy chủ VPS**), giữ nguyên địa chỉ máy chủ.
 
 ## 4. Telegram (khuyên dùng)
 

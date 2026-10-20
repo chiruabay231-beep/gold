@@ -6,6 +6,8 @@ struct StopBotView: View {
     @Environment(LiveMarket.self) private var market
     @Environment(PaperTrader.self) private var trader
     @Environment(StopBotController.self) private var bot
+    @Environment(MT5Trader.self) private var mt5
+    @State private var confirmReal = false
     @State private var report: CandleStopBot.Report?
     @State private var testedBars = 0
 
@@ -62,7 +64,17 @@ struct StopBotView: View {
             }
 
             Section {
+                if market.source == .mt5 {
+                    Picker("Đặt lệnh vào", selection: $bot.preferMT5) {
+                        Text("Tài khoản MT5 \(mt5Account)").tag(true)
+                        Text("Demo trong app").tag(false)
+                    }
+                    .disabled(bot.isRunning)
+                } else {
+                    LabeledContent("Đặt lệnh vào", value: "Demo trong app")
+                }
                 if bot.isRunning {
+                    LabeledContent("Đang chạy", value: "\(LiveView.displayName(bot.symbol)) \(bot.interval.map(LiveView.label) ?? "") · \(bot.destination == .mt5 ? "MT5" : "demo")")
                     if bot.chartMoved {
                         Label("Tab Live đang mở mã/khung khác: bot chờ cho tới khi quay lại \(bot.symbolKey.map { LiveView.displayName(PaperTrader.bareSymbol($0)) } ?? "") \(bot.interval.map(LiveView.label) ?? "").",
                               systemImage: "exclamationmark.triangle")
@@ -72,13 +84,16 @@ struct StopBotView: View {
                         Label("Dừng bot (huỷ lệnh chờ)", systemImage: "stop.circle.fill").frame(maxWidth: .infinity)
                     }
                 } else {
-                    Button { bot.start() } label: {
-                        Label("Chạy bot trên tài khoản demo", systemImage: "play.circle.fill").frame(maxWidth: .infinity)
+                    Button {
+                        if bot.plannedDestination == .mt5, mt5.isReal { confirmReal = true } else { bot.start() }
+                    } label: {
+                        Label(bot.plannedDestination == .mt5 ? "Chạy bot trên tài khoản MT5" : "Chạy bot trên tài khoản demo",
+                              systemImage: "play.circle.fill").frame(maxWidth: .infinity)
                     }
                     .disabled(market.closedCandles.isEmpty || trader.isReplaying)
                 }
             } footer: {
-                Text("Bot đặt lệnh chờ trên tài khoản demo trong app (thấy trên biểu đồ Live và tab Giao dịch), khớp lệnh và TP/SL có thông báo, giọng nói. Chạy khi app đang mở (hoặc bật Chạy nền). Nút ▶︎/⏸ cạnh BUY/SELL ở tab Live cũng bật/tắt bot này.")
+                Text("Chạy được trên mọi mã của mọi nguồn giá ở tab Live (Binance, OANDA, MT5…). Biểu đồ nguồn MT5 (VPS) đặt lệnh thẳng vào tài khoản Exness/MT5 đang đăng nhập (cần bật Cho phép đặt lệnh ở trang Đăng nhập; tài khoản thật luôn hỏi lại); nguồn khác đặt lệnh trên tài khoản demo trong app. Lệnh hiện trên biểu đồ Live, khớp lệnh và TP/SL có thông báo. Bot chạy khi app đang mở (hoặc bật Chạy nền). Nút ▶︎/⏸ cạnh BUY/SELL ở tab Live cũng bật/tắt bot này.")
             }
 
             Section("Nhật ký") {
@@ -93,9 +108,22 @@ struct StopBotView: View {
                 }
             }
         }
+        .confirmationDialog("Bot đặt lệnh TIỀN THẬT?", isPresented: $confirmReal, titleVisibility: .visible) {
+            Button("Chạy bot trên tài khoản thật", role: .destructive) { bot.start() }
+        } message: {
+            Text("Mỗi nến đóng bot đặt Buy Stop / Sell Stop \(PaperTrader.lots(bot.config.lots)) lot vào tài khoản MT5 \(mt5Account).")
+        }
         .navigationTitle("Bot Stop theo nến")
+        .task(id: market.source == .mt5) {
+            if market.source == .mt5 { await mt5.refresh() }
+        }
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: bot.config) { _, _ in report = nil }
+    }
+
+    private var mt5Account: String {
+        guard let state = mt5.state, let login = state.login else { return "" }
+        return "#\(login)" + (state.mode == "real" ? " · THẬT" : " · demo")
     }
 
     @ViewBuilder

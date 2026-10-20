@@ -57,6 +57,10 @@ struct LiveView: View {
     /// Limit order being placed by dragging its line on the chart.
     /// The order being prepared in the order sheet (drawn on the chart).
     @State private var orderTicket: OrderTicket?
+    /// The order sheet opens low (prices, type, price, volume); drag up for SL/TP and the button.
+    @State private var ticketDetent = LiveView.ticketCompact
+    static let ticketCompact = PresentationDetent.height(236)
+    static let ticketFull = PresentationDetent.fraction(0.56)
     /// Prices of trade lines while they are being dragged.
     @State private var lineOverrides: [String: Double] = [:]
     @AppStorage("trade.lots") private var defaultLots = 0.01
@@ -180,10 +184,10 @@ struct LiveView: View {
             OrderTicketSheet(ticket: $orderTicket, lots: $defaultLots, bid: liveQuote.bid, ask: liveQuote.ask,
                              decimals: currentDecimals, contractSize: PaperAccount.contractSize(for: market.symbolKey),
                              distance: defaultDistance, accountLabel: orderAccountLabel, onSubmit: { submitTicket() })
-                .presentationDetents([.fraction(0.48), .large])
+                .presentationDetents([Self.ticketCompact, Self.ticketFull], selection: $ticketDetent)
                 .presentationDragIndicator(.visible)
                 // The chart stays usable: drag the order's lines while the sheet is open.
-                .presentationBackgroundInteraction(.enabled(upThrough: .fraction(0.48)))
+                .presentationBackgroundInteraction(.enabled(upThrough: Self.ticketFull))
         }
         .confirmationDialog(demoOrderTitle, isPresented: Binding(get: { demoOrderDrawing != nil },
                                                                  set: { if !$0 { demoOrderDrawing = nil } }),
@@ -801,6 +805,7 @@ struct LiveView: View {
     private func openTicket(side: PaperAccount.Side, kind: OrderTicket.Kind) {
         guard currentPrice > 0 else { return }
         let auto = AutoStops.enabled ? autoStopDistance : nil
+        if orderTicket == nil { ticketDetent = Self.ticketCompact }
         orderTicket = OrderTicket.make(side: side, kind: kind, bid: liveQuote.bid, ask: liveQuote.ask,
                                        distance: defaultDistance, stopDistance: auto,
                                        targetDistance: auto.map { $0 * AutoStops.riskReward })

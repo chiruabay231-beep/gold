@@ -69,15 +69,27 @@ final class MT5Trader {
         await perform { try await $0.mt5Modify(ticket: ticket, price: entry, stop: stop, target: target) }
     }
 
-    func cancel(_ ticket: Int) async {
-        await perform { try await $0.mt5Cancel(ticket: ticket) }
+    func cancel(_ ticket: Int, quiet: Bool = false) async {
+        await perform(quiet: quiet) { try await $0.mt5Cancel(ticket: ticket) }
+    }
+
+    /// A pending order for a bot: no haptics; returns its ticket, or nil with `lastError` set.
+    func botPending(symbol: String, side: PaperAccount.Side, lots: Double, entry: Double, stop: Double?,
+                    target: Double?) async -> Int? {
+        var ticket: Int?
+        await perform(quiet: true) { client in
+            let state = try await client.mt5Order(symbol: symbol, side: side, lots: lots, price: entry, stop: stop, target: target)
+            ticket = state.ticket
+            return state
+        }
+        return ticket
     }
 
     func settings(tradingEnabled: Bool, allowReal: Bool, maxLots: Double) async {
         await perform { try await $0.mt5Settings(tradingEnabled: tradingEnabled, allowReal: allowReal, maxLots: maxLots) }
     }
 
-    private func perform(_ action: (RemoteBotClient) async throws -> MT5TradingState) async {
+    private func perform(quiet: Bool = false, _ action: (RemoteBotClient) async throws -> MT5TradingState) async {
         guard let client = RemoteBotSettings.client() else {
             lastError = "Chưa kết nối máy chủ VPS (Giao dịch → Đăng nhập)"
             return
@@ -86,10 +98,10 @@ final class MT5Trader {
         defer { busy = false }
         do {
             apply(try await action(client))
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            if !quiet { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
         } catch {
             lastError = error.localizedDescription
-            UINotificationFeedbackGenerator().notificationOccurred(.error)
+            if !quiet { UINotificationFeedbackGenerator().notificationOccurred(.error) }
         }
     }
 

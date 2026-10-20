@@ -32,6 +32,13 @@ if (-not $admin) {
     return
 }
 
+# Updating an MT5 install (task runs at logon) keeps it in MT5 mode without -Mt5.
+$existingTask = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+if (-not $Mt5 -and $existingTask -and "$($existingTask.Principal.LogonType)" -eq "Interactive") {
+    $Mt5 = $true
+    Write-Host "Giữ chế độ MT5 (giai đoạn 2) của bản đã cài." -ForegroundColor Yellow
+}
+
 New-Item -ItemType Directory -Force -Path $Dir | Out-Null
 $Temp = Join-Path $env:TEMP "goldbot-install"
 New-Item -ItemType Directory -Force -Path $Temp | Out-Null
