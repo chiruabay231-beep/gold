@@ -18,14 +18,14 @@ struct AccountSummary: View {
             .overlay(alignment: .topLeading) {
                 if let account {
                     Button { showDetail = true } label: {
-                        Image(systemName: account.isReal ? "checkmark.seal.fill" : "testtube.2")
+                        Image(systemName: "checkmark.seal.fill")
                             .font(.system(size: 17))
                             .foregroundColor(account.isReal ? Self.gold : .secondary)
                             .padding(.vertical, 4)
                     }
                     .buttonStyle(.plain)
                     .popover(isPresented: $showDetail) {
-                        Label(account.detail, systemImage: account.isReal ? "checkmark.seal.fill" : "testtube.2")
+                        Label(account.detail, systemImage: "checkmark.seal.fill")
                             .font(.footnote)
                             .padding(12)
                             .presentationCompactAdaptation(.popover)

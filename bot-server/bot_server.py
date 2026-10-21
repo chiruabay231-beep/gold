@@ -29,7 +29,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.2"
+VERSION = "1.3"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -395,6 +395,130 @@ class Mt5Feed:
         pass
 
 
+MT5_WINDOW_CLASS = "MetaQuotes::MetaTrader::5.00"
+# WM_COMMAND id of the toolbar's Algo Trading button (a toggle).
+MT5_CMD_ALGO_TRADING = 32851
+
+
+def mt5_windows(login=None):
+    """Top-level MT5 terminal windows, those showing `login` in the title first."""
+    if os.name != "nt":
+        return []
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def visit(hwnd, _):
+        name = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, name, 256)
+        if name.value == MT5_WINDOW_CLASS:
+            title = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(hwnd, title, 512)
+            found.append((hwnd, title.value))
+        return True
+
+    user32.EnumWindows(visit, 0)
+    if login:
+        mine = [w for w in found if str(login) in w[1]]
+        return mine if mine else (found if len(found) == 1 else [])
+    return found
+
+
+def write_algo_ini(data_path):
+    """Algo Trading on at start, and not turned off when the account changes."""
+    path = os.path.join(data_path, "config", "common.ini")
+    text = ""
+    for encoding in ("utf-16", "utf-8"):
+        try:
+            with open(path, encoding=encoding) as f:
+                text = f.read()
+            break
+        except (OSError, UnicodeError):
+            continue
+    wanted = {"Enabled": "1", "Account": "0", "Profile": "0", "AllowLiveTrading": "1"}
+    lines = text.splitlines()
+    try:
+        start = next(i for i, l in enumerate(lines) if l.strip().lower() == "[experts]")
+    except StopIteration:
+        lines += ["[Experts]"]
+        start = len(lines) - 1
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("[")), len(lines))
+    section = [l for l in lines[start + 1:end] if l.split("=")[0].strip() not in wanted]
+    section += [f"{k}={v}" for k, v in wanted.items()]
+    lines[start + 1:end] = section
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-16") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def ensure_algo_trading(mt5, cfg, log=None, restart=True):
+    """Turns MT5's Algo Trading back on (MT5 turns it off when the account changes).
+
+    First presses the button by window message; if that does not work, closes the
+    terminal, writes Enabled=1 / Account=0 into its common.ini and starts it again,
+    so later account changes keep it on. Returns True when trading is allowed."""
+    def allowed():
+        t = mt5.terminal_info()
+        return t is not None and bool(t.trade_allowed)
+
+    for _ in range(8):  # MT5 switches it off a moment after the login
+        if not allowed():
+            break
+        time.sleep(0.25)
+    else:
+        return True
+    # Only press the toggle when the terminal answers and says it is off.
+    if os.name != "nt" or mt5.terminal_info() is None:
+        return False
+    import ctypes
+    a = mt5.account_info()
+    windows = mt5_windows(a.login if a else None)
+    for hwnd, _ in windows[:1]:
+        ctypes.windll.user32.PostMessageW(hwnd, 0x0111, MT5_CMD_ALGO_TRADING, 0)
+        for _ in range(20):
+            time.sleep(0.25)
+            if allowed():
+                if log:
+                    log("⚙️ Đã tự bật Algo Trading trong MT5")
+                return True
+    if not restart:
+        return False
+    # Restart the terminal with the setting written down.
+    t = mt5.terminal_info()
+    if t is None or not getattr(t, "data_path", None):
+        return False
+    exe = os.path.join(t.path, "terminal64.exe") if getattr(t, "path", None) else cfg.get("path")
+    data_path = t.data_path
+    for hwnd, _ in windows[:1]:
+        ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
+    mt5.shutdown()
+    Mt5.connected = False
+    for _ in range(60):
+        if not mt5_windows(a.login if a else None):
+            break
+        time.sleep(0.5)
+    try:
+        write_algo_ini(data_path)
+    except OSError:
+        pass
+    restart = dict(cfg)
+    if exe:
+        restart["path"] = exe
+    try:
+        mt5 = Mt5.connect(restart)
+    except RuntimeError:
+        return False
+    for _ in range(20):
+        if allowed():
+            if log:
+                log("⚙️ Đã khởi động lại MT5 với Algo Trading bật sẵn")
+            return True
+        time.sleep(0.25)
+    return False
+
+
 def mt5_send(mt5, request):
     """order_send trying the symbol's filling modes; returns (result, error text)."""
     info = mt5.symbol_info(request["symbol"]) if request.get("symbol") else None
@@ -492,6 +616,8 @@ class Mt5Account:
             else:
                 self.cfg.update(login=0, password="", server="")
             self.server.save_config()
+            if not ensure_algo_trading(mt5, cfg, self.server.log):
+                self.server.log("⚠️ Algo Trading trong MT5 đang tắt: bật nút Algo Trading trên VPS để đặt lệnh")
         self.server.log(f"🔑 Đăng nhập MT5 #{login} ({server})")
         return self.status()
 
@@ -534,7 +660,9 @@ class Mt5Account:
             raise ValueError("Tài khoản không cho giao dịch (đang dùng mật khẩu investor? cần mật khẩu chính)")
         t = mt5.terminal_info()
         if t is not None and not t.trade_allowed:
-            raise ValueError("Bật nút Algo Trading trong MT5 trên VPS")
+            if not ensure_algo_trading(mt5, self.cfg, self.server.log):
+                raise ValueError("Bật nút Algo Trading trong MT5 trên VPS")
+            a = Mt5.module.account_info() or a
         return a
 
     def settings(self, body):
@@ -904,7 +1032,7 @@ class CopyWorker:
         if state["mode"] == "real" and not f.get("allowReal"):
             return dict(state, ok=False, error="Tài khoản THẬT: bật 'Cho phép tài khoản thật' cho tài khoản copy này")
         terminal = mt5.terminal_info()
-        if terminal is not None and not terminal.trade_allowed:
+        if terminal is not None and not terminal.trade_allowed and not ensure_algo_trading(mt5, {}, restart=False):
             return dict(state, ok=False, error="Bật nút Algo Trading trong MT5 của tài khoản copy này")
         master = {int(m["ticket"]): m for m in msg.get("positions", [])}
         skip = set(int(t) for t in msg.get("skip", []))
