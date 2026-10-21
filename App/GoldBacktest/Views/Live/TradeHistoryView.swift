@@ -116,10 +116,15 @@ struct TradeHistoryView: View {
     }
 
     let source: Source
+    /// Inside another list (the MT5 account page): the bar is a section header and
+    /// the page opens on today.
+    var embedded = false
+    /// Changes when positions close, to reload.
+    var reloadKey = 0
 
     @Environment(PaperTrader.self) private var trader
     @AppStorage("history.page") private var pageName = Page.positions.rawValue
-    @AppStorage("history.period") private var periodName = Period.week.rawValue
+    @AppStorage("history.period") private var periodName = Period.today.rawValue
     @AppStorage("history.sort") private var sortName = Sort.newest.rawValue
     @State private var customFrom = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var customTo = Date()
@@ -146,27 +151,50 @@ struct TradeHistoryView: View {
         }
     }
 
+    private var loadKey: String {
+        "\(periodName)|\(customFrom.timeIntervalSince1970)|\(customTo.timeIntervalSince1970)|\(reloadKey)"
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            topBar
-            List {
-                if let error {
-                    Text(error).font(.footnote).foregroundColor(.orange)
-                }
-                if let history {
-                    rows(history)
-                    summary(history)
-                } else if loading {
-                    HStack { Spacer(); ProgressView(); Spacer() }
-                }
+        if embedded {
+            Section {
+                content
+            } header: {
+                topBar
+                    .textCase(nil)
+                    .padding(.horizontal, -16)
+                    .task(id: loadKey) { await load() }
+                    .onAppear { periodName = Period.today.rawValue }
+                    .sheet(isPresented: $showCustom) { customSheet }
             }
-            .listStyle(.plain)
+            if let history { summary(history) }
+        } else {
+            VStack(spacing: 0) {
+                topBar
+                List {
+                    content
+                    if let history { summary(history) }
+                }
+                .listStyle(.plain)
+            }
+            .navigationTitle(source == .mt5 ? "Lịch sử" : "Lịch sử demo")
+            .navigationBarTitleDisplayMode(.inline)
+            .task(id: loadKey) { await load() }
+            .refreshable { await load() }
+            .sheet(isPresented: $showCustom) { customSheet }
         }
-        .navigationTitle(source == .mt5 ? "Lịch sử" : "Lịch sử demo")
-        .navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(periodName)|\(customFrom.timeIntervalSince1970)|\(customTo.timeIntervalSince1970)") { await load() }
-        .refreshable { await load() }
-        .sheet(isPresented: $showCustom) { customSheet }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let error {
+            Text(error).font(.footnote).foregroundColor(.orange)
+        }
+        if let history {
+            rows(history)
+        } else if loading {
+            HStack { Spacer(); ProgressView(); Spacer() }
+        }
     }
 
     // MARK: - Top bar
@@ -392,18 +420,20 @@ struct HistoryRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
-                HStack(spacing: 5) {
-                    Text(symbol).foregroundColor(.primary)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(symbol)
+                        .font(.system(size: 19, weight: .bold).width(.condensed))
+                        .foregroundColor(.primary)
                     if !side.isEmpty {
                         Text(side + (lots.map { " " + TradeHistoryView.lots($0) } ?? ""))
+                            .font(.system(size: 14))
                             .foregroundColor(side.hasPrefix("buy") ? Self.blue : Self.red)
                     }
                 }
-                .font(.system(size: 19, weight: .semibold).width(.condensed))
                 .lineLimit(1)
                 Spacer()
                 Text(value)
-                    .font(.system(size: 19, weight: .semibold).width(.condensed).monospacedDigit())
+                    .font(.system(size: 15).monospacedDigit())
                     .foregroundColor(valueColor)
             }
             HStack {
@@ -411,7 +441,7 @@ struct HistoryRow: View {
                 Spacer()
                 Text(Self.formatter.string(from: Date(timeIntervalSince1970: time)))
             }
-            .font(.system(size: 16).monospacedDigit())
+            .font(.system(size: 13).monospacedDigit())
             .foregroundColor(.secondary)
             .lineLimit(1)
             .minimumScaleFactor(0.8)
