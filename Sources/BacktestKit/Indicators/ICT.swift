@@ -311,6 +311,77 @@ public enum ICT {
         return zones
     }
 
+    /// Like `fairValueGaps`, but only gaps whose middle candle is a strong move:
+    /// body ≥ `displacement` × the average body of the 20 bars before, in the gap's
+    /// direction and at least half of its range.
+    public static func strongFairValueGaps(open: Series, high: Series, low: Series, close: Series,
+                                           minSize: Double = 0, displacement: Double = 1.5) -> Zones {
+        let n = high.count
+        var zones = Zones(bullTop: Series(repeating: .nan, count: n), bullBottom: Series(repeating: .nan, count: n),
+                          bearTop: Series(repeating: .nan, count: n), bearBottom: Series(repeating: .nan, count: n))
+        var bodySums = [0.0]
+        for i in 0..<n { bodySums.append(bodySums[i] + abs(close[i] - open[i])) }
+        func strong(_ m: Int, bullish: Bool) -> Bool {
+            let body = abs(close[m] - open[m])
+            guard (close[m] > open[m]) == bullish, body >= (high[m] - low[m]) * 0.5 else { return false }
+            let from = max(0, m - 20)
+            guard m > from else { return true }
+            return body >= (bodySums[m] - bodySums[from]) / Double(m - from) * displacement
+        }
+        var bullTop = Double.nan, bullBottom = Double.nan
+        var bearTop = Double.nan, bearBottom = Double.nan
+        for i in 0..<n {
+            if !bullBottom.isNaN, low[i] <= bullBottom { bullTop = .nan; bullBottom = .nan }
+            if !bearTop.isNaN, high[i] >= bearTop { bearTop = .nan; bearBottom = .nan }
+            if i >= 2 {
+                if low[i] - high[i - 2] > minSize, strong(i - 1, bullish: true) {
+                    bullTop = low[i]
+                    bullBottom = high[i - 2]
+                }
+                if low[i - 2] - high[i] > minSize, strong(i - 1, bullish: false) {
+                    bearTop = low[i - 2]
+                    bearBottom = high[i]
+                }
+            }
+            zones.bullTop[i] = bullTop
+            zones.bullBottom[i] = bullBottom
+            zones.bearTop[i] = bearTop
+            zones.bearBottom[i] = bearBottom
+        }
+        return zones
+    }
+
+    /// Most recent volume imbalances not yet filled: two candles in the same
+    /// direction whose bodies leave a gap (first close → second open) while their
+    /// wicks overlap. Removed once price trades through the whole gap.
+    public static func volumeImbalances(open: Series, high: Series, low: Series, close: Series) -> Zones {
+        let n = high.count
+        var zones = Zones(bullTop: Series(repeating: .nan, count: n), bullBottom: Series(repeating: .nan, count: n),
+                          bearTop: Series(repeating: .nan, count: n), bearBottom: Series(repeating: .nan, count: n))
+        var bullTop = Double.nan, bullBottom = Double.nan
+        var bearTop = Double.nan, bearBottom = Double.nan
+        for i in 0..<n {
+            if !bullBottom.isNaN, low[i] <= bullBottom { bullTop = .nan; bullBottom = .nan }
+            if !bearTop.isNaN, high[i] >= bearTop { bearTop = .nan; bearBottom = .nan }
+            if i >= 1 {
+                let upA = close[i - 1] > open[i - 1], upB = close[i] > open[i]
+                if upA, upB, open[i] > close[i - 1], low[i] <= high[i - 1] {
+                    bullTop = open[i]
+                    bullBottom = close[i - 1]
+                } else if !upA, !upB, close[i - 1] < open[i - 1], close[i] < open[i],
+                          open[i] < close[i - 1], high[i] >= low[i - 1] {
+                    bearTop = close[i - 1]
+                    bearBottom = open[i]
+                }
+            }
+            zones.bullTop[i] = bullTop
+            zones.bullBottom[i] = bullBottom
+            zones.bearTop[i] = bearTop
+            zones.bearBottom[i] = bearBottom
+        }
+        return zones
+    }
+
     /// Order blocks: the last opposite-colour candle within `lookback` bars
     /// before a structure break. A bullish OB is invalidated by a close below
     /// its low, a bearish OB by a close above its high.
@@ -486,7 +557,30 @@ public enum ICTFunctions {
                                                     structure: s, lookback: try args.length(2))))
             }
         }
+        func strongFVG(_ name: String, _ summary: String, _ pick: @escaping (ICT.Zones) -> Series) -> ScriptFunction {
+            ScriptFunction(name, [FunctionParameter("displacement", .number, default: 1.5),
+                                  FunctionParameter("min_size", .number, default: 0)],
+                           category: category, summary: summary) { args in
+                let d = args.data
+                return .series(pick(ICT.strongFairValueGaps(open: d.open, high: d.high, low: d.low, close: d.close,
+                                                            minSize: args.number(1), displacement: args.number(0))))
+            }
+        }
+        func vi(_ name: String, _ summary: String, _ pick: @escaping (ICT.Zones) -> Series) -> ScriptFunction {
+            ScriptFunction(name, [], category: category, summary: summary) { args in
+                let d = args.data
+                return .series(pick(ICT.volumeImbalances(open: d.open, high: d.high, low: d.low, close: d.close)))
+            }
+        }
         return [
+            strongFVG("bull_sfvg_top", "Cạnh trên FVG tăng MẠNH gần nhất (nến giữa thân ≥ displacement × thân TB 20 nến)") { $0.bullTop },
+            strongFVG("bull_sfvg_bottom", "Cạnh dưới FVG tăng mạnh gần nhất") { $0.bullBottom },
+            strongFVG("bear_sfvg_top", "Cạnh trên FVG giảm mạnh gần nhất") { $0.bearTop },
+            strongFVG("bear_sfvg_bottom", "Cạnh dưới FVG giảm MẠNH gần nhất") { $0.bearBottom },
+            vi("bull_vi_top", "Cạnh trên VI tăng gần nhất chưa bị lấp (mở cửa nến 2)") { $0.bullTop },
+            vi("bull_vi_bottom", "Cạnh dưới VI tăng (đóng cửa nến 1)") { $0.bullBottom },
+            vi("bear_vi_top", "Cạnh trên VI giảm (đóng cửa nến 1)") { $0.bearTop },
+            vi("bear_vi_bottom", "Cạnh dưới VI giảm gần nhất chưa bị lấp (mở cửa nến 2)") { $0.bearBottom },
             fvg("bull_fvg_top", "Cạnh trên FVG tăng gần nhất chưa bị lấp hết") { $0.bullTop },
             fvg("bull_fvg_bottom", "Cạnh dưới FVG tăng gần nhất chưa bị lấp hết") { $0.bullBottom },
             fvg("bull_fvg_ce", "CE (50%) của FVG tăng gần nhất") { z in zip(z.bullTop, z.bullBottom).map { ($0 + $1) / 2 } },

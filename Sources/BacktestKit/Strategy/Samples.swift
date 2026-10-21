@@ -337,6 +337,58 @@ public enum Samples {
                 plot(fast, "EMA nhanh")
                 plot(trend, "EMA xu hướng")
                 """),
+            StrategyDefinition(
+                name: "ICT M1 · FVG/VI + Dòng tiền cá mập",
+                summary: "Khung M1. MUA khi: giá trên EMA 200 và cấu trúc tăng, trong killzone London / NY AM, giá hồi chạm FVG MẠNH hoặc VI tăng rồi nến đóng bật lên, và dòng tiền đang VÀO (tuỳ chọn: có cá mập mua trong 15 nến). BÁN ngược lại. SL dưới đáy 5 nến + đệm ATR, TP = RR × rủi ro; thoát sớm khi có MSS ngược chiều hoặc dòng tiền đảo chiều mạnh.",
+                parameters: [ScriptParameter(name: "trend_len", defaultValue: 200, minValue: 50, maxValue: 500, step: 50),
+                             ScriptParameter(name: "swing", defaultValue: 3, minValue: 2, maxValue: 10, step: 1),
+                             ScriptParameter(name: "disp", defaultValue: 1.5, minValue: 1, maxValue: 4, step: 0.25),
+                             ScriptParameter(name: "flow_len", defaultValue: 20, minValue: 5, maxValue: 60, step: 5),
+                             ScriptParameter(name: "flow_min", defaultValue: 0.05, minValue: 0, maxValue: 0.5, step: 0.05),
+                             ScriptParameter(name: "exit_flow", defaultValue: 0.35, minValue: 0.1, maxValue: 1, step: 0.05),
+                             ScriptParameter(name: "use_shark", defaultValue: 0, minValue: 0, maxValue: 1, step: 1),
+                             ScriptParameter(name: "shark_mult", defaultValue: 2.5, minValue: 1.5, maxValue: 5, step: 0.5),
+                             ScriptParameter(name: "rr", defaultValue: 2, minValue: 1, maxValue: 5, step: 0.5),
+                             ScriptParameter(name: "sl_buffer", defaultValue: 0.3, minValue: 0, maxValue: 2, step: 0.1)],
+                script: """
+                // 1. Xu hướng: giá so với EMA 200 và cấu trúc swing cùng hướng
+                trend = ema(close, trend_len)
+                ms = structure(swing, swing)
+                up   = close > trend and ms == 1
+                down = close < trend and ms == -1
+
+                // 2. Thời gian: killzone London hoặc New York AM (giờ New York)
+                kz = kz_london() or kz_ny_am()
+
+                // 3. Vùng ICT: FVG mạnh hoặc VI thuận chiều, giá hồi chạm vùng
+                in_bull = (low <= bull_sfvg_top(disp) and close > bull_sfvg_bottom(disp)) or (low <= bull_vi_top() and close > bull_vi_bottom())
+                in_bear = (high >= bear_sfvg_bottom(disp) and close < bear_sfvg_top(disp)) or (high >= bear_vi_bottom() and close < bear_vi_top())
+
+                // 4. Dòng tiền: tiền đang vào để mua, đang ra để bán; use_shark = 1 đòi thêm cá mập gần đây
+                mf = money_flow(flow_len)
+                shark_up = highest(shark_buy(shark_mult), 15) > 0
+                shark_dn = highest(shark_sell(shark_mult), 15) > 0
+                money_up = mf > flow_min and (use_shark == 0 or shark_up)
+                money_dn = mf < -flow_min and (use_shark == 0 or shark_dn)
+
+                // 5. Vào lệnh khi nến đóng bật lại theo hướng
+                long_entry  = kz and up and in_bull and money_up and close > open
+                short_entry = kz and down and in_bear and money_dn and close < open
+
+                // 6. SL dưới/trên đỉnh-đáy 5 nến + đệm ATR, TP theo RR
+                a = atr(14)
+                long_stop    = lowest(low, 5) - sl_buffer * a
+                short_stop   = highest(high, 5) + sl_buffer * a
+                long_target  = close + rr * (close - long_stop)
+                short_target = close - rr * (short_stop - close)
+
+                // 7. Thoát sớm: MSS ngược chiều hoặc dòng tiền đảo chiều mạnh
+                long_exit  = mss_bear(swing, swing) or mf < -exit_flow
+                short_exit = mss_bull(swing, swing) or mf > exit_flow
+
+                plot(trend, "EMA xu hướng")
+                plot(mf, "Dòng tiền")
+                """),
         ]
     }
 }

@@ -26,7 +26,38 @@ public enum NativeIndicators {
     public static let category = "Native (Swift)"
 
     public static var all: [ScriptFunction] {
-        [supertrend, supertrendDirection, fairValueGapBull, fairValueGapBear, swingHighLevel, swingLowLevel]
+        [supertrend, supertrendDirection, fairValueGapBull, fairValueGapBear, swingHighLevel, swingLowLevel,
+         moneyFlow, sharkBuy, sharkSell]
+    }
+
+    public static let moneyCategory = "Dòng tiền"
+
+    /// "Dòng tiền cá mập" money flow: −1 (money leaving) … +1 (money coming in).
+    public static var moneyFlow: ScriptFunction {
+        ScriptFunction("money_flow", [.length(default: 20)], category: moneyCategory,
+                       summary: "Dòng tiền length nến: −1 = tiền ra hết … +1 = tiền vào hết (nến đóng gần đỉnh/đáy, theo khối lượng)") { args in
+            .series(SharkFlow.compute(candles: args.data.candles,
+                                      config: SharkFlow.Config(flowLength: try args.length(0))).flow)
+        }
+    }
+
+    private static func shark(_ name: String, buying: Bool, _ summary: String) -> ScriptFunction {
+        ScriptFunction(name, [FunctionParameter("mult", .number, default: 2.5), .length(default: 20)],
+                       category: moneyCategory, summary: summary) { args in
+            let out = SharkFlow.compute(candles: args.data.candles,
+                                        config: SharkFlow.Config(volumeLength: try args.length(1), sharkMultiple: args.number(0)))
+            var flags = Series(repeating: 0, count: args.count)
+            for s in out.sharks where s.buying == buying { flags[s.index] = 1 }
+            return .series(flags)
+        }
+    }
+
+    public static var sharkBuy: ScriptFunction {
+        shark("shark_buy", buying: true, "1 khi có cá mập MUA: khối lượng ≥ mult × trung bình length nến, nến đóng gần đỉnh")
+    }
+
+    public static var sharkSell: ScriptFunction {
+        shark("shark_sell", buying: false, "1 khi có cá mập BÁN: khối lượng ≥ mult × trung bình length nến, nến đóng gần đáy")
     }
 
     public static var supertrend: ScriptFunction {

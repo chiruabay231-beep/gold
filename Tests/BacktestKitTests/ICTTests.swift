@@ -187,6 +187,33 @@ final class ICTTests: XCTestCase {
         }
     }
 
+    func testICTMoneyFlowStrategyOnOneMinuteBars() throws {
+        let strategy = try XCTUnwrap(Samples.strategies.first { $0.name.hasPrefix("ICT M1 · FVG/VI") })
+        try strategy.validate()
+        let data = PriceData(candles: SampleData.candles(count: 20_000, interval: 60))
+        let result = try BacktestEngine.run(strategy: strategy, data: data, config: BacktestConfig(),
+                                            library: FunctionLibrary.standard.adding(Samples.indicators))
+        XCTAssertGreaterThan(result.trades.count, 0)
+        print("ICT M1 FVG/VI + money flow on 20k synthetic M1 bars: \(result.trades.count) trades, win rate \(result.metrics.winRate), net \(result.metrics.netProfit)")
+    }
+
+    func testVolumeImbalanceAndStrongGapSeries() {
+        // Bars 1-2: two up candles with a body gap (close 101 → open 101.5) and overlapping wicks.
+        let open: Series = [100, 100, 101.5, 102, 101]
+        let close: Series = [100, 101, 102.5, 102.2, 100.5]
+        let high: Series = [100.5, 101.6, 102.8, 102.4, 102.3]
+        let low: Series = [99.5, 99.9, 101.4, 101.9, 100.4]
+        let vi = ICT.volumeImbalances(open: open, high: high, low: low, close: close)
+        XCTAssertEqual(vi.bullBottom[2], 101)
+        XCTAssertEqual(vi.bullTop[2], 101.5)
+        XCTAssertEqual(vi.bullTop[3], 101.5)
+        XCTAssertTrue(vi.bullTop[4].isNaN)   // traded through
+        // A small middle candle does not make a strong gap.
+        let o: Series = [100, 100.9, 101.2], h: Series = [101, 103.1, 104], l: Series = [99, 100.8, 103], c: Series = [100.5, 101.1, 103.5]
+        XCTAssertTrue(ICT.strongFairValueGaps(open: o, high: h, low: l, close: c).bullTop[2].isNaN)
+        XCTAssertEqual(ICT.fairValueGaps(high: h, low: l).bullTop[2], 103)
+    }
+
     func testICTM1TrendStrategyOnOneMinuteBars() throws {
         let strategy = try XCTUnwrap(Samples.strategies.first { $0.name.hasPrefix("ICT M1 Trend") })
         try strategy.validate()
