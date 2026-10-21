@@ -30,14 +30,39 @@ public enum SharkFlow {
         public var ratio: Double
     }
 
+    /// Price against money over the last `flowLength` bars, in plain words.
+    public enum Situation: String, Sendable {
+        /// Price up and money coming in: a healthy rise.
+        case strongUp
+        /// Price up while money leaves: a weak rise, may turn down.
+        case weakUp
+        /// Price down and money leaving: a healthy fall.
+        case strongDown
+        /// Price down while money comes in: someone is buying the dip, may turn up.
+        case weakDown
+        case flat
+    }
+
+    /// Where price and money start to disagree (start of a weakUp / weakDown run).
+    public struct Divergence: Hashable, Sendable {
+        public var index: Int
+        /// true = price falling while money comes in (may turn up).
+        public var bullish: Bool
+    }
+
     public struct Output: Sendable {
         /// Per bar: −1 (closed at the low) … +1 (closed at the high), weighted by volume below.
         public var pressure: [Double] = []
         /// Money flow score of the last `flowLength` bars, −1 … +1 (NaN before enough bars).
         public var flow: [Double] = []
         public var sharks: [Shark] = []
+        /// Per bar (nil before enough bars).
+        public var situations: [Situation?] = []
+        public var divergences: [Divergence] = []
 
         public init() {}
+
+        public var situation: Situation? { situations.last ?? nil }
 
         /// The latest score.
         public var current: Double? { flow.last.flatMap { $0.isFinite ? $0 : nil } }
@@ -66,6 +91,29 @@ public enum SharkFlow {
             if i >= length - 1, total > 0 { flow[i] = max(-1, min(1, money / total)) }
         }
         out.flow = flow
+
+        // Price move over the same bars, against half the average bar range.
+        var situations = [Situation?](repeating: nil, count: n)
+        var rangeSum = 0.0
+        for i in 0..<n {
+            rangeSum += c[i].high - c[i].low
+            if i >= length { rangeSum -= c[i - length].high - c[i - length].low }
+            guard i >= length, flow[i].isFinite else { continue }
+            let change = c[i].close - c[i - length].close
+            let threshold = rangeSum / Double(length) * 0.5
+            if change > threshold {
+                situations[i] = flow[i] < -0.05 ? .weakUp : .strongUp
+            } else if change < -threshold {
+                situations[i] = flow[i] > 0.05 ? .weakDown : .strongDown
+            } else {
+                situations[i] = .flat
+            }
+            let state = situations[i]
+            if state == .weakUp || state == .weakDown, situations[i - 1] != state {
+                out.divergences.append(Divergence(index: i, bullish: state == .weakDown))
+            }
+        }
+        out.situations = situations
 
         let lookback = max(config.volumeLength, 1)
         var sum = 0.0

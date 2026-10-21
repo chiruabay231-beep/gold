@@ -93,6 +93,7 @@ struct LiveView: View {
     @State private var frameCache = LiveFrameCache()
     @AppStorage(LiveIndicators.sharkKey) private var showSharkFlow = false
     @AppStorage(LiveIndicators.sharkMultipleKey) private var sharkMultiple = 2.5
+    @AppStorage("live.sharkPaneHeight") private var sharkPaneHeight = 120.0
     @State private var showKillzoneSettings = false
     @State private var showOandaSettings = false
     /// OANDA instrument to open once a token has been saved.
@@ -107,7 +108,8 @@ struct LiveView: View {
             header
             charts
             if let flow = sharkFlow, chartCandles.count > 2 {
-                SharkFlowPane(output: flow, range: viewport.range(total: chartCandles.count), theme: theme)
+                SharkFlowPane(output: flow, viewport: viewport, total: chartCandles.count, theme: theme,
+                              height: $sharkPaneHeight)
             }
             indicatorPanes
             if showTradeButtons {

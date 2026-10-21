@@ -20,6 +20,24 @@ final class SharkFlowTests: XCTestCase {
         XCTAssertEqual(out.sharks.first?.ratio ?? 0, 6, accuracy: 1e-9)
     }
 
+    func testPriceAgainstMoney() {
+        // Price creeps up while every bar closes near its low: a weak rise.
+        let up = (0..<40).map { i -> Candle in
+            let base = 100 + Double(i) * 0.5
+            return bar(i, base, base + 1, base - 1, base - 0.8, 10)
+        }
+        let out = SharkFlow.compute(candles: up, config: SharkFlow.Config(flowLength: 10))
+        XCTAssertEqual(out.situation, .weakUp)
+        XCTAssertEqual(out.divergences.first?.index, 10)
+        XCTAssertEqual(out.divergences.first?.bullish, false)
+        // Price falling with closes near the highs: dip being bought.
+        let down = (0..<40).map { i -> Candle in
+            let base = 120 - Double(i) * 0.5
+            return bar(i, base, base + 1, base - 1, base + 0.8, 10)
+        }
+        XCTAssertEqual(SharkFlow.compute(candles: down, config: SharkFlow.Config(flowLength: 10)).situation, .weakDown)
+    }
+
     func testRangeStandsInWithoutVolume() {
         var candles = (0..<25).map { bar($0, 100, 100.5, 99.5, 100.4, 0) }
         candles.append(bar(25, 100, 104, 99.9, 103.9, 0))                    // wide green bar
