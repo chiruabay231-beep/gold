@@ -435,9 +435,10 @@ struct KillzonePivotsSettingsView: View {
     @ViewBuilder
     private var periods: some View {
         Section {
-            Toggle("Đỉnh / đáy từng ngày (chưa bị quét)", isOn: $settings.config.showDailyLevels)
+            Toggle("Đỉnh / đáy từng ngày", isOn: $settings.config.showDailyLevels)
             if settings.config.showDailyLevels {
                 Stepper("\(settings.config.dailyLevelDays) ngày gần nhất", value: $settings.config.dailyLevelDays, in: 1...20)
+                Toggle("Giá chạm: dừng lại, nét chấm ……", isOn: $settings.config.dailyLevelsKeepTouched)
                 colorRow("Màu đỉnh ngày", color: $settings.dayHighColor)
                 colorRow("Màu đáy ngày", color: $settings.dayLowColor)
                 stylePicker("Nét", selection: $settings.dayLevelStyle)
@@ -445,7 +446,7 @@ struct KillzonePivotsSettingsView: View {
         } header: {
             Text("Đỉnh / đáy ngày")
         } footer: {
-            Text("Đỉnh và đáy của mỗi ngày đã đóng, ghi rõ thứ (vd: Đỉnh T3, Đáy T5), kéo sang phải tới khi có nến quét qua thì biến mất. Ngày tính theo múi giờ của chỉ báo (mặc định New York, giống ICT).")
+            Text("Đỉnh và đáy của mỗi ngày đã đóng, ghi rõ thứ (vd: Đỉnh T3, Đáy T5), kéo sang phải tới khi có nến chạm vào: đường dừng ngay ở cây nến đó và chuyển sang nét chấm …… (tắt "Giá chạm" thì đường bị chạm biến mất). Ngày tính theo múi giờ của chỉ báo (mặc định New York, giống ICT).")
         }
         Section("Ngày / Tuần / Tháng trước") {
             Toggle("PDH / PDL (ngày trước)", isOn: $settings.config.showPreviousDay)

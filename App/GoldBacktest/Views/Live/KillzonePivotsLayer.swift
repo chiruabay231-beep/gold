@@ -210,7 +210,8 @@ struct KillzonePivotsLayer {
                 let isHigh: Bool
                 if case .dayHigh = level.kind { isHigh = true } else { isHigh = false }
                 segment.color = (isHigh ? settings.dayHighColor : settings.dayLowColor).color
-                segment.dash = settings.dayLevelStyle.dash
+                // Reached by price: stops at that candle, dotted.
+                segment.dash = (level.mitigated ? LineStyle.dotted : settings.dayLevelStyle).dash
                 segment.label = "\(isHigh ? "Đỉnh" : "Đáy") \(Self.weekdays[min(max(weekday, 0), 7)])"
                 // In the middle of the line, clear of the pivot labels at the right edge.
                 segment.centerLabel = true

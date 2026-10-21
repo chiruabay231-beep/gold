@@ -102,10 +102,12 @@ public enum KillzonePivots {
         public var cutoffHour = 15.0
 
         public var showPreviousDay = false
-        /// High and low of each of the last days, kept while no candle has
-        /// traded through them (a swept one is no longer drawn).
+        /// High and low of each of the last days, drawn until a candle reaches them.
         public var showDailyLevels = true
         public var dailyLevelDays = 5
+        /// A daily high/low price has reached stops at that candle and is drawn
+        /// dotted; off, it is no longer drawn.
+        public var dailyLevelsKeepTouched = true
         public var showPreviousWeek = false
         public var showPreviousMonth = false
         public var showDayOfWeek = false
@@ -211,6 +213,7 @@ public enum KillzonePivots {
             showPreviousDay = try c.decodeIfPresent(Bool.self, forKey: .showPreviousDay) ?? d.showPreviousDay
             showDailyLevels = try c.decodeIfPresent(Bool.self, forKey: .showDailyLevels) ?? d.showDailyLevels
             dailyLevelDays = try c.decodeIfPresent(Int.self, forKey: .dailyLevelDays) ?? d.dailyLevelDays
+            dailyLevelsKeepTouched = try c.decodeIfPresent(Bool.self, forKey: .dailyLevelsKeepTouched) ?? d.dailyLevelsKeepTouched
             showPreviousWeek = try c.decodeIfPresent(Bool.self, forKey: .showPreviousWeek) ?? d.showPreviousWeek
             showPreviousMonth = try c.decodeIfPresent(Bool.self, forKey: .showPreviousMonth) ?? d.showPreviousMonth
             showDayOfWeek = try c.decodeIfPresent(Bool.self, forKey: .showDayOfWeek) ?? d.showDayOfWeek
@@ -552,8 +555,8 @@ public enum KillzonePivots {
     }
 
     /// The high and low of each of the last `dailyLevelDays` finished days (days in
-    /// the indicator's time zone), from the bar that made them to the right edge,
-    /// as long as no later candle traded beyond them.
+    /// the indicator's time zone), from the bar that made them to the right edge;
+    /// once a later candle reaches one it ends at that candle (mitigated).
     static func dailyLevels(_ c: [Candle], config: Config) -> [Level] {
         let zone = TimeZone(identifier: config.timeZoneID) ?? TimeZone(identifier: "America/New_York")!
         let days = ICT.NewYorkClock(time: c.map(\.time), zone: zone).day
@@ -575,16 +578,20 @@ public enum KillzonePivots {
             let bars = range.map { ($0, c[$0]) }
             guard let high = bars.max(by: { $0.1.high < $1.1.high }), let low = bars.min(by: { $0.1.low < $1.1.low }) else { continue }
             let weekday = calendar.component(.weekday, from: c[range.lowerBound].time)
-            if firstBreak(c, price: high.1.high, isHigh: true, from: range.upperBound + 1) == nil {
-                levels.append(Level(kind: .dayHigh(weekday: weekday), price: high.1.high, start: high.0, end: nil,
-                                    label: "", mitigated: false))
-            }
-            if firstBreak(c, price: low.1.low, isHigh: false, from: range.upperBound + 1) == nil {
-                levels.append(Level(kind: .dayLow(weekday: weekday), price: low.1.low, start: low.0, end: nil,
-                                    label: "", mitigated: false))
+            for (isHigh, start, price) in [(true, high.0, high.1.high), (false, low.0, low.1.low)] {
+                let touch = firstTouch(c, price: price, isHigh: isHigh, from: range.upperBound + 1)
+                if touch != nil && !config.dailyLevelsKeepTouched { continue }
+                levels.append(Level(kind: isHigh ? .dayHigh(weekday: weekday) : .dayLow(weekday: weekday), price: price,
+                                    start: start, end: touch, label: "", mitigated: touch != nil))
             }
         }
         return levels
+    }
+
+    /// First bar from `from` that reaches `price`.
+    static func firstTouch(_ c: [Candle], price: Double, isHigh: Bool, from: Int) -> Int? {
+        guard from < c.count else { return nil }
+        return (from..<c.count).first { isHigh ? c[$0].high >= price : c[$0].low <= price }
     }
 
     /// First bar from `from` that trades beyond `price`.

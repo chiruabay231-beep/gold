@@ -252,7 +252,7 @@ final class KillzonePivotsTests: XCTestCase {
         XCTAssertEqual(bounce?.end, 202)
     }
 
-    func testDailyHighsAndLowsUntilSwept() {
+    func testDailyHighsAndLowsStopWhenTouched() {
         // 15-minute bars from Monday 12 Oct 2026 00:00 New York: three days of 96 bars.
         let data = candles { c in
             for j in 0..<c.count { c[j].high = 100.5; c[j].low = 99.5 }
@@ -269,13 +269,23 @@ final class KillzonePivotsTests: XCTestCase {
             if case .dayLow = $0.kind { return true }
             return false
         }
-        // Monday (weekday 2): the high stays, the swept low is gone.
-        XCTAssertTrue(levels.contains { $0.kind == .dayHigh(weekday: 2) && $0.price == 105 && $0.start == 40 && $0.end == nil })
-        XCTAssertFalse(levels.contains { $0.kind == .dayLow(weekday: 2) })
+        // Monday (weekday 2): the high runs on; the low stops at the bar that reached it, dotted.
+        XCTAssertTrue(levels.contains { $0.kind == .dayHigh(weekday: 2) && $0.price == 105 && $0.start == 40 && $0.end == nil && !$0.mitigated })
+        XCTAssertTrue(levels.contains { $0.kind == .dayLow(weekday: 2) && $0.price == 95 && $0.start == 50 && $0.end == 120 && $0.mitigated })
         // Tuesday (weekday 3): both kept; the running Wednesday is not drawn.
         XCTAssertTrue(levels.contains { $0.kind == .dayHigh(weekday: 3) && $0.price == 103 })
         XCTAssertTrue(levels.contains { $0.kind == .dayLow(weekday: 3) && $0.price == 94 })
         XCTAssertFalse(levels.contains { $0.kind == .dayHigh(weekday: 4) })
+        // A touch is enough (no need to trade beyond it).
+        var exact = data
+        exact[160].high = 105
+        XCTAssertTrue(KillzonePivots.compute(candles: exact, barInterval: 900, config: config).levels.contains {
+            $0.kind == .dayHigh(weekday: 2) && $0.end == 160 && $0.mitigated
+        })
+        config.dailyLevelsKeepTouched = false
+        XCTAssertFalse(KillzonePivots.compute(candles: data, barInterval: 900, config: config).levels.contains {
+            $0.kind == .dayLow(weekday: 2)
+        })
         config.showDailyLevels = false
         XCTAssertFalse(KillzonePivots.compute(candles: data, barInterval: 900, config: config).levels.contains {
             if case .dayHigh = $0.kind { return true } else { return false }
