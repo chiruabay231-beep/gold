@@ -575,7 +575,7 @@ struct LiveView: View {
                 .padding(.horizontal, 8)
                 .padding(.vertical, 3)
                 .background(Capsule().fill(theme.grid.opacity(0.9)))
-                .padding(.top, 6)
+                .padding(.top, splitColumns ? 24 : 6)
                 .padding(.trailing, 72)
                 .allowsHitTesting(false)
         }
@@ -622,6 +622,8 @@ struct LiveView: View {
                         framed: true,
                         crosshairMode: crosshairMode,
                         showTimeAxis: timeAxis,
+                        // Side by side: both headers inside, so the two frames make one rectangle.
+                        headerInside: axisLeading,
                         axisLeading: axisLeading,
                         linkedCrosshair: compareMode ? $linkedCrosshairTime : nil,
                         viewport: $viewport)
@@ -1271,9 +1273,10 @@ struct LiveView: View {
     // MARK: - Bottom tool bar
 
     private var bottomBar: some View {
+        // The tools centred in the space right of Bố cục.
         HStack(spacing: 6) {
             layoutButton
-            newsInfo
+            newsInfo.fixedSize()
             Spacer(minLength: 4)
             toolbarButton("backward.end.alt", active: replay.isActive) { toggleReplay() }
             toolbarButton("pencil.tip", active: showDrawingBar) {
@@ -1289,6 +1292,7 @@ struct LiveView: View {
             toolbarButton("arrow.up.left.and.arrow.down.right", active: false) {
                 fullScreen = true
             }
+            Spacer(minLength: 4)
         }
         .padding(.leading, 10)
         .padding(.trailing, 6)
@@ -1332,18 +1336,20 @@ struct LiveView: View {
     /// stacked (chia ngang) or side by side (chia dọc).
     private var layoutButton: some View {
         Menu {
-            Button { compareMode = false } label: {
+            Button { compareMode = false; viewport.rightOffset = 0 } label: {
                 Label("1 biểu đồ", systemImage: compareMode ? "rectangle" : "checkmark")
             }
             Button {
                 compareMode = true
                 splitColumns = false
+                viewport.rightOffset = 0
             } label: {
                 Label("Chia ngang 2 (trên / dưới)", systemImage: compareMode && !splitColumns ? "checkmark" : "rectangle.split.1x2")
             }
             Button {
                 compareMode = true
                 splitColumns = true
+                viewport.rightOffset = 0
             } label: {
                 Label("Chia dọc 2 (trái / phải)", systemImage: compareMode && splitColumns ? "checkmark" : "rectangle.split.2x1")
             }

@@ -312,6 +312,8 @@ struct CandleChart: View {
                     header(layout: layout)
                         .padding(.horizontal, 6)
                         .padding(.leading, axisLeading ? axisWidth : 0)
+                        // Inside the plot: clear of the price axis.
+                        .padding(.trailing, headerInside && !axisLeading ? axisWidth : 0)
                         .padding(.top, 2)
                 }
                 if let point = menuPoint {
