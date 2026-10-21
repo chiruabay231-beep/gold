@@ -6,6 +6,8 @@ import BacktestKit
 struct DatasetInfo: Codable, Identifiable, Hashable {
     enum Source: String, Codable {
         case csv, binance, sample
+        /// Bars from the Exness (MT5) account on the VPS.
+        case exness
     }
 
     var id: UUID
@@ -52,6 +54,7 @@ struct DatasetInfo: Codable, Identifiable, Hashable {
         case .csv: return "CSV"
         case .binance: return "Binance"
         case .sample: return "Mẫu"
+        case .exness: return "Exness"
         }
     }
 }

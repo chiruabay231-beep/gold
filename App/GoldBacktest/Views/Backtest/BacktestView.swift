@@ -14,8 +14,17 @@ struct BacktestRun: Identifiable, Hashable {
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
+/// Backtest: Exness data (MT5 on the VPS) or a saved file, a strategy, capital,
+/// and the rest folded under "Nâng cao".
 struct BacktestView: View {
     @Environment(AppStore.self) private var store
+    @Environment(LiveMarket.self) private var market
+
+    /// "exness" or "file".
+    @AppStorage("backtest.source") private var source = "exness"
+    @AppStorage("backtest.symbol") private var exnessSymbol = ""
+    @AppStorage("backtest.interval") private var exnessInterval = BinanceClient.Interval.m15.rawValue
+    @AppStorage("backtest.days") private var exnessDays = 30
 
     @State private var datasetID: UUID?
     @State private var strategyID: UUID?
@@ -24,9 +33,14 @@ struct BacktestView: View {
     @State private var fromDate = Date()
     @State private var toDate = Date()
     @State private var running = false
+    /// Bars downloaded so far while loading from Exness.
+    @State private var loadedBars: Int?
     @State private var error: String?
     @State private var run: BacktestRun?
     @State private var showingOptimizer = false
+    @State private var showSymbols = false
+    @State private var showParameters = false
+    @State private var showAdvanced = false
 
     struct TimeZoneOption: Identifiable {
         var id: String
@@ -41,49 +55,51 @@ struct BacktestView: View {
         TimeZoneOption(id: "Asia/Tokyo", label: "Tokyo"),
     ]
 
+    static let exnessIntervals: [BinanceClient.Interval] = [.m1, .m5, .m15, .m30, .h1, .h4, .d1]
+    static let dayChoices = [7, 14, 30, 60, 90, 180, 365]
+    /// The VPS sends at most 5000 bars a request; 60 requests at most.
+    static let maxBars = 300_000
+
     private var strategy: StrategyDefinition? { store.strategies.first { $0.id == strategyID } }
-    private var dataset: DatasetInfo? { store.datasets.first { $0.id == datasetID } }
+    private var fromExness: Bool { source == "exness" }
+    private var interval: BinanceClient.Interval { BinanceClient.Interval(rawValue: exnessInterval) ?? .m15 }
+
+    /// The saved file, or the Exness download already made for these choices.
+    private var dataset: DatasetInfo? {
+        if fromExness { return store.datasets.first { $0.source == .exness && $0.name == exnessName } }
+        return store.datasets.first { $0.id == datasetID }
+    }
+
+    private var exnessName: String { "Exness \(exnessSymbol) \(interval.rawValue) \(exnessDays) ngày" }
 
     var body: some View {
         @Bindable var store = store
         Form {
-            Section("Chọn") {
-                DatasetPicker(datasets: store.datasets, selection: $datasetID)
+            dataSection
+
+            Section {
                 Picker("Chiến lược", selection: $strategyID) {
                     Text("Chọn…").tag(UUID?.none)
                     ForEach(store.strategies) { strategy in
                         Text(strategy.name).tag(Optional(strategy.id))
                     }
                 }
-            }
-
-            if let strategy, !strategy.parameters.isEmpty {
-                Section {
-                    ForEach(strategy.parameters) { parameter in
-                        LabeledContent(parameter.name) {
-                            TextField("", value: Binding(
-                                get: { parameterValues[parameter.name] ?? parameter.defaultValue },
-                                set: { parameterValues[parameter.name] = $0 }),
-                                format: .number)
-                                .keyboardType(.numbersAndPunctuation)
-                                .multilineTextAlignment(.trailing)
+                if let strategy, !strategy.parameters.isEmpty {
+                    DisclosureGroup(isExpanded: $showParameters) {
+                        ForEach(strategy.parameters) { parameter in
+                            LabeledContent(parameter.name) {
+                                TextField("", value: Binding(
+                                    get: { parameterValues[parameter.name] ?? parameter.defaultValue },
+                                    set: { parameterValues[parameter.name] = $0 }),
+                                    format: .number)
+                                    .keyboardType(.numbersAndPunctuation)
+                                    .multilineTextAlignment(.trailing)
+                            }
+                            .font(.callout.monospaced())
                         }
-                        .font(.body.monospaced())
-                    }
-                    Button("Về mặc định") { parameterValues = [:] }
-                } header: {
-                    Text("Tham số chiến lược")
-                }
-            }
-
-            if let dataset {
-                Section("Khoảng thời gian") {
-                    Toggle("Giới hạn ngày", isOn: $useDateRange)
-                    if useDateRange {
-                        DatePicker("Từ", selection: $fromDate, in: dataset.start...dataset.end, displayedComponents: .date)
-                        DatePicker("Đến", selection: $toDate, in: dataset.start...dataset.end, displayedComponents: .date)
-                        Text("Dữ liệu trước ngày bắt đầu vẫn được dùng để tính chỉ báo (warm-up).")
-                            .font(.caption).foregroundStyle(.secondary)
+                        Button("Về mặc định") { parameterValues = [:] }
+                    } label: {
+                        LabeledContent("Tham số", value: parameterSummary(strategy))
                     }
                 }
             }
@@ -100,29 +116,22 @@ struct BacktestView: View {
             }
 
             Section {
-                numberRow("Phí % mỗi chiều", $store.config.commissionPercent)
-                numberRow("Phí cố định mỗi chiều", $store.config.commissionPerTrade)
-                numberRow("Trượt giá / spread (giá)", $store.config.slippage)
-            } header: {
-                Text("Chi phí")
-            } footer: {
-                Text("XAUUSD: spread 0.2 tương đương 20 point. Trượt giá được cộng vào giá khớp mỗi chiều.")
-            }
-
-            Section {
-                Toggle("Cho phép Mua", isOn: $store.config.allowLong)
-                Toggle("Cho phép Bán", isOn: $store.config.allowShort)
-                optionalPercentRow("Cắt lỗ mặc định %", $store.config.stopLossPercent)
-                optionalPercentRow("Chốt lời mặc định %", $store.config.takeProfitPercent)
-                Picker("Múi giờ", selection: $store.config.timeZoneIdentifier) {
-                    ForEach(Self.timeZones) { zone in
-                        Text(zone.label).tag(zone.id)
+                DisclosureGroup("Nâng cao: phí, spread, SL/TP, múi giờ", isExpanded: $showAdvanced) {
+                    numberRow("Phí % mỗi chiều", $store.config.commissionPercent)
+                    numberRow("Phí cố định mỗi chiều", $store.config.commissionPerTrade)
+                    numberRow("Spread / trượt giá", $store.config.slippage)
+                    Toggle("Cho phép Mua", isOn: $store.config.allowLong)
+                    Toggle("Cho phép Bán", isOn: $store.config.allowShort)
+                    optionalPercentRow("Cắt lỗ mặc định %", $store.config.stopLossPercent)
+                    optionalPercentRow("Chốt lời mặc định %", $store.config.takeProfitPercent)
+                    Picker("Múi giờ", selection: $store.config.timeZoneIdentifier) {
+                        ForEach(Self.timeZones) { zone in
+                            Text(zone.label).tag(zone.id)
+                        }
                     }
+                    Text("XAUUSD: spread 0.2 = 20 point. SL/TP mặc định chỉ dùng khi chiến lược không tự đặt.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
-            } header: {
-                Text("Quản lý lệnh")
-            } footer: {
-                Text("Cắt lỗ/chốt lời mặc định chỉ dùng khi script không gán long_stop / long_target… Múi giờ áp dụng cho hour, session(), vwap, daily_high().")
             }
 
             if let error {
@@ -135,24 +144,30 @@ struct BacktestView: View {
                 } label: {
                     HStack {
                         Spacer()
-                        if running { ProgressView().padding(.trailing, 6) }
-                        Text(running ? "Đang chạy…" : "Chạy backtest").bold()
+                        if running { ProgressView().tint(.white).padding(.trailing, 6) }
+                        Text(runTitle).bold()
                         Spacer()
                     }
+                    .padding(.vertical, 6)
                 }
-                .disabled(running || strategy == nil || dataset == nil)
+                .buttonStyle(.borderedProminent)
+                .listRowInsets(EdgeInsets())
+                .disabled(running || strategy == nil || !canLoad)
+            }
+            .listRowBackground(Color.clear)
 
+            Section {
                 Button {
                     store.saveConfig()
                     showingOptimizer = true
                 } label: {
-                    HStack {
-                        Spacer()
-                        Label("Tối ưu tham số", systemImage: "slider.horizontal.3")
-                        Spacer()
-                    }
+                    Label("Tối ưu tham số", systemImage: "slider.horizontal.3")
                 }
                 .disabled(running || strategy?.parameters.isEmpty != false || dataset == nil)
+            } footer: {
+                if fromExness, dataset == nil {
+                    Text("Tối ưu tham số dùng dữ liệu đã tải: chạy backtest một lần trước.")
+                }
             }
         }
         .navigationTitle("Backtest")
@@ -176,8 +191,12 @@ struct BacktestView: View {
                 }
             }
         }
+        .sheet(isPresented: $showSymbols) {
+            MT5SymbolSearchView { symbol in exnessSymbol = symbol }
+        }
         .onAppear {
-            if datasetID == nil { datasetID = store.datasets.first?.id }
+            if exnessSymbol.isEmpty { exnessSymbol = market.source == .mt5 ? market.symbol : "XAUUSD" }
+            if datasetID == nil { datasetID = store.datasets.first { $0.source != .exness }?.id ?? store.datasets.first?.id }
             if strategyID == nil { strategyID = store.strategies.first?.id }
         }
         .onChange(of: strategyID) { parameterValues = [:] }
@@ -188,6 +207,105 @@ struct BacktestView: View {
             }
         }
         .onDisappear { store.saveConfig() }
+    }
+
+    // MARK: - Data
+
+    @ViewBuilder
+    private var dataSection: some View {
+        Section {
+            Picker("Nguồn", selection: $source) {
+                Text("Exness").tag("exness")
+                Text("File đã nạp").tag("file")
+            }
+            .pickerStyle(.segmented)
+            if fromExness {
+                if RemoteBotSettings.client() == nil {
+                    Text("Kết nối máy chủ VPS và đăng nhập Exness ở Giao dịch → Đăng nhập.")
+                        .font(.footnote).foregroundColor(.orange)
+                }
+                Button { showSymbols = true } label: {
+                    LabeledContent("Mã", value: exnessSymbol.isEmpty ? "Chọn…" : exnessSymbol)
+                }
+                .foregroundColor(.primary)
+                Picker("Khung", selection: $exnessInterval) {
+                    ForEach(Self.exnessIntervals, id: \.rawValue) { interval in
+                        Text(interval.rawValue).tag(interval.rawValue)
+                    }
+                }
+                Picker("Thời gian", selection: $exnessDays) {
+                    ForEach(Self.dayChoices, id: \.self) { days in Text("\(days) ngày gần nhất").tag(days) }
+                }
+            } else {
+                DatasetPicker(datasets: store.datasets, selection: $datasetID)
+                if let dataset {
+                    Toggle("Giới hạn ngày", isOn: $useDateRange)
+                    if useDateRange {
+                        DatePicker("Từ", selection: $fromDate, in: dataset.start...dataset.end, displayedComponents: .date)
+                        DatePicker("Đến", selection: $toDate, in: dataset.start...dataset.end, displayedComponents: .date)
+                    }
+                }
+                NavigationLink { DatasetListView() } label: {
+                    Label("Nạp / quản lý file dữ liệu", systemImage: "tray.and.arrow.down")
+                }
+            }
+        } header: {
+            Text("Dữ liệu")
+        } footer: {
+            if let loadedBars {
+                Text("Đang tải từ Exness… \(loadedBars.formatted()) nến")
+            } else if let dataset {
+                Text("\(dataset.barCount.formatted()) nến · \(dataset.start.formatted(date: .abbreviated, time: .omitted)) – \(dataset.end.formatted(date: .abbreviated, time: .omitted))"
+                     + (fromExness ? " · tải lúc \(dataset.createdAt.formatted(date: .omitted, time: .shortened))" : ""))
+            } else if fromExness {
+                Text("Nến lấy thẳng từ tài khoản Exness trên VPS khi bấm Chạy backtest.")
+            }
+        }
+    }
+
+    private var canLoad: Bool {
+        fromExness ? RemoteBotSettings.client() != nil && !exnessSymbol.isEmpty : dataset != nil
+    }
+
+    private var runTitle: String {
+        if running { return loadedBars == nil ? "Đang chạy…" : "Đang tải dữ liệu…" }
+        return "Chạy backtest"
+    }
+
+    private func parameterSummary(_ strategy: StrategyDefinition) -> String {
+        strategy.parameters.prefix(4).map { p in
+            let value = parameterValues[p.name] ?? p.defaultValue
+            return value.formatted()
+        }.joined(separator: " · ")
+    }
+
+    /// Exness bars for the chosen symbol, timeframe and days, newest download
+    /// reused for 10 minutes; older pages fetched back to the start date.
+    @MainActor
+    private func exnessDataset() async throws -> DatasetInfo {
+        if let dataset, Date().timeIntervalSince(dataset.createdAt) < 600 { return dataset }
+        guard let client = RemoteBotSettings.client() else {
+            throw RemoteBotClient.ServerError(message: "Chưa kết nối máy chủ VPS.")
+        }
+        let symbol = exnessSymbol, interval = interval, name = exnessName
+        let startDate = Date().addingTimeInterval(-Double(exnessDays) * 86_400)
+        loadedBars = 0
+        defer { loadedBars = nil }
+        // The newest bar is still forming: left out.
+        var bars = Array(try await client.mt5Candles(symbol: symbol, interval: interval, count: 5000).dropLast())
+        loadedBars = bars.count
+        while let first = bars.first, first.time > startDate, bars.count < Self.maxBars {
+            let older = try await client.mt5Candles(symbol: symbol, interval: interval, count: 5000, before: first.time)
+            guard !older.isEmpty else { break }
+            bars = older + bars
+            loadedBars = bars.count
+        }
+        bars.removeAll { $0.time < startDate }
+        guard bars.count > 50 else {
+            throw RemoteBotClient.ServerError(message: "Exness chỉ trả \(bars.count) nến \(symbol) \(interval.rawValue): chọn khung lớn hơn hoặc nhiều ngày hơn.")
+        }
+        for old in store.datasets where old.source == .exness && old.name == name { store.deleteDataset(old.id) }
+        return try store.addDataset(name: name, symbol: symbol, source: .exness, candles: bars)
     }
 
     private var sizingLabel: String {
@@ -227,7 +345,7 @@ struct BacktestView: View {
 
     /// Data cut at the end date, plus the first bar on or after the start date.
     private func sliced(_ data: PriceData) -> (data: PriceData, start: Int) {
-        guard useDateRange else { return (data, 0) }
+        guard useDateRange, !fromExness else { return (data, 0) }
         let endOfDay = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: toDate)) ?? toDate
         let end = data.time.firstIndex { $0 >= endOfDay } ?? data.count
         let start = data.time.firstIndex { $0 >= Calendar.current.startOfDay(for: fromDate) } ?? 0
@@ -237,23 +355,22 @@ struct BacktestView: View {
 
     @MainActor
     private func runBacktest() {
-        guard let strategy, let dataset else { return }
+        guard let strategy else { return }
         error = nil
         store.saveConfig()
-        let data: PriceData
-        do {
-            data = try store.priceData(for: dataset.id)
-        } catch {
-            self.error = error.localizedDescription
-            return
-        }
-        let (input, start) = sliced(data)
         let config = store.config
         let library = store.library
         let values = parameterValues
         running = true
         Task {
             do {
+                let picked: DatasetInfo?
+                if fromExness { picked = try await exnessDataset() } else { picked = dataset }
+                guard let dataset = picked else {
+                    running = false
+                    return
+                }
+                let (input, start) = sliced(try store.priceData(for: dataset.id))
                 let result = try await Task.detached(priority: .userInitiated) {
                     try BacktestEngine.run(strategy: strategy, data: input, config: config, library: library,
                                            parameterValues: values, tradingStart: start)
