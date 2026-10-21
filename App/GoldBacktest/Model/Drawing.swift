@@ -159,6 +159,67 @@ enum LineStyle: String, Codable, CaseIterable {
     }
 }
 
+/// Where a drawing's text sits along it.
+enum TextAlign: String, Codable, CaseIterable {
+    case left, center, right
+
+    var title: String {
+        switch self {
+        case .left: return "Trái"
+        case .center: return "Giữa"
+        case .right: return "Phải"
+        }
+    }
+}
+
+/// One Fibonacci level: shown or not, its value and an optional own colour.
+struct FibLevel: Codable, Hashable, Identifiable {
+    var id = UUID()
+    var value: Double
+    var enabled = true
+    var color: RGBAColor?
+}
+
+/// Fibonacci settings like TradingView's "Fib thoái lui" sheet.
+struct FibSettings: Codable, Hashable {
+    enum Extend: String, Codable, CaseIterable {
+        case none, left, right, both
+        var title: String {
+            switch self {
+            case .none: return "Đừng mở rộng"
+            case .left: return "Sang trái"
+            case .right: return "Sang phải"
+            case .both: return "Cả hai bên"
+            }
+        }
+    }
+
+    var levels: [FibLevel]
+    var showTrendLine = true
+    var extend = Extend.none
+    var background = true
+    var backgroundOpacity = 0.12
+    var reverse = false
+    var showPrices = true
+    var showLevels = true
+    var labelsLeft = true
+    /// One colour for every level (nil = each level's own / the default palette).
+    var singleColor: RGBAColor?
+    /// ICT's OTE zone (0.62–0.79) shaded on a retracement.
+    var oteZone = true
+
+    static func defaults(for tool: DrawingTool) -> FibSettings {
+        if tool == .fibExtension {
+            return FibSettings(levels: [0, 0.618, 1, 1.272, 1.618, 2, 2.618, 3.618].map { FibLevel(value: $0) })
+        }
+        // 1 = first point, 0 = second point; negative = targets beyond the second point.
+        let shown: [Double] = [1, 0.79, 0.705, 0.62, 0.5, 0, -0.27, -0.62, -1]
+        let all: [Double] = [1, 0.886, 0.79, 0.705, 0.62, 0.5, 0.382, 0.236, 0, -0.27, -0.62, -1, -1.618, -2.618]
+        return FibSettings(levels: all.map { FibLevel(value: $0, enabled: shown.contains($0)) },
+                           background: false)
+    }
+}
+
 struct Drawing: Codable, Identifiable, Hashable {
     var id = UUID()
     var tool: DrawingTool
@@ -173,6 +234,12 @@ struct Drawing: Codable, Identifiable, Hashable {
     var customColor: RGBAColor?
     /// Locked drawings can be selected but not moved.
     var locked = false
+    var textAlign = TextAlign.right
+    /// Fibonacci tools: levels and look (nil = defaults).
+    var fib: FibSettings?
+
+    /// The Fibonacci settings in use.
+    var fibSettings: FibSettings { fib ?? FibSettings.defaults(for: tool) }
 
     init(tool: DrawingTool, points: [ChartPoint]) {
         self.tool = tool
@@ -197,6 +264,8 @@ struct Drawing: Codable, Identifiable, Hashable {
         lineStyle = try c.decodeIfPresent(LineStyle.self, forKey: .lineStyle) ?? .solid
         customColor = try c.decodeIfPresent(RGBAColor.self, forKey: .customColor)
         locked = try c.decodeIfPresent(Bool.self, forKey: .locked) ?? false
+        textAlign = try c.decodeIfPresent(TextAlign.self, forKey: .textAlign) ?? .right
+        fib = try c.decodeIfPresent(FibSettings.self, forKey: .fib)
     }
 
     var color: Color { customColor?.color ?? DrawingPalette.colors[colorIndex % DrawingPalette.colors.count] }
@@ -255,18 +324,23 @@ struct DrawingStyle: Codable, Hashable {
     var lineWidth: Double
     var lineStyle: LineStyle
     var riskReward: Double
+    var textAlign: TextAlign?
+    var fib: FibSettings?
 }
 
 extension Drawing {
     var style: DrawingStyle {
         get { DrawingStyle(colorIndex: colorIndex, customColor: customColor, lineWidth: lineWidth, lineStyle: lineStyle,
-                           riskReward: riskReward) }
+                           riskReward: riskReward, textAlign: textAlign, fib: fib) }
         set {
             colorIndex = newValue.colorIndex
             customColor = newValue.customColor
             lineWidth = newValue.lineWidth
             lineStyle = newValue.lineStyle
             riskReward = newValue.riskReward
+            if let align = newValue.textAlign { textAlign = align }
+            // Fibonacci settings only apply between Fibonacci tools.
+            if tool == .fibRetracement || tool == .fibExtension { fib = newValue.fib }
         }
     }
 }

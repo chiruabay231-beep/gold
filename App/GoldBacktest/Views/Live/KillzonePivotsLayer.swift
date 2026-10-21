@@ -212,6 +212,8 @@ struct KillzonePivotsLayer {
                 segment.color = (isHigh ? settings.dayHighColor : settings.dayLowColor).color
                 segment.dash = settings.dayLevelStyle.dash
                 segment.label = "\(isHigh ? "Đỉnh" : "Đáy") \(Self.weekdays[min(max(weekday, 0), 7)])"
+                // In the middle of the line, clear of the pivot labels at the right edge.
+                segment.centerLabel = true
             }
             segments.append(segment)
         }

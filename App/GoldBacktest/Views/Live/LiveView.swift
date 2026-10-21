@@ -76,6 +76,8 @@ struct LiveView: View {
     @AppStorage(DrawingFavorites.onChartKey) private var favoritesOnChart = true
     /// Thước ngắm: the crosshair shows only while this is on.
     @State private var crosshairMode = false
+    /// Crosshair time shared by the two charts of the compare split.
+    @State private var linkedCrosshairTime: Date?
     @State private var activeTool: DrawingTool?
     @State private var selectedDrawingID: UUID?
     @State private var editingTextDrawing: Drawing?
@@ -509,15 +511,17 @@ struct LiveView: View {
         if compareMode {
             GeometryReader { geometry in
                 let wide = geometry.size.width > geometry.size.height * 1.2
-                let layout = wide ? AnyLayout(HStackLayout(spacing: 1)) : AnyLayout(VStackLayout(spacing: 1))
+                // Stacked, the two frames touch: no time axis on the upper chart, the
+                // lower chart's OHLC inside its frame.
+                let layout = wide ? AnyLayout(HStackLayout(spacing: 1)) : AnyLayout(VStackLayout(spacing: 0))
                 layout {
-                    chartPanel
+                    chartPanel(timeAxis: wide)
                     comparisonPanel
                 }
                 .background(theme.grid)
             }
         } else {
-            chartPanel
+            chartPanel(timeAxis: true)
         }
     }
 
@@ -556,6 +560,8 @@ struct LiveView: View {
                             timeZone: ChartTimeZones.zone(timeZoneID),
                             framed: true,
                             crosshairMode: crosshairMode,
+                            headerInside: true,
+                            linkedCrosshair: $linkedCrosshairTime,
                             viewport: comparisonViewport)
             } else {
                 VStack(spacing: 8) {
@@ -587,7 +593,7 @@ struct LiveView: View {
         }
     }
 
-    private var chartPanel: some View {
+    private func chartPanel(timeAxis: Bool) -> some View {
         let settings = killzoneSettings
         let layer = killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
                                         settings: settings, enabled: showKillzonePivots, comparison: smtComparison,
@@ -625,6 +631,8 @@ struct LiveView: View {
                         positionSizing: positionSizing,
                         framed: true,
                         crosshairMode: crosshairMode,
+                        showTimeAxis: timeAxis,
+                        linkedCrosshair: compareMode ? $linkedCrosshairTime : nil,
                         viewport: $viewport)
         }
         .overlay(alignment: .leading) {

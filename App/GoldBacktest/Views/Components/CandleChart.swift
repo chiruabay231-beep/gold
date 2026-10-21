@@ -234,6 +234,13 @@ struct CandleChart: View {
     var framed = false
     /// The crosshair shows only in this mode (Thước ngắm button): a tap places it, a drag moves it.
     var crosshairMode = false
+    /// Off for the upper chart of the compare split, so the two frames touch.
+    var showTimeAxis = true
+    /// The OHLC header drawn over the top of the plot instead of above it.
+    var headerInside = false
+    /// Time of the crosshair shared with another chart (compare split): moving
+    /// it here moves the other chart's vertical line too.
+    var linkedCrosshair: Binding<Date?>? = nil
     @Binding var viewport: ChartViewport
 
     private enum DragMode { case pan, axis, crosshair, moveDrawing, moveHandle, create, priceLine }
@@ -262,9 +269,9 @@ struct CandleChart: View {
     @State private var menuPoint: CGPoint?
 
     private let axisWidth: CGFloat = 66
-    private let timeAxisHeight: CGFloat = 18
+    private var timeAxisHeight: CGFloat { showTimeAxis ? 18 : 0 }
 
-    private var headerHeight: CGFloat { showHeader ? 34 : 4 }
+    private var headerHeight: CGFloat { showHeader && !headerInside ? 34 : (headerInside ? 0 : 4) }
 
     var body: some View {
         GeometryReader { geometry in
@@ -289,6 +296,11 @@ struct CandleChart: View {
             }
             .background(theme.background)
             .contentShape(Rectangle())
+            .onChange(of: crosshair) { _, _ in
+                guard let linked = linkedCrosshair else { return }
+                let time = crosshairIndex(layout: layout, ownOnly: true).map { candles[$0].time }
+                if linked.wrappedValue != time { linked.wrappedValue = time }
+            }
             .modifier(ChartGestures(enabled: interactive) { content in
                 content
                     .simultaneousGesture(dragGesture(layout: layout))
@@ -551,8 +563,10 @@ struct CandleChart: View {
             line.move(to: CGPoint(x: x, y: layout.plot.minY))
             line.addLine(to: CGPoint(x: x, y: layout.volume.maxY))
             context.stroke(line, with: .color(theme.grid), lineWidth: theme.isLight ? 1 : 0.5)
-            context.draw(Text(candles[i].time.formatted(timeFormat)).font(.system(size: 10)).foregroundColor(theme.text),
+            if showTimeAxis {
+                context.draw(Text(candles[i].time.formatted(timeFormat)).font(.system(size: 10)).foregroundColor(theme.text),
                          at: CGPoint(x: x, y: layout.timeAxis.midY), anchor: .center)
+            }
         }
         if framed {
             let frame = CGRect(x: 0.5, y: layout.plot.minY + 0.5, width: layout.axisX - 0.5,
@@ -871,6 +885,14 @@ struct CandleChart: View {
         }
 
         // Crosshair.
+        if crosshair == nil, let index = crosshairIndex(layout: layout) {
+            // The other chart's crosshair: its time as a vertical line here.
+            let x = s.x(index)
+            var path = Path()
+            path.move(to: CGPoint(x: x, y: layout.plot.minY))
+            path.addLine(to: CGPoint(x: x, y: layout.volume.maxY))
+            context.stroke(path, with: .color(theme.text.opacity(0.8)), style: StrokeStyle(lineWidth: 0.7, dash: [3, 3]))
+        }
         if let point = crosshair, let index = crosshairIndex(layout: layout) {
             let x = s.x(index)
             let y = min(max(point.y, layout.plot.minY), layout.plot.maxY)
@@ -888,7 +910,9 @@ struct CandleChart: View {
             if barInterval < 60 { crosshairFormat = crosshairFormat.second(.twoDigits) }
             crosshairFormat.timeZone = timeZone
             let timeText = candles[index].time.formatted(crosshairFormat)
-            let timeBox = CGRect(x: x - 60, y: layout.timeAxis.minY + 1, width: 120, height: 16)
+            // Without a time axis (upper compare chart) the time sits at the bottom of the plot.
+            let timeY = showTimeAxis ? layout.timeAxis.minY + 1 : layout.volume.maxY - 17
+            let timeBox = CGRect(x: x - 60, y: timeY, width: 120, height: 16)
             context.fill(Path(roundedRect: timeBox, cornerRadius: 2), with: .color(theme.crosshairLabel))
             context.draw(Text(timeText).font(.system(size: 10)).foregroundColor(.white),
                          at: CGPoint(x: timeBox.midX, y: timeBox.midY), anchor: .center)
@@ -935,13 +959,12 @@ struct CandleChart: View {
             path.addLine(to: CGPoint(x: layout.axisX, y: p0.y))
             context.stroke(path, with: .color(color), style: stroke)
             axisLabels.append(AxisLabel(price: d.points[0].price, text: Self.format(d.points[0].price, decimals),
-                                        tag: d.text, color: color, textColor: .white))
+                                        tag: "", color: color, textColor: .white))
         case .verticalLine:
             var path = Path()
             path.move(to: CGPoint(x: p0.x, y: layout.plot.minY))
             path.addLine(to: CGPoint(x: p0.x, y: layout.plot.maxY))
             context.stroke(path, with: .color(color), style: stroke)
-            label(d.text, at: CGPoint(x: p0.x + 4, y: layout.plot.minY + 10))
         case .trendLine, .trendRay:
             guard points.count > 1 else { break }
             var end = points[1]
@@ -956,40 +979,14 @@ struct CandleChart: View {
             path.move(to: p0)
             path.addLine(to: end)
             context.stroke(path, with: .color(color), style: stroke)
-            label(d.text, at: CGPoint(x: points[1].x + 6, y: points[1].y))
         case .rectangle:
             guard points.count > 1 else { break }
             let rect = CGRect(x: min(p0.x, points[1].x), y: min(p0.y, points[1].y),
                               width: abs(points[1].x - p0.x), height: abs(points[1].y - p0.y))
             context.fill(Path(rect), with: .color(color.opacity(0.15)))
             context.stroke(Path(rect), with: .color(color), style: stroke)
-            label(d.text, at: CGPoint(x: rect.minX + 4, y: rect.minY + 9))
-        case .fibRetracement:
-            guard points.count > 1 else { break }
-            let left = min(p0.x, points[1].x)
-            let right = max(max(p0.x, points[1].x), left + s.barWidth * 12)
-            if let top = d.fibPrice(0.62), let bottom = d.fibPrice(0.79) {
-                let y1 = s.y(top), y2 = s.y(bottom)
-                let zone = CGRect(x: left, y: min(y1, y2), width: right - left, height: abs(y2 - y1))
-                context.fill(Path(zone), with: .color(DrawingPalette.colors[3].opacity(0.16)))
-            }
-            for level in Drawing.fibLevels {
-                guard let price = d.fibPrice(level) else { continue }
-                let y = s.y(price)
-                let levelColor: Color = level == 0 || level == 1 ? color
-                    : (level < 0 ? theme.up : (level >= 0.62 && level <= 0.79 ? DrawingPalette.colors[3] : color))
-                var path = Path()
-                path.move(to: CGPoint(x: left, y: y))
-                path.addLine(to: CGPoint(x: right, y: y))
-                context.stroke(path, with: .color(levelColor),
-                               style: StrokeStyle(lineWidth: CGFloat(d.lineWidth) * (level == 0.705 ? 0.95 : 0.7), dash: d.lineStyle.dash))
-                let name = level == 0.705 ? "0.705 OTE" : String(format: "%g", level)
-                label("\(name) (\(Self.format(price, decimals)))", at: CGPoint(x: left + 3, y: y - 6), color: levelColor)
-            }
-            var diagonal = Path()
-            diagonal.move(to: p0)
-            diagonal.addLine(to: points[1])
-            context.stroke(diagonal, with: .color(color.opacity(0.6)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+        case .fibRetracement, .fibExtension:
+            drawFib(d, points: points, in: &context, s: s, layout: layout, decimals: decimals, color: color)
         case .priceRange:
             guard points.count > 1 else { break }
             let rect = CGRect(x: min(p0.x, points[1].x), y: min(p0.y, points[1].y),
@@ -1038,25 +1035,6 @@ struct CandleChart: View {
             label(stopText, at: CGPoint(x: left + 4, y: stopY + (stopY < entryY ? 8 : -8)), color: theme.down)
             label("Vào \(Self.format(levels.entry, decimals))", at: CGPoint(x: right - 4, y: entryY - 8), anchor: .trailing,
                   color: theme.primaryText)
-        case .fibExtension:
-            var legs = Path()
-            legs.addLines(points)
-            context.stroke(legs, with: .color(color.opacity(0.6)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-            guard points.count > 2 else { break }
-            let left = points[2].x
-            let right = max(left + s.barWidth * 20, points.map(\.x).max() ?? left)
-            for level in Drawing.fibExtensionLevels {
-                guard let price = d.fibExtensionPrice(level) else { continue }
-                let y = s.y(price)
-                let levelColor = level == 1 || level == 1.618 ? DrawingPalette.colors[3] : color
-                var path = Path()
-                path.move(to: CGPoint(x: left, y: y))
-                path.addLine(to: CGPoint(x: right, y: y))
-                context.stroke(path, with: .color(levelColor),
-                               style: StrokeStyle(lineWidth: CGFloat(d.lineWidth) * (level == 1.618 ? 0.95 : 0.7), dash: d.lineStyle.dash))
-                label("\(String(format: "%g", level)) (\(Self.format(price, decimals)))", at: CGPoint(x: left + 3, y: y - 6),
-                      color: levelColor)
-            }
         case .elliottImpulse, .elliottCorrection:
             var path = Path()
             path.addLines(points)
@@ -1125,21 +1103,23 @@ struct CandleChart: View {
             context.stroke(path, with: .color(color), style: stroke)
             context.stroke(Self.arrowHead(from: points[points.count - 2], to: points[points.count - 1], size: 10 + width * 2),
                            with: .color(color), style: StrokeStyle(lineWidth: width, lineCap: .round))
-            label(d.text, at: CGPoint(x: points[points.count - 1].x + 8, y: points[points.count - 1].y))
         case .ellipse:
             guard points.count > 1 else { break }
             let rect = CGRect(x: min(p0.x, points[1].x), y: min(p0.y, points[1].y),
                               width: abs(points[1].x - p0.x), height: abs(points[1].y - p0.y))
             context.fill(Path(ellipseIn: rect), with: .color(color.opacity(0.15)))
             context.stroke(Path(ellipseIn: rect), with: .color(color), style: stroke)
-            label(d.text, at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
         case .arrowMarker:
             guard points.count > 1 else { break }
             context.fill(Self.arrowShape(from: p0, to: points[1]), with: .color(color))
         case .text:
             let text = d.text.isEmpty ? "Ghi chú" : d.text
+            let anchor: UnitPoint = d.textAlign == .left ? .leading : (d.textAlign == .center ? .center : .trailing)
             context.draw(Text(text).font(.system(size: 12, weight: .medium)).foregroundColor(color),
-                         at: p0, anchor: .leading)
+                         at: p0, anchor: anchor)
+        }
+        if d.tool != .text, !d.text.isEmpty {
+            drawText(of: d, points: points, in: &context, layout: layout, color: color)
         }
         if selected {
             for p in handlePoints(of: d, s: s) {
@@ -1339,6 +1319,138 @@ struct CandleChart: View {
                      at: CGPoint(x: right - 2, y: pocY - 7), anchor: .trailing)
     }
 
+    /// A drawing's text, placed left / centre / right along it (TradingView's text alignment).
+    private func drawText(of d: Drawing, points: [CGPoint], in context: inout GraphicsContext, layout: Layout, color: Color) {
+        guard let p0 = points.first else { return }
+        let text = Text(d.text).font(.system(size: 11, weight: .semibold)).foregroundColor(color)
+        let anchor: UnitPoint = d.textAlign == .left ? .leading : (d.textAlign == .center ? .center : .trailing)
+        func along(_ a: CGFloat, _ b: CGFloat) -> CGFloat {
+            switch d.textAlign {
+            case .left: return a + 4
+            case .center: return (a + b) / 2
+            case .right: return b - 4
+            }
+        }
+        switch d.tool {
+        case .horizontalLine, .horizontalRay:
+            let start = d.tool == .horizontalRay ? p0.x : 0
+            context.draw(text, at: CGPoint(x: along(start, layout.axisX), y: p0.y - 8), anchor: anchor)
+        case .verticalLine:
+            let y: CGFloat
+            switch d.textAlign {
+            case .left: y = layout.plot.minY + 10
+            case .center: y = layout.plot.midY
+            case .right: y = layout.plot.maxY - 10
+            }
+            context.draw(text, at: CGPoint(x: p0.x + 4, y: y), anchor: .leading)
+        case .trendLine, .trendRay, .arrow, .path:
+            guard let last = points.last, points.count > 1 else { return }
+            let t: CGFloat = d.textAlign == .left ? 0 : (d.textAlign == .center ? 0.5 : 1)
+            let point = CGPoint(x: p0.x + (last.x - p0.x) * t, y: p0.y + (last.y - p0.y) * t)
+            context.draw(text, at: CGPoint(x: point.x, y: point.y - 9), anchor: anchor)
+        default:
+            // Boxes and patterns: along the top edge of the shape (inside for boxes).
+            let xs = points.map(\.x), ys = points.map(\.y)
+            guard let minX = xs.min(), let maxX = xs.max(), let minY = ys.min() else { return }
+            let inside = d.tool == .rectangle || d.tool == .ellipse
+            context.draw(text, at: CGPoint(x: along(minX, max(maxX, minX + 40)), y: inside ? minY + 10 : minY - 10),
+                         anchor: anchor)
+        }
+    }
+
+    // MARK: - Fibonacci
+
+    /// Shown levels of a Fibonacci drawing and their prices.
+    private func fibLines(_ d: Drawing) -> [(level: FibLevel, price: Double)] {
+        let f = d.fibSettings
+        return f.levels.filter(\.enabled).compactMap { level in
+            if d.tool == .fibExtension {
+                guard d.points.count > 2 else { return nil }
+                let leg = d.points[1].price - d.points[0].price
+                return (level, d.points[2].price + (f.reverse ? -leg : leg) * level.value)
+            }
+            guard d.points.count > 1 else { return nil }
+            let start = d.points[0].price, end = d.points[1].price
+            let value = f.reverse ? 1 - level.value : level.value
+            return (level, end + (start - end) * value)
+        }
+    }
+
+    /// Left and right ends of the level lines on screen.
+    private func fibSpan(_ d: Drawing, points: [CGPoint], s: Scale, layout: Layout) -> (left: CGFloat, right: CGFloat)? {
+        var left: CGFloat, right: CGFloat
+        if d.tool == .fibExtension {
+            guard points.count > 2 else { return nil }
+            left = points[2].x
+            right = max(left + s.barWidth * 20, points.map(\.x).max() ?? left)
+        } else {
+            guard points.count > 1 else { return nil }
+            left = min(points[0].x, points[1].x)
+            right = max(max(points[0].x, points[1].x), left + s.barWidth * 12)
+        }
+        let extend = d.fibSettings.extend
+        if extend == .left || extend == .both { left = 0 }
+        if extend == .right || extend == .both { right = layout.axisX }
+        return (left, right)
+    }
+
+    private func drawFib(_ d: Drawing, points: [CGPoint], in context: inout GraphicsContext, s: Scale, layout: Layout,
+                         decimals: Int, color: Color) {
+        let f = d.fibSettings
+        if f.showTrendLine, points.count > 1 {
+            var legs = Path()
+            legs.addLines(points)
+            context.stroke(legs, with: .color(color.opacity(0.6)), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+        }
+        guard let span = fibSpan(d, points: points, s: s, layout: layout) else { return }
+        let lines = fibLines(d).sorted { $0.price > $1.price }
+        func levelColor(_ level: FibLevel) -> Color {
+            if let own = level.color { return own.color }
+            if let single = f.singleColor { return single.color }
+            let v = level.value
+            if d.tool == .fibExtension { return v == 1 || v == 1.618 ? DrawingPalette.colors[3] : color }
+            if v == 0 || v == 1 { return color }
+            return v < 0 ? theme.up : (v >= 0.62 && v <= 0.79 ? DrawingPalette.colors[3] : color)
+        }
+        // Background between neighbouring levels, in the upper level's colour.
+        if f.background {
+            for (upper, lower) in zip(lines, lines.dropFirst()) {
+                let y1 = s.y(upper.price), y2 = s.y(lower.price)
+                context.fill(Path(CGRect(x: span.left, y: min(y1, y2), width: span.right - span.left, height: abs(y2 - y1))),
+                             with: .color(levelColor(upper.level).opacity(f.backgroundOpacity)))
+            }
+        }
+        if f.oteZone, d.tool == .fibRetracement, d.points.count > 1 {
+            let start = d.points[0].price, end = d.points[1].price
+            let value = { (v: Double) in end + (start - end) * (f.reverse ? 1 - v : v) }
+            let y1 = s.y(value(0.62)), y2 = s.y(value(0.79))
+            context.fill(Path(CGRect(x: span.left, y: min(y1, y2), width: span.right - span.left, height: abs(y2 - y1))),
+                         with: .color(DrawingPalette.colors[3].opacity(0.16)))
+        }
+        for line in lines {
+            let y = s.y(line.price)
+            let c = levelColor(line.level)
+            var path = Path()
+            path.move(to: CGPoint(x: span.left, y: y))
+            path.addLine(to: CGPoint(x: span.right, y: y))
+            let key = line.level.value == 0.705 || (d.tool == .fibExtension && line.level.value == 1.618)
+            context.stroke(path, with: .color(c),
+                           style: StrokeStyle(lineWidth: CGFloat(d.lineWidth) * (key ? 0.95 : 0.7), dash: d.lineStyle.dash))
+            var parts: [String] = []
+            if f.showLevels {
+                parts.append(line.level.value == 0.705 && d.tool == .fibRetracement ? "0.705 OTE" : String(format: "%g", line.level.value))
+            }
+            if f.showPrices { parts.append("(\(Self.format(line.price, decimals)))") }
+            guard !parts.isEmpty else { continue }
+            let text = Text(parts.joined(separator: " ")).font(.system(size: 10, weight: .semibold)).foregroundColor(c)
+            if f.labelsLeft {
+                context.draw(text, at: CGPoint(x: max(span.left, 0) + 3, y: y - 6), anchor: .leading)
+            } else {
+                context.draw(text, at: CGPoint(x: min(span.right, layout.axisX) - 3, y: y - 6), anchor: .trailing)
+            }
+        }
+    }
+
     // MARK: - Hit testing
 
     private func hitDrawing(at location: CGPoint, layout: Layout) -> Drawing? {
@@ -1373,12 +1485,10 @@ struct CandleChart: View {
                                       width: abs(points[1].x - p0.x), height: abs(points[1].y - p0.y))
                     if rect.insetBy(dx: -tolerance, dy: -tolerance).contains(location) { return d }
                 }
-            case .fibRetracement:
-                if points.count > 1 {
-                    let left = min(p0.x, points[1].x)
-                    let right = max(max(p0.x, points[1].x), left + s.barWidth * 12)
-                    let ys = Drawing.fibLevels.compactMap { d.fibPrice($0) }.map { s.y($0) }
-                    if location.x > left - tolerance, location.x < right + tolerance,
+            case .fibRetracement, .fibExtension:
+                if let span = fibSpan(d, points: points, s: s, layout: layout) {
+                    let ys = fibLines(d).map { s.y($0.price) } + points.map(\.y)
+                    if location.x > span.left - tolerance, location.x < span.right + tolerance,
                        let top = ys.min(), let bottom = ys.max(), location.y > top - tolerance, location.y < bottom + tolerance {
                         return d
                     }
@@ -1390,16 +1500,6 @@ struct CandleChart: View {
                     let top = min(s.y(levels.stop), s.y(levels.target))
                     let bottom = max(s.y(levels.stop), s.y(levels.target))
                     if CGRect(x: left, y: top, width: right - left, height: bottom - top).contains(location) { return d }
-                }
-            case .fibExtension:
-                if points.count > 2 {
-                    let left = points[2].x
-                    let right = max(left + s.barWidth * 20, points.map(\.x).max() ?? left)
-                    let ys = Drawing.fibExtensionLevels.compactMap { d.fibExtensionPrice($0) }.map { s.y($0) } + points.map(\.y)
-                    if location.x > min(left, points.map(\.x).min() ?? left) - tolerance, location.x < right + tolerance,
-                       let top = ys.min(), let bottom = ys.max(), location.y > top - tolerance, location.y < bottom + tolerance {
-                        return d
-                    }
                 }
             case .elliottImpulse, .elliottCorrection, .headShoulders, .trianglePattern, .brush, .arrow, .path:
                 if zip(points, points.dropFirst()).contains(where: { Self.distance(from: location, toSegment: $0, $1) < tolerance }) {
@@ -1523,10 +1623,15 @@ struct CandleChart: View {
 
     // MARK: - Header (OHLC + overlay values)
 
-    private func crosshairIndex(layout: Layout) -> Int? {
-        guard let point = crosshair, !candles.isEmpty else { return nil }
-        let s = scale(layout: layout)
-        return min(max(s.index(atX: point.x), 0), candles.count - 1)
+    /// Bar under the crosshair, or under the other chart's crosshair (compare split).
+    private func crosshairIndex(layout: Layout, ownOnly: Bool = false) -> Int? {
+        guard !candles.isEmpty else { return nil }
+        if let point = crosshair {
+            let s = scale(layout: layout)
+            return min(max(s.index(atX: point.x), 0), candles.count - 1)
+        }
+        guard !ownOnly, let time = linkedCrosshair?.wrappedValue else { return nil }
+        return min(max(Int(index(for: time).rounded()), 0), candles.count - 1)
     }
 
     @ViewBuilder

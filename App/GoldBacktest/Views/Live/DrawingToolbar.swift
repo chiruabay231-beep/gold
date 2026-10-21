@@ -172,9 +172,7 @@ struct DrawingActionsBar: View {
                     }
                     .accessibilityLabel("Vào lệnh demo")
                 }
-                if drawing.tool.isLine || drawing.tool == .text {
-                    Button(action: onEditText) { item { Image(systemName: "textformat") } }
-                }
+                Button(action: onEditText) { item { Image(systemName: "textformat") } }
                 Button {
                     var d = drawing
                     d.locked.toggle()
@@ -278,10 +276,21 @@ struct DrawingSettingsView: View {
                             ForEach(LineStyle.allCases, id: \.self) { Text($0.title).tag($0) }
                         }
                     }
-                    if drawing.tool.isLine || drawing.tool == .text {
-                        TextField("Nhãn / ghi chú", text: $drawing.text)
-                    }
                     Toggle("Khoá (không cho kéo)", isOn: $drawing.locked)
+                }
+
+                Section("Văn bản") {
+                    TextField(drawing.tool == .text ? "Nội dung" : "Văn bản trên hình vẽ", text: $drawing.text, axis: .vertical)
+                        .lineLimit(1...4)
+                    Picker("Căn chữ", selection: $drawing.textAlign) {
+                        ForEach(TextAlign.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
+
+                if drawing.tool == .fibRetracement || drawing.tool == .fibExtension {
+                    FibSettingsSection(fib: Binding(get: { drawing.fibSettings }, set: { drawing.fib = $0 }),
+                                       tool: drawing.tool)
                 }
 
                 Section {
@@ -308,17 +317,28 @@ struct DrawingSettingsView: View {
                         templateName = ""
                         naming = true
                     } label: {
-                        Label("Lưu kiểu này thành mẫu…", systemImage: "square.and.arrow.down")
+                        Label("Lưu dưới dạng…", systemImage: "square.and.arrow.down")
                     }
                     Button {
                         DrawingStyles.setDefault(drawing.style, for: drawing.tool)
                     } label: {
-                        Label("Dùng kiểu này cho hình mới", systemImage: "checkmark.seal")
+                        Label("Lưu làm mặc định cho hình mới", systemImage: "checkmark.seal")
+                    }
+                    Button {
+                        var fresh = Drawing(tool: drawing.tool, points: drawing.points)
+                        if let style = DrawingStyles.defaultStyle(for: drawing.tool) { fresh.style = style }
+                        drawing.style = fresh.style
+                        drawing.fib = fresh.fib
+                    } label: {
+                        Label("Áp dụng mặc định", systemImage: "arrow.uturn.backward")
                     }
                     Button(role: .destructive) {
                         DrawingStyles.setDefault(nil, for: drawing.tool)
+                        let fresh = Drawing(tool: drawing.tool, points: drawing.points)
+                        drawing.style = fresh.style
+                        drawing.fib = nil
                     } label: {
-                        Label("Về kiểu gốc cho hình mới", systemImage: "arrow.counterclockwise")
+                        Label("Về kiểu gốc của app", systemImage: "arrow.counterclockwise")
                     }
                 } header: {
                     Text("Mẫu kiểu \(drawing.tool.title)")
@@ -409,5 +429,77 @@ struct DrawingSettingsView: View {
             .keyboardType(.decimalPad)
             .multilineTextAlignment(.trailing)
             .frame(maxWidth: 140)
+    }
+}
+
+/// TradingView-like Fibonacci settings: trend line, extend, each level (on/off,
+/// value, colour), background, reverse, prices, level values and label side.
+struct FibSettingsSection: View {
+    @Binding var fib: FibSettings
+    let tool: DrawingTool
+
+    var body: some View {
+        Section {
+            Toggle("Đường xu hướng", isOn: $fib.showTrendLine)
+            Picker("Kéo dài", selection: $fib.extend) {
+                ForEach(FibSettings.Extend.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            ForEach($fib.levels) { $level in
+                HStack(spacing: 10) {
+                    Button { level.enabled.toggle() } label: {
+                        Image(systemName: level.enabled ? "checkmark.square.fill" : "square")
+                            .font(.system(size: 20))
+                            .foregroundColor(level.enabled ? .primary : .secondary)
+                    }
+                    .buttonStyle(.plain)
+                    TextField("Mức", value: $level.value, format: .number.precision(.fractionLength(0...4)))
+                        .keyboardType(.numbersAndPunctuation)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+                        .foregroundColor(level.enabled ? .primary : .secondary)
+                    ColorPicker("", selection: Binding(get: { level.color?.color ?? .gray },
+                                                       set: { level.color = RGBAColor($0) }))
+                        .labelsHidden()
+                        .opacity(level.enabled ? 1 : 0.4)
+                }
+            }
+            .onDelete { fib.levels.remove(atOffsets: $0) }
+            Button {
+                fib.levels.append(FibLevel(value: (fib.levels.map(\.value).max() ?? 1) + 0.5))
+            } label: {
+                Label("Thêm mức", systemImage: "plus")
+            }
+        } header: {
+            Text(tool == .fibExtension ? "Các mức mở rộng" : "Các mức Fib")
+        } footer: {
+            Text(tool == .fibExtension ? "Mức tính từ điểm thứ 3 theo độ dài sóng 1→2." : "1 = điểm đầu, 0 = điểm cuối, số âm = mục tiêu vượt điểm cuối. Vuốt trái để xoá một mức.")
+        }
+        Section("Hiển thị") {
+            Toggle(isOn: Binding(get: { fib.singleColor != nil }, set: { fib.singleColor = $0 ? RGBAColor(Color(red: 0.16, green: 0.38, blue: 1)) : nil })) {
+                Text("Sử dụng một màu")
+            }
+            if fib.singleColor != nil {
+                ColorPicker("Màu chung", selection: Binding(get: { fib.singleColor?.color ?? .blue }, set: { fib.singleColor = RGBAColor($0) }))
+            }
+            Toggle("Hình nền", isOn: $fib.background)
+            if fib.background {
+                HStack {
+                    Text("Độ đậm")
+                    Slider(value: $fib.backgroundOpacity, in: 0.03...0.5)
+                }
+            }
+            if tool == .fibRetracement {
+                Toggle("Vùng OTE (0.62–0.79)", isOn: $fib.oteZone)
+            }
+            Toggle("Đảo ngược", isOn: $fib.reverse)
+            Toggle("Các mức giá", isOn: $fib.showPrices)
+            Toggle("Mức độ (giá trị)", isOn: $fib.showLevels)
+            Picker("Nhãn", selection: $fib.labelsLeft) {
+                Text("Bên trái").tag(true)
+                Text("Bên phải").tag(false)
+            }
+            .pickerStyle(.segmented)
+        }
     }
 }
