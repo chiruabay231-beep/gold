@@ -7,8 +7,37 @@ struct AccountSummary: View {
     let floating: Double
     let currency: String
     let rows: [(String, String)]
+    /// Broker account: a seal at the top left (gold = real money, grey = demo);
+    /// tapping it shows the login and server in a small bubble.
+    var account: (isReal: Bool, detail: String)? = nil
+
+    @State private var showDetail = false
 
     var body: some View {
+        summary
+            .overlay(alignment: .topLeading) {
+                if let account {
+                    Button { showDetail = true } label: {
+                        Image(systemName: account.isReal ? "checkmark.seal.fill" : "testtube.2")
+                            .font(.system(size: 17))
+                            .foregroundColor(account.isReal ? Self.gold : .secondary)
+                            .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showDetail) {
+                        Label(account.detail, systemImage: account.isReal ? "checkmark.seal.fill" : "testtube.2")
+                            .font(.footnote)
+                            .padding(12)
+                            .presentationCompactAdaptation(.popover)
+                    }
+                    .accessibilityLabel(account.isReal ? "Tài khoản thật \(account.detail)" : "Tài khoản demo \(account.detail)")
+                }
+            }
+    }
+
+    static let gold = Color(red: 0.85, green: 0.65, blue: 0.13)
+
+    private var summary: some View {
         VStack(spacing: 10) {
             Text(String(format: "%.2f %@", floating, currency))
                 .font(.system(size: 22).monospacedDigit())

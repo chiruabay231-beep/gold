@@ -53,9 +53,8 @@ struct BrokerTradeView: View {
             if let state = mt5.state, state.login != nil {
                 Section {
                     AccountSummary(floating: state.profit ?? state.positions.reduce(0) { $0 + $1.profit },
-                                   currency: state.currency ?? "USD", rows: summaryRows(state))
-                } footer: {
-                    Text("#\(state.login.map { String($0) } ?? "") · \(state.server ?? "")")
+                                   currency: state.currency ?? "USD", rows: summaryRows(state),
+                                   account: (state.mode == "real", "#\(state.login.map { String($0) } ?? "") · \(state.server ?? "")"))
                 }
                 if !state.tradingEnabled {
                     Section {
