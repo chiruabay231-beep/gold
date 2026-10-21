@@ -11,10 +11,6 @@ struct LiveView: View {
     @Environment(BotController.self) private var bot
     @Environment(NewsStore.self) private var news
     @Environment(MT5Trader.self) private var mt5
-    /// A real-money MT5 order waiting for confirmation.
-    @State private var pendingRealOrder: (() -> Void)?
-    /// Real orders confirmed once for this session.
-    @State private var realOrdersConfirmed = false
     @AppStorage("news.vietnamese") private var newsVietnamese = false
     /// Split view: this chart and the correlated market (gold / silver), with SMT on both.
     @AppStorage("live.compare") private var compareMode = false
@@ -160,22 +156,6 @@ struct LiveView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(mt5.lastError ?? "")
-        }
-        .confirmationDialog("Đặt lệnh trên tài khoản THẬT \(mt5.state?.login.map { "#\($0)" } ?? "")?",
-                            isPresented: Binding(get: { pendingRealOrder != nil }, set: { if !$0 { pendingRealOrder = nil } }),
-                            titleVisibility: .visible) {
-            Button("Đặt lệnh", role: .destructive) {
-                pendingRealOrder?()
-                pendingRealOrder = nil
-            }
-            Button("Đặt lệnh và không hỏi lại lần này") {
-                realOrdersConfirmed = true
-                pendingRealOrder?()
-                pendingRealOrder = nil
-            }
-            Button("Huỷ", role: .cancel) { pendingRealOrder = nil }
-        } message: {
-            Text("Lệnh dùng tiền thật trên \(market.symbol).")
         }
         .task(id: "\(market.symbolKey)|\(market.interval.rawValue)|\(compareTarget ?? "")") {
             market.setComparison(symbol: compareTarget)
@@ -875,14 +855,9 @@ struct LiveView: View {
     /// On an MT5 chart orders go to the broker account on the VPS.
     private var tradesMT5: Bool { market.source == .mt5 && !replay.isActive }
 
-    /// Runs an MT5 order, asking first on a real account.
+    /// Runs an MT5 order (no confirmation, also on a real account).
     private func sendMT5(_ order: @escaping () async -> Void) {
-        let run = { Task { await order() } }
-        if mt5.isReal && !realOrdersConfirmed {
-            pendingRealOrder = { _ = run() }
-        } else {
-            _ = run()
-        }
+        Task { await order() }
     }
 
     /// SELL at the bid or BUY at the ask. One-click orders get the automatic
@@ -1045,6 +1020,13 @@ struct LiveView: View {
         for p in mt5.positions(market.symbol) {
             let id = "mpos|\(p.ticket)"
             let side = p.paperSide
+            if let dragged = lineOverrides[id + "|entry"] {
+                // Dragging away from the entry: the SL or TP it will set, live under the finger.
+                let isProfit = (dragged - p.entry) * side.sign > 0
+                lines.append(ChartPriceLine(id: id + "|entry", price: dragged, color: isProfit ? green : red,
+                                            label: "\(isProfit ? "TP" : "SL") \(money(side: side, lots: p.lots, entry: p.entry, price: dragged))",
+                                            dash: [5, 3]))
+            }
             lines.append(ChartPriceLine(id: id + "|entry", price: p.entry, color: side == .long ? blue : red,
                                         label: "\(side == .long ? "BUY" : "SELL") \(QuickTradePanel.lotText(p.lots))\(tag)",
                                         dash: [6, 4], handleFraction: 0.42,

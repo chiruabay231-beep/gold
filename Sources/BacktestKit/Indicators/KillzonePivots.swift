@@ -155,6 +155,9 @@ public enum KillzonePivots {
         public var showVI = true
         public var viCount = 20
         public var viHideTouched = false
+        /// A touched FVG / VI that held (price bounced) stays this many minutes after
+        /// the touch, then goes; one that price trades through goes at once.
+        public var gapKeepMinutes = 15.0
 
         /// Market structure: MSS (break against the trend) and optionally BOS.
         public var showMSS = true
@@ -230,6 +233,7 @@ public enum KillzonePivots {
             showVI = try c.decodeIfPresent(Bool.self, forKey: .showVI) ?? d.showVI
             viCount = try c.decodeIfPresent(Int.self, forKey: .viCount) ?? d.viCount
             viHideTouched = try c.decodeIfPresent(Bool.self, forKey: .viHideTouched) ?? d.viHideTouched
+            gapKeepMinutes = try c.decodeIfPresent(Double.self, forKey: .gapKeepMinutes) ?? d.gapKeepMinutes
             showMSS = try c.decodeIfPresent(Bool.self, forKey: .showMSS) ?? d.showMSS
             showBOS = try c.decodeIfPresent(Bool.self, forKey: .showBOS) ?? d.showBOS
             swingLength = try c.decodeIfPresent(Int.self, forKey: .swingLength) ?? d.swingLength
@@ -641,6 +645,7 @@ public enum KillzonePivots {
         for raw in rawGaps(c, minSize: config.fvgMinSize, displacement: displacement).reversed() {
             let gap = followed(raw, start: raw.start, formed: raw.start + 1, in: c)
             if gap.touched && config.fvgHideFilled { continue }
+            if !stillShown(gap, in: c, keepMinutes: config.gapKeepMinutes) { continue }
             gaps.append(gap)
             if gaps.count == count { break }
         }
@@ -718,10 +723,22 @@ public enum KillzonePivots {
             guard let raw else { continue }
             let gap = followed(raw, start: i - 1, formed: i, in: c)
             if gap.touched && config.viHideTouched { continue }
+            if !stillShown(gap, in: c, keepMinutes: config.gapKeepMinutes) { continue }
             found.append(gap)
             if found.count >= max(config.viCount, 1) { break }
         }
         return found.reversed()
+    }
+
+    /// An untouched gap stays. A touched one stays while price has not traded through
+    /// it (beyond its far edge) and for `keepMinutes` after the touch.
+    static func stillShown(_ gap: FairValueGap, in c: [Candle], keepMinutes: Double) -> Bool {
+        guard gap.touched, gap.end < c.count else { return true }
+        for j in gap.end..<c.count where gap.bullish ? c[j].low < gap.bottom : c[j].high > gap.top {
+            return false
+        }
+        guard let last = c.last else { return true }
+        return last.time.timeIntervalSince(c[gap.end].time) <= keepMinutes * 60
     }
 
     /// The gap placed on the chart bars `c` from `start`, ending at the first bar

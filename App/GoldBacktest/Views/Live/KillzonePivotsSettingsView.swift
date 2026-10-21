@@ -245,6 +245,8 @@ struct KillzonePivotsSettingsView: View {
                 }
                 Toggle("Đường giữa 50% (chữ FVG)", isOn: $settings.config.fvgMidline)
                 Toggle("Ẩn FVG đã bị chạm", isOn: $settings.config.fvgHideFilled)
+                Stepper("Chạm rồi bật ngược: giữ \(Int(settings.config.gapKeepMinutes)) phút",
+                        value: $settings.config.gapKeepMinutes, in: 5...120, step: 5)
                 Stepper("Lọc FVG nhỏ: \(String(format: "%.1f", settings.config.fvgMinSize)) × biên độ nến",
                         value: $settings.config.fvgMinSize, in: 0...2, step: 0.1)
                 Stepper("Giữ \(settings.config.fvgCount) FVG gần nhất", value: $settings.config.fvgCount, in: 5...200, step: 5)
@@ -260,7 +262,7 @@ struct KillzonePivotsSettingsView: View {
         } header: {
             Text("FVG (Fair Value Gap)")
         } footer: {
-            Text("Khoảng trống giữa nến 1 và nến 3: hai đường cạnh và đường giữa có chữ FVG, kéo dài tới khi có nến chạm vào. FVG mạnh: nến giữa là nến đẩy mạnh (thân lớn hơn nhiều lần thân nến trung bình 20 cây trước, cùng chiều khoảng trống); FVG yếu bị lọc. FVG trùng FVG cùng chiều của khung lớn hơn được tô nền. VI: hai nến cùng chiều, thân cách nhau còn râu chồng lên nhau; vẽ nét đứt mảnh, kéo tới khi bị chạm.")
+            Text("Khoảng trống giữa nến 1 và nến 3: hai đường cạnh và đường giữa có chữ FVG, kéo dài tới khi có nến chạm vào. Nến chạm vùng rồi bật ngược: FVG/VI dừng ở nến đó và còn hiện thêm số phút đã chọn (mặc định 15) rồi tắt; nến xuyên qua hết vùng: tắt ngay. FVG mạnh: nến giữa là nến đẩy mạnh (thân lớn hơn nhiều lần thân nến trung bình 20 cây trước, cùng chiều khoảng trống); FVG yếu bị lọc. FVG trùng FVG cùng chiều của khung lớn hơn được tô nền. VI: hai nến cùng chiều, thân cách nhau còn râu chồng lên nhau; vẽ nét đứt mảnh, kéo tới khi bị chạm.")
         }
     }
 

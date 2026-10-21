@@ -185,15 +185,22 @@ final class KillzonePivotsTests: XCTestCase {
         XCTAssertEqual(gap?.end, 287)
         XCTAssertEqual(gap?.touched, false)
 
-        // A wick into the gap ends it at that bar.
+        // A wick into the gap ends it at that bar; it held, so it stays 15 minutes after the touch.
         var touched = data
         touched[150].low = 102.5
-        let ended = KillzonePivots.compute(candles: touched, barInterval: 900, config: config).fvgs.first { $0.start == 101 }
+        XCTAssertNil(KillzonePivots.compute(candles: touched, barInterval: 900, config: config).fvgs.first { $0.start == 101 },
+                     "gone long after the touch")
+        let recent = Array(touched.prefix(151))   // the touch is the last bar
+        let ended = KillzonePivots.compute(candles: recent, barInterval: 900, config: config).fvgs.first { $0.start == 101 }
         XCTAssertEqual(ended?.end, 150)
         XCTAssertEqual(ended?.touched, true)
         XCTAssertEqual(ended?.filled, false)
+        // Traded through: gone at once.
+        var through = recent
+        through[150].low = 100.5
+        XCTAssertNil(KillzonePivots.compute(candles: through, barInterval: 900, config: config).fvgs.first { $0.start == 101 })
         config.fvgHideFilled = true
-        XCTAssertNil(KillzonePivots.compute(candles: touched, barInterval: 900, config: config).fvgs.first { $0.start == 101 })
+        XCTAssertNil(KillzonePivots.compute(candles: recent, barInterval: 900, config: config).fvgs.first { $0.start == 101 })
         config.fvgHideFilled = false
 
         // M1 to D1 by default; not on weekly bars. Still drawn above the killzone limit.
@@ -211,7 +218,7 @@ final class KillzonePivotsTests: XCTestCase {
             c[102].low = 103; c[102].high = 104
             for j in 103..<150 { c[j].low = 104; c[j].high = 105; c[j].open = 104.5; c[j].close = 104.5 }
             // Strong gap: a big up candle 105 → 112.
-            c[150].high = 105.2; c[151].open = 105; c[151].close = 112; c[151].low = 104.9; c[151].high = 112.2
+            c[150].low = 104.9; c[150].high = 105.2; c[151].open = 105; c[151].close = 112; c[151].low = 104.9; c[151].high = 112.2
             c[152].low = 108; c[152].high = 113; c[152].open = 112; c[152].close = 112.5
             for j in 153..<288 { c[j].low = 112; c[j].high = 113; c[j].open = 112.5; c[j].close = 112.5 }
         }
@@ -228,13 +235,21 @@ final class KillzonePivotsTests: XCTestCase {
         vi[200].open = 112.2; vi[200].close = 112.6; vi[200].low = 112.1; vi[200].high = 113
         vi[201].open = 112.9; vi[201].close = 113.5; vi[201].low = 112.8; vi[201].high = 113.6
         config.showVI = true
+        let fresh = KillzonePivots.compute(candles: Array(vi.prefix(202)), barInterval: 900, config: config)
+            .volumeImbalances.first { $0.start == 200 }
+        XCTAssertEqual(fresh?.bullish, true)
+        XCTAssertEqual(fresh?.bottom, 112.6)
+        XCTAssertEqual(fresh?.top, 112.9)
         let imbalance = KillzonePivots.compute(candles: vi, barInterval: 900, config: config).volumeImbalances.first { $0.start == 200 }
-        XCTAssertEqual(imbalance?.bullish, true)
-        XCTAssertEqual(imbalance?.bottom, 112.6)
-        XCTAssertEqual(imbalance?.top, 112.9)
-        // The next bars trade down to 112: touched at bar 202.
-        XCTAssertEqual(imbalance?.touched, true)
-        XCTAssertEqual(imbalance?.end, 202)
+        // Bar 202 trades down to 112, through the whole gap: the VI is gone at once.
+        XCTAssertNil(imbalance)
+        // Only a touch that holds keeps it (for 15 minutes).
+        var held = vi
+        for j in 202..<288 { held[j].low = 112.7; held[j].high = 113.4; held[j].open = 113; held[j].close = 113.1 }
+        let bounce = KillzonePivots.compute(candles: Array(held.prefix(203)), barInterval: 900, config: config)
+            .volumeImbalances.first { $0.start == 200 }
+        XCTAssertEqual(bounce?.touched, true)
+        XCTAssertEqual(bounce?.end, 202)
     }
 
     func testDailyHighsAndLowsUntilSwept() {
