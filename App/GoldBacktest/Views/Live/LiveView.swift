@@ -18,6 +18,8 @@ struct LiveView: View {
     @AppStorage("news.vietnamese") private var newsVietnamese = false
     /// Split view: this chart and the correlated market (gold / silver), with SMT on both.
     @AppStorage("live.compare") private var compareMode = false
+    /// Two charts side by side (chia dọc) instead of stacked (chia ngang).
+    @AppStorage("live.splitColumns") private var splitColumns = false
     @State private var comparisonCache = KillzonePivotsCache()
     @State private var comparisonPriceRange: ClosedRange<Double>?
     @Environment(\.scenePhase) private var scenePhase
@@ -513,9 +515,9 @@ struct LiveView: View {
     private var charts: some View {
         if compareMode {
             GeometryReader { geometry in
-                let wide = geometry.size.width > geometry.size.height * 1.2
-                // Stacked, the two frames touch: no time axis on the upper chart, the
-                // lower chart's OHLC inside its frame.
+                // Bố cục: chia dọc = side by side, chia ngang = stacked. Stacked, the two
+                // frames touch: no time axis on the upper chart, the lower chart's OHLC inside.
+                let wide = splitColumns
                 let layout = wide ? AnyLayout(HStackLayout(spacing: 1)) : AnyLayout(VStackLayout(spacing: 0))
                 layout {
                     chartPanel(timeAxis: wide)
@@ -1283,7 +1285,7 @@ struct LiveView: View {
 
     private var bottomBar: some View {
         HStack(spacing: 6) {
-            compareButton
+            layoutButton
             newsInfo
             Spacer(minLength: 4)
             toolbarButton("backward.end.alt", active: replay.isActive) { toggleReplay() }
@@ -1297,9 +1299,6 @@ struct LiveView: View {
             }
             toolbarButton("function", active: false) { showIndicatorSheet = true }
             toolbarButton("ellipsis", active: false) { showMoreSheet = true }
-            toolbarButton("briefcase", active: !trader.account.positions.isEmpty) {
-                store.selectedTab = .trade
-            }
             toolbarButton("arrow.up.left.and.arrow.down.right", active: false) {
                 fullScreen = true
             }
@@ -1342,14 +1341,29 @@ struct LiveView: View {
         frameCache.clock(date, zone: timeZoneID)
     }
 
-    /// Splits the chart: this market and the correlated one (XAU / XAG), SMT on both.
-    private var compareButton: some View {
-        Button {
-            compareMode.toggle()
+    /// Bố cục: one chart, or two (this market and the correlated one, SMT on both)
+    /// stacked (chia ngang) or side by side (chia dọc).
+    private var layoutButton: some View {
+        Menu {
+            Button { compareMode = false } label: {
+                Label("1 biểu đồ", systemImage: compareMode ? "rectangle" : "checkmark")
+            }
+            Button {
+                compareMode = true
+                splitColumns = false
+            } label: {
+                Label("Chia ngang 2 (trên / dưới)", systemImage: compareMode && !splitColumns ? "checkmark" : "rectangle.split.1x2")
+            }
+            Button {
+                compareMode = true
+                splitColumns = true
+            } label: {
+                Label("Chia dọc 2 (trái / phải)", systemImage: compareMode && splitColumns ? "checkmark" : "rectangle.split.2x1")
+            }
         } label: {
             HStack(spacing: 5) {
-                Image(systemName: compareMode ? "rectangle.split.1x2.fill" : "rectangle.split.1x2")
-                Text("So sánh")
+                Image(systemName: !compareMode ? "rectangle" : (splitColumns ? "rectangle.split.2x1.fill" : "rectangle.split.1x2.fill"))
+                Text("Bố cục")
             }
             .font(.system(size: 12, weight: .semibold))
             .foregroundColor(compareMode ? .white : theme.primaryText)
@@ -1357,7 +1371,6 @@ struct LiveView: View {
             .padding(.vertical, 7)
             .background(RoundedRectangle(cornerRadius: 8).fill(compareMode ? theme.accent : theme.grid.opacity(theme.isLight ? 0.5 : 0.8)))
         }
-        .buttonStyle(.plain)
     }
 
     /// The next red news of the day; tap for the News tab.

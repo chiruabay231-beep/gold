@@ -120,45 +120,49 @@ struct TradeBar: View {
     static let buyColor = Color(red: 0.16, green: 0.45, blue: 0.95)
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             side("SELL", price: bid, color: Self.sellColor, alignment: .leading, action: onSell) { onTicket(.short) }
-            VStack(spacing: 2) {
-                HStack(spacing: 6) {
-                    Button { set(lots - 0.01) } label: { Image(systemName: "chevron.down").frame(width: 26, height: 26) }
+            VStack(spacing: 1) {
+                HStack(spacing: 2) {
+                    Button { set(lots - 0.01) } label: { Image(systemName: "minus").frame(width: 24, height: 24) }
                     Button { showLots = true } label: {
                         Text(QuickTradePanel.lotText(lots))
-                            .font(.system(size: 17, weight: .semibold).monospacedDigit())
+                            .font(.system(size: 15, weight: .semibold).monospacedDigit())
                             .foregroundColor(.primary)
+                            .frame(minWidth: 38)
                     }
                     .popover(isPresented: $showLots) {
                         LotPicker(lots: $lots).presentationCompactAdaptation(.popover)
                     }
-                    Button { set(lots + 0.01) } label: { Image(systemName: "chevron.up").frame(width: 26, height: 26) }
+                    Button { set(lots + 0.01) } label: { Image(systemName: "plus").frame(width: 24, height: 24) }
                 }
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.primary)
+                .font(.system(size: 11, weight: .bold))
+                .foregroundColor(.secondary)
                 Text("Spread \(CandleChart.format(max(0, ask - bid), decimals))")
                     .font(.system(size: 9).monospacedDigit())
                     .foregroundColor(.secondary)
             }
-            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 4)
+            .frame(height: 44)
+            .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
             side("BUY", price: ask, color: Self.buyColor, alignment: .trailing, action: onBuy) { onTicket(.long) }
         }
-        .frame(height: 54)
-        .background(Color(.secondarySystemBackground))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(Color(.systemBackground))
     }
 
     private func side(_ title: String, price: Double, color: Color, alignment: HorizontalAlignment,
                       action: @escaping () -> Void, hold: @escaping () -> Void) -> some View {
-        VStack(alignment: alignment, spacing: 0) {
-            Text(title).font(.system(size: 10, weight: .bold))
-            BigPrice(price: price, decimals: decimals, size: 24)
+        VStack(alignment: alignment, spacing: -1) {
+            Text(title).font(.system(size: 9, weight: .bold)).opacity(0.85)
+            BigPrice(price: price, decimals: decimals, size: 19)
         }
         .foregroundColor(.white)
         .padding(.horizontal, 10)
-        .frame(width: 128, height: 54, alignment: alignment == .leading ? .leading : .trailing)
-        .background(color)
-        .contentShape(Rectangle())
+        .frame(maxWidth: .infinity, minHeight: 44, maxHeight: 44, alignment: alignment == .leading ? .leading : .trailing)
+        .background(color, in: RoundedRectangle(cornerRadius: 10))
+        .contentShape(RoundedRectangle(cornerRadius: 10))
         .onTapGesture { if price > 0 { action() } }
         .onLongPressGesture(minimumDuration: 0.4) { hold() }
     }

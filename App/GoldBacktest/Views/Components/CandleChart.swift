@@ -817,15 +817,6 @@ struct CandleChart: View {
                 context.fill(Path(ellipseIn: dot), with: .color(color))
                 context.stroke(Path(ellipseIn: dot), with: .color(theme.background.opacity(alpha)), lineWidth: 1.2)
             }
-            if line.draggable {
-                // Drag handle: a ring on the line, like MT5's.
-                let center = CGPoint(x: layout.plot.width * line.handleFraction, y: y)
-                let handle = CGRect(x: center.x - 7, y: center.y - 7, width: 14, height: 14)
-                context.fill(Path(ellipseIn: handle), with: .color(theme.background))
-                context.stroke(Path(ellipseIn: handle), with: .color(color), lineWidth: 2.2)
-                let dot = CGRect(x: center.x - 2.5, y: center.y - 2.5, width: 5, height: 5)
-                context.fill(Path(ellipseIn: dot), with: .color(color))
-            }
             axisLabels.append(AxisLabel(price: line.price, text: Self.format(line.price, decimals), tag: "",
                                         color: theme.background, textColor: line.color, border: line.color))
         }
