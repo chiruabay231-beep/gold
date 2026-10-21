@@ -13,6 +13,8 @@ struct SharkFlowPane: View {
     @Binding var height: Double
     /// Price axis width of the main chart.
     var axisWidth: CGFloat = 66
+    /// Side-by-side split: the main chart takes the left half, its price axis on the left.
+    var leftHalf = false
 
     @State private var dragStart: Double?
 
@@ -95,18 +97,19 @@ struct SharkFlowPane: View {
     }
 
     private func draw(in context: inout GraphicsContext, size: CGSize) {
-        let width = max(size.width - axisWidth, 10)
+        let width = max((leftHalf ? size.width / 2 : size.width) - axisWidth, 10)
+        let left: CGFloat = leftHalf ? axisWidth : 0
         let (start, _) = viewport.bounds(total: total)
         let barWidth = width / CGFloat(max(viewport.visibleCount, 1))
-        func x(_ index: Int) -> CGFloat { CGFloat(Double(index) - start + 0.5) * barWidth }
+        func x(_ index: Int) -> CGFloat { left + CGFloat(Double(index) - start + 0.5) * barWidth }
         let range = viewport.range(total: total)
         let mid = size.height / 2
         var zero = Path()
-        zero.move(to: CGPoint(x: 0, y: mid))
-        zero.addLine(to: CGPoint(x: width, y: mid))
+        zero.move(to: CGPoint(x: left, y: mid))
+        zero.addLine(to: CGPoint(x: left + width, y: mid))
         context.stroke(zero, with: .color(theme.grid), lineWidth: 1)
         var plot = context
-        plot.clip(to: Path(CGRect(x: 0, y: 0, width: width, height: size.height)))
+        plot.clip(to: Path(CGRect(x: left, y: 0, width: width, height: size.height)))
         for i in range where i < output.flow.count {
             let value = output.flow[i]
             guard value.isFinite else { continue }
@@ -125,9 +128,10 @@ struct SharkFlowPane: View {
             plot.draw(Text("⚠️").font(.system(size: 10)),
                       at: CGPoint(x: x(d.index), y: d.bullish ? size.height - 8 : 8), anchor: .center)
         }
+        let labelX = leftHalf ? 6 : width + 6
         context.draw(Text("VÀO").font(.system(size: 9)).foregroundColor(theme.text),
-                     at: CGPoint(x: width + 6, y: 8), anchor: .leading)
+                     at: CGPoint(x: labelX, y: 8), anchor: .leading)
         context.draw(Text("RA").font(.system(size: 9)).foregroundColor(theme.text),
-                     at: CGPoint(x: width + 6, y: size.height - 8), anchor: .leading)
+                     at: CGPoint(x: labelX, y: size.height - 8), anchor: .leading)
     }
 }

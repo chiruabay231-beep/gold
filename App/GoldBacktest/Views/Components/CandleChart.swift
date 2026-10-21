@@ -249,6 +249,8 @@ struct CandleChart: View {
     var showTimeAxis = true
     /// The OHLC header drawn over the top of the plot instead of above it.
     var headerInside = false
+    /// Price axis on the left (left chart of the side-by-side split, so the two frames touch).
+    var axisLeading = false
     /// Time of the crosshair shared with another chart (compare split): moving
     /// it here moves the other chart's vertical line too.
     var linkedCrosshair: Binding<Date?>? = nil
@@ -290,13 +292,26 @@ struct CandleChart: View {
                                 headerHeight: headerHeight, showVolume: showVolume)
             ZStack(alignment: .topLeading) {
                 TimelineView(.periodic(from: .now, by: countdownInterval == nil ? 3600 : 1)) { timeline in
-                    Canvas { context, _ in
-                        draw(in: &context, layout: layout, now: timeline.date)
+                    Canvas { context, size in
+                        if axisLeading {
+                            // Same drawing, cut in two: the plot moved right of the axis, the axis on the left.
+                            var plot = context
+                            plot.translateBy(x: axisWidth, y: 0)
+                            plot.clip(to: Path(CGRect(x: 0, y: 0, width: layout.axisX, height: size.height)))
+                            draw(in: &plot, layout: layout, now: timeline.date)
+                            var axis = context
+                            axis.translateBy(x: -layout.axisX, y: 0)
+                            axis.clip(to: Path(CGRect(x: layout.axisX, y: 0, width: axisWidth, height: size.height)))
+                            draw(in: &axis, layout: layout, now: timeline.date, axisOnly: true)
+                        } else {
+                            draw(in: &context, layout: layout, now: timeline.date)
+                        }
                     }
                 }
                 if showHeader {
                     header(layout: layout)
                         .padding(.horizontal, 6)
+                        .padding(.leading, axisLeading ? axisWidth : 0)
                         .padding(.top, 2)
                 }
                 if let point = menuPoint {
@@ -319,7 +334,7 @@ struct CandleChart: View {
                     .simultaneousGesture(crosshairGesture)
                     .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { value in
                         // Double tap on the price axis: back to auto-fit.
-                        if value.location.x > layout.axisX { viewport.manualPriceRange = nil }
+                        if chartLocation(value.location, layout: layout).x > layout.axisX { viewport.manualPriceRange = nil }
                     })
                     .simultaneousGesture(SpatialTapGesture().onEnded { value in
                         handleTap(at: value.location, layout: layout)
@@ -547,7 +562,19 @@ struct CandleChart: View {
         }
     }
 
-    private func draw(in context: inout GraphicsContext, layout: Layout, now: Date) {
+    /// A touch on screen in the chart's own coordinates (plot from x = 0, axis after it).
+    private func chartLocation(_ point: CGPoint, layout: Layout) -> CGPoint {
+        guard axisLeading else { return point }
+        return CGPoint(x: point.x < axisWidth ? layout.axisX + point.x : point.x - axisWidth, y: point.y)
+    }
+
+    /// A finger moving over the plot: shifted only, so passing over the left axis doesn't jump.
+    private func plotLocation(_ point: CGPoint) -> CGPoint {
+        axisLeading ? CGPoint(x: point.x - axisWidth, y: point.y) : point
+    }
+
+    /// `axisOnly`: the pass that only shows the price axis (axis on the left), candles skipped.
+    private func draw(in context: inout GraphicsContext, layout: Layout, now: Date, axisOnly: Bool = false) {
         guard !candles.isEmpty else { return }
         let s = scale(layout: layout)
         let range = viewport.range(total: candles.count)
@@ -595,7 +622,7 @@ struct CandleChart: View {
         drawTimeEvents(in: &context, layout: layout, s: s)
 
         // Session boxes (behind candles).
-        for box in sessionBoxes where box.range.upperBound >= range.lowerBound && box.range.lowerBound < range.upperBound {
+        for box in sessionBoxes where !axisOnly && box.range.upperBound >= range.lowerBound && box.range.lowerBound < range.upperBound {
             let rect = CGRect(x: s.x(box.range.lowerBound) - s.barWidth / 2, y: s.y(box.high),
                               width: s.x(box.range.upperBound) - s.x(box.range.lowerBound) + s.barWidth,
                               height: max(2, s.y(box.low) - s.y(box.high)))
@@ -627,7 +654,7 @@ struct CandleChart: View {
                                  at: CGPoint(x: x + 3, y: layout.plot.minY + 8), anchor: .leading)
             }
         }
-        for segment in segments {
+        for segment in segments where !axisOnly {
             let startX = s.x(segment.start)
             let endX = segment.end.map { s.x($0) } ?? layout.axisX
             guard endX >= 0, startX <= layout.axisX else { continue }
@@ -674,8 +701,10 @@ struct CandleChart: View {
             }
         }
 
-        drawCandles(in: &plotContext, range: range, s: s)
-        drawBubbles(in: &plotContext, range: range, s: s)
+        if !axisOnly {
+            drawCandles(in: &plotContext, range: range, s: s)
+            drawBubbles(in: &plotContext, range: range, s: s)
+        }
 
         // Overlays.
         var axisLabels: [AxisLabel] = []
@@ -1691,12 +1720,13 @@ struct CandleChart: View {
 
     // MARK: - Gestures
 
-    private func handleTap(at location: CGPoint, layout: Layout) {
+    private func handleTap(at screenLocation: CGPoint, layout: Layout) {
+        let location = chartLocation(screenLocation, layout: layout)
         // Taps on the reset menu belong to its buttons; a tap elsewhere closes it.
         if let point = menuPoint {
             let width = layout.axisX + axisWidth, height = layout.timeAxis.maxY
             let center = CGPoint(x: min(max(point.x, 110), width - 110), y: min(max(point.y, 70), height - 70))
-            if CGRect(x: center.x - 105, y: center.y - 100, width: 210, height: 200).contains(location) { return }
+            if CGRect(x: center.x - 105, y: center.y - 100, width: 210, height: 200).contains(screenLocation) { return }
             if Date().timeIntervalSince(pressEndedAt) > 0.3 {
                 menuPoint = nil
                 crosshair = nil
@@ -1763,12 +1793,14 @@ struct CandleChart: View {
     private func dragGesture(layout: Layout) -> some Gesture {
         DragGesture(minimumDistance: 4)
             .onChanged { value in
+                let startLocation = chartLocation(value.startLocation, layout: layout)
+                let location = plotLocation(value.location)
                 if dragMode == nil {
                     let range = currentPriceRange(layout: layout)
-                    if value.startLocation.x > layout.axisX {
+                    if startLocation.x > layout.axisX {
                         dragMode = .axis
                         dragStartRange = range
-                    } else if drawingTool == nil, let line = hitPriceLine(at: value.startLocation, layout: layout) {
+                    } else if drawingTool == nil, let line = hitPriceLine(at: startLocation, layout: layout) {
                         dragMode = .priceLine
                         draggedLine = (line.id, line.price)
                         activeLineGroup = Self.lineGroup(line.id)
@@ -1776,11 +1808,11 @@ struct CandleChart: View {
                     } else if drawingTool != nil {
                         dragMode = .create
                         crosshair = nil
-                    } else if !drawingsLocked, let hit = hitHandle(at: value.startLocation, layout: layout), !hit.0.locked {
+                    } else if !drawingsLocked, let hit = hitHandle(at: startLocation, layout: layout), !hit.0.locked {
                         dragMode = .moveHandle
                         movingOriginal = hit.0
                         handleIndex = hit.1
-                    } else if !drawingsLocked, let id = selectedDrawingID, let hit = hitDrawing(at: value.startLocation, layout: layout),
+                    } else if !drawingsLocked, let id = selectedDrawingID, let hit = hitDrawing(at: startLocation, layout: layout),
                               hit.id == id, !hit.locked {
                         dragMode = .moveDrawing
                         movingOriginal = hit
@@ -1814,43 +1846,43 @@ struct CandleChart: View {
                     movingPreview = moved
                 case .priceLine:
                     guard let line = draggedLine else { return }
-                    let price = scale(layout: layout).price(atY: value.location.y)
+                    let price = scale(layout: layout).price(atY: location.y)
                     draggedLine = (line.id, price)
                     onPriceLineDrag?(line.id, price, false)
                 case .create:
                     guard let tool = drawingTool else { return }
                     if tool == .brush {
                         // Free hand: a point every few pixels.
-                        var stroke = creatingPreview?.points ?? [chartPoint(at: value.startLocation, layout: layout, snap: false)]
+                        var stroke = creatingPreview?.points ?? [chartPoint(at: startLocation, layout: layout, snap: false)]
                         if let last = stroke.last {
                             let p = screenPoint(last, layout: layout)
-                            if hypot(p.x - value.location.x, p.y - value.location.y) > 3 {
-                                stroke.append(chartPoint(at: value.location, layout: layout, snap: false))
+                            if hypot(p.x - location.x, p.y - location.y) > 3 {
+                                stroke.append(chartPoint(at: location, layout: layout, snap: false))
                             }
                         }
                         creatingPreview = Drawing(tool: .brush, points: stroke)
                         guidePoint = nil
                         return
                     }
-                    let end = chartPoint(at: value.location, layout: layout)
+                    let end = chartPoint(at: location, layout: layout)
                     if tool.pointsNeeded == 1 {
                         creatingPreview = makeDrawing(tool, points: [end])
                     } else if tool.isMultiPoint {
                         // One drag per point: from the last placed point to the finger.
-                        let placed = pendingPoints.isEmpty ? [chartPoint(at: value.startLocation, layout: layout)] : pendingPoints
+                        let placed = pendingPoints.isEmpty ? [chartPoint(at: startLocation, layout: layout)] : pendingPoints
                         creatingPreview = makeDrawing(tool, points: placed + [end])
                     } else {
-                        let start = pendingPoints.first ?? chartPoint(at: value.startLocation, layout: layout)
+                        let start = pendingPoints.first ?? chartPoint(at: startLocation, layout: layout)
                         creatingPreview = makeDrawing(tool, points: [start, end])
                     }
                     guidePoint = screenPoint(end, layout: layout)
                 case .moveHandle:
                     guard let original = movingOriginal, let handle = handleIndex else { return }
-                    let point = chartPoint(at: value.location, layout: layout)
+                    let point = chartPoint(at: location, layout: layout)
                     movingPreview = moving(original, handle: handle, to: point)
                     guidePoint = screenPoint(point, layout: layout)
                 case .crosshair:
-                    crosshair = value.location
+                    crosshair = location
                 case .pan:
                     let barWidth = layout.plot.width / CGFloat(max(viewport.visibleCount, 1))
                     let offset = panStartOffset + Double(value.translation.width / barWidth)
@@ -1918,7 +1950,7 @@ struct CandleChart: View {
             .onChanged { value in
                 if crosshairMode, drawingTool == nil, dragMode != .moveHandle, dragMode != .moveDrawing, dragMode != .priceLine,
                    case .second(true, let drag?) = value {
-                    crosshair = drag.location
+                    crosshair = plotLocation(drag.location)
                 }
             }
             .onEnded { value in

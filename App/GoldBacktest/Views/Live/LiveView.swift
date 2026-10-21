@@ -107,7 +107,7 @@ struct LiveView: View {
             charts
             if let flow = sharkFlow, chartCandles.count > 2 {
                 SharkFlowPane(output: flow, viewport: viewport, total: chartCandles.count, theme: theme,
-                              height: $sharkPaneHeight)
+                              height: $sharkPaneHeight, leftHalf: compareMode && splitColumns)
             }
             indicatorPanes
             if showTradeButtons {
@@ -497,11 +497,14 @@ struct LiveView: View {
             GeometryReader { geometry in
                 // Bố cục: chia dọc = side by side, chia ngang = stacked. Stacked, the two
                 // frames touch: no time axis on the upper chart, the lower chart's OHLC inside.
+                // Side by side the left chart has its price axis on the left, so the frames touch in the middle.
                 let wide = splitColumns
-                let layout = wide ? AnyLayout(HStackLayout(spacing: 1)) : AnyLayout(VStackLayout(spacing: 0))
+                let layout = wide ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(VStackLayout(spacing: 0))
                 layout {
-                    chartPanel(timeAxis: wide)
+                    chartPanel(timeAxis: wide, axisLeading: wide)
+                        .frame(width: wide ? geometry.size.width / 2 : nil)
                     comparisonPanel
+                        .frame(width: wide ? geometry.size.width / 2 : nil)
                 }
                 .background(theme.grid)
             }
@@ -578,7 +581,8 @@ struct LiveView: View {
         }
     }
 
-    private func chartPanel(timeAxis: Bool) -> some View {
+    private func chartPanel(timeAxis: Bool, axisLeading: Bool = false) -> some View {
+        let axisInset: CGFloat = axisLeading ? 66 : 0
         let settings = killzoneSettings
         let layer = killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
                                         settings: settings, enabled: showKillzonePivots, comparison: smtComparison,
@@ -618,6 +622,7 @@ struct LiveView: View {
                         framed: true,
                         crosshairMode: crosshairMode,
                         showTimeAxis: timeAxis,
+                        axisLeading: axisLeading,
                         linkedCrosshair: compareMode ? $linkedCrosshairTime : nil,
                         viewport: $viewport)
         }
@@ -634,14 +639,14 @@ struct LiveView: View {
                     showDrawingBar = false
                     activeTool = nil
                 }
-                .padding(.leading, 6)
+                .padding(.leading, 6 + axisInset)
             }
         }
         .overlay(alignment: .topLeading) {
             // Bản vẽ → Hiển thị mục yêu thích trên Biểu đồ.
             if favoritesOnChart, !showDrawingBar {
                 FavoriteToolsBar(activeTool: $activeTool, crosshair: $crosshairMode, theme: theme) { showDrawingTools = true }
-                    .padding(.leading, 6)
+                    .padding(.leading, 6 + axisInset)
                     .padding(.top, 40)
             }
         }
@@ -650,7 +655,7 @@ struct LiveView: View {
                 KillzoneRangeTable(layer: layer, settings: settings,
                                    decimals: priceDecimals ?? CandleChart.decimals(for: chartCandles.last?.close ?? 1),
                                    theme: theme)
-                    .padding(.trailing, 72)
+                    .padding(.trailing, axisLeading ? 6 : 72)
                     .padding(.top, 40)
                     .allowsHitTesting(false)
             }

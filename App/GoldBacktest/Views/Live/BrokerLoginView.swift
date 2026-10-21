@@ -1,15 +1,15 @@
 import SwiftUI
 import BacktestKit
 
-/// "Giao dịch" tab: the in-app demo account, the broker (MT5) account, and
-/// logging in to brokers, each on its own page.
+/// "Giao dịch" tab: copy trade, the broker (MT5) account, and logging in to
+/// brokers, each on its own page. The in-app demo account is under the Sàn menu.
 struct TradeRootView: View {
     @AppStorage("trade.page") private var page = 0
 
     var body: some View {
         VStack(spacing: 0) {
             Picker("Trang", selection: $page) {
-                Text("Demo").tag(0)
+                Text("Copy trade").tag(0)
                 Text("Sàn (MT5)").tag(1)
                 Text("Đăng nhập").tag(2)
             }
@@ -17,7 +17,7 @@ struct TradeRootView: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 8)
             switch page {
-            case 0: TradePanelView()
+            case 0: CopyTradeView()
             case 1: BrokerTradeView(page: $page)
             default: BrokerLoginView()
             }
@@ -35,7 +35,6 @@ struct BrokerTradeView: View {
     @Environment(LiveMarket.self) private var market
     @State private var closing: MT5TradingState.Position?
     @State private var showSymbols = false
-    @State private var showCopy = false
 
     var body: some View {
         List {
@@ -56,7 +55,7 @@ struct BrokerTradeView: View {
                     AccountSummary(floating: state.profit ?? state.positions.reduce(0) { $0 + $1.profit },
                                    currency: state.currency ?? "USD", rows: summaryRows(state))
                 } footer: {
-                    Text("#\(state.login.map { String($0) } ?? "") · \(state.server ?? "") · \(state.mode == "real" ? "TIỀN THẬT" : "demo")")
+                    Text("#\(state.login.map { String($0) } ?? "") · \(state.server ?? "")")
                 }
                 if !state.tradingEnabled {
                     Section {
@@ -104,7 +103,12 @@ struct BrokerTradeView: View {
                     Button { showSymbols = true } label: { Label("Mở biểu đồ để giao dịch…", systemImage: "chart.xyaxis.line") }
                     Button { Task { await mt5.refresh() } } label: { Label("Làm mới", systemImage: "arrow.clockwise") }
                     Button { page = 2 } label: { Label("Tài khoản & quyền đặt lệnh…", systemImage: "person.badge.key") }
-                    Button { showCopy = true } label: { Label("Copy trade…", systemImage: "doc.on.doc") }
+                    Button { page = 0 } label: { Label("Copy trade…", systemImage: "doc.on.doc") }
+                    NavigationLink {
+                        TradePanelView()
+                    } label: {
+                        Label("Tài khoản demo trong app…", systemImage: "briefcase")
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -112,7 +116,6 @@ struct BrokerTradeView: View {
         }
         .task { await mt5.watch() }
         .refreshable { await mt5.refresh() }
-        .navigationDestination(isPresented: $showCopy) { CopyTradeView() }
 
         .sheet(isPresented: $showSymbols) {
             MT5SymbolSearchView { symbol in
@@ -129,7 +132,7 @@ struct BrokerTradeView: View {
             }
         } message: {
             if let p = closing {
-                Text("Vào \(Self.price(p.entry)) · SL \(p.stop.map(Self.price) ?? "–") · TP \(p.target.map(Self.price) ?? "–") · lãi/lỗ \(String(format: "%+.2f", p.profit))\(mt5.isReal ? " · TIỀN THẬT" : "")")
+                Text("Vào \(Self.price(p.entry)) · SL \(p.stop.map(Self.price) ?? "–") · TP \(p.target.map(Self.price) ?? "–") · lãi/lỗ \(String(format: "%+.2f", p.profit))")
             }
         }
         .alert("Lệnh MT5", isPresented: Binding(get: { mt5.lastError != nil }, set: { if !$0 { mt5.lastError = nil } })) {
@@ -199,13 +202,6 @@ struct BrokerLoginView: View {
                 accountsSection
                 loginSection
                 if current != nil { tradingSection }
-                Section {
-                    NavigationLink { CopyTradeView() } label: {
-                        Label("Copy trade sang tài khoản khác", systemImage: "doc.on.doc")
-                    }
-                } footer: {
-                    Text("Một lệnh trên tài khoản đang dùng được mở trên nhiều tài khoản MT5 khác.")
-                }
             }
             vpsSection
         }

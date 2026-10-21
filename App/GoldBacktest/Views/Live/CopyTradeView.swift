@@ -26,12 +26,6 @@ struct CopyTradeView: View {
         }
         .navigationTitle("Copy trade")
         .navigationBarTitleDisplayMode(.inline)
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { editing = CopyFollowerDraft() } label: { Image(systemName: "plus") }
-                    .disabled(RemoteBotSettings.client() == nil || outdated)
-            }
-        }
         .task {
             while !Task.isCancelled {
                 await refresh()
@@ -56,7 +50,7 @@ struct CopyTradeView: View {
             Button("Bật copy") { Task { await perform { try await $0.copySettings(enabled: true) } } }
         } message: {
             Text("Từ bây giờ mọi lệnh mới trên tài khoản chính được mở trên các tài khoản copy đang bật"
-                 + (status?.followers.contains { $0.allowReal && $0.enabled } == true ? ", có cả tài khoản TIỀN THẬT." : "."))
+                 + (status?.followers.contains { $0.allowReal && $0.enabled } == true ? ", có cả tài khoản thật." : "."))
         }
         .alert("Copy trade", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK", role: .cancel) {}
@@ -67,83 +61,83 @@ struct CopyTradeView: View {
 
     // MARK: - Sections
 
+    /// One line: on/off and where the orders come from.
     private var mainSection: some View {
         Section {
-            Toggle(isOn: Binding(get: { status?.enabled ?? false }, set: { on in
-                if on { confirmEnable = true } else { Task { await perform { try await $0.copySettings(enabled: false) } } }
-            })) {
-                Label("Copy trade", systemImage: "doc.on.doc")
-            }
-            .disabled(status == nil || busy)
-            if let m = status?.master {
-                if m.connected == true, let login = m.login {
-                    LabeledContent("Tài khoản chính", value: "#\(login) · \(m.server ?? "")")
-                    LabeledContent("Lệnh đang mở", value: "\(m.positions ?? 0)")
-                } else if status?.enabled == true {
-                    Text(m.error ?? "Đang đọc tài khoản chính…").font(.footnote).foregroundColor(.orange)
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Copy trade").font(.headline)
+                    Text(summary).font(.caption).foregroundColor(.secondary)
                 }
+                Spacer()
+                Toggle("Copy trade", isOn: Binding(get: { status?.enabled ?? false }, set: { on in
+                    if on { confirmEnable = true } else { Task { await perform { try await $0.copySettings(enabled: false) } } }
+                }))
+                .labelsHidden()
+                .disabled(status == nil || busy)
+            }
+            if status?.enabled == true, let m = status?.master, m.connected != true {
+                Text(m.error ?? "Đang đọc tài khoản chính…").font(.caption).foregroundColor(.orange)
             }
         } footer: {
-            Text("Tài khoản chính là tài khoản MT5 đang đăng nhập ở trang Đăng nhập. Mọi lệnh mới của nó (đặt từ app, bot hay MT5) được mở trên các tài khoản copy, SL/TP sửa theo, đóng cùng lúc. Lệnh đã mở trước khi bật copy không được copy.")
+            Text("Lệnh mới của tài khoản chính (app, bot hay MT5) được mở trên các tài khoản copy, SL/TP và đóng theo.")
         }
+    }
+
+    private var summary: String {
+        let followers = status?.followers.filter(\.enabled).count ?? 0
+        if let m = status?.master, m.connected == true, let login = m.login {
+            return "Từ #\(login) → \(followers) tài khoản · \(m.positions ?? 0) lệnh mở"
+        }
+        return "Tài khoản chính: MT5 đang đăng nhập · \(followers) tài khoản copy"
     }
 
     private var followersSection: some View {
         Section {
-            if let followers = status?.followers, !followers.isEmpty {
-                ForEach(followers) { f in
-                    Button { editing = CopyFollowerDraft(f) } label: { followerRow(f) }
-                        .swipeActions {
-                            Button("Xoá", role: .destructive) { removing = f }
-                            if (f.status?.positions ?? 0) > 0 {
-                                Button("Đóng lệnh") {
-                                    Task { await perform { try await $0.copyCloseAll(id: f.id) } }
-                                }
-                                .tint(.orange)
+            ForEach(status?.followers ?? []) { f in
+                Button { editing = CopyFollowerDraft(f) } label: { followerRow(f) }
+                    .swipeActions {
+                        Button("Xoá", role: .destructive) { removing = f }
+                        if (f.status?.positions ?? 0) > 0 {
+                            Button("Đóng lệnh") {
+                                Task { await perform { try await $0.copyCloseAll(id: f.id) } }
                             }
+                            .tint(.orange)
                         }
-                }
-            } else {
-                Button { editing = CopyFollowerDraft() } label: {
-                    Label("Thêm tài khoản copy", systemImage: "plus.circle.fill")
-                }
+                    }
+            }
+            Button { editing = CopyFollowerDraft() } label: {
+                Label("Thêm tài khoản copy", systemImage: "plus.circle")
             }
         } header: {
             Text("Tài khoản copy")
         } footer: {
-            Text("Mỗi tài khoản copy chạy một MT5 riêng trên VPS (app tự sao chép MT5 đã cài), tốn khoảng 200–300 MB RAM mỗi tài khoản. Chạm để sửa, vuốt trái để xoá.")
+            Text("Chạm để sửa, vuốt trái để xoá hoặc đóng lệnh.")
         }
     }
 
     private func followerRow(_ f: CopyTradeStatus.Follower) -> some View {
         let s = f.status
         let connected = s?.connected == true && f.enabled
-        return HStack(alignment: .top) {
+        return HStack(spacing: 10) {
             Circle()
                 .fill(!f.enabled ? Color.gray : (connected && (s?.error ?? "").isEmpty ? Color.green : Color.orange))
-                .frame(width: 9, height: 9)
-                .padding(.top, 6)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(f.title).font(.headline).foregroundColor(.primary)
-                    if s?.mode == "real" {
-                        Text("THẬT").font(.caption2.bold()).foregroundColor(.white)
-                            .padding(.horizontal, 4).background(Color.red, in: Capsule())
-                    }
-                }
-                Text("#\(f.login) · \(f.server)").font(.caption).foregroundColor(.secondary)
-                Text(f.fixedLots > 0 ? "Lot cố định \(Self.lots(f.fixedLots))" : "Lot × \(Self.lots(f.multiplier))"
-                     + " · tối đa \(Self.lots(f.maxLots))")
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(f.title).font(.system(size: 16, weight: .semibold)).foregroundColor(.primary)
+                Text("#\(f.login) · \(f.server) · "
+                     + (f.fixedLots > 0 ? "\(Self.lots(f.fixedLots)) lot" : "× \(Self.lots(f.multiplier))"))
                     .font(.caption).foregroundColor(.secondary)
+                    .lineLimit(1)
                 if let error = s?.error, !error.isEmpty {
-                    Text(error).font(.caption).foregroundColor(.orange)
+                    Text(error).font(.caption).foregroundColor(.orange).lineLimit(2)
                 }
             }
             Spacer()
             if connected, let balance = s?.balance {
                 VStack(alignment: .trailing, spacing: 2) {
-                    Text(String(format: "%.2f %@", balance, s?.currency ?? "")).font(.subheadline.monospacedDigit())
-                    Text("\(s?.positions ?? 0) lệnh · \(String(format: "%+.2f", s?.profit ?? 0))")
+                    Text(String(format: "%.2f", balance)).font(.subheadline.monospacedDigit()).foregroundColor(.primary)
+                    Text(String(format: "%+.2f", s?.profit ?? 0))
                         .font(.caption.monospacedDigit())
                         .foregroundColor((s?.profit ?? 0) >= 0 ? OrderRow.profitColor : OrderRow.lossColor)
                 }
@@ -151,18 +145,30 @@ struct CopyTradeView: View {
         }
     }
 
+    /// The latest few; the rest one tap away.
     private var eventsSection: some View {
-        Section("Hoạt động") {
-            if (status?.events ?? []).isEmpty {
+        let events = status?.events ?? []
+        return Section("Hoạt động") {
+            if events.isEmpty {
                 Text("Chưa có").foregroundColor(.secondary)
             }
-            ForEach(status?.events ?? []) { e in
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(e.text).font(.subheadline)
-                    Text(Date(timeIntervalSince1970: e.time).formatted(date: .omitted, time: .standard))
-                        .font(.caption2).foregroundColor(.secondary)
+            ForEach(events.prefix(4)) { e in eventRow(e) }
+            if events.count > 4 {
+                NavigationLink("Xem tất cả · \(events.count)") {
+                    List(events) { e in eventRow(e) }
+                        .navigationTitle("Hoạt động copy")
+                        .navigationBarTitleDisplayMode(.inline)
                 }
             }
+        }
+    }
+
+    private func eventRow(_ e: CopyTradeStatus.Event) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(e.text).font(.footnote)
+            Spacer()
+            Text(Date(timeIntervalSince1970: e.time).formatted(date: .omitted, time: .shortened))
+                .font(.caption2).foregroundColor(.secondary)
         }
     }
 
@@ -240,7 +246,7 @@ struct CopyFollowerForm: View {
                 } header: {
                     Text("Tài khoản copy")
                 } footer: {
-                    Text("Cần mật khẩu chính (mật khẩu investor không đặt lệnh được). Mật khẩu chỉ lưu trên VPS của bạn.")
+                    Text("Mật khẩu chính (không phải investor), chỉ lưu trên VPS của bạn.")
                 }
 
                 Section {
@@ -256,29 +262,29 @@ struct CopyFollowerForm: View {
                         Stepper("Hệ số × \(CopyTradeView.lots(draft.multiplier))", value: $draft.multiplier, in: 0.1...20, step: 0.1)
                     }
                     Stepper("Tối đa \(CopyTradeView.lots(draft.maxLots)) lot / lệnh", value: $draft.maxLots, in: 0.01...100, step: 0.01)
-                    Toggle("Cho phép tài khoản THẬT", isOn: Binding(get: { draft.allowReal }, set: { on in
+                    Toggle("Cho phép tài khoản thật", isOn: Binding(get: { draft.allowReal }, set: { on in
                         if on { confirmReal = true } else { draft.allowReal = false }
                     }))
                     .tint(.red)
                 } header: {
                     Text("Lệnh")
                 } footer: {
-                    Text("Ví dụ hệ số 2: lệnh chính 0.05 lot → tài khoản này 0.10 lot (không quá mức tối đa). Tài khoản thật bị bỏ qua nếu chưa bật cho phép.")
+                    Text("Hệ số 2: lệnh chính 0.05 lot → 0.10 lot (không quá mức tối đa).")
                 }
 
                 Section {
-                    TextField("XAUUSDm=XAUUSD", text: $draft.symbolMap, axis: .vertical)
-                        .font(.body.monospaced())
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .lineLimit(1...5)
-                    TextField("Đường dẫn terminal64.exe (để trống = tự sao chép MT5)", text: $draft.path)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                } header: {
-                    Text("Nâng cao")
+                    DisclosureGroup("Nâng cao") {
+                        TextField("Đổi tên mã, vd XAUUSDm=XAUUSD", text: $draft.symbolMap, axis: .vertical)
+                            .font(.body.monospaced())
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .lineLimit(1...5)
+                        TextField("terminal64.exe riêng (trống = tự sao chép MT5)", text: $draft.path)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                    }
                 } footer: {
-                    Text("Đổi tên mã: mỗi dòng 'mã chính=mã copy' khi hai tài khoản đặt tên khác nhau. Mặc định tự tìm (XAUUSDm ↔ XAUUSD ↔ XAUUSD.r). Đường dẫn MT5: chỉ cần khi muốn dùng một MT5 riêng đã cài (vd sàn khác).")
+                    Text("Mã tự khớp (XAUUSDm ↔ XAUUSD ↔ XAUUSD.r); chỉ đổi khi hai sàn đặt tên khác hẳn.")
                 }
             }
             .navigationTitle(draft.id == nil ? "Thêm tài khoản copy" : "Sửa tài khoản copy")
@@ -294,7 +300,7 @@ struct CopyFollowerForm: View {
                     }
                 }
             }
-            .confirmationDialog("Copy vào tài khoản TIỀN THẬT?", isPresented: $confirmReal, titleVisibility: .visible) {
+            .confirmationDialog("Copy vào tài khoản thật?", isPresented: $confirmReal, titleVisibility: .visible) {
                 Button("Cho phép tài khoản thật", role: .destructive) { draft.allowReal = true }
             } message: {
                 Text("Mọi lệnh của tài khoản chính sẽ được mở bằng tiền thật trên tài khoản này. Hãy thử với tài khoản demo trước.")

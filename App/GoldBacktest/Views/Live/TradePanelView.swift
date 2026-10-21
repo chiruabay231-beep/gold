@@ -11,7 +11,7 @@ struct AccountSummary: View {
     var body: some View {
         VStack(spacing: 10) {
             Text(String(format: "%.2f %@", floating, currency))
-                .font(.system(size: 30, weight: .bold).monospacedDigit())
+                .font(.system(size: 22).monospacedDigit())
                 .foregroundColor(floating >= 0 ? OrderRow.profitColor : OrderRow.lossColor)
                 .frame(maxWidth: .infinity)
             ForEach(rows.indices, id: \.self) { i in
@@ -58,7 +58,7 @@ struct OrderRow: View {
     }
 }
 
-/// "Demo" page of the Giao dịch tab: the in-app demo account, laid out like
+/// The in-app demo account (Giao dịch → Sàn → •••), laid out like
 /// a broker app (summary, open positions, pending orders, history).
 struct TradePanelView: View {
     @Environment(PaperTrader.self) private var trader
