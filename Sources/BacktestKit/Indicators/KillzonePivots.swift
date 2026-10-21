@@ -102,6 +102,10 @@ public enum KillzonePivots {
         public var cutoffHour = 15.0
 
         public var showPreviousDay = false
+        /// High and low of each of the last days, kept while no candle has
+        /// traded through them (a swept one is no longer drawn).
+        public var showDailyLevels = true
+        public var dailyLevelDays = 5
         public var showPreviousWeek = false
         public var showPreviousMonth = false
         public var showDayOfWeek = false
@@ -202,6 +206,8 @@ public enum KillzonePivots {
             cutoffEnabled = try c.decodeIfPresent(Bool.self, forKey: .cutoffEnabled) ?? d.cutoffEnabled
             cutoffHour = try c.decodeIfPresent(Double.self, forKey: .cutoffHour) ?? d.cutoffHour
             showPreviousDay = try c.decodeIfPresent(Bool.self, forKey: .showPreviousDay) ?? d.showPreviousDay
+            showDailyLevels = try c.decodeIfPresent(Bool.self, forKey: .showDailyLevels) ?? d.showDailyLevels
+            dailyLevelDays = try c.decodeIfPresent(Int.self, forKey: .dailyLevelDays) ?? d.dailyLevelDays
             showPreviousWeek = try c.decodeIfPresent(Bool.self, forKey: .showPreviousWeek) ?? d.showPreviousWeek
             showPreviousMonth = try c.decodeIfPresent(Bool.self, forKey: .showPreviousMonth) ?? d.showPreviousMonth
             showDayOfWeek = try c.decodeIfPresent(Bool.self, forKey: .showDayOfWeek) ?? d.showDayOfWeek
@@ -254,6 +260,8 @@ public enum KillzonePivots {
             case midpoint(session: Int)
             case open(mark: Int)
             case previousDay, previousWeek, previousMonth
+            /// High / low of one finished day; weekday 1 = Sunday … 7 = Saturday.
+            case dayHigh(weekday: Int), dayLow(weekday: Int)
         }
 
         public var kind: Kind
@@ -373,6 +381,10 @@ public enum KillzonePivots {
         }
         if config.showMSS || config.showBOS {
             output.breaks = structureBreaks(candles, config: config)
+        }
+        // Day highs/lows on intraday charts, whatever the killzone timeframe limit.
+        if config.showDailyLevels, barInterval < 86_400 {
+            output.levels += dailyLevels(candles, config: config)
         }
         guard barInterval <= config.timeframeLimitMinutes * 60 else {
             output.hiddenByTimeframe = true
@@ -533,6 +545,42 @@ public enum KillzonePivots {
         }
         output.sweeps = Array(output.sweeps.sorted { $0.index < $1.index }.suffix(max(config.sweepCount, 1)))
         return output
+    }
+
+    /// The high and low of each of the last `dailyLevelDays` finished days (days in
+    /// the indicator's time zone), from the bar that made them to the right edge,
+    /// as long as no later candle traded beyond them.
+    static func dailyLevels(_ c: [Candle], config: Config) -> [Level] {
+        let zone = TimeZone(identifier: config.timeZoneID) ?? TimeZone(identifier: "America/New_York")!
+        let days = ICT.NewYorkClock(time: c.map(\.time), zone: zone).day
+        guard let today = days.last else { return [] }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        // Bars of each day, newest first, the running day left out.
+        var ranges: [(day: Int, range: ClosedRange<Int>)] = []
+        var end = c.count - 1
+        while end >= 0, days[end] == today { end -= 1 }
+        while end >= 0, ranges.count < max(config.dailyLevelDays, 1) {
+            var start = end
+            while start > 0, days[start - 1] == days[end] { start -= 1 }
+            ranges.append((days[end], start...end))
+            end = start - 1
+        }
+        var levels: [Level] = []
+        for (_, range) in ranges.reversed() {
+            let bars = range.map { ($0, c[$0]) }
+            guard let high = bars.max(by: { $0.1.high < $1.1.high }), let low = bars.min(by: { $0.1.low < $1.1.low }) else { continue }
+            let weekday = calendar.component(.weekday, from: c[range.lowerBound].time)
+            if firstBreak(c, price: high.1.high, isHigh: true, from: range.upperBound + 1) == nil {
+                levels.append(Level(kind: .dayHigh(weekday: weekday), price: high.1.high, start: high.0, end: nil,
+                                    label: "", mitigated: false))
+            }
+            if firstBreak(c, price: low.1.low, isHigh: false, from: range.upperBound + 1) == nil {
+                levels.append(Level(kind: .dayLow(weekday: weekday), price: low.1.low, start: low.0, end: nil,
+                                    label: "", mitigated: false))
+            }
+        }
+        return levels
     }
 
     /// First bar from `from` that trades beyond `price`.

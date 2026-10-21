@@ -34,6 +34,9 @@ struct KillzonePivotsSettings: Codable, Hashable {
     var fvgZoneColor = RGBAColor(red: 0.55, green: 0.56, blue: 0.6)
     var fvgZoneMidColor = RGBAColor(red: 0.612, green: 0.153, blue: 0.69)
     var viColor = RGBAColor(red: 0.98, green: 0.6, blue: 0.0)
+    var dayHighColor = RGBAColor(red: 0.031, green: 0.6, blue: 0.506)
+    var dayLowColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
+    var dayLevelStyle = LineStyle.solid
     var mssBullColor = RGBAColor(red: 0.031, green: 0.6, blue: 0.506)
     var mssBearColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
     var sweepColor = RGBAColor(red: 0.98, green: 0.6, blue: 0.0)
@@ -72,6 +75,9 @@ struct KillzonePivotsSettings: Codable, Hashable {
         fvgZoneColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgZoneColor) ?? d.fvgZoneColor
         fvgZoneMidColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgZoneMidColor) ?? d.fvgZoneMidColor
         viColor = try c.decodeIfPresent(RGBAColor.self, forKey: .viColor) ?? d.viColor
+        dayHighColor = try c.decodeIfPresent(RGBAColor.self, forKey: .dayHighColor) ?? d.dayHighColor
+        dayLowColor = try c.decodeIfPresent(RGBAColor.self, forKey: .dayLowColor) ?? d.dayLowColor
+        dayLevelStyle = try c.decodeIfPresent(LineStyle.self, forKey: .dayLevelStyle) ?? d.dayLevelStyle
         mssBullColor = try c.decodeIfPresent(RGBAColor.self, forKey: .mssBullColor) ?? d.mssBullColor
         mssBearColor = try c.decodeIfPresent(RGBAColor.self, forKey: .mssBearColor) ?? d.mssBearColor
         sweepColor = try c.decodeIfPresent(RGBAColor.self, forKey: .sweepColor) ?? d.sweepColor
@@ -199,6 +205,13 @@ struct KillzonePivotsLayer {
             case .previousDay, .previousWeek, .previousMonth:
                 segment.color = settings.periodColor.color
                 segment.dash = LineStyle.dashed.dash
+            case .dayHigh(let weekday), .dayLow(let weekday):
+                // "Đỉnh T3" / "Đáy T3": which day of the week made it.
+                let isHigh: Bool
+                if case .dayHigh = level.kind { isHigh = true } else { isHigh = false }
+                segment.color = (isHigh ? settings.dayHighColor : settings.dayLowColor).color
+                segment.dash = settings.dayLevelStyle.dash
+                segment.label = "\(isHigh ? "Đỉnh" : "Đáy") \(Self.weekdays[min(max(weekday, 0), 7)])"
             }
             segments.append(segment)
         }

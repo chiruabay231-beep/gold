@@ -140,7 +140,13 @@ final class KillzonePivotsTests: XCTestCase {
 
         let hourly = KillzonePivots.compute(candles: data, barInterval: 3600, config: config)
         XCTAssertTrue(hourly.hiddenByTimeframe)
-        XCTAssertTrue(hourly.levels.isEmpty)
+        // Only the day highs/lows stay above the killzone timeframe limit.
+        XCTAssertTrue(hourly.levels.allSatisfy {
+            switch $0.kind {
+            case .dayHigh, .dayLow: return true
+            default: return false
+            }
+        })
     }
 
     func testConfigDecodesWithMissingKeys() throws {
@@ -229,6 +235,36 @@ final class KillzonePivotsTests: XCTestCase {
         // The next bars trade down to 112: touched at bar 202.
         XCTAssertEqual(imbalance?.touched, true)
         XCTAssertEqual(imbalance?.end, 202)
+    }
+
+    func testDailyHighsAndLowsUntilSwept() {
+        // 15-minute bars from Monday 12 Oct 2026 00:00 New York: three days of 96 bars.
+        let data = candles { c in
+            for j in 0..<c.count { c[j].high = 100.5; c[j].low = 99.5 }
+            c[40].high = 105        // Monday high, never taken again
+            c[50].low = 95          // Monday low, swept on Tuesday
+            c[120].low = 94         // Tuesday takes Monday's low
+            c[130].high = 103       // Tuesday high, still there
+        }
+        var config = KillzonePivots.Config()
+        config.showFVG = false
+        config.showMSS = false
+        let levels = KillzonePivots.compute(candles: data, barInterval: 900, config: config).levels.filter {
+            if case .dayHigh = $0.kind { return true }
+            if case .dayLow = $0.kind { return true }
+            return false
+        }
+        // Monday (weekday 2): the high stays, the swept low is gone.
+        XCTAssertTrue(levels.contains { $0.kind == .dayHigh(weekday: 2) && $0.price == 105 && $0.start == 40 && $0.end == nil })
+        XCTAssertFalse(levels.contains { $0.kind == .dayLow(weekday: 2) })
+        // Tuesday (weekday 3): both kept; the running Wednesday is not drawn.
+        XCTAssertTrue(levels.contains { $0.kind == .dayHigh(weekday: 3) && $0.price == 103 })
+        XCTAssertTrue(levels.contains { $0.kind == .dayLow(weekday: 3) && $0.price == 94 })
+        XCTAssertFalse(levels.contains { $0.kind == .dayHigh(weekday: 4) })
+        config.showDailyLevels = false
+        XCTAssertFalse(KillzonePivots.compute(candles: data, barInterval: 900, config: config).levels.contains {
+            if case .dayHigh = $0.kind { return true } else { return false }
+        })
     }
 
     func testFairValueGapConfluenceWithHigherTimeframe() {
