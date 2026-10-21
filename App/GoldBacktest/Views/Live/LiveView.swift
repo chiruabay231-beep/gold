@@ -57,7 +57,7 @@ struct LiveView: View {
     @State private var orderTicket: OrderTicket?
     /// The order sheet opens low (prices, type, price, volume); drag up for SL/TP and the button.
     @State private var ticketDetent = LiveView.ticketCompact
-    static let ticketCompact = PresentationDetent.height(236)
+    static let ticketCompact = PresentationDetent.height(118)
     static let ticketFull = PresentationDetent.fraction(0.56)
     /// Prices of trade lines while they are being dragged.
     @State private var lineOverrides: [String: Double] = [:]
@@ -188,7 +188,10 @@ struct LiveView: View {
         .sheet(isPresented: Binding(get: { orderTicket != nil }, set: { if !$0 { orderTicket = nil } })) {
             OrderTicketSheet(ticket: $orderTicket, lots: $defaultLots, bid: liveQuote.bid, ask: liveQuote.ask,
                              decimals: currentDecimals, contractSize: PaperAccount.contractSize(for: market.symbolKey),
-                             distance: defaultDistance, accountLabel: orderAccountLabel, onSubmit: { submitTicket() })
+                             distance: defaultDistance, accountLabel: orderAccountLabel,
+                             compact: ticketDetent == Self.ticketCompact,
+                             onExpand: { ticketDetent = Self.ticketFull },
+                             onSubmit: { submitTicket() })
                 .presentationDetents([Self.ticketCompact, Self.ticketFull], selection: $ticketDetent)
                 .presentationDragIndicator(.visible)
                 // The chart stays usable: drag the order's lines while the sheet is open.
@@ -992,24 +995,27 @@ struct LiveView: View {
             }
         }
 
-        if let t = orderTicket {
+        if var t = orderTicket {
+            // While the entry is dragged the order already shows the side it will take.
+            if t.isPending, let dragged = lineOverrides["ticket|entry"] {
+                t.move(to: dragged, bid: liveQuote.bid, ask: liveQuote.ask)
+            }
             let open = t.openPrice(bid: liveQuote.bid, ask: liveQuote.ask)
-            let entry = t.isPending ? value("ticket|entry", t.entry) : open
-            let shift = t.isPending ? entry - t.entry : 0
+            let entry = t.isPending ? t.entry : open
             if t.isPending {
                 lines.append(ChartPriceLine(id: "ticket|entry", price: entry, color: t.side == .long ? blue : red,
                                             label: "\(t.name) \(QuickTradePanel.lotText(defaultLots))",
                                             handleFraction: 0.42, closable: true))
             }
             if let stop = t.stop {
-                let price = value("ticket|sl", stop + shift)
+                let price = value("ticket|sl", stop)
                 lines.append(ChartPriceLine(id: "ticket|sl", price: price, color: red, label: "SL", dash: [4, 4],
                                             handleFraction: 0.42,
                                             value: money(side: t.side, lots: defaultLots, entry: entry, price: price),
                                             valueColor: moneyColor(side: t.side, entry: entry, price: price)))
             }
             if let target = t.target {
-                let price = value("ticket|tp", target + shift)
+                let price = value("ticket|tp", target)
                 lines.append(ChartPriceLine(id: "ticket|tp", price: price, color: green, label: "TP", dash: [4, 4],
                                             handleFraction: 0.42,
                                             value: money(side: t.side, lots: defaultLots, entry: entry, price: price),
@@ -1130,11 +1136,8 @@ struct LiveView: View {
             guard var t = orderTicket else { return }
             switch field {
             case "entry":
-                // SL and TP move with the entry.
-                let shift = price - t.entry
-                t.entry = price
-                t.stop = t.stop.map { $0 + shift }
-                t.target = t.target.map { $0 + shift }
+                // SL and TP move with the entry; under the price it is a Buy Limit, over it a Sell Limit.
+                t.move(to: price, bid: liveQuote.bid, ask: liveQuote.ask)
             case "sl": t.stop = price
             case "tp": t.target = price
             default: break

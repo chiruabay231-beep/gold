@@ -58,6 +58,27 @@ struct OrderTicket: Equatable {
                            target: targetDistance.map { entry + side.sign * $0 })
     }
 
+    /// Moves a pending order's entry. A limit or stop takes the side that fits where it
+    /// now sits (under the price: Buy Limit / Sell Stop, over it: Sell Limit / Buy Stop);
+    /// SL and TP keep their distances and turn over with the side.
+    mutating func move(to price: Double, bid: Double, ask: Double) {
+        var stopOffset = stop.map { $0 - entry }
+        var targetOffset = target.map { $0 - entry }
+        entry = price
+        if isPending, bid > 0 {
+            var newSide = side
+            if price < bid { newSide = kind == .limit ? .long : .short }
+            if price > ask { newSide = kind == .limit ? .short : .long }
+            if newSide != side {
+                side = newSide
+                stopOffset = stopOffset.map { -$0 }
+                targetOffset = targetOffset.map { -$0 }
+            }
+        }
+        stop = stopOffset.map { entry + $0 }
+        target = targetOffset.map { entry + $0 }
+    }
+
     /// Why the order can't be sent as it is, if it can't.
     func problem(bid: Double, ask: Double) -> String? {
         switch (kind, side) {
@@ -185,12 +206,101 @@ struct OrderTicketSheet: View {
     let distance: Double
     /// Where the order goes ("Tài khoản demo", "Exness #123 · THẬT").
     let accountLabel: String
+    /// Low sheet: one row like MT5 (order button, SL, TP); pull up for everything.
+    var compact = false
+    var onExpand: () -> Void = {}
     var onSubmit: () -> Void
 
     var body: some View {
         if let current = ticket {
-            content(current)
+            if compact {
+                compactRow(current)
+            } else {
+                content(current)
+            }
         }
+    }
+
+    /// "→ Buy Limit 0.10" · SL · TP · ⌃ — the side follows where the entry line is dragged.
+    private func compactRow(_ t: OrderTicket) -> some View {
+        let problem = t.problem(bid: bid, ask: ask)
+        let color = t.side == .long ? TradeBar.buyColor : TradeBar.sellColor
+        return VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                HStack(spacing: 0) {
+                    Button(action: onSubmit) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "arrow.right")
+                                .font(.system(size: 16, weight: .bold))
+                                .frame(width: 34, height: 34)
+                                .background(Circle().fill(.white.opacity(0.2)))
+                            Text(t.name)
+                                .font(.system(size: 17, weight: .semibold))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                            Spacer(minLength: 4)
+                        }
+                        .padding(.leading, 6)
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(problem != nil || bid <= 0)
+                    Menu {
+                        ForEach([0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2], id: \.self) { value in
+                            Button(String(format: "%g lot", value)) { lots = value }
+                        }
+                    } label: {
+                        Text(QuickTradePanel.lotText(lots))
+                            .font(.system(size: 16, weight: .semibold).monospacedDigit())
+                            .padding(.horizontal, 12)
+                            .frame(maxHeight: .infinity)
+                            .background(Capsule().fill(.black.opacity(0.15)))
+                    }
+                    .padding(4)
+                }
+                .foregroundColor(.white)
+                .frame(height: 50)
+                .background(Capsule().fill(color.opacity(problem == nil ? 1 : 0.45)))
+                levelToggle("SL", value: t.stop, color: TradeBar.sellColor, current: t, isStop: true)
+                levelToggle("TP", value: t.target, color: .green, current: t, isStop: false)
+                Button(action: onExpand) {
+                    Image(systemName: "chevron.up.circle")
+                        .font(.system(size: 26))
+                        .foregroundColor(TradeBar.buyColor)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Mở bảng lệnh đầy đủ (Stop, giá, SL/TP)")
+            }
+            Text(problem ?? "Kéo đường lệnh trên biểu đồ: dưới giá = Buy Limit, trên giá = Sell Limit")
+                .font(.caption2)
+                .foregroundColor(problem == nil ? .secondary : .orange)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 18)
+    }
+
+    /// The round SL / TP button: on puts the level at a default distance, off removes it.
+    private func levelToggle(_ title: String, value: Double?, color: Color, current: OrderTicket, isStop: Bool) -> some View {
+        Button {
+            guard var updated = ticket else { return }
+            let open = current.openPrice(bid: bid, ask: ask)
+            let distance = self.distance * 3
+            let price: Double? = value == nil
+                ? open + current.side.sign * (isStop ? -distance : distance * AutoStops.riskReward) : nil
+            if isStop { updated.stop = price } else { updated.target = price }
+            ticket = updated
+        } label: {
+            Text(title)
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 44, height: 44)
+                .foregroundColor(value == nil ? color : .white)
+                .background(Circle().fill(value == nil ? Color.clear : color))
+                .overlay(Circle().stroke(color, lineWidth: 1.5))
+        }
+        .buttonStyle(.plain)
     }
 
     private var step: Double {
@@ -222,12 +332,9 @@ struct OrderTicketSheet: View {
 
                 if t.isPending {
                     stepperRow("Giá", value: Binding(get: { ticket?.entry ?? t.entry }, set: { new in
-                        // SL and TP move with the entry.
+                        // SL and TP move with the entry; the side follows the price.
                         guard var updated = ticket else { return }
-                        let shift = new - updated.entry
-                        updated.entry = new
-                        updated.stop = updated.stop.map { $0 + shift }
-                        updated.target = updated.target.map { $0 + shift }
+                        updated.move(to: new, bid: bid, ask: ask)
                         ticket = updated
                     }), step: step, color: color)
                 }
