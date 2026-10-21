@@ -222,7 +222,13 @@ struct RemoteBotClient {
         if let failure = try? JSONDecoder().decode(Failure.self, from: data), let message = failure.error {
             throw ServerError(message: message)
         }
-        throw ServerError(message: code == 401 ? "Sai mật khẩu máy chủ" : "Máy chủ trả lỗi \(code)")
+        switch code {
+        case 401: throw ServerError(message: "Sai mật khẩu máy chủ")
+        case 502, 530:
+            // Cloudflare answers but the bot behind it does not.
+            throw ServerError(message: "Bot trên VPS không chạy (lỗi \(code)). Gõ /url cho bot Telegram: có trả lời thì nhập địa chỉ mới; không trả lời thì khởi động lại GoldBot trên VPS.")
+        default: throw ServerError(message: "Máy chủ trả lỗi \(code)")
+        }
     }
 
     func status() async throws -> RemoteStatus {

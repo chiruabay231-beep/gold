@@ -7,6 +7,8 @@ Set-Location $Dir
 $python = (Get-Content (Join-Path $Dir "python.txt") -ErrorAction SilentlyContinue | Select-Object -First 1)
 if (-not $python) { $python = "python" }
 $env:PYTHONIOENCODING = "utf-8"
+# Tells the server run.ps1 restarts it after an update.
+$env:GOLDBOT_SUPERVISED = "1"
 
 while ($true) {
     $server = Start-Process -FilePath $python -ArgumentList "`"$Dir\bot_server.py`"" -WorkingDirectory $Dir -NoNewWindow -Wait -PassThru `

@@ -29,7 +29,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.3"
+VERSION = "1.4"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2283,6 +2283,17 @@ class BotServer:
 
         def restart():
             time.sleep(1.5)
+            if not os.environ.get("GOLDBOT_SUPERVISED"):
+                # Not started by run.ps1 (or by an older one): start the new version
+                # ourselves; it steps aside if run.ps1 brings one up first.
+                args = [a for a in sys.argv[1:] if a != "--after-update"]
+                flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                try:
+                    subprocess.Popen([sys.executable, os.path.join(HERE, "bot_server.py"), "--after-update"] + args,
+                                     cwd=HERE, creationflags=flags, close_fds=True,
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                except OSError:
+                    pass
             os._exit(UPDATE_EXIT_CODE)
 
         threading.Thread(target=restart, daemon=True).start()
@@ -2505,6 +2516,15 @@ def main():
         return copy_worker_main()
     if "--selftest" in sys.argv:
         sys.exit(selftest())
+    if "--after-update" in sys.argv:
+        # Started by an update: run only if no other copy (run.ps1's) answers on the port.
+        time.sleep(8)
+        port = int(read_json(CONFIG_PATH, {}).get("port", 8787))
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}/ping", timeout=5):
+                return
+        except OSError:
+            pass
     server = BotServer()
     port = int(server.config.get("port", 8787))
     httpd = ThreadingHTTPServer(("0.0.0.0" if "--public" in sys.argv else "127.0.0.1", port), make_handler(server))
