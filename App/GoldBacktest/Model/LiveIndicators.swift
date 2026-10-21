@@ -5,6 +5,8 @@ import BacktestKit
 /// Stored as comma-separated ids so both tabs can share one AppStorage key.
 enum LiveIndicators {
     static let storageKey = "live.customIndicators"
+    static let sharkKey = "live.sharkFlow"
+    static let sharkMultipleKey = "live.sharkMultiple"
 
     static func ids(_ stored: String) -> Set<UUID> {
         Set(stored.split(separator: ",").compactMap { UUID(uuidString: String($0)) })
@@ -56,6 +58,18 @@ final class LiveFrameCache {
             ema = TA.ema(closes(), 200)
         }
         return ema
+    }
+
+    private var sharkKey = ""
+    private var shark = SharkFlow.Output()
+
+    func sharkFlow(_ candles: [Candle], multiple: Double) -> SharkFlow.Output {
+        let key = "\(candles.count)|\(candles.first?.time.timeIntervalSince1970 ?? 0)|\(candles.last?.close ?? 0)|\(candles.last?.volume ?? 0)|\(multiple)"
+        if key != sharkKey {
+            sharkKey = key
+            shark = SharkFlow.compute(candles: candles, config: SharkFlow.Config(sharkMultiple: multiple))
+        }
+        return shark
     }
 
     func candleColors(_ json: String) -> CandleColors? {

@@ -162,6 +162,15 @@ struct ChartVerticalLine {
     var width: CGFloat = 1
 }
 
+/// A big player on a bar ("Dòng tiền cá mập"): green under the bar for buying,
+/// red above it for selling, bigger for bigger volume.
+struct ChartBubble {
+    var index: Int
+    var buying: Bool
+    /// Volume ÷ average volume.
+    var ratio: Double
+}
+
 /// A moment marked on the time axis (economic news), possibly after the last bar.
 struct ChartTimeEvent {
     var time: Date
@@ -197,6 +206,8 @@ struct CandleChart: View {
     var notes: [ChartNote] = []
     /// News flags on the time axis.
     var timeEvents: [ChartTimeEvent] = []
+    /// Shark bubbles: a big buyer under the bar, a big seller above it.
+    var bubbles: [ChartBubble] = []
     /// Ask price, drawn as a second dotted line above the bid (the spread).
     var askPrice: Double?
     var priceLines: [ChartPriceLine] = []
@@ -664,6 +675,7 @@ struct CandleChart: View {
         }
 
         drawCandles(in: &plotContext, range: range, s: s)
+        drawBubbles(in: &plotContext, range: range, s: s)
 
         // Overlays.
         var axisLabels: [AxisLabel] = []
@@ -1317,6 +1329,22 @@ struct CandleChart: View {
         context.draw(Text("POC \(Self.format(pocPrice, decimals))").font(.system(size: 9, weight: .semibold))
                         .foregroundColor(DrawingPalette.colors[1]),
                      at: CGPoint(x: right - 2, y: pocY - 7), anchor: .trailing)
+    }
+
+    private func drawBubbles(in context: inout GraphicsContext, range: Range<Int>, s: Scale) {
+        for bubble in bubbles where range.contains(bubble.index) && candles.indices.contains(bubble.index) {
+            let c = candles[bubble.index]
+            let radius = min(5 + CGFloat(bubble.ratio) * 1.6, 16)
+            let x = s.x(bubble.index)
+            let y = bubble.buying ? s.y(c.low) + radius + 3 : s.y(c.high) - radius - 3
+            let rect = CGRect(x: x - radius, y: y - radius, width: radius * 2, height: radius * 2)
+            let color = bubble.buying ? theme.up : theme.down
+            context.fill(Path(ellipseIn: rect), with: .color(color.opacity(0.35)))
+            context.stroke(Path(ellipseIn: rect), with: .color(color), lineWidth: 1)
+            if radius >= 9 {
+                context.draw(Text("🦈").font(.system(size: radius)), at: CGPoint(x: x, y: y), anchor: .center)
+            }
+        }
     }
 
     /// A drawing's text, placed left / centre / right along it (TradingView's text alignment).

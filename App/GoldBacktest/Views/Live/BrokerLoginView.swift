@@ -36,6 +36,9 @@ struct BrokerTradeView: View {
     @State private var closing: MT5TradingState.Position?
     @State private var showSymbols = false
     @State private var showCopy = false
+    /// Closed positions of the last 7 days, shown on the page (MT5 history look).
+    @State private var recent: TradeHistory?
+    @State private var recentError: String?
 
     var body: some View {
         List {
@@ -91,22 +94,7 @@ struct BrokerTradeView: View {
                         }
                     }
                 }
-                Section {
-                    NavigationLink { TradeHistoryView(source: .mt5) } label: {
-                        Label("Lịch sử (vị thế, lệnh, giao dịch)", systemImage: "clock.arrow.circlepath")
-                    }
-                }
-                if !state.deals.isEmpty {
-                    Section("Đã đóng (24 giờ)") {
-                        ForEach(state.deals.reversed().prefix(5)) { d in
-                            OrderRow(symbol: d.symbol, detail: "\(d.side == "long" ? "buy" : "sell") \(Self.lots(d.lots))",
-                                     isBuy: d.side == "long",
-                                     line: "\(Self.price(d.price)) · \(d.reason == "target" ? "TP" : (d.reason == "stop" ? "SL" : "đóng")) · \(Date(timeIntervalSince1970: d.time).formatted(date: .omitted, time: .shortened))",
-                                     trailing: String(format: "%.2f", d.profit),
-                                     trailingColor: d.profit >= 0 ? OrderRow.profitColor : OrderRow.lossColor)
-                        }
-                    }
-                }
+                historySection(state)
             }
         }
         .listStyle(.insetGrouped)
@@ -127,6 +115,8 @@ struct BrokerTradeView: View {
         .task { await mt5.watch() }
         .refreshable { await mt5.refresh() }
         .navigationDestination(isPresented: $showCopy) { CopyTradeView() }
+        // Reloaded when a position closes.
+        .task(id: mt5.state?.deals.count) { await loadRecent() }
         .sheet(isPresented: $showSymbols) {
             MT5SymbolSearchView { symbol in
                 market.select(source: .mt5, symbol: symbol, interval: market.interval.isSeconds ? .m1 : nil)
@@ -149,6 +139,51 @@ struct BrokerTradeView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(mt5.lastError ?? "")
+        }
+    }
+
+    @ViewBuilder
+    private func historySection(_ state: MT5TradingState) -> some View {
+        Section {
+            if let recent {
+                let positions = recent.positions.sorted { $0.closeTime > $1.closeTime }
+                if positions.isEmpty {
+                    Text("Chưa có lệnh đóng trong 7 ngày").foregroundColor(.secondary)
+                }
+                ForEach(positions.prefix(30)) { p in
+                    HistoryRow(symbol: p.symbol, side: p.side == "long" ? "buy" : "sell", lots: p.lots,
+                               detail: "\(Self.price(p.entry)) → \(Self.price(p.exit))",
+                               value: String(format: "%.2f", p.profit), valueColor: TradeHistoryView.color(p.profit),
+                               time: p.closeTime)
+                }
+            } else {
+                // Older VPS server: the last 24 hours from the account state.
+                if let recentError { Text(recentError).font(.footnote).foregroundColor(.orange) }
+                ForEach(state.deals.reversed()) { d in
+                    HistoryRow(symbol: d.symbol, side: d.side == "long" ? "buy" : "sell", lots: d.lots,
+                               detail: "\(Self.price(d.price)) · \(d.reason == "target" ? "TP" : (d.reason == "stop" ? "SL" : "đóng"))",
+                               value: String(format: "%.2f", d.profit), valueColor: TradeHistoryView.color(d.profit),
+                               time: d.time)
+                }
+            }
+            NavigationLink { TradeHistoryView(source: .mt5) } label: {
+                Label("Xem tất cả (vị thế, lệnh, giao dịch)", systemImage: "clock.arrow.circlepath")
+            }
+        } header: {
+            Text("Lịch sử 7 ngày")
+        }
+    }
+
+    private func loadRecent() async {
+        guard let client = RemoteBotSettings.client(), mt5.state != nil else { return }
+        do {
+            recent = try await client.mt5History(from: Date().addingTimeInterval(-7 * 86_400), to: Date())
+            recentError = nil
+        } catch {
+            recent = nil
+            recentError = ServerUpdate.isOutdated(error)
+                ? "Đang hiện 24 giờ gần nhất. Cập nhật máy chủ VPS (Bot trên VPS → Cập nhật) để xem lịch sử theo ngày."
+                : nil
         }
     }
 

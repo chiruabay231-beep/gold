@@ -15,6 +15,8 @@ struct LiveIndicatorSheet: View {
     @AppStorage("live.killzonePivots.on") private var showKillzonePivots = true
     @AppStorage(LiveIndicators.storageKey) private var liveIndicatorIDs = ""
     @AppStorage("live.showEMA200") private var showEMA200 = true
+    @AppStorage(LiveIndicators.sharkKey) private var showSharkFlow = false
+    @AppStorage(LiveIndicators.sharkMultipleKey) private var sharkMultiple = 2.5
     @AppStorage("live.volume") private var showVolume = true
     @AppStorage("live.highLow") private var showHighLow = true
 
@@ -42,6 +44,21 @@ struct LiveIndicatorSheet: View {
                     } label: {
                         Label(store.indicators.isEmpty ? "Viết chỉ báo mới…" : "Quản lý / sửa chỉ báo…", systemImage: "square.and.pencil")
                     }
+                }
+                Section {
+                    Toggle("🦈 Dòng tiền cá mập", isOn: $showSharkFlow)
+                    if showSharkFlow {
+                        Picker("Cá mập khi khối lượng ≥", selection: $sharkMultiple) {
+                            Text("2 × trung bình").tag(2.0)
+                            Text("2.5 × trung bình").tag(2.5)
+                            Text("3 × trung bình").tag(3.0)
+                            Text("4 × trung bình").tag(4.0)
+                        }
+                    }
+                } header: {
+                    Text("Dòng tiền")
+                } footer: {
+                    Text("Khung dưới biểu đồ: cột XANH = tiền vào (nến đóng gần đỉnh), cột ĐỎ = tiền ra (nến đóng gần đáy); dòng chữ cho biết tiền đang vào hay ra và mạnh cỡ nào (20 nến gần nhất). Bong bóng 🦈 trên biểu đồ = nến khối lượng lớn bất thường: xanh dưới nến là cá mập MUA, đỏ trên nến là cá mập BÁN; bong bóng càng to khối lượng càng lớn. Sàn forex/CFD (Exness) không có khối lượng thật nên đây là ước lượng; Binance XAUUSDT cho kết quả sát hơn.")
                 }
                 Section("Khác") {
                     Toggle("EMA 200", isOn: $showEMA200)

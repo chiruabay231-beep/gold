@@ -91,6 +91,8 @@ struct LiveView: View {
     @State private var indicatorCache = LiveIndicatorCache()
     /// Results reused between frames while the chart is dragged.
     @State private var frameCache = LiveFrameCache()
+    @AppStorage(LiveIndicators.sharkKey) private var showSharkFlow = false
+    @AppStorage(LiveIndicators.sharkMultipleKey) private var sharkMultiple = 2.5
     @State private var showKillzoneSettings = false
     @State private var showOandaSettings = false
     /// OANDA instrument to open once a token has been saved.
@@ -104,6 +106,9 @@ struct LiveView: View {
         VStack(spacing: 0) {
             header
             charts
+            if let flow = sharkFlow, chartCandles.count > 2 {
+                SharkFlowPane(output: flow, range: viewport.range(total: chartCandles.count), theme: theme)
+            }
             indicatorPanes
             if showTradeButtons {
                 TradeBar(bid: liveQuote.bid, ask: liveQuote.ask, decimals: currentDecimals, lots: $defaultLots,
@@ -286,11 +291,6 @@ struct LiveView: View {
                     HStack(spacing: 8) {
                         // Tap the symbol to switch market.
                         symbolMenu
-                        Text(market.source.title)
-                            .font(.system(size: 11))
-                            .foregroundColor(theme.text)
-                            .lineLimit(1)
-                            .layoutPriority(-1)
                         statusDot
                         if replay.isActive {
                             Text("REPLAY")
@@ -365,6 +365,7 @@ struct LiveView: View {
         var names: [String] = []
         if showKillzonePivots { names.append(Self.killzonePivotsName) }
         if showEMA200 { names.append("EMA 200") }
+        if showSharkFlow { names.append("🦈 Dòng tiền cá mập") }
         names += selectedIndicators.map(\.title)
         names += customIndicators.errors.map { "⚠︎ \($0)" }
         if bot.isRunning, let strategy = store.strategies.first(where: { $0.id == bot.strategyID }) {
@@ -609,6 +610,7 @@ struct LiveView: View {
                         verticalLines: layer.verticalLines,
                         notes: layer.notes,
                         timeEvents: replay.isActive ? [] : newsTimeEvents,
+                        bubbles: sharkBubbles,
                         askPrice: liveQuote.ask > liveQuote.bid ? liveQuote.ask : nil,
                         priceLines: tradeLines,
                         onPriceLineDrag: { id, price, ended in tradeLineDragged(id: id, price: price, ended: ended) },
@@ -1213,6 +1215,16 @@ struct LiveView: View {
             DrawingStyles.setDefault(changed.style, for: changed.tool)
         }
         store.updateDrawing(changed, key: drawingKey)
+    }
+
+    /// "Dòng tiền cá mập" of the chart's bars (nil when off).
+    private var sharkFlow: SharkFlow.Output? {
+        guard showSharkFlow else { return nil }
+        return frameCache.sharkFlow(chartCandles, multiple: sharkMultiple)
+    }
+
+    private var sharkBubbles: [ChartBubble] {
+        sharkFlow?.sharks.map { ChartBubble(index: $0.index, buying: $0.buying, ratio: $0.ratio) } ?? []
     }
 
     private var overlays: [ChartLine] {
