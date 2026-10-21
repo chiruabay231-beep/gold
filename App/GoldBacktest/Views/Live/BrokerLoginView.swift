@@ -180,6 +180,12 @@ struct BrokerLoginView: View {
     @State private var askPassword: SavedBrokerAccount?
     @State private var promptPassword = ""
     @State private var confirmLogout = false
+    /// An account tapped in the list, waiting for "Chuyển tài khoản".
+    @State private var switching: SavedBrokerAccount?
+    /// The add-account form; folded once there are accounts.
+    @State private var showAddForm: Bool?
+    /// The account being logged in, for its spinner.
+    @State private var switchingLogin: String?
 
     private var hasVPS: Bool { RemoteBotSettings.client() != nil }
 
@@ -198,8 +204,8 @@ struct BrokerLoginView: View {
     var body: some View {
         List {
             if hasVPS {
-                accountsSection
                 loginSection
+                accountsSection
                 if current != nil { tradingSection }
             }
             vpsSection
@@ -231,6 +237,20 @@ struct BrokerLoginView: View {
         } message: {
             Text(mt5.lastError ?? "")
         }
+        .confirmationDialog("Chuyển sang tài khoản #\(switching?.login ?? "")?",
+                            isPresented: Binding(get: { switching != nil }, set: { if !$0 { switching = nil } }),
+                            titleVisibility: .visible) {
+            Button("Chuyển tài khoản") {
+                if let account = switching { signIn(saved: account) }
+                switching = nil
+            }
+            Button("Huỷ", role: .cancel) { switching = nil }
+        } message: {
+            if let account = switching {
+                Text("\(account.broker) · \(account.server) · \(Self.isReal(account) ? "tài khoản thật" : "demo")"
+                     + (current.map { "\nĐang dùng #\($0.login) sẽ được thay." } ?? ""))
+            }
+        }
         .confirmationDialog("Đăng xuất MT5 trên VPS?", isPresented: $confirmLogout, titleVisibility: .visible) {
             Button("Đăng xuất", role: .destructive) { Task { await logout() } }
         } message: {
@@ -252,27 +272,38 @@ struct BrokerLoginView: View {
             }
             ForEach(accounts) { account in
                 let isCurrent = account.id == current?.id
+                let real = isCurrent ? status?.mode == "real" : Self.isReal(account)
                 Button { tap(account, isCurrent: isCurrent) } label: {
-                    HStack {
+                    HStack(spacing: 12) {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.system(size: 20))
+                            .foregroundColor(real ? AccountSummary.gold : .secondary)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("#\(account.login) · \(account.broker)").font(.body.weight(.semibold)).foregroundColor(.primary)
-                            Text(account.server).font(.caption).foregroundColor(.secondary)
+                            Text("#\(account.login)").font(.system(size: 16, weight: .semibold).monospacedDigit())
+                                .foregroundColor(.primary)
+                            Text("\(account.broker) · \(account.server)").font(.caption).foregroundColor(.secondary)
+                                .lineLimit(1)
                         }
                         Spacer()
                         if isCurrent {
-                            VStack(alignment: .trailing, spacing: 2) {
-                                Text(status?.mode == "real" ? "THẬT · đang dùng" : "Demo · đang dùng")
-                                    .font(.caption.bold())
-                                    .foregroundColor(status?.mode == "real" ? .red : .green)
+                            VStack(alignment: .trailing, spacing: 3) {
+                                Text("Đang dùng")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 7).padding(.vertical, 2)
+                                    .background(Color.green, in: Capsule())
                                 if let balance = status?.balance {
                                     Text(String(format: "%.2f %@", balance, status?.currency ?? ""))
                                         .font(.caption.monospacedDigit()).foregroundColor(.secondary)
                                 }
                             }
+                        } else if busy && switchingLogin == account.login {
+                            ProgressView()
                         } else {
-                            Text("Đăng nhập").font(.caption).foregroundColor(.accentColor)
+                            Text("Chuyển").font(.subheadline).foregroundColor(.accentColor)
                         }
                     }
+                    .padding(.vertical, 2)
                 }
                 .disabled(busy)
                 .swipeActions {
@@ -292,48 +323,68 @@ struct BrokerLoginView: View {
         } header: {
             Text("Tài khoản MT5")
         } footer: {
-            Text("Chạm một tài khoản để đăng nhập nó trên VPS. Vuốt trái để đăng xuất hoặc xoá.")
+            Text("Chạm một tài khoản để chuyển. Vuốt trái để đăng xuất hoặc xoá.")
         }
     }
 
+    private var formOpen: Bool { showAddForm ?? accounts.isEmpty }
+
     private var loginSection: some View {
         Section {
-            Picker("Sàn", selection: $broker) {
-                ForEach(Broker.allCases) { Text($0.rawValue).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            HStack {
-                TextField(broker == .exness ? "Server, vd Exness-MT5Trial7" : "Server của sàn", text: $server)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                if broker == .exness {
-                    Menu {
-                        Button("Demo: Exness-MT5Trial…") { server = "Exness-MT5Trial" }
-                        Button("Thật: Exness-MT5Real…") { server = "Exness-MT5Real" }
-                    } label: {
-                        Image(systemName: "list.bullet.circle")
-                    }
-                }
-            }
-            TextField("Số tài khoản", text: $login).keyboardType(.numberPad)
-            SecureField("Mật khẩu", text: $password).textContentType(.password)
-            Toggle("Lưu tài khoản (tự đăng nhập lại)", isOn: $remember)
             Button {
-                Task { await signIn(login: login, password: password, server: server,
-                                    brokerName: broker == .exness ? Broker.exness.rawValue : "MT5") }
+                withAnimation { showAddForm = !formOpen }
             } label: {
                 HStack {
-                    if busy { ProgressView() }
-                    Text("Đăng nhập").frame(maxWidth: .infinity)
+                    Label("Thêm tài khoản Exness / MT5", systemImage: "person.crop.circle.badge.plus")
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundColor(.secondary)
+                        .rotationEffect(.degrees(formOpen ? 180 : 0))
                 }
             }
-            .disabled(busy || login.isEmpty || password.isEmpty || server.isEmpty)
-        } header: {
-            Text("Thêm tài khoản")
+            if formOpen {
+                Picker("Sàn", selection: $broker) {
+                    ForEach(Broker.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                HStack {
+                    TextField(broker == .exness ? "Server, vd Exness-MT5Trial7" : "Server của sàn", text: $server)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    if broker == .exness {
+                        Menu {
+                            Button("Demo: Exness-MT5Trial…") { server = "Exness-MT5Trial" }
+                            Button("Thật: Exness-MT5Real…") { server = "Exness-MT5Real" }
+                        } label: {
+                            Image(systemName: "list.bullet.circle")
+                        }
+                    }
+                }
+                TextField("Số tài khoản", text: $login).keyboardType(.numberPad)
+                SecureField("Mật khẩu chính", text: $password).textContentType(.password)
+                Toggle("Lưu để chuyển nhanh", isOn: $remember)
+                Button {
+                    Task { await signIn(login: login, password: password, server: server,
+                                        brokerName: broker == .exness ? Broker.exness.rawValue : "MT5") }
+                } label: {
+                    HStack {
+                        Spacer()
+                        if busy { ProgressView().tint(.white) }
+                        Text("Đăng nhập").bold()
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(busy || login.isEmpty || password.isEmpty || server.isEmpty)
+            }
         } footer: {
-            Text(broker == .exness
-                 ? "Server và số tài khoản xem trong Exness Personal Area → tài khoản → Thông tin. Mật khẩu investor chỉ xem giá; đặt lệnh cần mật khẩu chính."
-                 : "Cần cài MT5 của sàn đó trên VPS và đăng nhập một lần trong MT5.")
+            if formOpen {
+                Text(broker == .exness
+                     ? "Server và số tài khoản: Exness Personal Area → tài khoản → Thông tin. Đặt lệnh cần mật khẩu chính (không phải investor)."
+                     : "Cần cài MT5 của sàn đó trên VPS và đăng nhập một lần trong MT5.")
+            }
         }
     }
 
@@ -346,7 +397,7 @@ struct BrokerLoginView: View {
             Toggle("Cho phép đặt lệnh từ app", isOn: Binding(get: { enabled }, set: { value in
                 Task { await mt5.settings(tradingEnabled: value, allowReal: allowReal, maxLots: maxLots) }
             }))
-            Toggle("Cho phép tài khoản THẬT", isOn: Binding(get: { allowReal }, set: { value in
+            Toggle("Cho phép tài khoản thật", isOn: Binding(get: { allowReal }, set: { value in
                 Task { await mt5.settings(tradingEnabled: enabled, allowReal: value, maxLots: maxLots) }
             }))
             .tint(.red)
@@ -356,7 +407,7 @@ struct BrokerLoginView: View {
         } header: {
             Text("Quyền đặt lệnh")
         } footer: {
-            Text("Đặt lệnh trên biểu đồ Live của mã MT5. Tài khoản thật luôn hỏi xác nhận; cần nút Algo Trading bật trong MT5 trên VPS.")
+            Text("Đặt lệnh trên biểu đồ Live của mã MT5. Algo Trading trong MT5 được tự bật lại khi đổi tài khoản.")
         }
     }
 
@@ -381,6 +432,16 @@ struct BrokerLoginView: View {
 
     private func tap(_ account: SavedBrokerAccount, isCurrent: Bool) {
         guard !isCurrent else { return }
+        switching = account
+    }
+
+    /// Exness puts "Real" or "Trial" in the server name.
+    static func isReal(_ account: SavedBrokerAccount) -> Bool {
+        let server = account.server.lowercased()
+        return server.contains("real") || !(server.contains("trial") || server.contains("demo"))
+    }
+
+    private func signIn(saved account: SavedBrokerAccount) {
         if let password = account.savedPassword {
             Task { await signIn(login: account.login, password: password, server: account.server, brokerName: account.broker) }
         } else {
@@ -405,7 +466,11 @@ struct BrokerLoginView: View {
     private func signIn(login: String, password: String, server: String, brokerName: String) async {
         guard let client = RemoteBotSettings.client() else { return }
         busy = true
-        defer { busy = false }
+        switchingLogin = login
+        defer {
+            busy = false
+            switchingLogin = nil
+        }
         let cleanLogin = login.filter(\.isNumber)
         let cleanServer = server.trimmingCharacters(in: .whitespaces)
         do {
@@ -418,6 +483,7 @@ struct BrokerLoginView: View {
             }
             self.password = ""
             self.login = ""
+            showAddForm = false
             await mt5.refresh()
         } catch {
             statusError = error.localizedDescription
