@@ -11,6 +11,7 @@ struct LiveView: View {
     @Environment(BotController.self) private var bot
     @Environment(NewsStore.self) private var news
     @Environment(MT5Trader.self) private var mt5
+    @Environment(MemberFeed.self) private var memberFeed
     @AppStorage("news.vietnamese") private var newsVietnamese = false
     /// Split view: this chart and the correlated market (gold / silver), with SMT on both.
     @AppStorage("live.compare") private var compareMode = false
@@ -1028,6 +1029,24 @@ struct LiveView: View {
                                             label: "TP", dash: [4, 4], handleFraction: 0.55,
                                             value: money(side: o.side, lots: o.lots, entry: entry, price: price),
                                             valueColor: moneyColor(side: o.side, entry: entry, price: price)))
+            }
+        }
+
+        // Signals of the owner this phone follows: purple, not draggable.
+        for signal in memberFeed.openSignals(matching: market.symbol) {
+            let id = "sig|\(signal.id)"
+            let purple = SignalRow.purple
+            lines.append(ChartPriceLine(id: id + "|entry", price: signal.entry, color: purple,
+                                        label: "📣 \(signal.isBuy ? "MUA" : "BÁN") tín hiệu", dash: [2, 3], draggable: false,
+                                        value: signal.move.map { String(format: "%+.2f", $0) } ?? "",
+                                        valueColor: (signal.move ?? 0) >= 0 ? green : red))
+            if let stop = signal.stop {
+                lines.append(ChartPriceLine(id: id + "|sl", price: stop, color: purple.opacity(0.8), label: "📣 SL",
+                                            dash: [2, 3], draggable: false))
+            }
+            if let target = signal.target {
+                lines.append(ChartPriceLine(id: id + "|tp", price: target, color: purple.opacity(0.8), label: "📣 TP",
+                                            dash: [2, 3], draggable: false))
             }
         }
 

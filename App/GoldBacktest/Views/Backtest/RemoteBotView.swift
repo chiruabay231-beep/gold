@@ -62,6 +62,11 @@ struct RemoteBotView: View {
                 }
             }
             Section {
+                if remote.status != nil {
+                    NavigationLink { MembersView() } label: {
+                        Label("Thành viên & mã mời (chia sẻ tín hiệu)", systemImage: "person.2.badge.key")
+                    }
+                }
                 NavigationLink { VPSGuideView() } label: {
                     Label("Hướng dẫn thuê và cài VPS", systemImage: "book")
                 }

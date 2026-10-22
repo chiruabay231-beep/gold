@@ -10,6 +10,7 @@ struct GoldBacktestApp: App {
     @State private var news = NewsStore()
     @State private var mt5Trader = MT5Trader()
     @State private var stopBot = StopBotController()
+    @State private var memberFeed = MemberFeed()
 
     init() {
         UNUserNotificationCenter.current().delegate = NotificationDelegate.shared
@@ -26,6 +27,9 @@ struct GoldBacktestApp: App {
                 .environment(news)
                 .environment(mt5Trader)
                 .environment(stopBot)
+                .environment(memberFeed)
+                // Signals of the owner this phone follows (if any), for the chart and the Tín hiệu page.
+                .task { await memberFeed.watch() }
                 .onAppear {
                     let trader = trader
                     let stopBot = stopBot

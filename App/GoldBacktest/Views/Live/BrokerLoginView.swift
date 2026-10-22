@@ -1,16 +1,18 @@
 import SwiftUI
 import BacktestKit
 
-/// "Giao dịch" tab: copy trade, the broker (MT5) account, and logging in to
-/// brokers, each on its own page. The in-app demo account is under the Sàn menu.
+/// "Giao dịch" tab: copy trade, the broker (MT5) account, signals shared with
+/// members, and logging in to brokers, each on its own page. The in-app demo
+/// account is under the Sàn menu.
 struct TradeRootView: View {
     @AppStorage("trade.page") private var page = 0
 
     var body: some View {
         VStack(spacing: 0) {
             Picker("Trang", selection: $page) {
-                Text("Copy trade").tag(0)
-                Text("Sàn (MT5)").tag(1)
+                Text("Copy").tag(0)
+                Text("Sàn MT5").tag(1)
+                Text("Tín hiệu").tag(3)
                 Text("Đăng nhập").tag(2)
             }
             .pickerStyle(.segmented)
@@ -19,6 +21,7 @@ struct TradeRootView: View {
             switch page {
             case 0: CopyTradeView()
             case 1: BrokerTradeView(page: $page)
+            case 3: SignalsView()
             default: BrokerLoginView()
             }
         }

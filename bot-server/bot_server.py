@@ -12,6 +12,7 @@ Run:  python bot_server.py            (reads config.json next to this file)
       python bot_server.py --selftest (checks botkit with sample data)
 """
 
+import hashlib
 import hmac
 import json
 import math
@@ -29,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.5"
+VERSION = "1.6"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -1440,12 +1441,12 @@ class CopyTrader:
         self.event(f"📋 Copy trade {'BẬT' if enabled else 'TẮT'}")
         return self.status()
 
-    def save_follower(self, body):
+    def save_follower(self, body, new_id=None):
         fid = str(body.get("id") or "")
         current = self.follower(fid) if fid else None
         f = dict(current or DEFAULT_FOLLOWER)
         if not current:
-            f["id"] = uuid.uuid4().hex[:8]
+            f["id"] = new_id or uuid.uuid4().hex[:8]
         try:
             f["login"] = int(str(body.get("login", f["login"])).strip())
         except ValueError:
@@ -1929,6 +1930,237 @@ DEFAULT_SETTINGS = {
     "rules": {},
 }
 
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
+def new_member_code():
+    raw = "".join(secrets.choice(CODE_ALPHABET) for _ in range(12))
+    return "-".join(raw[i:i + 4] for i in range(0, 12, 4))
+
+
+def code_hash(code):
+    return hashlib.sha256(code.strip().upper().encode()).hexdigest()
+
+
+class Members:
+    """People the owner shares the signals with. Each has an invite code (only its
+    hash is kept), a role ("signals": sees the signals; "copy": may also copy them into
+    their own MT5 account) and an expiry. The signals are the owner's trades: the
+    positions of the main MT5 account (bot, app or MT5 itself) or of the VPS demo bot.
+    Members never see the strategy, the lot sizes or the owner's account."""
+
+    def __init__(self, server):
+        self.server = server
+        self.lock = threading.RLock()
+        self.items = server.signal_state  # newest first, kept in state.json
+        self.by_key = {s["key"]: s for s in self.items if s.get("status") == "open"}
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    @property
+    def cfg(self):
+        return self.server.config.setdefault("members", [])
+
+    # ----- members -----
+
+    def find(self, mid):
+        return next((m for m in self.cfg if m["id"] == mid), None)
+
+    def by_code(self, code):
+        digest = code_hash(code)
+        for m in self.cfg:
+            if hmac.compare_digest(m.get("codeHash", ""), digest):
+                return m
+        return None
+
+    @staticmethod
+    def active(m):
+        return bool(m.get("enabled")) and (not m.get("expires") or m["expires"] > now())
+
+    def check(self, m):
+        if not m.get("enabled"):
+            raise PermissionError("Tài khoản thành viên đã bị khoá")
+        if m.get("expires") and m["expires"] <= now():
+            raise PermissionError("Mã thành viên đã hết hạn")
+        if now() - (m.get("lastSeen") or 0) > 60:
+            m["lastSeen"] = now()
+            self.server.save_config()
+
+    def public(self, m):
+        f = self.server.copier.follower(self.follower_id(m))
+        return {"id": m["id"], "name": m["name"], "role": m["role"], "enabled": bool(m.get("enabled")),
+                "expires": m.get("expires") or None, "created": m.get("created"), "lastSeen": m.get("lastSeen"),
+                "hasCopy": f is not None}
+
+    def list(self):
+        with self.lock:
+            open_count = sum(1 for s in self.items if s.get("status") == "open")
+            return {"ok": True, "members": [self.public(m) for m in self.cfg], "openSignals": open_count,
+                    "signals": len(self.items), "url": self.server.tunnel_url}
+
+    def save(self, body):
+        mid = str(body.get("id") or "")
+        m = self.find(mid) if mid else None
+        code = None
+        if m is None:
+            m = {"id": uuid.uuid4().hex[:8], "created": now(), "lastSeen": None}
+            code = new_member_code()
+            m["codeHash"] = code_hash(code)
+            self.cfg.append(m)
+        m["name"] = str(body.get("name", m.get("name", "")) or "").strip() or "Thành viên"
+        role = str(body.get("role", m.get("role", "signals")))
+        m["role"] = role if role in ("signals", "copy") else "signals"
+        m["enabled"] = bool(body.get("enabled", m.get("enabled", True)))
+        if "days" in body:
+            days = float(body.get("days") or 0)
+            m["expires"] = now() + days * 86400 if days > 0 else None
+        self.server.save_config()
+        self._sync_followers()
+        self.server.log(f"👥 {'Thêm' if code else 'Sửa'} thành viên {m['name']} ({m['role']})")
+        return dict(self.list(), code=code, member=self.public(m))
+
+    def new_code(self, body):
+        m = self.find(str(body.get("id") or ""))
+        if m is None:
+            raise ValueError("Không có thành viên này")
+        code = new_member_code()
+        m["codeHash"] = code_hash(code)
+        self.server.save_config()
+        self.server.log(f"👥 Đổi mã thành viên {m['name']} (mã cũ hết dùng được)")
+        return dict(self.list(), code=code, member=self.public(m))
+
+    def remove(self, body):
+        m = self.find(str(body.get("id") or ""))
+        if m is None:
+            raise ValueError("Không có thành viên này")
+        if self.server.copier.follower(self.follower_id(m)):
+            self.server.copier.remove_follower({"id": self.follower_id(m), "closePositions": False})
+        self.cfg.remove(m)
+        self.server.save_config()
+        self.server.log(f"👥 Xoá thành viên {m['name']}")
+        return self.list()
+
+    # ----- what a member sees -----
+
+    def me(self, m):
+        return {"ok": True, "name": m["name"], "role": m["role"], "expires": m.get("expires") or None,
+                "version": VERSION, "ownerCopyOn": bool(self.server.copier.cfg["enabled"])}
+
+    def signals(self, limit=60):
+        with self.lock:
+            return {"ok": True, "signals": [{k: v for k, v in s.items() if k != "key"} for s in self.items[:limit]]}
+
+    @staticmethod
+    def follower_id(m):
+        return "m" + m["id"]
+
+    def copy_status(self, m):
+        status = self.server.copier.status()
+        row = next((f for f in status["followers"] if f["id"] == self.follower_id(m)), None)
+        return {"ok": True, "follower": row, "ownerCopyOn": status["enabled"],
+                "allowed": m["role"] == "copy"}
+
+    def copy_save(self, m, body):
+        if m["role"] != "copy":
+            raise PermissionError("Mã của bạn chỉ được xem tín hiệu (không có quyền copy lệnh)")
+        fid = self.follower_id(m)
+        current = self.server.copier.follower(fid)
+        data = {k: body[k] for k in ("login", "password", "server", "multiplier", "fixedLots", "maxLots",
+                                     "allowReal", "symbolMap") if k in body}
+        data.update(id=fid if current else "", name=m["name"], path="")
+        self.server.copier.save_follower(data, new_id=fid)
+        f = self.server.copier.follower(fid)
+        f["member"] = m["id"]
+        f["memberEnabled"] = bool(body.get("enabled", True))
+        self._sync_followers()
+        return self.copy_status(m)
+
+    def copy_remove(self, m):
+        if self.server.copier.follower(self.follower_id(m)):
+            self.server.copier.remove_follower({"id": self.follower_id(m), "closePositions": False})
+        return self.copy_status(m)
+
+    def _sync_followers(self):
+        """A member's copy runs only while the member is active and wants it."""
+        changed = False
+        for f in self.server.copier.cfg["followers"]:
+            if not f.get("member"):
+                continue
+            m = self.find(f["member"])
+            on = m is not None and self.active(m) and m["role"] == "copy" and f.get("memberEnabled", True)
+            if bool(f.get("enabled")) != on:
+                f["enabled"] = on
+                changed = True
+        if changed:
+            self.server.save_config()
+
+    # ----- the signal feed -----
+
+    def _loop(self):
+        while True:
+            try:
+                if self.cfg:
+                    self._scan()
+                    self._sync_followers()
+            except Exception as e:
+                if os.environ.get("BOT_DEBUG"):
+                    print("signals:", e)
+            time.sleep(3)
+
+    def _owner_positions(self):
+        mt5_cfg = self.server.config.get("mt5") or {}
+        if mt5_cfg.get("login"):
+            with Mt5.lock:
+                mt5 = Mt5.connect(mt5_cfg)
+                if mt5.account_info() is None:
+                    return None
+                rows = mt5.positions_get() or ()
+                return [{"key": f"mt5:{r.ticket}", "symbol": r.symbol,
+                         "side": "long" if r.type == mt5.POSITION_TYPE_BUY else "short",
+                         "entry": r.price_open, "stop": r.sl or None, "target": r.tp or None,
+                         "price": r.price_current, "time": float(r.time) - Mt5.offset_seconds}
+                        for r in rows if r.magic != COPY_MAGIC]
+        with self.server.lock:
+            return [{"key": f"paper:{p['id']}", "symbol": p["symbol"], "side": p["side"], "entry": p["entryPrice"],
+                     "stop": p.get("stop"), "target": p.get("target"),
+                     "price": self.server.prices.get(p["symbol"], p["entryPrice"]),
+                     "time": p.get("openTime") or now()} for p in self.server.paper.get("positions", [])]
+
+    def _scan(self):
+        rows = self._owner_positions()
+        if rows is None:
+            return
+        changed = False
+        seen = set()
+        with self.lock:
+            for r in rows:
+                seen.add(r["key"])
+                s = self.by_key.get(r["key"])
+                if s is None:
+                    s = {"id": uuid.uuid4().hex[:10], "key": r["key"], "symbol": r["symbol"], "side": r["side"],
+                         "entry": r["entry"], "stop": r["stop"], "target": r["target"], "price": r["price"],
+                         "openTime": r["time"], "status": "open"}
+                    self.items.insert(0, s)
+                    self.by_key[r["key"]] = s
+                    changed = True
+                    self.server.log(f"📣 Tín hiệu {'MUA' if r['side'] == 'long' else 'BÁN'} {r['symbol']} @ {fmt(r['entry'])}"
+                                    f" · SL {fmt(r['stop']) if r['stop'] else '–'} · TP {fmt(r['target']) if r['target'] else '–'}")
+                else:
+                    if (s["stop"], s["target"]) != (r["stop"], r["target"]):
+                        s["stop"], s["target"] = r["stop"], r["target"]
+                        changed = True
+                    s["price"] = r["price"]
+            for key in [k for k in self.by_key if k not in seen]:
+                s = self.by_key.pop(key)
+                s["status"] = "closed"
+                s["exit"] = s.get("price")
+                s["closeTime"] = now()
+                sign = 1 if s["side"] == "long" else -1
+                s["result"] = (s["exit"] - s["entry"]) * sign if s.get("exit") is not None else None
+                changed = True
+            del self.items[200:]
+        if changed:
+            self.server.save_state()
+
 
 class BotServer:
     def __init__(self):
@@ -1943,6 +2175,7 @@ class BotServer:
         self.paper = state.get("paper") or {"balance": float(self.config["paper_balance"]), "positions": [], "history": []}
         self.mt5_memory = state.get("mt5Memory") or {}
         self.copy_state = state.get("copy") or {}
+        self.signal_state = state.get("signals") or []
         self.log_entries = state.get("log") or []
         self.feed = None
         self.feed_key = None
@@ -1956,6 +2189,7 @@ class BotServer:
         self.tunnel_url = ""
         self.mt5_account = Mt5Account(self)
         self.copier = CopyTrader(self)
+        self.members = Members(self)
         self.telegram = Telegram(self)
         self.tunnel = Tunnel(self) if self.config.get("tunnel") else None
 
@@ -1967,7 +2201,8 @@ class BotServer:
     def save_state(self):
         with self.lock:
             write_json(STATE_PATH, {"settings": self.settings, "paper": self.paper, "mt5Memory": self.mt5_memory,
-                                    "copy": self.copy_state, "log": self.log_entries[:300]})
+                                    "copy": self.copy_state, "signals": self.signal_state,
+                                    "log": self.log_entries[:300]})
 
     def log(self, text, notify=False):
         with self.lock:
@@ -2375,12 +2610,23 @@ def make_handler(server):
             self.end_headers()
             self.wfile.write(data)
 
-        def _authorized(self):
+        def _authorized(self, path):
+            """True for the owner; a member (their entry) only on /member/ paths."""
             header = self.headers.get("Authorization", "")
             given = header[7:] if header.startswith("Bearer ") else self.headers.get("X-Bot-Password", "")
             if given and hmac.compare_digest(given.encode(), server.config["password"].encode()):
                 failures["count"] = 0
+                if path.startswith("/member/"):
+                    self._send(403, {"ok": False, "error": "Đây là mật khẩu chủ máy chủ: dùng mã thành viên"})
+                    return False
                 return True
+            member = server.members.by_code(given) if given else None
+            if member is not None:
+                failures["count"] = 0
+                if not path.startswith("/member/"):
+                    self._send(403, {"ok": False, "error": "Mã thành viên chỉ xem được tín hiệu"})
+                    return False
+                return member
             failures["count"] += 1
             time.sleep(min(5, failures["count"]))  # slows down password guessing
             self._send(401, {"ok": False, "error": "Sai mật khẩu máy chủ"})
@@ -2399,9 +2645,21 @@ def make_handler(server):
             limit = int((params.get("limit") or ["100"])[0])
             if path == "/ping":
                 return self._send(200, {"ok": True, "app": "gold-bot", "version": VERSION})
-            if not self._authorized():
+            who = self._authorized(path)
+            if not who:
                 return
             try:
+                if isinstance(who, dict):
+                    server.members.check(who)
+                    if path == "/member/me":
+                        return self._send(200, server.members.me(who))
+                    if path == "/member/signals":
+                        return self._send(200, server.members.signals(min(limit, 200)))
+                    if path == "/member/copy":
+                        return self._send(200, server.members.copy_status(who))
+                    return self._send(404, {"ok": False, "error": "Không có đường dẫn này"})
+                if path == "/members":
+                    return self._send(200, server.members.list())
                 if path == "/status":
                     return self._send(200, server.status())
                 if path == "/log":
@@ -2433,6 +2691,8 @@ def make_handler(server):
                         symbol, (params.get("interval") or ["1m"])[0], (params.get("count") or ["500"])[0],
                         (params.get("before") or [None])[0]))
                 self._send(404, {"ok": False, "error": "Không có đường dẫn này"})
+            except PermissionError as e:
+                self._send(403, {"ok": False, "error": str(e)})
             except ValueError as e:
                 self._send(400, {"ok": False, "error": str(e)})
             except Exception as e:
@@ -2440,10 +2700,24 @@ def make_handler(server):
 
         def do_POST(self):
             path = self.path.partition("?")[0]
-            if not self._authorized():
+            who = self._authorized(path)
+            if not who:
                 return
             try:
                 body = self._body()
+                if isinstance(who, dict):
+                    server.members.check(who)
+                    if path == "/member/copy":
+                        return self._send(200, server.members.copy_save(who, body))
+                    if path == "/member/copy/remove":
+                        return self._send(200, server.members.copy_remove(who))
+                    return self._send(404, {"ok": False, "error": "Không có đường dẫn này"})
+                if path == "/members/save":
+                    return self._send(200, server.members.save(body))
+                if path == "/members/code":
+                    return self._send(200, server.members.new_code(body))
+                if path == "/members/remove":
+                    return self._send(200, server.members.remove(body))
                 if path == "/start":
                     server.start(body)
                     return self._send(200, server.status())
@@ -2486,6 +2760,8 @@ def make_handler(server):
                     server.telegram.send("🔔 Thử thông báo từ máy chủ bot")
                     return self._send(200, {"ok": True})
                 self._send(404, {"ok": False, "error": "Không có đường dẫn này"})
+            except PermissionError as e:
+                self._send(403, {"ok": False, "error": str(e)})
             except ValueError as e:
                 self._send(400, {"ok": False, "error": str(e)})
             except Exception as e:
