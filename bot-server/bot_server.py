@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.6"
+VERSION = "1.7"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -1932,6 +1932,10 @@ DEFAULT_SETTINGS = {
 
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
+# What members' apps show besides the chart and the signals (the owner chooses).
+DEFAULT_MEMBER_FEATURES = {"news": True, "killzones": True, "sharkflow": True, "demo": True,
+                           "indicators": False, "backtest": False}
+
 
 def new_member_code():
     raw = "".join(secrets.choice(CODE_ALPHABET) for _ in range(12))
@@ -1959,6 +1963,20 @@ class Members:
     @property
     def cfg(self):
         return self.server.config.setdefault("members", [])
+
+    @property
+    def features(self):
+        saved = self.server.config.get("memberFeatures") or {}
+        return {k: bool(saved.get(k, v)) for k, v in DEFAULT_MEMBER_FEATURES.items()}
+
+    def set_features(self, body):
+        features = self.features
+        for key in DEFAULT_MEMBER_FEATURES:
+            if key in body:
+                features[key] = bool(body[key])
+        self.server.config["memberFeatures"] = features
+        self.server.save_config()
+        return self.list()
 
     # ----- members -----
 
@@ -1995,7 +2013,7 @@ class Members:
         with self.lock:
             open_count = sum(1 for s in self.items if s.get("status") == "open")
             return {"ok": True, "members": [self.public(m) for m in self.cfg], "openSignals": open_count,
-                    "signals": len(self.items), "url": self.server.tunnel_url}
+                    "signals": len(self.items), "url": self.server.tunnel_url, "features": self.features}
 
     def save(self, body):
         mid = str(body.get("id") or "")
@@ -2043,7 +2061,8 @@ class Members:
 
     def me(self, m):
         return {"ok": True, "name": m["name"], "role": m["role"], "expires": m.get("expires") or None,
-                "version": VERSION, "ownerCopyOn": bool(self.server.copier.cfg["enabled"])}
+                "version": VERSION, "ownerCopyOn": bool(self.server.copier.cfg["enabled"]),
+                "features": self.features}
 
     def signals(self, limit=60):
         with self.lock:
@@ -2716,6 +2735,8 @@ def make_handler(server):
                     return self._send(200, server.members.save(body))
                 if path == "/members/code":
                     return self._send(200, server.members.new_code(body))
+                if path == "/members/features":
+                    return self._send(200, server.members.set_features(body))
                 if path == "/members/remove":
                     return self._send(200, server.members.remove(body))
                 if path == "/start":

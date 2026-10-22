@@ -25,7 +25,7 @@ struct LiveView: View {
 
     @AppStorage("live.theme") private var themeName = "tradingView"
     @AppStorage("live.showEMA200") private var showEMA200 = true
-    @AppStorage("live.killzonePivots.on") private var showKillzonePivots = true
+    @AppStorage("live.killzonePivots.on") private var killzonesSetting = true
     @AppStorage(KillzonePivotsSettings.storageKey) private var killzonePivotsJSON = ""
     @AppStorage("live.volume") private var showVolume = true
     @AppStorage("live.highLow") private var showHighLow = true
@@ -44,7 +44,7 @@ struct LiveView: View {
     @State private var showAutoStopSettings = false
     @State private var replay = ReplaySession()
     @State private var replaySummary: String?
-    @AppStorage("live.showTradeButtons") private var showTradeButtons = true
+    @AppStorage("live.showTradeButtons") private var tradeButtonsSetting = true
     /// Timeframes shown in the row under the price; the rest are in the ▾ picker.
     @AppStorage("live.favoriteIntervals") private var favoriteIntervalsText = "1m,5m,15m,1h,4h,1D"
     @State private var showIntervalPicker = false
@@ -92,7 +92,7 @@ struct LiveView: View {
     @State private var indicatorCache = LiveIndicatorCache()
     /// Results reused between frames while the chart is dragged.
     @State private var frameCache = LiveFrameCache()
-    @AppStorage(LiveIndicators.sharkKey) private var showSharkFlow = false
+    @AppStorage(LiveIndicators.sharkKey) private var sharkSetting = false
     @AppStorage(LiveIndicators.sharkMultipleKey) private var sharkMultiple = 2.5
     @State private var showKillzoneSettings = false
     @State private var showOandaSettings = false
@@ -100,6 +100,15 @@ struct LiveView: View {
     @State private var pendingOandaInstrument: String?
 
     private var theme: ChartTheme { themeName == "binance" ? .binance : .tradingView }
+
+    // In a member's app the owner decides which of these show (Thành viên & mã mời).
+    private var showKillzonePivots: Bool { killzonesSetting && memberFeed.allows(.killzones) }
+    private var showSharkFlow: Bool { sharkSetting && memberFeed.allows(.sharkflow) }
+    private var canTrade: Bool { memberFeed.allows(.demo) }
+    private var showTradeButtons: Bool {
+        get { tradeButtonsSetting && canTrade }
+        nonmutating set { tradeButtonsSetting = newValue }
+    }
     private var drawingKey: String { "\(market.source.rawValue):\(market.symbol)" }
     private var drawings: [Drawing] { store.drawings(for: drawingKey) }
 
@@ -271,6 +280,13 @@ struct LiveView: View {
         let decimals = priceDecimals ?? CandleChart.decimals(for: last)
         let changeColor = changePct >= 0 ? theme.up : theme.down
         return VStack(alignment: .leading, spacing: 6) {
+            if memberFeed.isPreview {
+                HStack {
+                    Text("👁 Đang xem như thành viên").font(.system(size: 12, weight: .semibold)).foregroundColor(.orange)
+                    Spacer()
+                    previewBadge
+                }
+            }
             HStack(alignment: .center, spacing: 8) {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
@@ -305,15 +321,17 @@ struct LiveView: View {
                     }
                 }
                 Spacer(minLength: 6)
-                LiveBotControl(theme: theme)
-                VStack(spacing: 6) {
-                    // Shows or hides the SELL | lot | BUY bar under the chart.
-                    headerButton("BUY/SELL", systemImage: showTradeButtons ? "chevron.down" : "arrow.left.arrow.right",
-                                 filled: showTradeButtons) { showTradeButtons.toggle() }
-                        .accessibilityLabel(showTradeButtons ? "Ẩn nút giao dịch" : "Hiện nút giao dịch")
-                    headerButton(orderTicket != nil ? "Đóng" : "Lệnh chờ",
-                                 systemImage: orderTicket != nil ? "xmark" : "plus.forwardslash.minus",
-                                 filled: orderTicket != nil) { toggleTicket() }
+                if !memberFeed.memberMode { LiveBotControl(theme: theme) }
+                if canTrade {
+                    VStack(spacing: 6) {
+                        // Shows or hides the SELL | lot | BUY bar under the chart.
+                        headerButton("BUY/SELL", systemImage: showTradeButtons ? "chevron.down" : "arrow.left.arrow.right",
+                                     filled: showTradeButtons) { showTradeButtons.toggle() }
+                            .accessibilityLabel(showTradeButtons ? "Ẩn nút giao dịch" : "Hiện nút giao dịch")
+                        headerButton(orderTicket != nil ? "Đóng" : "Lệnh chờ",
+                                     systemImage: orderTicket != nil ? "xmark" : "plus.forwardslash.minus",
+                                     filled: orderTicket != nil) { toggleTicket() }
+                    }
                 }
             }
             legend
@@ -321,6 +339,18 @@ struct LiveView: View {
         .padding(.horizontal, 14)
         .padding(.top, 6)
         .padding(.bottom, 2)
+    }
+
+    /// The owner trying the member side: tap to go back.
+    private var previewBadge: some View {
+        Button { memberFeed.disconnect() } label: {
+            Label("Thoát xem thử", systemImage: "eye.slash")
+                .font(.system(size: 12, weight: .semibold))
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                .foregroundColor(.white)
+                .background(Capsule().fill(Color.orange))
+        }
+        .buttonStyle(.plain)
     }
 
     private func headerButton(_ title: String, systemImage: String, filled: Bool,
@@ -908,7 +938,8 @@ struct LiveView: View {
     }
 
     /// On an MT5 chart orders go to the broker account on the VPS.
-    private var tradesMT5: Bool { market.source == .mt5 && !replay.isActive }
+    /// Members trade only the demo account, never the owner's MT5 account.
+    private var tradesMT5: Bool { market.source == .mt5 && !replay.isActive && !memberFeed.memberMode }
 
     /// Runs an MT5 order (no confirmation, also on a real account).
     private func sendMT5(_ order: @escaping () async -> Void) {

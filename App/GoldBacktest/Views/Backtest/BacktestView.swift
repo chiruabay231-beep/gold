@@ -19,6 +19,7 @@ struct BacktestRun: Identifiable, Hashable {
 struct BacktestView: View {
     @Environment(AppStore.self) private var store
     @Environment(LiveMarket.self) private var market
+    @Environment(MemberFeed.self) private var memberFeed
 
     /// "exness" or "file".
     @AppStorage("backtest.source") private var source = "exness"
@@ -176,8 +177,10 @@ struct BacktestView: View {
             ToolbarItem(placement: .primaryAction) {
                 NavigationLink { StrategyListView() } label: { Label("Chiến lược", systemImage: "list.bullet.rectangle") }
             }
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationLink { BotView() } label: { Label("Bot", systemImage: "cpu") }
+            if !memberFeed.memberMode {
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink { BotView() } label: { Label("Bot", systemImage: "cpu") }
+                }
             }
         }
         .navigationDestination(item: $run) { run in

@@ -11,6 +11,7 @@ struct LiveIndicatorSheet: View {
     var onManage: () -> Void
 
     @Environment(AppStore.self) private var store
+    @Environment(MemberFeed.self) private var memberFeed
     @Environment(\.dismiss) private var dismiss
     @AppStorage("live.killzonePivots.on") private var showKillzonePivots = true
     @AppStorage(LiveIndicators.storageKey) private var liveIndicatorIDs = ""
@@ -23,42 +24,48 @@ struct LiveIndicatorSheet: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("ICT") {
-                    Toggle(LiveView.killzonePivotsName, isOn: $showKillzonePivots)
-                    Button {
-                        onKillzoneSettings()
-                        dismiss()
-                    } label: {
-                        Label("Cài đặt Killzones + Pivots…", systemImage: "gearshape")
-                    }
-                }
-                Section("Chỉ báo của bạn (tab Chỉ báo)") {
-                    ForEach(store.indicators) { indicator in
-                        Toggle(indicator.title, isOn: Binding(
-                            get: { LiveIndicators.ids(liveIndicatorIDs).contains(indicator.id) },
-                            set: { _ in liveIndicatorIDs = LiveIndicators.toggled(indicator.id, in: liveIndicatorIDs) }))
-                    }
-                    Button {
-                        onManage()
-                        dismiss()
-                    } label: {
-                        Label(store.indicators.isEmpty ? "Viết chỉ báo mới…" : "Quản lý / sửa chỉ báo…", systemImage: "square.and.pencil")
-                    }
-                }
-                Section {
-                    Toggle("🦈 Dòng tiền cá mập", isOn: $showSharkFlow)
-                    if showSharkFlow {
-                        Picker("Cá mập khi khối lượng ≥", selection: $sharkMultiple) {
-                            Text("2 × trung bình").tag(2.0)
-                            Text("2.5 × trung bình").tag(2.5)
-                            Text("3 × trung bình").tag(3.0)
-                            Text("4 × trung bình").tag(4.0)
+                if memberFeed.allows(.killzones) {
+                    Section("ICT") {
+                        Toggle(LiveView.killzonePivotsName, isOn: $showKillzonePivots)
+                        Button {
+                            onKillzoneSettings()
+                            dismiss()
+                        } label: {
+                            Label("Cài đặt Killzones + Pivots…", systemImage: "gearshape")
                         }
                     }
-                } header: {
-                    Text("Dòng tiền")
-                } footer: {
-                    Text("Hai dòng chữ trên biểu đồ: dòng tiền đang vào hay ra, và ý nghĩa — giá tăng + tiền vào = tăng khoẻ; ⚠️ giá tăng nhưng tiền ra = tăng yếu, dễ đảo chiều; giá giảm + tiền ra = giảm khoẻ; ⚠️ giá giảm nhưng tiền vào = có người gom, dễ bật lên. Bong bóng 🦈 trên nến = khối lượng lớn bất thường: xanh dưới nến là cá mập MUA, đỏ trên nến là cá mập BÁN. Sàn forex/CFD (Exness) không có khối lượng thật nên đây là ước lượng.")
+                }
+                if memberFeed.allows(.indicators) {
+                    Section("Chỉ báo của bạn (tab Chỉ báo)") {
+                        ForEach(store.indicators) { indicator in
+                            Toggle(indicator.title, isOn: Binding(
+                                get: { LiveIndicators.ids(liveIndicatorIDs).contains(indicator.id) },
+                                set: { _ in liveIndicatorIDs = LiveIndicators.toggled(indicator.id, in: liveIndicatorIDs) }))
+                        }
+                        Button {
+                            onManage()
+                            dismiss()
+                        } label: {
+                            Label(store.indicators.isEmpty ? "Viết chỉ báo mới…" : "Quản lý / sửa chỉ báo…", systemImage: "square.and.pencil")
+                        }
+                    }
+                }
+                if memberFeed.allows(.sharkflow) {
+                    Section {
+                        Toggle("🦈 Dòng tiền cá mập", isOn: $showSharkFlow)
+                        if showSharkFlow {
+                            Picker("Cá mập khi khối lượng ≥", selection: $sharkMultiple) {
+                                Text("2 × trung bình").tag(2.0)
+                                Text("2.5 × trung bình").tag(2.5)
+                                Text("3 × trung bình").tag(3.0)
+                                Text("4 × trung bình").tag(4.0)
+                            }
+                        }
+                    } header: {
+                        Text("Dòng tiền")
+                    } footer: {
+                        Text("Hai dòng chữ trên biểu đồ: dòng tiền đang vào hay ra, và ý nghĩa — giá tăng + tiền vào = tăng khoẻ; ⚠️ giá tăng nhưng tiền ra = tăng yếu, dễ đảo chiều; giá giảm + tiền ra = giảm khoẻ; ⚠️ giá giảm nhưng tiền vào = có người gom, dễ bật lên. Bong bóng 🦈 trên nến = khối lượng lớn bất thường: xanh dưới nến là cá mập MUA, đỏ trên nến là cá mập BÁN. Sàn forex/CFD (Exness) không có khối lượng thật nên đây là ước lượng.")
+                    }
                 }
                 Section("Khác") {
                     Toggle("EMA 200", isOn: $showEMA200)

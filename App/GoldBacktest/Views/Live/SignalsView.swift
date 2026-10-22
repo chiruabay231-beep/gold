@@ -27,7 +27,7 @@ struct SignalsView: View {
             } else {
                 connectSection
             }
-            if ownerConnected {
+            if ownerConnected && !feed.memberMode {
                 Section {
                     NavigationLink { MembersView() } label: {
                         Label("Thành viên & mã mời", systemImage: "person.2.badge.key")
@@ -134,11 +134,18 @@ struct SignalsView: View {
                         .font(.caption).foregroundColor(.secondary)
                 }
                 Spacer()
-                Button { confirmDisconnect = true } label: {
-                    Image(systemName: "rectangle.portrait.and.arrow.right").foregroundColor(.secondary)
+                if feed.isPreview {
+                    Button("Thoát xem thử") { feed.disconnect() }
+                        .buttonStyle(.borderedProminent)
+                        .tint(.orange)
+                        .font(.footnote.weight(.semibold))
+                } else {
+                    Button { confirmDisconnect = true } label: {
+                        Image(systemName: "rectangle.portrait.and.arrow.right").foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel("Ngắt kết nối")
                 }
-                .buttonStyle(.borderless)
-                .accessibilityLabel("Ngắt kết nối")
             }
             if let error = feed.error {
                 Text(error).font(.footnote).foregroundColor(.orange)
@@ -294,7 +301,10 @@ struct SignalRow: View {
 // MARK: - Owner: members and invite codes
 
 struct MembersView: View {
+    @Environment(MemberFeed.self) private var memberFeed
+    @Environment(AppStore.self) private var store
     @State private var list: MembersList?
+    @State private var startingPreview = false
     @State private var error: String?
     @State private var editing: MemberRow?
     @State private var adding = false
@@ -329,6 +339,36 @@ struct MembersView: View {
                 Text("Chạm để sửa quyền, hạn dùng hoặc đổi mã. Vuốt trái để khoá hoặc xoá. Khoá hay hết hạn thì người đó mất tín hiệu và ngừng copy ngay.")
             }
             if let list {
+                Section {
+                    ForEach(MemberFeature.allCases) { feature in
+                        Toggle(feature.title, isOn: Binding(
+                            get: { list.features?[feature.rawValue] ?? feature.defaultOn },
+                            set: { on in
+                                var features = list.features ?? [:]
+                                features[feature.rawValue] = on
+                                Task { await perform { try await $0.memberFeatures(features) } }
+                            }))
+                    }
+                } header: {
+                    Text("Thành viên được xem")
+                } footer: {
+                    Text("Biểu đồ Live và trang Tín hiệu luôn có. Thành viên không bao giờ thấy Bot, tài khoản sàn, copy trade, chiến lược hay đăng nhập của bạn; nút BUY/SELL của họ chỉ đặt lệnh demo trong app.")
+                }
+                Section {
+                    Menu {
+                        Button("Xem như: chỉ tín hiệu") { startPreview(role: "signals") }
+                        Button("Xem như: tín hiệu + copy lệnh") { startPreview(role: "copy") }
+                    } label: {
+                        HStack {
+                            Label("Xem thử như thành viên", systemImage: "eye")
+                            Spacer()
+                            if startingPreview { ProgressView() }
+                        }
+                    }
+                    .disabled(startingPreview)
+                } footer: {
+                    Text("Máy này chuyển sang đúng giao diện thành viên (dùng một mã thử riêng). Bấm \"Thoát xem thử\" ở trên biểu đồ để quay lại.")
+                }
                 Section {
                     LabeledContent("Tín hiệu đang mở", value: "\(list.openSignals ?? 0)")
                     LabeledContent("Tín hiệu đã ghi", value: "\(list.signals ?? 0)")
@@ -398,6 +438,36 @@ struct MembersView: View {
         Text(text).font(.caption2.weight(.semibold)).foregroundColor(.white)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .background(color, in: Capsule())
+    }
+
+    static let previewName = "🧪 Xem thử (chủ)"
+
+    /// Makes (or re-codes) a test member and switches this phone to its view.
+    private func startPreview(role: String) {
+        guard let client = RemoteBotSettings.client() else { return }
+        startingPreview = true
+        Task {
+            defer { startingPreview = false }
+            do {
+                let existing = list?.members.first { $0.name == Self.previewName }
+                var result: MembersList
+                if let existing {
+                    result = try await client.memberSave(id: existing.id, name: Self.previewName, role: role, enabled: true, days: 0)
+                    result = try await client.memberNewCode(id: existing.id)
+                } else {
+                    result = try await client.memberSave(id: nil, name: Self.previewName, role: role, enabled: true, days: 0)
+                }
+                list = result
+                guard let code = result.code else { return }
+                if await memberFeed.connect(url: RemoteBotSettings.url, code: code, preview: true) {
+                    store.selectedTab = .live
+                } else {
+                    error = memberFeed.error ?? "Không vào được chế độ xem thử"
+                }
+            } catch {
+                self.error = error.localizedDescription
+            }
+        }
     }
 
     private func save(id: String?, name: String, role: String, enabled: Bool, days: Double?) async {

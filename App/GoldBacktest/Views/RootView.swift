@@ -4,25 +4,42 @@ struct RootView: View {
     @Environment(AppStore.self) private var store
     @Environment(NewsStore.self) private var news
 
+    @Environment(MemberFeed.self) private var memberFeed
+
     var body: some View {
         @Bindable var store = store
+        let member = memberFeed.memberMode
         TabView(selection: $store.selectedTab) {
             NavigationStack { LiveView() }
                 .tabItem { Label("Live", systemImage: "waveform.path.ecg.rectangle") }
                 .tag(AppTab.live)
-            NavigationStack { TradeRootView() }
-                .tabItem { Label("Giao dịch", systemImage: "briefcase") }
-                .tag(AppTab.trade)
-            NavigationStack { IndicatorListView() }
-                .tabItem { Label("Chỉ báo", systemImage: "function") }
-                .tag(AppTab.indicators)
-            NavigationStack { NewsView() }
-                .tabItem { Label("Tin tức", systemImage: "newspaper") }
-                .tag(AppTab.news)
-            NavigationStack { BacktestView() }
-                .tabItem { Label("Backtest", systemImage: "play.circle") }
-                .tag(AppTab.backtest)
+            if member {
+                // A member's app: the signals instead of the owner's accounts.
+                NavigationStack { SignalsView() }
+                    .tabItem { Label("Tín hiệu", systemImage: "antenna.radiowaves.left.and.right") }
+                    .tag(AppTab.trade)
+            } else {
+                NavigationStack { TradeRootView() }
+                    .tabItem { Label("Giao dịch", systemImage: "briefcase") }
+                    .tag(AppTab.trade)
+            }
+            if memberFeed.allows(.indicators) {
+                NavigationStack { IndicatorListView() }
+                    .tabItem { Label("Chỉ báo", systemImage: "function") }
+                    .tag(AppTab.indicators)
+            }
+            if memberFeed.allows(.news) {
+                NavigationStack { NewsView() }
+                    .tabItem { Label("Tin tức", systemImage: "newspaper") }
+                    .tag(AppTab.news)
+            }
+            if memberFeed.allows(.backtest) {
+                NavigationStack { BacktestView() }
+                    .tabItem { Label("Backtest", systemImage: "play.circle") }
+                    .tag(AppTab.backtest)
+            }
         }
+        .onChange(of: member) { store.selectedTab = .live }
         // Watches gold for sudden moves and their news while the app runs.
         .task { await news.monitor() }
         .alert("Lỗi", isPresented: Binding(

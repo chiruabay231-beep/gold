@@ -54,9 +54,42 @@ enum MemberSettings {
         return RemoteBotClient(baseURL: url, password: code)
     }
 
+    /// The owner trying the member side on their own phone ("Xem thử như thành viên").
+    static var preview: Bool {
+        get { UserDefaults.standard.bool(forKey: "member.preview") }
+        set { UserDefaults.standard.set(newValue, forKey: "member.preview") }
+    }
+
     static func disconnect() {
         saveCode("")
         url = ""
+        preview = false
+    }
+}
+
+/// Parts of the app a member's app shows besides the chart and the signals; the
+/// owner switches them on the VPS (Thành viên & mã mời).
+enum MemberFeature: String, CaseIterable, Identifiable {
+    case news, killzones, sharkflow, demo, indicators, backtest
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .news: return "Tin tức"
+        case .killzones: return "Chỉ báo ICT Killzones (FVG, đỉnh đáy…)"
+        case .sharkflow: return "Dòng tiền cá mập"
+        case .demo: return "Nút BUY/SELL (giao dịch demo)"
+        case .indicators: return "Tab Chỉ báo (tự viết chỉ báo)"
+        case .backtest: return "Tab Backtest"
+        }
+    }
+
+    /// Same defaults as the server.
+    var defaultOn: Bool {
+        switch self {
+        case .news, .killzones, .sharkflow, .demo: return true
+        case .indicators, .backtest: return false
+        }
     }
 }
 
@@ -69,6 +102,8 @@ struct MemberInfo: Decodable {
     var version: String?
     /// Copying runs only while the owner has copy trade on.
     var ownerCopyOn: Bool?
+    /// What the owner lets members see (MemberFeature raw values).
+    var features: [String: Bool]?
 
     var canCopy: Bool { role == "copy" }
 }
@@ -132,6 +167,7 @@ struct MembersList: Decodable {
     /// The new invite code, only right after adding a member or changing its code.
     var code: String?
     var member: MemberRow?
+    var features: [String: Bool]?
 }
 
 extension RemoteBotClient {
@@ -176,6 +212,10 @@ extension RemoteBotClient {
         try await json("/members/code", ["id": id], as: MembersList.self)
     }
 
+    func memberFeatures(_ features: [String: Bool]) async throws -> MembersList {
+        try await json("/members/features", features, as: MembersList.self)
+    }
+
     func memberRemove(id: String) async throws -> MembersList {
         try await json("/members/remove", ["id": id], as: MembersList.self)
     }
@@ -194,6 +234,23 @@ final class MemberFeed {
 
     var isConnected: Bool { MemberSettings.client() != nil }
     var openSignals: [TradeSignal] { signals.filter(\.isOpen) }
+
+    /// The app shows only what members get: a member's phone (no owner password),
+    /// or the owner's phone while trying it out.
+    private(set) var memberMode = MemberFeed.computeMode()
+
+    private static func computeMode() -> Bool {
+        MemberSettings.client() != nil && (RemoteBotSettings.client() == nil || MemberSettings.preview)
+    }
+
+    /// Owner's phone, trying the member side.
+    var isPreview: Bool { memberMode && MemberSettings.preview }
+
+    /// Whether a part of the app shows (always, outside member mode).
+    func allows(_ feature: MemberFeature) -> Bool {
+        guard memberMode else { return true }
+        return info?.features?[feature.rawValue] ?? feature.defaultOn
+    }
 
     func refresh() async {
         guard let client = MemberSettings.client() else {
@@ -217,15 +274,18 @@ final class MemberFeed {
         }
     }
 
-    func connect(url: String, code: String) async -> Bool {
+    func connect(url: String, code: String, preview: Bool = false) async -> Bool {
         MemberSettings.url = url
         MemberSettings.saveCode(code)
+        MemberSettings.preview = preview
         connectionID = UUID()
         await refresh()
         if info == nil {
             MemberSettings.disconnect()
+            memberMode = Self.computeMode()
             return false
         }
+        memberMode = Self.computeMode()
         return true
     }
 
@@ -235,6 +295,7 @@ final class MemberFeed {
         signals = []
         error = nil
         connectionID = UUID()
+        memberMode = Self.computeMode()
     }
 
     /// Open signals of a chart's market: XAUUSD, XAUUSDm, XAUUSDT and XAU_USD all match.
