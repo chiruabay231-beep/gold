@@ -347,8 +347,11 @@ extension RemoteBotClient {
         return try await post("/mt5/order", object, as: MT5TradingState.self)
     }
 
-    func mt5Close(ticket: Int) async throws -> MT5TradingState {
-        try await post("/mt5/close", ["ticket": ticket], as: MT5TradingState.self)
+    /// Closes a position, or `lots` of it.
+    func mt5Close(ticket: Int, lots: Double? = nil) async throws -> MT5TradingState {
+        var object: [String: Any] = ["ticket": ticket]
+        if let lots { object["lots"] = lots }
+        return try await post("/mt5/close", object, as: MT5TradingState.self)
     }
 
     /// New SL/TP of a position, or new entry/SL/TP of a pending order. nil removes SL or TP.

@@ -74,6 +74,10 @@ public struct PaperAccount: Codable, Hashable, Sendable {
         public var closeTime: Date
         public var reason: ExitReason
         public var profit: Double
+        /// SL and TP when it closed, and the first SL (moved since if they differ).
+        public var stop: Double? = nil
+        public var target: Double? = nil
+        public var initialStop: Double? = nil
     }
 
     public enum Event: Hashable, Sendable {
@@ -145,7 +149,8 @@ public struct PaperAccount: Codable, Hashable, Sendable {
         guard let index = positions.firstIndex(where: { $0.id == positionID }) else { return nil }
         let p = positions.remove(at: index)
         let trade = ClosedTrade(id: p.id, symbol: p.symbol, side: p.side, lots: p.lots, entryPrice: p.entryPrice,
-                                exitPrice: price, openTime: p.openTime, closeTime: time, reason: reason, profit: p.profit(at: price))
+                                exitPrice: price, openTime: p.openTime, closeTime: time, reason: reason, profit: p.profit(at: price),
+                                stop: p.stop, target: p.target, initialStop: p.initialStop)
         balance += trade.profit
         history.insert(trade, at: 0)
         return trade

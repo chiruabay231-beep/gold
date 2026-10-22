@@ -29,7 +29,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.4"
+VERSION = "1.5"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -867,6 +867,7 @@ class Mt5Account:
                 summary["commission"] += d.commission + fee
                 if d.position_id:
                     by_position.setdefault(int(d.position_id), []).append(d)
+            orders_by_ticket = {int(o.ticket): o for o in orders_raw}
             positions = []
             for pid, rows in by_position.items():
                 ins = [r for r in rows if r.entry == getattr(mt5, "DEAL_ENTRY_IN", 0)]
@@ -876,12 +877,25 @@ class Mt5Account:
                 first = ins[0]
                 lots = sum(r.volume for r in outs)
                 exit_price = sum(r.price * r.volume for r in outs) / lots if lots else outs[-1].price
+                reason = {mt5.DEAL_REASON_SL: "stop", mt5.DEAL_REASON_TP: "target"}.get(outs[-1].reason, "manual")
+                # SL/TP when it closed (the deal keeps the position's levels), and those it opened with.
+                stop = getattr(outs[-1], "sl", 0) or (outs[-1].price if reason == "stop" else 0)
+                target = getattr(outs[-1], "tp", 0) or (outs[-1].price if reason == "target" else 0)
+                opening = orders_by_ticket.get(int(getattr(first, "order", 0) or 0))
+                if opening is None and getattr(first, "order", 0) and hasattr(mt5, "history_orders_get"):
+                    try:
+                        opening = next(iter(mt5.history_orders_get(ticket=int(first.order)) or ()), None)
+                    except (TypeError, RuntimeError):
+                        opening = None
+                stop_open = getattr(first, "sl", 0) or (opening.sl if opening is not None else 0)
+                target_open = getattr(first, "tp", 0) or (opening.tp if opening is not None else 0)
                 positions.append({"ticket": pid, "symbol": first.symbol,
                                   "side": "long" if first.type == mt5.DEAL_TYPE_BUY else "short",
                                   "lots": lots, "entry": first.price, "exit": exit_price,
                                   "openTime": float(first.time) - offset, "closeTime": float(outs[-1].time) - offset,
                                   "profit": sum(r.profit + r.swap + r.commission + (getattr(r, "fee", 0) or 0) for r in rows),
-                                  "reason": {mt5.DEAL_REASON_SL: "stop", mt5.DEAL_REASON_TP: "target"}.get(outs[-1].reason, "manual")})
+                                  "reason": reason, "stop": stop or None, "target": target or None,
+                                  "stopOpen": stop_open or None, "targetOpen": target_open or None})
             order_names = {mt5.ORDER_TYPE_BUY: "buy", mt5.ORDER_TYPE_SELL: "sell", mt5.ORDER_TYPE_BUY_LIMIT: "buy limit",
                            mt5.ORDER_TYPE_SELL_LIMIT: "sell limit", mt5.ORDER_TYPE_BUY_STOP: "buy stop",
                            mt5.ORDER_TYPE_SELL_STOP: "sell stop"}

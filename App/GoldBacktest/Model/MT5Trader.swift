@@ -61,8 +61,9 @@ final class MT5Trader {
         await perform { try await $0.mt5Order(symbol: symbol, side: side, lots: lots, price: entry, stop: stop, target: target) }
     }
 
-    func close(_ ticket: Int) async {
-        await perform { try await $0.mt5Close(ticket: ticket) }
+    /// Closes the position, or only `lots` of it (partial close).
+    func close(_ ticket: Int, lots: Double? = nil) async {
+        await perform { try await $0.mt5Close(ticket: ticket, lots: lots) }
     }
 
     func modify(_ ticket: Int, entry: Double? = nil, stop: Double?, target: Double?) async {

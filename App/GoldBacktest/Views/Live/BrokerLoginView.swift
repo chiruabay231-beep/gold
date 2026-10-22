@@ -73,7 +73,7 @@ struct BrokerTradeView: View {
                             .contentShape(Rectangle())
                             .onTapGesture { closing = p }
                             .swipeActions {
-                                Button("Đóng", role: .destructive) { closing = p }
+                                Button("Đóng", role: .destructive) { Task { await mt5.close(p.ticket) } }
                             }
                     }
                 }
@@ -122,16 +122,9 @@ struct BrokerTradeView: View {
                 store.selectedTab = .live
             }
         }
-        .confirmationDialog(closing.map { "Đóng \($0.symbol) \($0.side == "long" ? "buy" : "sell") \(Self.lots($0.lots))?" } ?? "",
-                            isPresented: Binding(get: { closing != nil }, set: { if !$0 { closing = nil } }),
-                            titleVisibility: .visible) {
-            Button("Đóng lệnh", role: .destructive) {
-                if let ticket = closing?.ticket { Task { await mt5.close(ticket) } }
-                closing = nil
-            }
-        } message: {
-            if let p = closing {
-                Text("Vào \(Self.price(p.entry)) · SL \(p.stop.map(Self.price) ?? "–") · TP \(p.target.map(Self.price) ?? "–") · lãi/lỗ \(String(format: "%+.2f", p.profit))")
+        .sheet(item: $closing) { p in
+            ClosePositionSheet(position: p) { lots in
+                Task { await mt5.close(p.ticket, lots: lots < p.lots ? lots : nil) }
             }
         }
         .alert("Lệnh MT5", isPresented: Binding(get: { mt5.lastError != nil }, set: { if !$0 { mt5.lastError = nil } })) {
@@ -550,4 +543,84 @@ struct MT5SymbolSearchView: View {
             }
         }
     }
+}
+
+/// Tap an open position: close all of it or part of it (e.g. 0.03 of 0.10 lot).
+struct ClosePositionSheet: View {
+    let position: MT5TradingState.Position
+    var onClose: (Double) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var lots: Double
+
+    init(position: MT5TradingState.Position, onClose: @escaping (Double) -> Void) {
+        self.position = position
+        self.onClose = onClose
+        _lots = State(initialValue: position.lots)
+    }
+
+    private var all: Bool { lots >= position.lots - 1e-9 }
+
+    var body: some View {
+        let p = position
+        let buy = p.side == "long"
+        let share = p.lots > 0 ? p.profit * lots / p.lots : 0
+        VStack(spacing: 16) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(p.symbol).font(.system(size: 22, weight: .bold).width(.condensed))
+                Text("\(buy ? "buy" : "sell") \(BrokerTradeView.lots(p.lots))")
+                    .foregroundColor(buy ? OrderRow.profitColor : OrderRow.lossColor)
+                Spacer()
+                Text(String(format: "%+.2f", p.profit))
+                    .font(.system(size: 20, weight: .semibold).monospacedDigit())
+                    .foregroundColor(p.profit >= 0 ? OrderRow.profitColor : OrderRow.lossColor)
+            }
+            Text("Vào \(BrokerTradeView.price(p.entry)) → \(p.price.map(BrokerTradeView.price) ?? "–") · SL \(p.stop.map(BrokerTradeView.price) ?? "–") · TP \(p.target.map(BrokerTradeView.price) ?? "–")")
+                .font(.footnote.monospacedDigit())
+                .foregroundColor(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            // Lots to close.
+            HStack(spacing: 14) {
+                Button { lots = max(0.01, round2(lots - 0.01)) } label: { Image(systemName: "minus") }
+                    .buttonStyle(.bordered)
+                VStack(spacing: 0) {
+                    Text(BrokerTradeView.lots(lots))
+                        .font(.system(size: 30, weight: .semibold).monospacedDigit())
+                    Text("lot đóng").font(.caption).foregroundColor(.secondary)
+                }
+                .frame(minWidth: 110)
+                Button { lots = min(p.lots, round2(lots + 0.01)) } label: { Image(systemName: "plus") }
+                    .buttonStyle(.bordered)
+            }
+            HStack(spacing: 8) {
+                ForEach([0.25, 0.5, 0.75, 1.0], id: \.self) { fraction in
+                    let value = fraction == 1 ? p.lots : max(0.01, round2(p.lots * fraction))
+                    Button(fraction == 1 ? "Tất cả" : "\(Int(fraction * 100))%") { lots = value }
+                        .buttonStyle(.bordered)
+                        .tint(abs(lots - value) < 1e-9 ? .accentColor : .gray)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            Text("Lãi/lỗ phần đóng ≈ \(String(format: "%+.2f", share)) · còn lại \(BrokerTradeView.lots(round2(p.lots - lots))) lot")
+                .font(.footnote.monospacedDigit())
+                .foregroundColor(.secondary)
+            Button {
+                onClose(lots)
+                dismiss()
+            } label: {
+                Text(all ? "Đóng toàn bộ \(BrokerTradeView.lots(lots)) lot" : "Đóng \(BrokerTradeView.lots(lots)) lot")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+                    .foregroundColor(.white)
+                    .background(OrderRow.lossColor, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(20)
+        .presentationDetents([.height(400)])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func round2(_ value: Double) -> Double { (value * 100).rounded() / 100 }
 }

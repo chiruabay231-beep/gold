@@ -15,6 +15,11 @@ struct TradeHistory {
         var closeTime: Double
         var profit: Double
         var reason: String?
+        /// SL / TP when it closed, and when it opened (moved if they differ).
+        var stop: Double?
+        var target: Double?
+        var stopOpen: Double?
+        var targetOpen: Double?
         var id: Int { ticket }
     }
 
@@ -74,7 +79,8 @@ struct TradeHistory {
             let open = t.openTime.timeIntervalSince1970, close = t.closeTime.timeIntervalSince1970
             positions.append(Position(ticket: k, symbol: symbol, side: t.side.rawValue, lots: t.lots, entry: t.entryPrice,
                                       exit: t.exitPrice, openTime: open, closeTime: close, profit: t.profit,
-                                      reason: t.reason.rawValue))
+                                      reason: t.reason.rawValue, stop: t.stop, target: t.target,
+                                      stopOpen: t.initialStop, targetOpen: nil))
             orders.append(Order(ticket: k * 2, symbol: symbol, type: side, lots: t.lots, filled: t.lots, price: t.entryPrice,
                                 state: "filled", time: open, doneTime: open))
             orders.append(Order(ticket: k * 2 + 1, symbol: symbol, type: other, lots: t.lots, filled: t.lots, price: t.exitPrice,
@@ -107,7 +113,7 @@ struct TradeHistoryView: View {
     }
 
     enum Period: String, CaseIterable, Identifiable {
-        case today = "Hôm nay", week = "Tuần trước", month = "Tháng trước", threeMonths = "3 tháng trước", custom = "Tuỳ chỉnh"
+        case today = "Hôm nay", yesterday = "Hôm qua", week = "Tuần trước", month = "Tháng trước", threeMonths = "3 tháng trước", custom = "Tuỳ chỉnh"
         var id: String { rawValue }
     }
 
@@ -132,6 +138,8 @@ struct TradeHistoryView: View {
     @State private var history: TradeHistory?
     @State private var error: String?
     @State private var loading = false
+    /// A closed position tapped: its details with the SL/TP it had.
+    @State private var selected: TradeHistory.Position?
 
     private var page: Page { Page(rawValue: pageName) ?? .positions }
     private var period: Period { Period(rawValue: periodName) ?? .week }
@@ -143,6 +151,7 @@ struct TradeHistoryView: View {
         let today = calendar.startOfDay(for: now)
         switch period {
         case .today: return (today, now)
+        case .yesterday: return (calendar.date(byAdding: .day, value: -1, to: today) ?? today, today)
         case .week: return (calendar.date(byAdding: .day, value: -7, to: today) ?? today, now)
         case .month: return (calendar.date(byAdding: .month, value: -1, to: today) ?? today, now)
         case .threeMonths: return (calendar.date(byAdding: .month, value: -3, to: today) ?? today, now)
@@ -200,6 +209,16 @@ struct TradeHistoryView: View {
     // MARK: - Top bar
 
     private var topBar: some View {
+        topBarRow
+            .background {
+                // Details of a tapped closed position (here: one sheet for the whole list).
+                Color.clear.sheet(item: $selected) { p in
+                    ClosedPositionDetail(position: p, name: Self.name(p.symbol))
+                }
+            }
+    }
+
+    private var topBarRow: some View {
         HStack(spacing: 8) {
             Menu {
                 Picker("Sắp xếp", selection: $sortName) {
@@ -279,11 +298,16 @@ struct TradeHistoryView: View {
             let items = sorted(h.positions, time: \.closeTime, symbol: \.symbol, profit: { $0.profit })
             if items.isEmpty { empty }
             ForEach(items) { p in
-                HistoryRow(symbol: Self.name(p.symbol), side: p.side == "long" ? "buy" : "sell", lots: p.lots,
-                           detail: "\(Self.price(p.entry)) → \(Self.price(p.exit))",
-                           value: String(format: "%.2f", p.profit), valueColor: Self.color(p.profit),
-                           time: p.closeTime, marker: Self.marker(p.reason))
+                Button { selected = p } label: {
+                    HistoryRow(symbol: Self.name(p.symbol), side: p.side == "long" ? "buy" : "sell", lots: p.lots,
+                               detail: "\(Self.price(p.entry)) → \(Self.price(p.exit))",
+                               value: String(format: "%.2f", p.profit), valueColor: Self.color(p.profit),
+                               time: p.closeTime, marker: Self.marker(p.reason))
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
+
         case .orders:
             let items = sorted(h.orders, time: \.time, symbol: \.symbol, profit: { _ in 0 })
             if items.isEmpty { empty }
@@ -471,5 +495,108 @@ struct HistoryRow: View {
             .minimumScaleFactor(0.8)
         }
         .padding(.vertical, 4)
+    }
+}
+
+/// A closed position: prices, times and the SL / TP it had (where it was dragged to).
+struct ClosedPositionDetail: View {
+    let position: TradeHistory.Position
+    let name: String
+
+    @Environment(\.dismiss) private var dismiss
+
+    private static let formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "dd/MM HH:mm:ss"
+        return f
+    }()
+
+    var body: some View {
+        let p = position
+        let buy = p.side == "long"
+        NavigationStack {
+            List {
+                Section {
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(name).font(.system(size: 22, weight: .bold).width(.condensed))
+                        Text("\(buy ? "buy" : "sell") \(TradeHistoryView.lots(p.lots))")
+                            .foregroundColor(buy ? HistoryRow.blue : HistoryRow.red)
+                        Spacer()
+                        Text(String(format: "%+.2f", p.profit))
+                            .font(.system(size: 22, weight: .semibold).monospacedDigit())
+                            .foregroundColor(p.profit >= 0 ? HistoryRow.blue : HistoryRow.red)
+                    }
+                    row("Vào", TradeHistoryView.price(p.entry), time: p.openTime)
+                    row("Ra", TradeHistoryView.price(p.exit), time: p.closeTime)
+                }
+                Section {
+                    level("SL", now: p.stop, first: p.stopOpen, color: HistoryRow.red)
+                    level("TP", now: p.target, first: p.targetOpen, color: Color(red: 0.12, green: 0.66, blue: 0.36))
+                    LabeledContent("Đóng do") {
+                        Text(reason).foregroundColor(TradeHistoryView.marker(p.reason))
+                    }
+                    LabeledContent("Giữ lệnh", value: duration(p.closeTime - p.openTime))
+                } footer: {
+                    if p.stop == nil, p.target == nil, p.stopOpen == nil {
+                        Text("Lệnh này không có SL/TP (hoặc máy chủ VPS cũ chưa gửi SL/TP: cập nhật máy chủ).")
+                    }
+                }
+            }
+            .navigationTitle("Lệnh #\(p.ticket)")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Xong") { dismiss() } } }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private var reason: String {
+        switch position.reason {
+        case "stop": return "Chạm SL"
+        case "target": return "Chạm TP"
+        case "reversal": return "Bot tự đóng (đảo chiều)"
+        default: return "Đóng tay"
+        }
+    }
+
+    private func row(_ title: String, _ price: String, time: Double) -> some View {
+        LabeledContent(title) {
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(price).font(.body.monospacedDigit()).foregroundColor(.primary)
+                Text(Self.formatter.string(from: Date(timeIntervalSince1970: time))).font(.caption).foregroundColor(.secondary)
+            }
+        }
+    }
+
+    /// "4080.50", or "4075.00 → 4080.50 · đã kéo" when it was moved.
+    private func level(_ title: String, now: Double?, first: Double?, color: Color) -> some View {
+        LabeledContent {
+            if let now {
+                if let first, abs(first - now) > 1e-9 {
+                    VStack(alignment: .trailing, spacing: 1) {
+                        Text("\(TradeHistoryView.price(first)) → \(TradeHistoryView.price(now))")
+                            .font(.body.monospacedDigit()).foregroundColor(color)
+                        Text("đã kéo").font(.caption).foregroundColor(.secondary)
+                    }
+                } else {
+                    Text(TradeHistoryView.price(now)).font(.body.monospacedDigit()).foregroundColor(color)
+                }
+            } else if let first {
+                VStack(alignment: .trailing, spacing: 1) {
+                    Text(TradeHistoryView.price(first)).font(.body.monospacedDigit()).foregroundColor(color)
+                    Text("đã bỏ trước khi đóng").font(.caption).foregroundColor(.secondary)
+                }
+            } else {
+                Text("Không đặt").foregroundColor(.secondary)
+            }
+        } label: {
+            Text(title).fontWeight(.semibold).foregroundColor(color)
+        }
+    }
+
+    private func duration(_ seconds: Double) -> String {
+        let minutes = max(0, Int(seconds / 60))
+        if minutes < 60 { return "\(minutes) phút" }
+        if minutes < 1440 { return "\(minutes / 60) giờ \(minutes % 60) phút" }
+        return "\(minutes / 1440) ngày \(minutes % 1440 / 60) giờ"
     }
 }
