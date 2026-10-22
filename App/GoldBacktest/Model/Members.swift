@@ -298,8 +298,19 @@ final class MemberFeed {
         }
     }
 
-    func connect(url: String, code: String, preview: Bool = false) async -> Bool {
-        MemberSettings.url = url
+    /// Signs in with an invite code. A member only has the code: the address is
+    /// looked up where the server posts it (the owner's preview passes it).
+    func connect(url: String? = nil, code: String, preview: Bool = false) async -> Bool {
+        let code = code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        var address = url
+        if address == nil {
+            address = await URLRelay.shared.address(forMemberCode: code)?.absoluteString
+        }
+        guard let address else {
+            error = "Mã mời không đúng (hoặc người cung cấp chưa bật). Kiểm tra lại mã."
+            return false
+        }
+        MemberSettings.url = address
         MemberSettings.saveCode(code)
         MemberSettings.preview = preview
         connectionID = UUID()

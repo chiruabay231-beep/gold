@@ -50,14 +50,22 @@ struct SymbolPickerView: View {
     var onOandaToken: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(MemberFeed.self) private var memberFeed
     @AppStorage("live.watchlist") private var watchlistJSON = ""
     @State private var items: [WatchItem] = []
     @State private var showAdd = false
     @State private var showMT5 = false
 
+    /// A member's app leaves out MT5 symbols (they go through the owner's VPS).
+    private var visibleItems: [WatchItem] {
+        memberFeed.memberMode ? items.filter { $0.source != .mt5 } : items
+    }
+
     var body: some View {
         NavigationStack {
             List {
+                // MT5 goes through the owner's VPS: not in a member's app.
+                if !memberFeed.memberMode {
                 Section {
                     Button { showMT5 = true } label: {
                         HStack(spacing: 12) {
@@ -77,8 +85,9 @@ struct SymbolPickerView: View {
                         .contentShape(Rectangle())
                     }
                 }
+                }
                 Section {
-                    ForEach(items) { item in
+                    ForEach(visibleItems) { item in
                         Button {
                             onOpen(item)
                             dismiss()
@@ -97,10 +106,12 @@ struct SymbolPickerView: View {
                         }
                     }
                     .onDelete { offsets in
-                        items.remove(atOffsets: offsets)
+                        let ids = Set(offsets.map { visibleItems[$0].id })
+                        items.removeAll { ids.contains($0.id) }
                         save()
                     }
                     .onMove { from, to in
+                        guard visibleItems.count == items.count else { return }
                         items.move(fromOffsets: from, toOffset: to)
                         save()
                     }
@@ -152,6 +163,7 @@ struct AddSymbolView: View {
     var onAdd: (WatchItem) -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(MemberFeed.self) private var memberFeed
     @State private var source = LiveSource.binanceFutures
     @State private var text = ""
     /// Symbols of the MT5 account on the VPS matching `text`.
@@ -175,7 +187,9 @@ struct AddSymbolView: View {
                         Text("Binance Futures (vàng, bạc)").tag(LiveSource.binanceFutures)
                         Text("Binance (crypto)").tag(LiveSource.binance)
                         Text("OANDA (cần token)").tag(LiveSource.oanda)
-                        Text("MT5 qua VPS (Exness, sàn khác)").tag(LiveSource.mt5)
+                        if !memberFeed.memberMode {
+                            Text("MT5 qua VPS (Exness, sàn khác)").tag(LiveSource.mt5)
+                        }
                     }
                     TextField(source == .oanda ? "VD: XAUUSD, EURUSD" : (source == .mt5 ? "VD: XAUUSDm, US30m" : "VD: XAUUSDT, BTCUSDT"),
                               text: $text)

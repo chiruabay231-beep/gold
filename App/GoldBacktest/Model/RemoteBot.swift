@@ -202,6 +202,9 @@ struct RemoteBotClient {
         try await request(path, method: method, body: body, timeout: timeout)
     }
 
+    /// A member's client (the invite code): its messages never mention the server.
+    private var isMember: Bool { MemberSettings.code == password }
+
     /// The server could not be reached at this address (VPS off, or a new address).
     private struct Unreachable: Error { var code: Int }
 
@@ -218,6 +221,9 @@ struct RemoteBotClient {
                 if let data = try? await retry.attempt(path, method: method, body: body, timeout: timeout) {
                     return data
                 }
+            }
+            if isMember {
+                throw ServerError(message: "Chưa nhận được tín hiệu, đang thử kết nối lại…")
             }
             throw ServerError(message: failure.code == 0
                 ? "Không kết nối được máy chủ VPS. Nếu VPS vừa khởi động lại, app sẽ tự tìm địa chỉ mới sau ít phút."
@@ -248,7 +254,7 @@ struct RemoteBotClient {
             throw ServerError(message: message, code: code)
         }
         switch code {
-        case 401: throw ServerError(message: "Sai mật khẩu máy chủ")
+        case 401: throw ServerError(message: isMember ? "Mã mời không đúng" : "Sai mật khẩu máy chủ", code: 401)
         // Cloudflare answers but nothing behind this address (bot down or tunnel gone).
         case 502, 530: throw Unreachable(code: code)
         default: throw ServerError(message: "Máy chủ trả lỗi \(code)")
@@ -588,24 +594,33 @@ actor URLRelay {
         return ("aurum-" + String(sha256("url:" + password).prefix(24)), false)
     }
 
+    /// Where the server of an invite code is now (nil: wrong code or not posted).
+    func address(forMemberCode code: String) async -> URL? {
+        let codeHash = Self.sha256(code.trimmingCharacters(in: .whitespaces).uppercased())
+        return await latest(topic: "aurum-" + String(Self.sha256("murl:" + codeHash).prefix(24)))
+    }
+
+    private func latest(topic: String) async -> URL? {
+        guard let url = URL(string: "\(Self.base)/\(topic)/json?poll=1&since=all"),
+              let fetched = try? await URLSession.shared.data(from: url) else { return nil }
+        struct Message: Decodable { var event: String?; var message: String? }
+        let posted = String(decoding: fetched.0, as: UTF8.self)
+            .split(whereSeparator: \.isNewline)
+            .compactMap { try? JSONDecoder().decode(Message.self, from: Data($0.utf8)) }
+            .filter { $0.event == "message" }
+            .compactMap { $0.message?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .last
+        guard let posted, posted.hasPrefix("https://") else { return nil }
+        return RemoteBotClient.normalizedURL(posted)
+    }
+
     /// The newest address posted for this server, if it differs from `current`
     /// (also saved, so later requests go there). At most one lookup every 20 s.
     func newAddress(password: String, current: URL) async -> URL? {
         let (topic, member) = Self.topic(password: password)
         if let last = lastLookup[topic], Date().timeIntervalSince(last) < 20 { return nil }
         lastLookup[topic] = Date()
-        guard let url = URL(string: "\(Self.base)/\(topic)/json?poll=1&since=all"),
-              let fetched = try? await URLSession.shared.data(from: url) else { return nil }
-        let data = fetched.0
-        struct Message: Decodable { var event: String?; var message: String? }
-        let posted = String(decoding: data, as: UTF8.self)
-            .split(whereSeparator: \.isNewline)
-            .compactMap { try? JSONDecoder().decode(Message.self, from: Data($0.utf8)) }
-            .filter { $0.event == "message" }
-            .compactMap { $0.message?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .last
-        guard let posted, posted.hasPrefix("https://"), let address = RemoteBotClient.normalizedURL(posted),
-              address.absoluteString != current.absoluteString else { return nil }
+        guard let address = await latest(topic: topic), address.absoluteString != current.absoluteString else { return nil }
         await MainActor.run {
             if member { MemberSettings.url = address.absoluteString } else { RemoteBotSettings.url = address.absoluteString }
         }

@@ -62,7 +62,8 @@ struct BacktestView: View {
     static let maxBars = 300_000
 
     private var strategy: StrategyDefinition? { store.strategies.first { $0.id == strategyID } }
-    private var fromExness: Bool { source == "exness" }
+    /// Exness bars come through the owner's VPS: a member's app uses saved files.
+    private var fromExness: Bool { source == "exness" && !memberFeed.memberMode }
     private var interval: BinanceClient.Interval { BinanceClient.Interval(rawValue: exnessInterval) ?? .m15 }
 
     /// The saved file, or the Exness download already made for these choices.
@@ -217,11 +218,13 @@ struct BacktestView: View {
     @ViewBuilder
     private var dataSection: some View {
         Section {
-            Picker("Nguồn", selection: $source) {
-                Text("Exness").tag("exness")
-                Text("File đã nạp").tag("file")
+            if !memberFeed.memberMode {
+                Picker("Nguồn", selection: $source) {
+                    Text("Exness").tag("exness")
+                    Text("File đã nạp").tag("file")
+                }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
             if fromExness {
                 if RemoteBotSettings.client() == nil {
                     Text("Kết nối máy chủ VPS và đăng nhập Exness ở Giao dịch → Đăng nhập.")

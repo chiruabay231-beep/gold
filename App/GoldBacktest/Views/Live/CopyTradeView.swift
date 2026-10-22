@@ -216,6 +216,10 @@ struct CopyTradeView: View {
 /// Add or edit a follower account.
 struct CopyFollowerForm: View {
     @State var draft: CopyFollowerDraft
+    /// A member copying the signals into their own account: no server details.
+    var forMember = false
+    /// Whether a real-money account may be chosen (members: the owner decides).
+    var realAllowed = true
     var onSave: (CopyFollowerDraft) async throws -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -246,7 +250,8 @@ struct CopyFollowerForm: View {
                 } header: {
                     Text("Tài khoản copy")
                 } footer: {
-                    Text("Mật khẩu chính (không phải investor), chỉ lưu trên VPS của bạn.")
+                    Text(forMember ? "Mật khẩu chính (không phải investor) của tài khoản MT5 của bạn: chỉ dùng để đặt lệnh copy."
+                         : "Mật khẩu chính (không phải investor), chỉ lưu trên VPS của bạn.")
                 }
 
                 Section {
@@ -262,14 +267,17 @@ struct CopyFollowerForm: View {
                         Stepper("Hệ số × \(CopyTradeView.lots(draft.multiplier))", value: $draft.multiplier, in: 0.1...20, step: 0.1)
                     }
                     Stepper("Tối đa \(CopyTradeView.lots(draft.maxLots)) lot / lệnh", value: $draft.maxLots, in: 0.01...100, step: 0.01)
-                    Toggle("Cho phép tài khoản thật", isOn: Binding(get: { draft.allowReal }, set: { on in
-                        if on { confirmReal = true } else { draft.allowReal = false }
-                    }))
-                    .tint(.red)
+                    if realAllowed {
+                        Toggle("Cho phép tài khoản thật", isOn: Binding(get: { draft.allowReal }, set: { on in
+                            if on { confirmReal = true } else { draft.allowReal = false }
+                        }))
+                        .tint(.red)
+                    }
                 } header: {
                     Text("Lệnh")
                 } footer: {
-                    Text("Hệ số 2: lệnh chính 0.05 lot → 0.10 lot (không quá mức tối đa).")
+                    Text("Hệ số 2: lệnh chính 0.05 lot → 0.10 lot (không quá mức tối đa)."
+                         + (realAllowed ? "" : " Chỉ copy vào tài khoản demo."))
                 }
 
                 Section {
@@ -279,9 +287,11 @@ struct CopyFollowerForm: View {
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .lineLimit(1...5)
-                        TextField("terminal64.exe riêng (trống = tự sao chép MT5)", text: $draft.path)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
+                        if !forMember {
+                            TextField("terminal64.exe riêng (trống = tự sao chép MT5)", text: $draft.path)
+                                .textInputAutocapitalization(.never)
+                                .autocorrectionDisabled()
+                        }
                     }
                 } footer: {
                     Text("Mã tự khớp (XAUUSDm ↔ XAUUSD ↔ XAUUSD.r); chỉ đổi khi hai sàn đặt tên khác hẳn.")

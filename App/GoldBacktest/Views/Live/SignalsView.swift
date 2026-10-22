@@ -7,10 +7,6 @@ import UIKit
 struct SignalsView: View {
     @Environment(MemberFeed.self) private var feed
 
-    @State private var urlText = MemberSettings.url.isEmpty ? RemoteBotSettings.url : MemberSettings.url
-    @State private var codeText = ""
-    @State private var connecting = false
-    @State private var connectError: String?
     @State private var copy: MemberCopyStatus?
     @State private var editingCopy: CopyFollowerDraft?
     @State private var confirmDisconnect = false
@@ -24,8 +20,9 @@ struct SignalsView: View {
                 openSection
                 if info.canCopy { copySection }
                 closedSection
-            } else {
-                connectSection
+            } else if feed.memberMode {
+                // Signed in but the code no longer answers.
+                Section { Text(feed.error ?? "Đang tải tín hiệu…").foregroundColor(.secondary) }
             }
             if ownerConnected && !feed.memberMode {
                 Section {
@@ -35,7 +32,7 @@ struct SignalsView: View {
                 } header: {
                     Text("Chủ máy chủ")
                 } footer: {
-                    Text("Tạo mã cho người dùng: họ thấy lệnh của bạn thành tín hiệu (và copy được nếu bạn cho phép). Họ không thấy chiến lược, số lot hay tài khoản của bạn.")
+                    Text("Tạo mã cho người dùng: họ thấy lệnh của bạn thành tín hiệu (và copy được nếu bạn cho phép). Họ không thấy chiến lược, số lot hay tài khoản của bạn. Muốn xem giao diện của họ: Thành viên & mã mời → Xem thử như thành viên.")
                 }
             }
         }
@@ -51,7 +48,8 @@ struct SignalsView: View {
         }
         .sheet(isPresented: Binding(get: { editingCopy != nil }, set: { if !$0 { editingCopy = nil } })) {
             if let draft = editingCopy {
-                CopyFollowerForm(draft: draft) { saved in
+                CopyFollowerForm(draft: draft, forMember: true,
+                                 realAllowed: feed.info?.features?[MemberFeature.copyReal.rawValue] ?? false) { saved in
                     guard let client = MemberSettings.client() else { return }
                     copy = try await client.memberCopySave(saved)
                 }
@@ -63,57 +61,7 @@ struct SignalsView: View {
                 copy = nil
             }
         } message: {
-            Text("Mã mời bị xoá khỏi máy này. Copy lệnh (nếu có) vẫn chạy trên máy chủ.")
-        }
-    }
-
-    // MARK: - Connect
-
-    private var connectSection: some View {
-        Section {
-            TextField("Địa chỉ máy chủ (https://…)", text: $urlText)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-                .keyboardType(.URL)
-            TextField("Mã mời, vd ABCD-EFGH-JKLM", text: $codeText)
-                .textInputAutocapitalization(.characters)
-                .autocorrectionDisabled()
-                .font(.body.monospaced())
-            Button {
-                connect()
-            } label: {
-                HStack {
-                    Spacer()
-                    if connecting { ProgressView().tint(.white) }
-                    Text("Kết nối").bold()
-                    Spacer()
-                }
-                .padding(.vertical, 4)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(connecting || urlText.isEmpty || codeText.isEmpty)
-            if let connectError {
-                Text(connectError).font(.footnote).foregroundColor(.red)
-            }
-        } header: {
-            Text("Nhận tín hiệu")
-        } footer: {
-            Text("Người cung cấp tín hiệu gửi cho bạn địa chỉ và mã mời.")
-        }
-    }
-
-    private func connect() {
-        connecting = true
-        connectError = nil
-        let url = urlText, code = codeText
-        Task {
-            let ok = await feed.connect(url: url, code: code)
-            connecting = false
-            if ok {
-                codeText = ""
-            } else {
-                connectError = feed.error ?? "Không kết nối được"
-            }
+            Text("Bạn cần nhập lại mã mời để vào app. Copy lệnh (nếu có) vẫn tiếp tục.")
         }
     }
 
@@ -148,7 +96,7 @@ struct SignalsView: View {
                 }
             }
             if let error = feed.error {
-                Text(error).font(.footnote).foregroundColor(.orange)
+                Text(Self.plain(error)).font(.footnote).foregroundColor(.orange)
             }
         }
     }
@@ -193,7 +141,7 @@ struct SignalsView: View {
                              : "Lot × \(CopyTradeView.lots(f.multiplier)) · tối đa \(CopyTradeView.lots(f.maxLots))")
                             .font(.caption).foregroundColor(.secondary)
                         if let error = s?.error, !error.isEmpty {
-                            Text(error).font(.caption).foregroundColor(.orange)
+                            Text(Self.plain(error)).font(.caption).foregroundColor(.orange)
                         }
                     }
                     Spacer()
@@ -228,7 +176,7 @@ struct SignalsView: View {
             if copy?.ownerCopyOn == false {
                 Text("Người cung cấp đang tắt copy trade: tài khoản của bạn sẽ copy khi họ bật lại.")
             } else {
-                Text("Mỗi tín hiệu mới được mở trên tài khoản MT5 của bạn, SL/TP và đóng theo. Mật khẩu chỉ lưu trên máy chủ của người cung cấp.")
+                Text("Mỗi tín hiệu mới được mở trên tài khoản MT5 của bạn, SL/TP và đóng theo.")
             }
         }
     }
@@ -239,6 +187,13 @@ struct SignalsView: View {
             return
         }
         copy = try? await client.memberCopy()
+    }
+
+    /// Messages for members never name the server behind the app.
+    static func plain(_ text: String) -> String {
+        text.replacingOccurrences(of: " trên VPS", with: "")
+            .replacingOccurrences(of: " VPS", with: "")
+            .replacingOccurrences(of: "VPS", with: "hệ thống")
     }
 
     static func date(_ time: Double) -> String {
@@ -395,7 +350,7 @@ struct MembersView: View {
         }
         .sheet(isPresented: Binding(get: { newCode != nil }, set: { if !$0 { newCode = nil } })) {
             if let newCode {
-                MemberCodeSheet(name: newCode.member.name, code: newCode.code, url: list?.url ?? RemoteBotSettings.url)
+                MemberCodeSheet(name: newCode.member.name, code: newCode.code)
             }
         }
         .confirmationDialog("Xoá \(removing?.name ?? "")?", isPresented: Binding(get: { removing != nil },
@@ -576,12 +531,11 @@ struct MemberEditSheet: View {
 struct MemberCodeSheet: View {
     let name: String
     let code: String
-    let url: String
 
     @Environment(\.dismiss) private var dismiss
 
     private var message: String {
-        "Aurum Pro · tín hiệu cho \(name)\nVào app → Giao dịch → Tín hiệu, nhập:\nĐịa chỉ: \(url)\nMã mời: \(code)"
+        "Aurum Pro · mã mời cho \(name)\nMở app Aurum Pro và nhập mã: \(code)"
     }
 
     var body: some View {
@@ -591,7 +545,6 @@ struct MemberCodeSheet: View {
                 Text(code)
                     .font(.system(size: 30, weight: .bold, design: .monospaced))
                     .textSelection(.enabled)
-                Text(url).font(.footnote).foregroundColor(.secondary).lineLimit(2).multilineTextAlignment(.center)
                 HStack(spacing: 12) {
                     Button {
                         UIPasteboard.general.string = message
@@ -604,7 +557,7 @@ struct MemberCodeSheet: View {
                     }
                     .buttonStyle(.borderedProminent)
                 }
-                Text("Mã chỉ hiện một lần: hãy gửi ngay. Mất mã thì vào thành viên → Đổi mã mời. Địa chỉ trycloudflare đổi khi VPS khởi động lại: khi đó gửi lại địa chỉ mới.")
+                Text("Mã chỉ hiện một lần: hãy gửi ngay. Mất mã thì vào thành viên → Đổi mã mời. Người nhận chỉ cần nhập mã, app tự kết nối.")
                     .font(.caption).foregroundColor(.secondary).multilineTextAlignment(.center)
                 Spacer()
             }

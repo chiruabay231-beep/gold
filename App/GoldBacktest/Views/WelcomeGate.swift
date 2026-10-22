@@ -2,12 +2,11 @@ import SwiftUI
 import UIKit
 
 /// First screen without access: a member enters the invite code they were sent
-/// (or pastes the whole invite message); the owner signs in with the VPS
-/// address and password. Nothing else of the app shows until then.
+/// (or pastes the invite message) — nothing about servers; the owner signs in
+/// from the small link at the bottom. Nothing else of the app shows until then.
 struct WelcomeGate: View {
     @Environment(MemberFeed.self) private var feed
 
-    @State private var urlText = MemberSettings.url
     @State private var codeText = ""
     @State private var busy = false
     @State private var error: String?
@@ -24,7 +23,7 @@ struct WelcomeGate: View {
                                                                      Color(red: 0.8, green: 0.55, blue: 0.1)],
                                                             startPoint: .top, endPoint: .bottom))
                         Text("Aurum Pro").font(.system(size: 30, weight: .bold))
-                        Text("Nhập mã mời để xem tín hiệu").font(.subheadline).foregroundColor(.secondary)
+                        Text("Nhập mã mời để bắt đầu").font(.subheadline).foregroundColor(.secondary)
                     }
                     .padding(.top, 40)
 
@@ -39,15 +38,17 @@ struct WelcomeGate: View {
                     }
 
                     VStack(spacing: 12) {
-                        Button {
-                            pasteInvite()
-                        } label: {
-                            Label("Dán tin nhắn mời", systemImage: "doc.on.clipboard")
-                                .frame(maxWidth: .infinity)
+                        HStack(spacing: 8) {
+                            field("ABCD-EFGH-JKLM", text: $codeText, keyboard: .asciiCapable, monospaced: true)
+                            Button {
+                                pasteInvite()
+                            } label: {
+                                Image(systemName: "doc.on.clipboard")
+                                    .frame(width: 44, height: 44)
+                            }
+                            .buttonStyle(.bordered)
+                            .accessibilityLabel("Dán mã")
                         }
-                        .buttonStyle(.bordered)
-                        field("Địa chỉ máy chủ (https://…)", text: $urlText, keyboard: .URL)
-                        field("Mã mời, vd ABCD-EFGH-JKLM", text: $codeText, keyboard: .asciiCapable, monospaced: true)
                         Button {
                             connect()
                         } label: {
@@ -58,7 +59,7 @@ struct WelcomeGate: View {
                             .frame(maxWidth: .infinity, minHeight: 44)
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(busy || urlText.isEmpty || codeText.isEmpty)
+                        .disabled(busy || codeText.filter(\.isLetter).count + codeText.filter(\.isNumber).count < 12)
                         if let error {
                             Text(error).font(.footnote).foregroundColor(.red).multilineTextAlignment(.center)
                         }
@@ -66,12 +67,13 @@ struct WelcomeGate: View {
                     .padding(16)
                     .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
 
-                    Text("Người cung cấp tín hiệu gửi cho bạn tin nhắn có địa chỉ và mã mời: chép cả tin nhắn rồi bấm \"Dán tin nhắn mời\".")
+                    Text("Chưa có mã? Liên hệ người giới thiệu app để nhận mã mời.")
                         .font(.caption).foregroundColor(.secondary).multilineTextAlignment(.center)
 
-                    Button("Tôi là chủ máy chủ") { showOwner = true }
-                        .font(.footnote)
-                        .padding(.top, 20)
+                    Button("Đăng nhập chủ") { showOwner = true }
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .padding(.top, 30)
                 }
                 .padding(.horizontal, 20)
             }
@@ -90,33 +92,25 @@ struct WelcomeGate: View {
             .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10))
     }
 
-    /// Reads "Địa chỉ: …" and "Mã mời: …" from the invite message on the clipboard.
+    /// Finds the code (XXXX-XXXX-XXXX) in what was copied: the code or the whole message.
     private func pasteInvite() {
-        guard let text = UIPasteboard.general.string else { return }
-        for line in text.split(whereSeparator: \.isNewline) {
-            let parts = line.split(separator: ":", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
-            guard parts.count == 2 else {
-                if line.hasPrefix("https://") { urlText = String(line) }
-                continue
-            }
-            let key = parts[0].lowercased()
-            if key.hasPrefix("địa chỉ") || key.hasPrefix("dia chi") { urlText = parts[1] }
-            if key.hasPrefix("mã") || key.hasPrefix("ma moi") || key.hasPrefix("code") { codeText = parts[1] }
+        guard let text = UIPasteboard.general.string?.uppercased() else { return }
+        let pattern = #/[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}/#
+        if let match = text.firstMatch(of: pattern) {
+            codeText = String(match.output)
+        } else {
+            codeText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        if codeText.isEmpty, text.count <= 20 { codeText = text.trimmingCharacters(in: .whitespacesAndNewlines) }
     }
 
     private func connect() {
         busy = true
         error = nil
-        let url = urlText, code = codeText
+        let code = codeText
         Task {
-            let ok = await feed.connect(url: url, code: code)
+            let ok = await feed.connect(code: code)
             busy = false
-            if !ok {
-                let message = feed.error ?? "Không kết nối được"
-                error = message.contains("Sai mật khẩu") ? "Mã mời không đúng" : message
-            }
+            if !ok { error = feed.error ?? "Không vào được, thử lại sau ít phút" }
         }
     }
 }
@@ -140,13 +134,13 @@ struct OwnerSignIn: View {
                         .keyboardType(.URL)
                     SecureField("Mật khẩu máy chủ", text: $passwordText)
                 } footer: {
-                    Text("Địa chỉ và mật khẩu hiện ra khi cài bot trên VPS (file config.json). Chỉ lưu trong Keychain của máy này.")
+                    Text("Dành cho chủ ứng dụng. Mật khẩu chỉ lưu trong Keychain của máy này.")
                 }
                 if let error {
                     Section { Text(error).font(.footnote).foregroundColor(.red) }
                 }
             }
-            .navigationTitle("Chủ máy chủ")
+            .navigationTitle("Đăng nhập chủ")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Huỷ") { dismiss() } }
