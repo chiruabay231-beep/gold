@@ -91,7 +91,6 @@ struct LiveView: View {
     @State private var frameCache = LiveFrameCache()
     @AppStorage(LiveIndicators.sharkKey) private var showSharkFlow = false
     @AppStorage(LiveIndicators.sharkMultipleKey) private var sharkMultiple = 2.5
-    @AppStorage("live.sharkPaneHeight") private var sharkPaneHeight = 120.0
     @State private var showKillzoneSettings = false
     @State private var showOandaSettings = false
     /// OANDA instrument to open once a token has been saved.
@@ -105,10 +104,6 @@ struct LiveView: View {
         VStack(spacing: 0) {
             header
             charts
-            if let flow = sharkFlow, chartCandles.count > 2 {
-                SharkFlowPane(output: flow, viewport: viewport, total: chartCandles.count, theme: theme,
-                              height: $sharkPaneHeight, leftHalf: compareMode && splitColumns)
-            }
             indicatorPanes
             if showTradeButtons {
                 TradeBar(bid: liveQuote.bid, ask: liveQuote.ask, decimals: currentDecimals, lots: $defaultLots,
@@ -351,7 +346,6 @@ struct LiveView: View {
         var names: [String] = []
         if showKillzonePivots { names.append(Self.killzonePivotsName) }
         if showEMA200 { names.append("EMA 200") }
-        if showSharkFlow { names.append("🦈 Dòng tiền cá mập") }
         names += selectedIndicators.map(\.title)
         names += customIndicators.errors.map { "⚠︎ \($0)" }
         if bot.isRunning, let strategy = store.strategies.first(where: { $0.id == bot.strategyID }) {
@@ -371,6 +365,10 @@ struct LiveView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 chartTools
+            }
+            // Dòng tiền cá mập: two lines of words, the full width.
+            if legendExpanded, let flow = sharkFlow, chartCandles.count > 2 {
+                SharkFlowSummary(output: flow, total: chartCandles.count, theme: theme)
             }
             timeframeRow
         }

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import BacktestKit
 
 /// The order being prepared in the order sheet; its entry, SL and TP are
@@ -211,6 +212,8 @@ struct OrderTicketSheet: View {
     var onExpand: () -> Void = {}
     var onSubmit: () -> Void
 
+    @State private var sliding = false
+
     var body: some View {
         if let current = ticket {
             if compact {
@@ -228,24 +231,7 @@ struct OrderTicketSheet: View {
         return VStack(spacing: 6) {
             HStack(spacing: 10) {
                 HStack(spacing: 0) {
-                    Button(action: onSubmit) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "arrow.right")
-                                .font(.system(size: 16, weight: .bold))
-                                .frame(width: 34, height: 34)
-                                .background(Circle().fill(.white.opacity(0.2)))
-                            Text(t.name)
-                                .font(.system(size: 17, weight: .semibold))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                            Spacer(minLength: 4)
-                        }
-                        .padding(.leading, 6)
-                        .frame(maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(problem != nil || bid <= 0)
+                    SlideToSend(title: t.name, enabled: problem == nil && bid > 0, sliding: $sliding, onSend: onSubmit)
                     Menu {
                         ForEach([0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2], id: \.self) { value in
                             Button(String(format: "%g lot", value)) { lots = value }
@@ -261,7 +247,9 @@ struct OrderTicketSheet: View {
                 }
                 .foregroundColor(.white)
                 .frame(height: 50)
-                .background(Capsule().fill(color.opacity(problem == nil ? 1 : 0.45)))
+                // Faint at rest, lit while the arrow is slid.
+                .background(Capsule().fill(color.opacity(problem != nil ? 0.35 : (sliding ? 1 : 0.6))))
+                .animation(.easeOut(duration: 0.15), value: sliding)
                 levelToggle("SL", value: t.stop, color: TradeBar.sellColor, current: t, isStop: true)
                 levelToggle("TP", value: t.target, color: .green, current: t, isStop: false)
                 Button(action: onExpand) {
@@ -272,7 +260,7 @@ struct OrderTicketSheet: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Mở bảng lệnh đầy đủ (Stop, giá, SL/TP)")
             }
-            Text(problem ?? "Kéo đường lệnh trên biểu đồ: dưới giá = Buy Limit, trên giá = Sell Limit")
+            Text(problem ?? "Trượt mũi tên sang phải để đặt lệnh · kéo đường lệnh: dưới giá = Buy, trên giá = Sell")
                 .font(.caption2)
                 .foregroundColor(problem == nil ? .secondary : .orange)
                 .lineLimit(1)
@@ -481,5 +469,69 @@ struct OrderTicketSheet: View {
         ticket = OrderTicket.make(side: side, kind: kind, bid: bid, ask: ask, distance: distance,
                                   stopDistance: current.stop.map { abs(open - $0) },
                                   targetDistance: current.target.map { abs(open - $0) })
+    }
+}
+
+/// MT5's slide-to-trade: drag the arrow to the end to send the order. The track
+/// lights up behind the arrow; let go early and it slides back.
+struct SlideToSend: View {
+    let title: String
+    let enabled: Bool
+    @Binding var sliding: Bool
+    var onSend: () -> Void
+
+    @State private var offset: CGFloat = 0
+    private let knob: CGFloat = 38
+
+    var body: some View {
+        GeometryReader { geometry in
+            let travel = max(geometry.size.width - knob - 8, 1)
+            let progress = min(offset / travel, 1)
+            ZStack(alignment: .leading) {
+                Text(title)
+                    .font(.system(size: 17, weight: .semibold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.leading, knob + 14)
+                    .opacity(1 - progress * 0.7)
+                // The lit trail behind the arrow.
+                Capsule()
+                    .fill(.white.opacity(0.28))
+                    .frame(width: knob + offset, height: knob)
+                    .padding(.leading, 4)
+                    .opacity(offset > 0 ? 1 : 0)
+                Image(systemName: progress > 0.85 ? "checkmark" : "arrow.right")
+                    .font(.system(size: 16, weight: .bold))
+                    .frame(width: knob, height: knob)
+                    .background(Circle().fill(.white.opacity(sliding ? 0.45 : 0.22)))
+                    .padding(.leading, 4)
+                    .offset(x: offset)
+            }
+            .frame(maxHeight: .infinity)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 2)
+                    .onChanged { value in
+                        guard enabled else { return }
+                        if !sliding { sliding = true }
+                        offset = min(max(0, value.translation.width), travel)
+                    }
+                    .onEnded { _ in
+                        let sent = enabled && offset >= travel * 0.85
+                        if sent {
+                            UINotificationFeedbackGenerator().notificationOccurred(.success)
+                            onSend()
+                        }
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                            offset = 0
+                            sliding = false
+                        }
+                    }
+            )
+        }
+        .accessibilityElement()
+        .accessibilityLabel(title)
+        .accessibilityHint("Trượt sang phải để đặt lệnh")
+        .accessibilityAction { if enabled { onSend() } }
     }
 }

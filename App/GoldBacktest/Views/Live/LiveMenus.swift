@@ -58,7 +58,7 @@ struct LiveIndicatorSheet: View {
                 } header: {
                     Text("Dòng tiền")
                 } footer: {
-                    Text("Khung dưới biểu đồ (kéo vạch trên cùng để đổi chiều cao): cột XANH = tiền vào, cột ĐỎ = tiền ra, thẳng hàng với từng nến. Dòng chữ nói rõ: giá tăng + tiền vào = tăng khoẻ; ⚠️ giá tăng nhưng tiền ra = tăng yếu, dễ đảo chiều; giá giảm + tiền ra = giảm khoẻ; ⚠️ giá giảm nhưng tiền vào = có người gom, dễ bật lên. Dấu ⚠️ trong khung đánh dấu lúc giá và tiền bắt đầu đi ngược nhau. Bong bóng 🦈 trên biểu đồ = nến khối lượng lớn bất thường: xanh dưới nến là cá mập MUA, đỏ trên nến là cá mập BÁN; bong bóng càng to khối lượng càng lớn. Sàn forex/CFD (Exness) không có khối lượng thật nên đây là ước lượng; Binance XAUUSDT cho kết quả sát hơn.")
+                    Text("Hai dòng chữ trên biểu đồ: dòng tiền đang vào hay ra, và ý nghĩa — giá tăng + tiền vào = tăng khoẻ; ⚠️ giá tăng nhưng tiền ra = tăng yếu, dễ đảo chiều; giá giảm + tiền ra = giảm khoẻ; ⚠️ giá giảm nhưng tiền vào = có người gom, dễ bật lên. Bong bóng 🦈 trên nến = khối lượng lớn bất thường: xanh dưới nến là cá mập MUA, đỏ trên nến là cá mập BÁN. Sàn forex/CFD (Exness) không có khối lượng thật nên đây là ước lượng.")
                 }
                 Section("Khác") {
                     Toggle("EMA 200", isOn: $showEMA200)
