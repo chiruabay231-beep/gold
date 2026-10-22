@@ -1095,11 +1095,13 @@ struct LiveView: View {
                                             label: "\(isProfit ? "TP" : "SL") \(money(side: side, lots: p.lots, entry: p.entry, price: dragged))",
                                             dash: [5, 3]))
             }
+            // Money moves with every tick, not only when the VPS reports (every 2 s).
+            let profit = p.liveProfit(bid: liveQuote.bid, ask: liveQuote.ask)
             lines.append(ChartPriceLine(id: id + "|entry", price: p.entry, color: side == .long ? blue : red,
                                         label: "\(side == .long ? "BUY" : "SELL") \(QuickTradePanel.lotText(p.lots))\(tag)",
                                         dash: [6, 4], handleFraction: 0.42,
-                                        value: String(format: "%+.2f %@", p.profit, mt5.state?.currency ?? "USD"),
-                                        valueColor: p.profit >= 0 ? green : red,
+                                        value: String(format: "%+.2f %@", profit, mt5.state?.currency ?? "USD"),
+                                        valueColor: profit >= 0 ? green : red,
                                         markerIndex: openIndex(Date(timeIntervalSince1970: p.time)), closable: true))
             if let stop = p.stop {
                 let price = value(id + "|sl", stop)

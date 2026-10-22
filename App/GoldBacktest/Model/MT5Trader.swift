@@ -161,3 +161,17 @@ final class MT5Trader {
         AlertSettings.post(title: title, body: body)
     }
 }
+
+extension MT5TradingState.Position {
+    /// The profit carried on with the live price: the VPS reports it every 2 s while
+    /// the chart ticks several times a second. Only for symbols quoted in USD (the
+    /// money is then price × lots × contract size); others keep the VPS figure.
+    func liveProfit(bid: Double, ask: Double) -> Double {
+        guard let price, bid > 0, ask >= bid else { return profit }
+        let pair = String(symbol.uppercased().filter(\.isLetter).prefix(6))
+        guard pair.hasSuffix("USD") else { return profit }
+        let buy = side == "long"
+        let close = buy ? bid : ask
+        return profit + (close - price) * (buy ? 1 : -1) * lots * PaperAccount.contractSize(for: symbol)
+    }
+}

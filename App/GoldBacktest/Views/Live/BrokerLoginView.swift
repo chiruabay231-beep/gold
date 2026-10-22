@@ -55,7 +55,8 @@ struct BrokerTradeView: View {
             }
             if let state = mt5.state, state.login != nil {
                 Section {
-                    AccountSummary(floating: state.profit ?? state.positions.reduce(0) { $0 + $1.profit },
+                    AccountSummary(floating: (state.profit ?? state.positions.reduce(0) { $0 + $1.profit })
+                                       + state.positions.reduce(0) { $0 + liveProfit($1) - $1.profit },
                                    currency: state.currency ?? "USD", rows: summaryRows(state),
                                    account: (state.mode == "real", "#\(state.login.map { String($0) } ?? "") · \(state.server ?? "")"))
                 }
@@ -70,9 +71,9 @@ struct BrokerTradeView: View {
                     ForEach(state.positions) { p in
                         OrderRow(symbol: p.symbol, detail: "\(p.side == "long" ? "buy" : "sell") \(Self.lots(p.lots))",
                                  isBuy: p.side == "long",
-                                 line: "\(Self.price(p.entry)) → \(p.price.map(Self.price) ?? "–")",
-                                 trailing: String(format: "%.2f", p.profit),
-                                 trailingColor: p.profit >= 0 ? OrderRow.profitColor : OrderRow.lossColor)
+                                 line: "\(Self.price(p.entry)) → \(livePrice(p).map(Self.price) ?? "–")",
+                                 trailing: String(format: "%.2f", liveProfit(p)),
+                                 trailingColor: liveProfit(p) >= 0 ? OrderRow.profitColor : OrderRow.lossColor)
                             .contentShape(Rectangle())
                             .onTapGesture { closing = p }
                             .swipeActions {
@@ -137,10 +138,23 @@ struct BrokerTradeView: View {
         }
     }
 
+    /// A position's profit at the live price when the chart streams its symbol from MT5.
+    private func liveProfit(_ p: MT5TradingState.Position) -> Double {
+        guard market.source == .mt5, market.symbol == p.symbol, let q = market.quote else { return p.profit }
+        return p.liveProfit(bid: q.bid, ask: q.ask)
+    }
+
+    /// The price a position closes at now: bid for a buy, ask for a sell.
+    private func livePrice(_ p: MT5TradingState.Position) -> Double? {
+        guard market.source == .mt5, market.symbol == p.symbol, let q = market.quote, q.bid > 0 else { return p.price }
+        return p.side == "long" ? q.bid : q.ask
+    }
+
     private func summaryRows(_ s: MT5TradingState) -> [(String, String)] {
         var rows: [(String, String)] = []
+        let drift = s.positions.reduce(0) { $0 + liveProfit($1) - $1.profit }
         if let v = s.balance { rows.append(("Số dư", String(format: "%.2f", v))) }
-        if let v = s.equity { rows.append(("Vốn", String(format: "%.2f", v))) }
+        if let v = s.equity { rows.append(("Vốn", String(format: "%.2f", v + drift))) }
         if let v = s.margin { rows.append(("Tiền ký quỹ", String(format: "%.2f", v))) }
         if let v = s.marginFree { rows.append(("Ký quỹ dư", String(format: "%.2f", v))) }
         if let v = s.marginLevel, v > 0 { rows.append(("Mức ký quỹ (%)", String(format: "%.2f", v))) }
