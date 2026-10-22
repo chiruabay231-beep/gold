@@ -255,6 +255,8 @@ struct CandleChart: View {
     var crosshairMode = false
     /// Off for the upper chart of the compare split, so the two frames touch.
     var showTimeAxis = true
+    /// The background grid (Cài đặt → Lưới nền).
+    var showGrid = true
     /// The OHLC header drawn over the top of the plot instead of above it.
     var headerInside = false
     /// Price axis on the left (left chart of the side-by-side split, so the two frames touch).
@@ -598,7 +600,7 @@ struct CandleChart: View {
             var line = Path()
             line.move(to: CGPoint(x: 0, y: y))
             line.addLine(to: CGPoint(x: layout.axisX, y: y))
-            context.stroke(line, with: .color(theme.grid), lineWidth: theme.isLight ? 1 : 0.5)
+            if showGrid { context.stroke(line, with: .color(theme.grid), lineWidth: theme.isLight ? 1 : 0.5) }
             context.draw(Text(Self.format(tick, decimals)).font(.system(size: 10)).foregroundColor(theme.text),
                          at: CGPoint(x: layout.axisX + 5, y: y), anchor: .leading)
         }
@@ -610,7 +612,7 @@ struct CandleChart: View {
             var line = Path()
             line.move(to: CGPoint(x: x, y: layout.plot.minY))
             line.addLine(to: CGPoint(x: x, y: layout.volume.maxY))
-            context.stroke(line, with: .color(theme.grid), lineWidth: theme.isLight ? 1 : 0.5)
+            if showGrid { context.stroke(line, with: .color(theme.grid), lineWidth: theme.isLight ? 1 : 0.5) }
             if showTimeAxis {
                 context.draw(Text(candles[i].time.formatted(timeFormat)).font(.system(size: 10)).foregroundColor(theme.text),
                          at: CGPoint(x: x, y: layout.timeAxis.midY), anchor: .center)

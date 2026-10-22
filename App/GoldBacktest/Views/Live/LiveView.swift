@@ -102,6 +102,7 @@ struct LiveView: View {
     @State private var pendingOandaInstrument: String?
 
     @AppStorage(ChartBackground.key) private var chartBackgroundJSON = ""
+    @AppStorage("live.showGrid") private var showGrid = true
     private var theme: ChartTheme {
         (themeName == "binance" ? ChartTheme.binance : .tradingView).with(background: ChartBackground.decode(chartBackgroundJSON))
     }
@@ -671,6 +672,7 @@ struct LiveView: View {
                             timeZone: ChartTimeZones.zone(timeZoneID),
                             framed: true,
                             crosshairMode: crosshairMode,
+                            showGrid: showGrid,
                             headerInside: true,
                             linkedCrosshair: $linkedCrosshairTime,
                             viewport: comparisonViewport)
@@ -745,6 +747,7 @@ struct LiveView: View {
                         framed: true,
                         crosshairMode: crosshairMode,
                         showTimeAxis: timeAxis,
+                        showGrid: showGrid,
                         // Side by side: both headers inside, so the two frames make one rectangle.
                         headerInside: axisLeading,
                         axisLeading: axisLeading,

@@ -7,6 +7,7 @@ struct AppSettingsView: View {
 
     @AppStorage("live.theme") private var themeName = "tradingView"
     @AppStorage(ChartBackground.key) private var backgroundJSON = ""
+    @AppStorage("live.showGrid") private var showGrid = true
     @AppStorage("live.candleStyle") private var candleStyle = CandleStyle.candles.rawValue
     @AppStorage("live.candleColors") private var candleColorsJSON = ""
     @AppStorage("live.precision") private var precision = -1
@@ -74,6 +75,7 @@ struct AppSettingsView: View {
                         }
                         .padding(.vertical, 2)
                     }
+                    Toggle("Lưới nền", isOn: $showGrid)
                     preview
                 } header: {
                     Text("Giao diện")
@@ -129,8 +131,23 @@ struct AppSettingsView: View {
         let colors = CandleColors.decode(candleColorsJSON) ?? .standard(for: theme)
         let bars: [(Double, Double, Double, Double)] = [(0.3, 0.8, 0.2, 0.7), (0.7, 0.9, 0.5, 0.6), (0.6, 0.65, 0.3, 0.35),
                                                         (0.35, 0.6, 0.25, 0.55), (0.55, 0.95, 0.5, 0.9), (0.9, 0.95, 0.6, 0.65)]
+        let grid = showGrid
         return Canvas { context, size in
             let width = size.width / CGFloat(bars.count)
+            if grid {
+                var lines = Path()
+                for k in 1..<4 {
+                    let y = size.height * CGFloat(k) / 4
+                    lines.move(to: CGPoint(x: 0, y: y))
+                    lines.addLine(to: CGPoint(x: size.width, y: y))
+                }
+                for k in 1..<3 {
+                    let x = size.width * CGFloat(k) / 3
+                    lines.move(to: CGPoint(x: x, y: 0))
+                    lines.addLine(to: CGPoint(x: x, y: size.height))
+                }
+                context.stroke(lines, with: .color(theme.grid), lineWidth: 1)
+            }
             func y(_ v: Double) -> CGFloat { size.height * (1 - CGFloat(v)) }
             for (i, bar) in bars.enumerated() {
                 let up = bar.3 >= bar.0
