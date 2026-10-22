@@ -282,7 +282,7 @@ struct TradeHistoryView: View {
                 HistoryRow(symbol: Self.name(p.symbol), side: p.side == "long" ? "buy" : "sell", lots: p.lots,
                            detail: "\(Self.price(p.entry)) → \(Self.price(p.exit))",
                            value: String(format: "%.2f", p.profit), valueColor: Self.color(p.profit),
-                           time: p.closeTime)
+                           time: p.closeTime, marker: Self.marker(p.reason))
             }
         case .orders:
             let items = sorted(h.orders, time: \.time, symbol: \.symbol, profit: { _ in 0 })
@@ -307,6 +307,16 @@ struct TradeHistoryView: View {
                                valueColor: Self.color(d.profit), time: d.time)
                 }
             }
+        }
+    }
+
+    /// The bar at the left of a closed position: red when the SL closed it, green for
+    /// the TP, grey when it was closed by hand (or by the bot).
+    static func marker(_ reason: String?) -> Color {
+        switch reason {
+        case "stop": return HistoryRow.red
+        case "target": return Color(red: 0.12, green: 0.66, blue: 0.36)
+        default: return Color.secondary.opacity(0.35)
         }
     }
 
@@ -407,6 +417,8 @@ struct HistoryRow: View {
     let value: String
     let valueColor: Color
     let time: Double
+    /// Bar at the left (closed positions: SL red, TP green).
+    var marker: Color? = nil
 
     static let blue = Color(red: 0.16, green: 0.42, blue: 0.95)
     static let red = Color(red: 0.86, green: 0.25, blue: 0.2)
@@ -418,6 +430,18 @@ struct HistoryRow: View {
     }()
 
     var body: some View {
+        HStack(spacing: 10) {
+            if let marker {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(marker)
+                    .frame(width: 4)
+                    .padding(.vertical, 2)
+            }
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {

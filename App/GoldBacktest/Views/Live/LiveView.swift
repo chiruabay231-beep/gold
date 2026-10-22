@@ -115,7 +115,6 @@ struct LiveView: View {
                          onSell: { marketOrder(.short) }, onBuy: { marketOrder(.long) },
                          onTicket: { side in openTicket(side: side, kind: .market) })
             }
-            bottomBar
         }
         .background(theme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
@@ -363,79 +362,118 @@ struct LiveView: View {
 
     private var legend: some View {
         VStack(alignment: .leading, spacing: 3) {
-            if legendExpanded {
-                ForEach(activeLayerNames, id: \.self) { name in
-                    if name == Self.killzonePivotsName {
-                        // Tap the name to open its settings, like TradingView's legend.
-                        Button { showKillzoneSettings = true } label: {
-                            HStack(spacing: 6) {
-                                Text(name)
-                                Image(systemName: "gearshape").font(.system(size: 10))
-                                if killzoneLayer.output.hiddenByTimeframe {
-                                    Text("· killzone ẩn trên khung này").foregroundColor(theme.text)
-                                }
-                            }
-                            .font(.system(size: 12))
-                            .foregroundColor(theme.primaryText)
-                            .lineLimit(1)
-                        }
-                        .buttonStyle(.plain)
-                    } else {
+            // Layer names on the left, the chart tools on the right under Lệnh chờ:
+            // no tool bar under the chart, so the chart is taller.
+            HStack(alignment: .top, spacing: 6) {
+                VStack(alignment: .leading, spacing: 3) {
+                    if legendExpanded { layerNames }
+                    newsInfo.fixedSize()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                chartTools
+            }
+            timeframeRow
+        }
+    }
+
+    @ViewBuilder
+    private var layerNames: some View {
+        ForEach(activeLayerNames, id: \.self) { name in
+            if name == Self.killzonePivotsName {
+                // Tap the name to open its settings, like TradingView's legend.
+                Button { showKillzoneSettings = true } label: {
+                    HStack(spacing: 6) {
                         Text(name)
-                            .font(.system(size: 12))
-                            .foregroundColor(theme.primaryText)
-                            .lineLimit(1)
+                        Image(systemName: "gearshape").font(.system(size: 10))
+                        if killzoneLayer.output.hiddenByTimeframe {
+                            Text("· killzone ẩn trên khung này").foregroundColor(theme.text)
+                        }
                     }
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.primaryText)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text(name)
+                    .font(.system(size: 12))
+                    .foregroundColor(theme.primaryText)
+                    .lineLimit(1)
+            }
+        }
+    }
+
+    /// Chart tools, small, right under BUY/SELL and Lệnh chờ.
+    private var chartTools: some View {
+        HStack(spacing: 0) {
+            layoutButton
+            toolbarButton("backward.end.alt", active: replay.isActive) { toggleReplay() }
+            toolbarButton("pencil.tip", active: showDrawingBar) {
+                if showDrawingBar {
+                    showDrawingBar = false
+                    activeTool = nil
+                } else {
+                    showDrawingTools = true
                 }
             }
-            HStack(spacing: 10) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.15)) { legendExpanded.toggle() }
-                } label: {
-                    Image(systemName: legendExpanded ? "chevron.up" : "chevron.down")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(theme.text)
-                        .frame(width: 30, height: 22)
-                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.grid, lineWidth: 1))
-                }
-                // The chosen timeframes, one tap to switch; ▾ opens all of them.
-                ScrollViewReader { proxy in
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(rowIntervals, id: \.self) { interval in
-                                Button { selectInterval(interval) } label: {
-                                    Text(Self.label(interval))
-                                        .font(.system(size: 13, weight: .semibold))
-                                        .foregroundColor(interval == market.interval ? .white : theme.primaryText)
-                                        .frame(minWidth: 38, minHeight: 22)
-                                        .background(interval == market.interval ? theme.accent : .clear,
-                                                    in: RoundedRectangle(cornerRadius: 5))
-                                        .overlay(RoundedRectangle(cornerRadius: 5).stroke(theme.grid, lineWidth: 1))
-                                }
-                                .buttonStyle(.plain)
-                                .id(interval)
+            toolbarButton("function", active: false) { showIndicatorSheet = true }
+            toolbarButton("ellipsis", active: false) { showMoreSheet = true }
+            toolbarButton("arrow.up.left.and.arrow.down.right", active: false) {
+                fullScreen = true
+            }
+        }
+    }
+
+    /// Show/hide the layer names, the favourite timeframes, ▾ for all of them.
+    private var timeframeRow: some View {
+        HStack(spacing: 10) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { legendExpanded.toggle() }
+            } label: {
+                Image(systemName: legendExpanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundColor(theme.text)
+                    .frame(width: 30, height: 22)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.grid, lineWidth: 1))
+            }
+            // The chosen timeframes, one tap to switch; ▾ opens all of them.
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(rowIntervals, id: \.self) { interval in
+                            Button { selectInterval(interval) } label: {
+                                Text(Self.label(interval))
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(interval == market.interval ? .white : theme.primaryText)
+                                    .frame(minWidth: 38, minHeight: 22)
+                                    .background(interval == market.interval ? theme.accent : .clear,
+                                                in: RoundedRectangle(cornerRadius: 5))
+                                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(theme.grid, lineWidth: 1))
                             }
+                            .buttonStyle(.plain)
+                            .id(interval)
                         }
-                        .padding(.vertical, 1)
                     }
-                    .onAppear { proxy.scrollTo(market.interval, anchor: .center) }
+                    .padding(.vertical, 1)
                 }
-                Button { showIntervalPicker = true } label: {
-                    Image(systemName: "chevron.down.square")
-                        .font(.system(size: 18))
-                        .foregroundColor(theme.text)
-                        .frame(width: 30, height: 24)
-                }
-                .accessibilityLabel("Tất cả khung thời gian")
-                .popover(isPresented: $showIntervalPicker) {
-                    IntervalPicker(current: market.interval, favorites: favoriteIntervals,
-                                   onSelect: { interval in
-                                       selectInterval(interval)
-                                       showIntervalPicker = false
-                                   },
-                                   onToggleFavorite: toggleFavorite)
-                        .presentationCompactAdaptation(.popover)
-                }
+                .onAppear { proxy.scrollTo(market.interval, anchor: .center) }
+            }
+            Button { showIntervalPicker = true } label: {
+                Image(systemName: "chevron.down.square")
+                    .font(.system(size: 18))
+                    .foregroundColor(theme.text)
+                    .frame(width: 30, height: 24)
+            }
+            .accessibilityLabel("Tất cả khung thời gian")
+            .popover(isPresented: $showIntervalPicker) {
+                IntervalPicker(current: market.interval, favorites: favoriteIntervals,
+                               onSelect: { interval in
+                                   selectInterval(interval)
+                                   showIntervalPicker = false
+                               },
+                               onToggleFavorite: toggleFavorite)
+                    .presentationCompactAdaptation(.popover)
             }
         }
     }
@@ -1273,37 +1311,6 @@ struct LiveView: View {
         }
     }
 
-    // MARK: - Bottom tool bar
-
-    private var bottomBar: some View {
-        // The tools centred in the space right of Bố cục.
-        HStack(spacing: 6) {
-            layoutButton
-            newsInfo.fixedSize()
-            Spacer(minLength: 4)
-            toolbarButton("backward.end.alt", active: replay.isActive) { toggleReplay() }
-            toolbarButton("pencil.tip", active: showDrawingBar) {
-                if showDrawingBar {
-                    showDrawingBar = false
-                    activeTool = nil
-                } else {
-                    showDrawingTools = true
-                }
-            }
-            toolbarButton("function", active: false) { showIndicatorSheet = true }
-            toolbarButton("ellipsis", active: false) { showMoreSheet = true }
-            toolbarButton("arrow.up.left.and.arrow.down.right", active: false) {
-                fullScreen = true
-            }
-            Spacer(minLength: 4)
-        }
-        .padding(.leading, 10)
-        .padding(.trailing, 6)
-        .padding(.vertical, 6)
-        .background(theme.background)
-        .overlay(alignment: .top) { Rectangle().fill(theme.grid).frame(height: 1) }
-    }
-
     // MARK: - Session and news info
 
     /// Red USD news of today (chart time zone), grouped by time, for the time axis.
@@ -1357,16 +1364,13 @@ struct LiveView: View {
                 Label("Chia dọc 2 (trái / phải)", systemImage: compareMode && splitColumns ? "checkmark" : "rectangle.split.2x1")
             }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: !compareMode ? "rectangle" : (splitColumns ? "rectangle.split.2x1.fill" : "rectangle.split.1x2.fill"))
-                Text("Bố cục")
-            }
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundColor(compareMode ? .white : theme.primaryText)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .background(RoundedRectangle(cornerRadius: 8).fill(compareMode ? theme.accent : theme.grid.opacity(theme.isLight ? 0.5 : 0.8)))
+            Image(systemName: !compareMode ? "rectangle" : (splitColumns ? "rectangle.split.2x1.fill" : "rectangle.split.1x2.fill"))
+                .font(.system(size: 15))
+                .foregroundColor(compareMode ? .white : theme.primaryText)
+                .frame(width: 31, height: 28)
+                .background(RoundedRectangle(cornerRadius: 7).fill(compareMode ? theme.accent : .clear))
         }
+        .accessibilityLabel("Bố cục")
     }
 
     /// The next red news of the day; tap for the News tab.
@@ -1424,9 +1428,9 @@ struct LiveView: View {
 
     private func toolbarIcon(_ systemName: String, active: Bool) -> some View {
         Image(systemName: systemName)
-            .font(.system(size: 17, weight: .regular))
+            .font(.system(size: 15, weight: .regular))
             .foregroundColor(active ? theme.accent : theme.primaryText)
-            .frame(width: 38, height: 34)
+            .frame(width: 31, height: 28)
             .background(RoundedRectangle(cornerRadius: 8).fill(active ? theme.accent.opacity(0.14) : .clear))
     }
 
