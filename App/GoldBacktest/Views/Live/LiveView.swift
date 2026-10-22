@@ -12,6 +12,8 @@ struct LiveView: View {
     @Environment(NewsStore.self) private var news
     @Environment(MT5Trader.self) private var mt5
     @Environment(MemberFeed.self) private var memberFeed
+    /// Price at the moment each red news came out (by release time).
+    @State private var newsReference: [Date: Double] = [:]
     @AppStorage("news.vietnamese") private var newsVietnamese = false
     /// Split view: this chart and the correlated market (gold / silver), with SMT on both.
     @AppStorage("live.compare") private var compareMode = false
@@ -142,6 +144,7 @@ struct LiveView: View {
                 try? await Task.sleep(nanoseconds: 15 * 60 * 1_000_000_000)
             }
         }
+        .task(id: nextNewsTime) { await noteNewsPrice() }
         .task(id: market.source == .mt5) {
             // Orders on an MT5 chart go to the broker account: keep its positions fresh.
             guard market.source == .mt5 else { return }
@@ -367,9 +370,14 @@ struct LiveView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 chartTools
             }
-            // Dòng tiền cá mập: two lines of words, the full width.
-            if legendExpanded, let flow = sharkFlow, chartCandles.count > 2 {
-                SharkFlowSummary(output: flow, total: chartCandles.count, theme: theme)
+            // Dòng tiền cá mập: two lines of words, the full width. For the first minute
+            // after a red USD news the verdict of the news takes its place.
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                if let flash = releasedNews(at: context.date) {
+                    newsFlash(flash, now: context.date)
+                } else if legendExpanded, let flow = sharkFlow, chartCandles.count > 2 {
+                    SharkFlowSummary(output: flow, total: chartCandles.count, theme: theme)
+                }
             }
             timeframeRow
         }
@@ -1333,6 +1341,79 @@ struct LiveView: View {
     // MARK: - Session and news info
 
     /// Red USD news of today (chart time zone), grouped by time, for the time axis.
+    /// How long the news verdict replaces the money-flow lines.
+    static let newsFlashSeconds: TimeInterval = 60
+
+    /// A red USD news released less than a minute ago.
+    private func releasedNews(at now: Date) -> (time: Date, events: [EconomicEvent])? {
+        todaysRedNews.first { now >= $0.time && now < $0.time.addingTimeInterval(Self.newsFlashSeconds) }
+    }
+
+    /// The next red news still to come or just out: its price is noted at release.
+    private var nextNewsTime: Date? {
+        let now = Date()
+        return todaysRedNews.first { $0.time.addingTimeInterval(Self.newsFlashSeconds) > now }?.time
+    }
+
+    /// Waits for the release and notes the price then, to measure the reaction.
+    private func noteNewsPrice() async {
+        guard let time = nextNewsTime, newsReference[time] == nil else { return }
+        let wait = time.timeIntervalSinceNow
+        if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
+        guard !Task.isCancelled, newsReference[time] == nil else { return }
+        if Date().timeIntervalSince(time) < 5, currentPrice > 0 {
+            newsReference[time] = currentPrice
+        } else if market.interval.seconds <= 60,
+                  let before = chartCandles.last(where: { $0.time < time }) {
+            // Opened late: the close of the bar before the release.
+            newsReference[time] = before.close
+        }
+    }
+
+    /// "📰 CPI m/m vừa ra" and what gold did since: up = bad news for USD, good for gold.
+    private func newsFlash(_ flash: (time: Date, events: [EconomicEvent]), now: Date) -> some View {
+        let first = flash.events.first
+        var title = Self.shortNewsTitle(first?.title ?? "Tin USD")
+        if flash.events.count > 1 { title += " +\(flash.events.count - 1)" }
+        let left = max(0, Int(flash.time.addingTimeInterval(Self.newsFlashSeconds).timeIntervalSince(now)))
+        let details = [first?.forecast.isEmpty == false ? "dự báo \(first!.forecast)" : nil,
+                       first?.previous.isEmpty == false ? "trước \(first!.previous)" : nil].compactMap { $0 }
+        let verdict = newsVerdict(reference: newsReference[flash.time])
+        return VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Text("📰 \(title) vừa ra").foregroundColor(theme.primaryText).fontWeight(.semibold)
+                if !details.isEmpty { Text(details.joined(separator: " · ")).foregroundColor(theme.text) }
+                Spacer(minLength: 4)
+                Text("\(left)s").foregroundColor(theme.text).monospacedDigit()
+            }
+            Text(verdict.text).foregroundColor(verdict.color).fontWeight(.semibold)
+        }
+        .font(.system(size: 12))
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+    }
+
+    /// Gold's move since the release: clearly up = the news was bad for USD (good for gold).
+    private func newsVerdict(reference: Double?) -> (text: String, color: Color) {
+        guard let reference, reference > 0, currentPrice > 0 else {
+            return ("Đang đo phản ứng giá…", theme.text)
+        }
+        let move = currentPrice - reference
+        let decimals = priceDecimals ?? CandleChart.decimals(for: currentPrice)
+        let moveText = String(format: "%+.\(decimals)f", move)
+        let isGold = ["XAU", "XAG", "PAXG", "GOLD", "SILVER"].contains { market.symbol.uppercased().hasPrefix($0) }
+        // About 0.4 USD on gold at 4000: smaller moves say nothing yet.
+        if abs(move) < currentPrice * 0.0001 {
+            return ("Giá gần như đứng yên (\(moveText)) → chưa rõ tốt hay xấu", theme.text)
+        }
+        if !isGold {
+            return ("Giá \(move > 0 ? "tăng" : "giảm") \(moveText) từ lúc ra tin", move > 0 ? theme.up : theme.down)
+        }
+        return move > 0
+            ? ("Tin XẤU cho USD → TỐT cho vàng (vàng \(moveText))", theme.up)
+            : ("Tin TỐT cho USD → XẤU cho vàng (vàng \(moveText))", theme.down)
+    }
+
     private var todaysRedNews: [(time: Date, events: [EconomicEvent])] {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = ChartTimeZones.zone(timeZoneID)
