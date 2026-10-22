@@ -24,6 +24,32 @@ struct RGBAColor: Codable, Hashable {
     var color: Color { Color(.sRGB, red: red, green: green, blue: blue, opacity: alpha) }
 }
 
+/// The chart background chosen in Cài đặt ("" = the theme's own).
+enum ChartBackground {
+    static let key = "live.chartBackground"
+
+    static func decode(_ json: String) -> Color? {
+        guard !json.isEmpty, let data = json.data(using: .utf8),
+              let color = try? JSONDecoder().decode(RGBAColor.self, from: data) else { return nil }
+        return color.color
+    }
+
+    static func encode(_ color: Color?) -> String {
+        guard let color, let data = try? JSONEncoder().encode(RGBAColor(color)) else { return "" }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Quick picks: name, colour, for the light (true) or dark theme.
+    static let presets: [(String, Color, Bool)] = [
+        ("Trắng", .white, true),
+        ("Kem", Color(red: 0.99, green: 0.97, blue: 0.92), true),
+        ("Xám nhạt", Color(red: 0.95, green: 0.96, blue: 0.97), true),
+        ("Đen", Color(red: 0.06, green: 0.07, blue: 0.08), false),
+        ("Xanh đêm", Color(red: 0.07, green: 0.09, blue: 0.16), false),
+        ("Xám đậm", Color(red: 0.13, green: 0.14, blue: 0.16), false),
+    ]
+}
+
 /// Candle colours like TradingView's "Symbol" settings: body, border and
 /// wick, each with an up and a down colour and an on/off switch.
 struct CandleColors: Codable, Hashable {

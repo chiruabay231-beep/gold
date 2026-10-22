@@ -47,7 +47,15 @@ struct ChartTheme: Equatable {
                                         crosshairLabel: Color(red: 0.075, green: 0.090, blue: 0.133),
                                         accent: Color(red: 0.161, green: 0.384, blue: 1.0))         // #2962FF
 
-    var isLight: Bool { self == .tradingView }
+    var isLight: Bool { primaryText == ChartTheme.tradingView.primaryText }
+
+    /// The theme with the chart background the user picked (Cài đặt → Màu nền).
+    func with(background color: Color?) -> ChartTheme {
+        guard let color else { return self }
+        var copy = self
+        copy.background = color
+        return copy
+    }
 }
 
 /// Which part of the history is visible. `rightOffset` is how many bars

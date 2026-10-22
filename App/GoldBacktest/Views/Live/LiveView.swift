@@ -40,7 +40,7 @@ struct LiveView: View {
     @AppStorage("position.balance") private var accountBalance = 0.0
     @AppStorage("position.riskPercent") private var riskPercent = 1.0
     @AppStorage("position.contractSize") private var contractSize = 100.0
-    @State private var showChartSettings = false
+    @State private var showAppSettings = false
     @State private var showAutoStopSettings = false
     @State private var replay = ReplaySession()
     @State private var replaySummary: String?
@@ -48,7 +48,6 @@ struct LiveView: View {
     /// Timeframes shown in the row under the price; the rest are in the ▾ picker.
     @AppStorage("live.favoriteIntervals") private var favoriteIntervalsText = "1m,5m,15m,1h,4h,1D"
     @State private var showIntervalPicker = false
-    @State private var showVoiceSettings = false
     @State private var showIndicatorSheet = false
     @State private var showMoreSheet = false
     /// Opens another sheet once the f(x) / ••• sheet has gone.
@@ -102,7 +101,10 @@ struct LiveView: View {
     /// OANDA instrument to open once a token has been saved.
     @State private var pendingOandaInstrument: String?
 
-    private var theme: ChartTheme { themeName == "binance" ? .binance : .tradingView }
+    @AppStorage(ChartBackground.key) private var chartBackgroundJSON = ""
+    private var theme: ChartTheme {
+        (themeName == "binance" ? ChartTheme.binance : .tradingView).with(background: ChartBackground.decode(chartBackgroundJSON))
+    }
 
     // In a member's app the owner decides which of these show (Thành viên & mã mời).
     private var showKillzonePivots: Bool { killzonesSetting && memberFeed.allows(.killzones) }
@@ -173,7 +175,7 @@ struct LiveView: View {
         } message: {
             Text(replaySummary ?? "")
         }
-        .sheet(isPresented: $showVoiceSettings) { VoiceSettingsView() }
+        .sheet(isPresented: $showAppSettings) { AppSettingsView() }
         .sheet(isPresented: $showDrawingTools) {
             DrawingToolsSheet(activeTool: activeTool, crosshair: $crosshairMode) { tool in
                 activeTool = tool
@@ -186,8 +188,7 @@ struct LiveView: View {
                                onManage: { afterSheet = { store.selectedTab = .indicators } })
         }
         .sheet(isPresented: $showMoreSheet, onDismiss: runAfterSheet) {
-            LiveMoreSheet(onChartSettings: { afterSheet = { showChartSettings = true } },
-                          onVoiceSettings: { afterSheet = { showVoiceSettings = true } },
+            LiveMoreSheet(onSettings: { afterSheet = { showAppSettings = true } },
                           onDemo: { afterSheet = { store.selectedTab = .trade } },
                           onAutoFit: { viewport.manualPriceRange = nil },
                           onClearDrawings: { afterSheet = { confirmClear = true } })
@@ -243,11 +244,6 @@ struct LiveView: View {
         }
         .sheet(isPresented: $showKillzoneSettings) {
             KillzonePivotsSettingsView(json: $killzonePivotsJSON)
-        }
-        .sheet(isPresented: $showChartSettings) {
-            ChartSettingsView(theme: theme, colorsJSON: $candleColorsJSON, candleStyle: $candleStyle,
-                              precision: $precision, timeZoneID: $timeZoneID, balance: $accountBalance,
-                              riskPercent: $riskPercent, contractSize: $contractSize)
         }
         .sheet(item: $settingsDrawing) { drawing in
             DrawingSettingsView(drawing: drawing, decimals: priceDecimals ?? CandleChart.decimals(for: market.candles.last?.close ?? 1),

@@ -81,49 +81,25 @@ struct LiveIndicatorSheet: View {
     }
 }
 
-/// Chart look, notifications and chart actions.
+/// The ••• menu: Cài đặt (look, trading buttons, notifications) and chart actions.
 struct LiveMoreSheet: View {
-    var onChartSettings: () -> Void
-    var onVoiceSettings: () -> Void
+    var onSettings: () -> Void
     var onDemo: () -> Void
     var onAutoFit: () -> Void
     var onClearDrawings: () -> Void
 
     @Environment(\.dismiss) private var dismiss
-    @AppStorage("live.theme") private var themeName = "tradingView"
-    @AppStorage("live.tradeBarPosition") private var tradeBarPosition = "bottom"
-    @AppStorage("live.candleStyle") private var candleStyle = CandleStyle.candles.rawValue
-    @AppStorage(AlertSettings.ordersKey) private var notifyOrders = true
-    @AppStorage(AlertSettings.signalsKey) private var notifySignals = true
-    @AppStorage(VoiceSettings.enabledKey) private var voice = true
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Thông báo") {
-                    Toggle(isOn: $notifyOrders) { Label("Thông báo lệnh", systemImage: "bell.badge") }
-                    Toggle(isOn: $notifySignals) { Label("Thông báo tín hiệu", systemImage: "waveform.path.ecg") }
-                    Toggle(isOn: $voice) { Label("Đọc bằng giọng nói", systemImage: "speaker.wave.2") }
-                    row("Cài đặt thông báo & giọng nói…", "slider.horizontal.3", onVoiceSettings)
+                Section {
+                    row("Cài đặt", "gearshape", onSettings)
+                } footer: {
+                    Text("Giao diện sáng/tối, màu nền biểu đồ, màu nến, nút BUY/SELL, thông báo.")
                 }
                 Section("Biểu đồ") {
-                    Picker("Nút BUY/SELL", selection: $tradeBarPosition) {
-                        Text("Dưới biểu đồ").tag("bottom")
-                        Text("Trên biểu đồ").tag("top")
-                    }
-                    Picker("Giao diện", selection: $themeName) {
-                        Text("TradingView (sáng)").tag("tradingView")
-                        Text("Binance (tối)").tag("binance")
-                    }
-                    Picker("Kiểu nến", selection: $candleStyle) {
-                        ForEach(CandleStyle.allCases) { style in
-                            Text(style.title).tag(style.rawValue)
-                        }
-                    }
                     row("Tự động căn thang giá", "arrow.up.and.down", onAutoFit)
-                    row("Cài đặt biểu đồ (màu nến…)", "gearshape", onChartSettings)
-                }
-                Section {
                     row("Giao dịch demo…", "briefcase", onDemo)
                     Button(role: .destructive) {
                         onClearDrawings()
