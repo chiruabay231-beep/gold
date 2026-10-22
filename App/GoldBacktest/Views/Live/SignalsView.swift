@@ -311,6 +311,7 @@ struct MembersView: View {
                 }
                 Section {
                     Menu {
+                        Button("Như người mới cài app (nhập mã từ đầu)") { startPreview(role: "copy", fresh: true) }
                         Button("Xem như: chỉ tín hiệu") { startPreview(role: "signals") }
                         Button("Xem như: tín hiệu + copy lệnh") { startPreview(role: "copy") }
                     } label: {
@@ -322,7 +323,7 @@ struct MembersView: View {
                     }
                     .disabled(startingPreview)
                 } footer: {
-                    Text("Máy này chuyển sang đúng giao diện thành viên (dùng một mã thử riêng). Bấm \"Thoát xem thử\" ở trên biểu đồ để quay lại.")
+                    Text("\"Như người mới cài app\": app hiện màn hình nhập mã như máy mới, mã thử đã chép sẵn để dán. Hai lựa chọn còn lại vào thẳng giao diện thành viên. Bấm \"Thoát xem thử\" để quay lại.")
                 }
                 Section {
                     LabeledContent("Tín hiệu đang mở", value: "\(list.openSignals ?? 0)")
@@ -398,7 +399,7 @@ struct MembersView: View {
     static let previewName = "🧪 Xem thử (chủ)"
 
     /// Makes (or re-codes) a test member and switches this phone to its view.
-    private func startPreview(role: String) {
+    private func startPreview(role: String, fresh: Bool = false) {
         guard let client = RemoteBotSettings.client() else { return }
         startingPreview = true
         Task {
@@ -414,6 +415,13 @@ struct MembersView: View {
                 }
                 list = result
                 guard let code = result.code else { return }
+                if fresh {
+                    // The code screen comes up as on a new phone; the code is ready to paste.
+                    UIPasteboard.general.string = code
+                    store.selectedTab = .live
+                    memberFeed.startFresh(testCode: code)
+                    return
+                }
                 if await memberFeed.connect(url: RemoteBotSettings.url, code: code, preview: true) {
                     store.selectedTab = .live
                 } else {

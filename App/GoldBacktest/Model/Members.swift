@@ -60,6 +60,13 @@ enum MemberSettings {
         set { UserDefaults.standard.set(newValue, forKey: "member.preview") }
     }
 
+    /// The owner trying the app as someone who just installed it: the code
+    /// screen first, as if the owner's password were not on this phone.
+    static var simulateFresh: Bool {
+        get { UserDefaults.standard.bool(forKey: "member.simulateFresh") }
+        set { UserDefaults.standard.set(newValue, forKey: "member.simulateFresh") }
+    }
+
     static func disconnect() {
         saveCode("")
         url = ""
@@ -255,7 +262,27 @@ final class MemberFeed {
     private(set) var hasAccess = MemberFeed.computeAccess()
 
     private static func computeAccess() -> Bool {
-        RemoteBotSettings.client() != nil || MemberSettings.client() != nil
+        (RemoteBotSettings.client() != nil && !MemberSettings.simulateFresh) || MemberSettings.client() != nil
+    }
+
+    /// The owner going through the code screen like a new user.
+    private(set) var simulating = MemberSettings.simulateFresh
+    /// The test code made for that, shown on the code screen.
+    private(set) var testCode: String?
+
+    /// Shows the code screen as a newly installed app would (owner only).
+    func startFresh(testCode code: String) {
+        MemberSettings.disconnect()
+        MemberSettings.simulateFresh = true
+        simulating = true
+        testCode = code
+        info = nil
+        signals = []
+        error = nil
+        revoked = false
+        connectionID = UUID()
+        memberMode = Self.computeMode()
+        hasAccess = Self.computeAccess()
     }
 
     /// After the owner saves (or clears) the VPS connection.
@@ -284,7 +311,8 @@ final class MemberFeed {
             self.error = error.localizedDescription
             // Locked or expired: the app closes until a new code is entered
             // (the owner's own phone stays open).
-            if (error as? RemoteBotClient.ServerError)?.code == 403, RemoteBotSettings.client() == nil {
+            if (error as? RemoteBotClient.ServerError)?.code == 403,
+               RemoteBotSettings.client() == nil || MemberSettings.simulateFresh {
                 revoked = true
                 hasAccess = false
             }
@@ -306,13 +334,17 @@ final class MemberFeed {
         if address == nil {
             address = await URLRelay.shared.address(forMemberCode: code)?.absoluteString
         }
+        if address == nil, MemberSettings.simulateFresh, !RemoteBotSettings.url.isEmpty {
+            // Owner's test: their own server, if the posted address is not there yet.
+            address = RemoteBotSettings.url
+        }
         guard let address else {
             error = "Mã mời không đúng (hoặc người cung cấp chưa bật). Kiểm tra lại mã."
             return false
         }
         MemberSettings.url = address
         MemberSettings.saveCode(code)
-        MemberSettings.preview = preview
+        MemberSettings.preview = preview || MemberSettings.simulateFresh
         connectionID = UUID()
         await refresh()
         if info == nil {
@@ -327,8 +359,12 @@ final class MemberFeed {
         return true
     }
 
+    /// Leaves the member side (and ends the owner's test, if it is one).
     func disconnect() {
         MemberSettings.disconnect()
+        MemberSettings.simulateFresh = false
+        simulating = false
+        testCode = nil
         info = nil
         signals = []
         error = nil

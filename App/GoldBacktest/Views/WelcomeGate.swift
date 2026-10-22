@@ -27,6 +27,26 @@ struct WelcomeGate: View {
                     }
                     .padding(.top, 40)
 
+                    if feed.simulating {
+                        // The owner's test of the first screen.
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Đang xem thử như người mới cài app", systemImage: "eye")
+                                .font(.footnote.weight(.semibold))
+                            if let code = feed.testCode {
+                                Text("Mã thử: \(code) (đã chép sẵn, bấm 📋 để dán)")
+                                    .font(.caption.monospaced())
+                            }
+                            Button("Thoát xem thử") { feed.disconnect() }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.orange)
+                                .font(.footnote.weight(.semibold))
+                        }
+                        .foregroundColor(.orange)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.1), in: RoundedRectangle(cornerRadius: 12))
+                    }
+
                     if feed.revoked {
                         Label("Mã của bạn đã bị khoá hoặc hết hạn. Liên hệ người cung cấp để có mã mới.",
                               systemImage: "lock.fill")
@@ -70,7 +90,10 @@ struct WelcomeGate: View {
                     Text("Chưa có mã? Liên hệ người giới thiệu app để nhận mã mời.")
                         .font(.caption).foregroundColor(.secondary).multilineTextAlignment(.center)
 
-                    Button("Đăng nhập chủ") { showOwner = true }
+                    Button("Đăng nhập chủ") {
+                        // In the owner's test the owner is already signed in: just leave the test.
+                        if feed.simulating { feed.disconnect() } else { showOwner = true }
+                    }
                         .font(.caption)
                         .foregroundColor(.secondary)
                         .padding(.top, 30)
