@@ -485,53 +485,56 @@ struct SlideToSend: View {
 
     var body: some View {
         GeometryReader { geometry in
-            let travel = max(geometry.size.width - knob - 8, 1)
-            let progress = min(offset / travel, 1)
-            ZStack(alignment: .leading) {
-                Text(title)
-                    .font(.system(size: 17, weight: .semibold))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .padding(.leading, knob + 14)
-                    .opacity(1 - progress * 0.7)
-                // The lit trail behind the arrow.
-                Capsule()
-                    .fill(.white.opacity(0.28))
-                    .frame(width: knob + offset, height: knob)
-                    .padding(.leading, 4)
-                    .opacity(offset > 0 ? 1 : 0)
-                Image(systemName: progress > 0.85 ? "checkmark" : "arrow.right")
-                    .font(.system(size: 16, weight: .bold))
-                    .frame(width: knob, height: knob)
-                    .background(Circle().fill(.white.opacity(sliding ? 0.45 : 0.22)))
-                    .padding(.leading, 4)
-                    .offset(x: offset)
-            }
-            .frame(maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 2)
-                    .onChanged { value in
-                        guard enabled else { return }
-                        if !sliding { sliding = true }
-                        offset = min(max(0, value.translation.width), travel)
-                    }
-                    .onEnded { _ in
-                        let sent = enabled && offset >= travel * 0.85
-                        if sent {
-                            UINotificationFeedbackGenerator().notificationOccurred(.success)
-                            onSend()
-                        }
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
-                            offset = 0
-                            sliding = false
-                        }
-                    }
-            )
+            track(travel: max(geometry.size.width - knob - 8, 1))
         }
         .accessibilityElement()
         .accessibilityLabel(title)
         .accessibilityHint("Trượt sang phải để đặt lệnh")
-        .accessibilityAction { if enabled { onSend() } }
+        .accessibilityAction(.default) { if enabled { onSend() } }
+    }
+
+    private func track(travel: CGFloat) -> some View {
+        let progress = Double(min(offset / travel, 1))
+        return ZStack(alignment: .leading) {
+            Text(title)
+                .font(Font.system(size: 17, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.leading, knob + 14)
+                .opacity(1 - progress * 0.7)
+            // The lit trail behind the arrow.
+            Capsule()
+                .fill(Color.white.opacity(0.28))
+                .frame(width: knob + offset, height: knob)
+                .padding(.leading, 4)
+                .opacity(offset > 0 ? 1.0 : 0.0)
+            Image(systemName: progress > 0.85 ? "checkmark" : "arrow.right")
+                .font(Font.system(size: 16, weight: .bold))
+                .frame(width: knob, height: knob)
+                .background(Circle().fill(Color.white.opacity(sliding ? 0.45 : 0.22)))
+                .padding(.leading, 4)
+                .offset(x: offset)
+        }
+        .frame(maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .gesture(
+            DragGesture(minimumDistance: 2)
+                .onChanged { value in
+                    guard enabled else { return }
+                    if !sliding { sliding = true }
+                    offset = min(max(0, value.translation.width), travel)
+                }
+                .onEnded { _ in
+                    let sent = enabled && offset >= travel * 0.85
+                    if sent {
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
+                        onSend()
+                    }
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        offset = 0
+                        sliding = false
+                    }
+                }
+        )
     }
 }
