@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.8"
+VERSION = "1.9"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -1937,7 +1937,9 @@ CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
 # What members' apps show besides the chart and the signals (the owner chooses).
 DEFAULT_MEMBER_FEATURES = {"news": True, "killzones": True, "sharkflow": True, "demo": True,
-                           "indicators": False, "backtest": False}
+                           "indicators": False, "backtest": False,
+                           # Members may copy into their own REAL-money accounts.
+                           "copyReal": False}
 
 
 def new_member_code():
@@ -2114,6 +2116,8 @@ class Members:
             raise PermissionError("Mã của bạn chỉ được xem tín hiệu (không có quyền copy lệnh)")
         fid = self.follower_id(m)
         current = self.server.copier.follower(fid)
+        if body.get("allowReal") and not self.features["copyReal"]:
+            raise PermissionError("Người cung cấp chưa cho copy vào tài khoản thật: dùng tài khoản demo")
         data = {k: body[k] for k in ("login", "password", "server", "multiplier", "fixedLots", "maxLots",
                                      "allowReal", "symbolMap") if k in body}
         data.update(id=fid if current else "", name=m["name"], path="")
@@ -2139,6 +2143,10 @@ class Members:
             on = m is not None and self.active(m) and m["role"] == "copy" and f.get("memberEnabled", True)
             if bool(f.get("enabled")) != on:
                 f["enabled"] = on
+                changed = True
+            if f.get("allowReal") and not self.features["copyReal"]:
+                # The owner took it back: a real account then refuses to copy.
+                f["allowReal"] = False
                 changed = True
         if changed:
             self.server.save_config()

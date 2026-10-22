@@ -5,6 +5,7 @@ import BacktestKit
 /// Controls the bot running 24/7 on the VPS (bot-server/bot_server.py).
 struct RemoteBotView: View {
     @Environment(AppStore.self) private var store
+    @Environment(MemberFeed.self) private var memberFeed
     @State private var remote = RemoteBot()
 
     @State private var urlText = RemoteBotSettings.url
@@ -102,6 +103,7 @@ struct RemoteBotView: View {
                     if !passwordText.isEmpty { RemoteBotSettings.savePassword(passwordText) }
                     passwordText = ""
                     editingConnection = false
+                    memberFeed.ownerChanged()
                 }
                 .disabled(RemoteBotClient.normalizedURL(urlText) == nil || (passwordText.isEmpty && RemoteBotSettings.password == nil))
             } else {

@@ -182,6 +182,8 @@ struct RemoteBotClient {
 
     struct ServerError: LocalizedError {
         var message: String
+        /// HTTP status (403 = refused: a member locked or expired).
+        var code = 0
         var errorDescription: String? { message }
     }
 
@@ -243,7 +245,7 @@ struct RemoteBotClient {
         if code == 200 { return data }
         struct Failure: Decodable { var error: String? }
         if let failure = try? JSONDecoder().decode(Failure.self, from: data), let message = failure.error {
-            throw ServerError(message: message)
+            throw ServerError(message: message, code: code)
         }
         switch code {
         case 401: throw ServerError(message: "Sai mật khẩu máy chủ")

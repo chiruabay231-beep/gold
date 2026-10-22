@@ -70,7 +70,7 @@ enum MemberSettings {
 /// Parts of the app a member's app shows besides the chart and the signals; the
 /// owner switches them on the VPS (Thành viên & mã mời).
 enum MemberFeature: String, CaseIterable, Identifiable {
-    case news, killzones, sharkflow, demo, indicators, backtest
+    case news, killzones, sharkflow, demo, indicators, backtest, copyReal
     var id: String { rawValue }
 
     var title: String {
@@ -81,6 +81,7 @@ enum MemberFeature: String, CaseIterable, Identifiable {
         case .demo: return "Nút BUY/SELL (giao dịch demo)"
         case .indicators: return "Tab Chỉ báo (tự viết chỉ báo)"
         case .backtest: return "Tab Backtest"
+        case .copyReal: return "Cho copy vào tài khoản THẬT của thành viên"
         }
     }
 
@@ -88,7 +89,7 @@ enum MemberFeature: String, CaseIterable, Identifiable {
     var defaultOn: Bool {
         switch self {
         case .news, .killzones, .sharkflow, .demo: return true
-        case .indicators, .backtest: return false
+        case .indicators, .backtest, .copyReal: return false
         }
     }
 }
@@ -246,6 +247,23 @@ final class MemberFeed {
     /// Owner's phone, trying the member side.
     var isPreview: Bool { memberMode && MemberSettings.preview }
 
+    /// The owner's server refused the code (locked or expired): back to the code screen.
+    private(set) var revoked = false
+
+    /// Whether the app opens: the owner (VPS password saved) always; anyone else
+    /// only with a working invite code.
+    private(set) var hasAccess = MemberFeed.computeAccess()
+
+    private static func computeAccess() -> Bool {
+        RemoteBotSettings.client() != nil || MemberSettings.client() != nil
+    }
+
+    /// After the owner saves (or clears) the VPS connection.
+    func ownerChanged() {
+        memberMode = Self.computeMode()
+        hasAccess = Self.computeAccess() && !revoked
+    }
+
     /// Whether a part of the app shows (always, outside member mode).
     func allows(_ feature: MemberFeature) -> Bool {
         guard memberMode else { return true }
@@ -264,6 +282,12 @@ final class MemberFeed {
             error = nil
         } catch {
             self.error = error.localizedDescription
+            // Locked or expired: the app closes until a new code is entered
+            // (the owner's own phone stays open).
+            if (error as? RemoteBotClient.ServerError)?.code == 403, RemoteBotSettings.client() == nil {
+                revoked = true
+                hasAccess = false
+            }
         }
     }
 
@@ -283,9 +307,12 @@ final class MemberFeed {
         if info == nil {
             MemberSettings.disconnect()
             memberMode = Self.computeMode()
+            hasAccess = Self.computeAccess() && !revoked
             return false
         }
+        revoked = false
         memberMode = Self.computeMode()
+        hasAccess = true
         return true
     }
 
@@ -296,6 +323,7 @@ final class MemberFeed {
         error = nil
         connectionID = UUID()
         memberMode = Self.computeMode()
+        hasAccess = Self.computeAccess()
     }
 
     /// Open signals of a chart's market: XAUUSD, XAUUSDm, XAUUSDT and XAU_USD all match.

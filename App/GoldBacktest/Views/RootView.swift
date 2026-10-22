@@ -7,9 +7,18 @@ struct RootView: View {
     @Environment(MemberFeed.self) private var memberFeed
 
     var body: some View {
+        // Without the owner's VPS password the app opens only with an invite code.
+        if memberFeed.hasAccess {
+            tabs
+        } else {
+            WelcomeGate()
+        }
+    }
+
+    private var tabs: some View {
         @Bindable var store = store
         let member = memberFeed.memberMode
-        TabView(selection: $store.selectedTab) {
+        return TabView(selection: $store.selectedTab) {
             NavigationStack { LiveView() }
                 .tabItem { Label("Live", systemImage: "waveform.path.ecg.rectangle") }
                 .tag(AppTab.live)
