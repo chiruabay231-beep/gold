@@ -85,6 +85,9 @@ struct LiveView: View {
     @State private var drawingText = ""
     @State private var legendExpanded = true
     @State private var fullScreen = false
+    @State private var showFullIntervalPicker = false
+    /// "bottom" (under the chart) or "top" (above it).
+    @AppStorage("live.tradeBarPosition") private var tradeBarPosition = "bottom"
     @State private var confirmClear = false
     @State private var killzoneCache = KillzonePivotsCache()
     /// Custom indicators (tab Chỉ báo) ticked for the Live chart.
@@ -115,13 +118,10 @@ struct LiveView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
+            if showTradeButtons && tradeBarOnTop { tradeBar }
             charts
             indicatorPanes
-            if showTradeButtons {
-                TradeBar(bid: liveQuote.bid, ask: liveQuote.ask, decimals: currentDecimals, lots: $defaultLots,
-                         onSell: { marketOrder(.short) }, onBuy: { marketOrder(.long) },
-                         onTicket: { side in openTicket(side: side, kind: .market) })
-            }
+            if showTradeButtons && !tradeBarOnTop { tradeBar }
         }
         .background(theme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
@@ -192,17 +192,9 @@ struct LiveView: View {
                           onAutoFit: { viewport.manualPriceRange = nil },
                           onClearDrawings: { afterSheet = { confirmClear = true } })
         }
-        .sheet(isPresented: Binding(get: { orderTicket != nil }, set: { if !$0 { orderTicket = nil } })) {
-            OrderTicketSheet(ticket: $orderTicket, lots: $defaultLots, bid: liveQuote.bid, ask: liveQuote.ask,
-                             decimals: currentDecimals, contractSize: PaperAccount.contractSize(for: market.symbolKey),
-                             distance: defaultDistance, accountLabel: orderAccountLabel,
-                             compact: ticketDetent == Self.ticketCompact,
-                             onExpand: { ticketDetent = Self.ticketFull },
-                             onSubmit: { submitTicket() })
-                .presentationDetents([Self.ticketCompact, Self.ticketFull], selection: $ticketDetent)
-                .presentationDragIndicator(.visible)
-                // The chart stays usable: drag the order's lines while the sheet is open.
-                .presentationBackgroundInteraction(.enabled(upThrough: Self.ticketFull))
+        // In full screen the order sheet opens over the full-screen chart instead.
+        .sheet(isPresented: Binding(get: { orderTicket != nil && !fullScreen }, set: { if !$0 { orderTicket = nil } })) {
+            ticketSheet
         }
         .confirmationDialog(demoOrderTitle, isPresented: Binding(get: { demoOrderDrawing != nil },
                                                                  set: { if !$0 { demoOrderDrawing = nil } }),
@@ -265,9 +257,66 @@ struct LiveView: View {
         }
         .fullScreenCover(isPresented: $fullScreen) {
             FullScreenChart(title: "\(Self.displayName(market.symbol)) · \(Self.label(market.interval))", theme: theme,
+                            titleView: AnyView(fullScreenTitle),
                             onClose: { fullScreen = false }) {
-                charts
+                VStack(spacing: 0) {
+                    if showTradeButtons && tradeBarOnTop { tradeBar }
+                    charts
+                    if showTradeButtons && !tradeBarOnTop { tradeBar }
+                }
             }
+            .sheet(isPresented: Binding(get: { orderTicket != nil && fullScreen }, set: { if !$0 { orderTicket = nil } })) {
+                ticketSheet
+            }
+        }
+    }
+
+    /// SELL | lot | BUY, under the chart or above it (••• → Biểu đồ).
+    private var tradeBar: some View {
+        TradeBar(bid: liveQuote.bid, ask: liveQuote.ask, decimals: currentDecimals, lots: $defaultLots,
+                 onSell: { marketOrder(.short) }, onBuy: { marketOrder(.long) },
+                 onTicket: { side in openTicket(side: side, kind: .market) })
+    }
+
+    private var tradeBarOnTop: Bool { tradeBarPosition == "top" }
+
+    private var ticketSheet: some View {
+        OrderTicketSheet(ticket: $orderTicket, lots: $defaultLots, bid: liveQuote.bid, ask: liveQuote.ask,
+                         decimals: currentDecimals, contractSize: PaperAccount.contractSize(for: market.symbolKey),
+                         distance: defaultDistance, accountLabel: orderAccountLabel,
+                         compact: ticketDetent == Self.ticketCompact,
+                         onExpand: { ticketDetent = Self.ticketFull },
+                         onSubmit: { submitTicket() })
+            .presentationDetents([Self.ticketCompact, Self.ticketFull], selection: $ticketDetent)
+            .presentationDragIndicator(.visible)
+            // The chart stays usable: drag the order's lines while the sheet is open.
+            .presentationBackgroundInteraction(.enabled(upThrough: Self.ticketFull))
+    }
+
+    /// Full screen: "XAUUSD · 1m ▾" — tap for the timeframes.
+    private var fullScreenTitle: some View {
+        Button { showFullIntervalPicker = true } label: {
+            HStack(spacing: 5) {
+                Text("\(Self.displayName(market.symbol)) · \(Self.label(market.interval))")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(theme.primaryText)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(theme.text)
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 7).stroke(theme.grid, lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .popover(isPresented: $showFullIntervalPicker) {
+            IntervalPicker(current: market.interval, favorites: favoriteIntervals,
+                           onSelect: { interval in
+                               selectInterval(interval)
+                               showFullIntervalPicker = false
+                           },
+                           onToggleFavorite: toggleFavorite)
+                .presentationCompactAdaptation(.popover)
         }
     }
 

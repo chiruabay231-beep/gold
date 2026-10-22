@@ -91,6 +91,7 @@ struct LiveMoreSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @AppStorage("live.theme") private var themeName = "tradingView"
+    @AppStorage("live.tradeBarPosition") private var tradeBarPosition = "bottom"
     @AppStorage("live.candleStyle") private var candleStyle = CandleStyle.candles.rawValue
     @AppStorage(AlertSettings.ordersKey) private var notifyOrders = true
     @AppStorage(AlertSettings.signalsKey) private var notifySignals = true
@@ -106,6 +107,10 @@ struct LiveMoreSheet: View {
                     row("Cài đặt thông báo & giọng nói…", "slider.horizontal.3", onVoiceSettings)
                 }
                 Section("Biểu đồ") {
+                    Picker("Nút BUY/SELL", selection: $tradeBarPosition) {
+                        Text("Dưới biểu đồ").tag("bottom")
+                        Text("Trên biểu đồ").tag("top")
+                    }
                     Picker("Giao diện", selection: $themeName) {
                         Text("TradingView (sáng)").tag("tradingView")
                         Text("Binance (tối)").tag("binance")

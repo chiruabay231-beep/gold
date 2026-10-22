@@ -2131,6 +2131,8 @@ struct ExpandableCandleChart: View {
 struct FullScreenChart<Content: View>: View {
     let title: String
     var theme: ChartTheme = .binance
+    /// Replaces the plain title (e.g. a symbol · timeframe button).
+    var titleView: AnyView? = nil
     let onClose: () -> Void
     @ViewBuilder let content: () -> Content
 
@@ -2139,10 +2141,14 @@ struct FullScreenChart<Content: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 16) {
-                Text(title)
-                    .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(theme.primaryText)
-                    .lineLimit(1)
+                if let titleView {
+                    titleView
+                } else {
+                    Text(title)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(theme.primaryText)
+                        .lineLimit(1)
+                }
                 Spacer()
                 Button {
                     landscape.toggle()
