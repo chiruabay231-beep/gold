@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import Security
+import CryptoKit
 import BacktestKit
 
 /// Address (UserDefaults) and password (Keychain, this device only) of the VPS bot server.
@@ -199,8 +200,30 @@ struct RemoteBotClient {
         try await request(path, method: method, body: body, timeout: timeout)
     }
 
+    /// The server could not be reached at this address (VPS off, or a new address).
+    private struct Unreachable: Error { var code: Int }
+
+    /// One request; when the address no longer answers, the server's new address is
+    /// looked up (the VPS posts it to ntfy.sh) and the request sent again there.
     private func request(_ path: String, method: String = "GET", body: Data? = nil,
                          timeout: TimeInterval = 25) async throws -> Data {
+        do {
+            return try await attempt(path, method: method, body: body, timeout: timeout)
+        } catch let failure as Unreachable {
+            if let moved = await URLRelay.shared.newAddress(password: password, current: baseURL) {
+                var retry = self
+                retry.baseURL = moved
+                if let data = try? await retry.attempt(path, method: method, body: body, timeout: timeout) {
+                    return data
+                }
+            }
+            throw ServerError(message: failure.code == 0
+                ? "Không kết nối được máy chủ VPS. Nếu VPS vừa khởi động lại, app sẽ tự tìm địa chỉ mới sau ít phút."
+                : "Bot trên VPS không chạy (lỗi \(failure.code)). Đợi 1–2 phút nếu vừa cập nhật; nếu vẫn lỗi, khởi động lại VPS (bot tự chạy lại và app tự tìm địa chỉ mới).")
+        }
+    }
+
+    private func attempt(_ path: String, method: String, body: Data?, timeout: TimeInterval) async throws -> Data {
         guard let url = URL(string: baseURL.absoluteString + path) else { throw ServerError(message: "Địa chỉ không hợp lệ") }
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = method
@@ -214,7 +237,7 @@ struct RemoteBotClient {
         do {
             (data, response) = try await URLSession.shared.data(for: request)
         } catch {
-            throw ServerError(message: "Không kết nối được máy chủ (VPS tắt hoặc địa chỉ đã đổi — gõ /url cho bot Telegram).")
+            throw Unreachable(code: 0)
         }
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
         if code == 200 { return data }
@@ -224,9 +247,8 @@ struct RemoteBotClient {
         }
         switch code {
         case 401: throw ServerError(message: "Sai mật khẩu máy chủ")
-        case 502, 530:
-            // Cloudflare answers but the bot behind it does not.
-            throw ServerError(message: "Bot trên VPS không chạy (lỗi \(code)). Gõ /url cho bot Telegram: có trả lời thì nhập địa chỉ mới; không trả lời thì khởi động lại GoldBot trên VPS.")
+        // Cloudflare answers but nothing behind this address (bot down or tunnel gone).
+        case 502, 530: throw Unreachable(code: code)
         default: throw ServerError(message: "Máy chủ trả lỗi \(code)")
         }
     }
@@ -539,5 +561,52 @@ final class RemoteBot {
     func testTelegram() async {
         guard let client = RemoteBotSettings.client() else { return }
         do { try await client.testTelegram() } catch { self.error = error.localizedDescription }
+    }
+}
+
+/// Finds the VPS again when its trycloudflare address changes: the server posts
+/// the address to an ntfy.sh topic only the owner's password (or a member's code)
+/// can work out, and the app reads it there and saves it.
+actor URLRelay {
+    static let shared = URLRelay()
+    static let base = "https://ntfy.sh"
+
+    private var lastLookup: [String: Date] = [:]
+
+    static func sha256(_ text: String) -> String {
+        SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Same as the server's relay_topic().
+    static func topic(password: String) -> (topic: String, member: Bool) {
+        if let code = MemberSettings.code, code == password {
+            let codeHash = sha256(code.trimmingCharacters(in: .whitespaces).uppercased())
+            return ("aurum-" + String(sha256("murl:" + codeHash).prefix(24)), true)
+        }
+        return ("aurum-" + String(sha256("url:" + password).prefix(24)), false)
+    }
+
+    /// The newest address posted for this server, if it differs from `current`
+    /// (also saved, so later requests go there). At most one lookup every 20 s.
+    func newAddress(password: String, current: URL) async -> URL? {
+        let (topic, member) = Self.topic(password: password)
+        if let last = lastLookup[topic], Date().timeIntervalSince(last) < 20 { return nil }
+        lastLookup[topic] = Date()
+        guard let url = URL(string: "\(Self.base)/\(topic)/json?poll=1&since=all"),
+              let fetched = try? await URLSession.shared.data(from: url) else { return nil }
+        let data = fetched.0
+        struct Message: Decodable { var event: String?; var message: String? }
+        let posted = String(decoding: data, as: UTF8.self)
+            .split(whereSeparator: \.isNewline)
+            .compactMap { try? JSONDecoder().decode(Message.self, from: Data($0.utf8)) }
+            .filter { $0.event == "message" }
+            .compactMap { $0.message?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .last
+        guard let posted, posted.hasPrefix("https://"), let address = RemoteBotClient.normalizedURL(posted),
+              address.absoluteString != current.absoluteString else { return nil }
+        await MainActor.run {
+            if member { MemberSettings.url = address.absoluteString } else { RemoteBotSettings.url = address.absoluteString }
+        }
+        return address
     }
 }

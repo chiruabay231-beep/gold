@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.7"
+VERSION = "1.8"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -54,6 +54,8 @@ DEFAULT_CONFIG = {
     "telegram": {"token": "", "chat_id": ""},
     # Cloudflare quick tunnel: gives an https://….trycloudflare.com address.
     "tunnel": True,
+    # The app looks the address up here when it changes (empty = off).
+    "url_relay": "https://ntfy.sh",
     "cloudflared": "",
     "botkit": "",
     "poll_seconds": 2,
@@ -1870,6 +1872,7 @@ class Tunnel:
         self.url = url
         self.server.tunnel_url = url
         self.server.log(f"🌐 Giữ địa chỉ máy chủ sau khi cập nhật: {url}")
+        threading.Thread(target=publish_address, args=(self.server,), daemon=True).start()
         while pid_alive(pid):
             time.sleep(10)
         self.url = ""
@@ -1944,6 +1947,32 @@ def new_member_code():
 
 def code_hash(code):
     return hashlib.sha256(code.strip().upper().encode()).hexdigest()
+
+
+def relay_topic(secret, kind="url"):
+    """ntfy topic the server posts its address to. Only someone holding the owner's
+    password (kind "url") or a member's code hash (kind "murl") can work it out."""
+    return "aurum-" + hashlib.sha256(f"{kind}:{secret}".encode()).hexdigest()[:24]
+
+
+def publish_address(server):
+    """Posts the tunnel address to ntfy.sh, so the app finds the server again after
+    the address changes (VPS restart) without Telegram. Repeated every 6 hours, as
+    ntfy keeps messages 12 hours."""
+    url = server.tunnel_url
+    relay = (server.config.get("url_relay") or "").rstrip("/")
+    if not url or not relay:
+        return
+    topics = [relay_topic(server.config["password"])]
+    topics += [relay_topic(m["codeHash"], "murl") for m in server.config.get("members", [])
+               if m.get("codeHash") and Members.active(m)]
+    for topic in topics:
+        try:
+            request = urllib.request.Request(f"{relay}/{topic}", data=url.encode(), method="POST",
+                                             headers={"User-Agent": "gold-bot/" + VERSION, "Cache": "yes"})
+            urllib.request.urlopen(request, timeout=10).close()
+        except Exception:
+            pass
 
 
 class Members:
@@ -2033,6 +2062,7 @@ class Members:
             m["expires"] = now() + days * 86400 if days > 0 else None
         self.server.save_config()
         self._sync_followers()
+        threading.Thread(target=publish_address, args=(self.server,), daemon=True).start()
         self.server.log(f"👥 {'Thêm' if code else 'Sửa'} thành viên {m['name']} ({m['role']})")
         return dict(self.list(), code=code, member=self.public(m))
 
@@ -2043,6 +2073,7 @@ class Members:
         code = new_member_code()
         m["codeHash"] = code_hash(code)
         self.server.save_config()
+        threading.Thread(target=publish_address, args=(self.server,), daemon=True).start()
         self.server.log(f"👥 Đổi mã thành viên {m['name']} (mã cũ hết dùng được)")
         return dict(self.list(), code=code, member=self.public(m))
 
@@ -2211,6 +2242,12 @@ class BotServer:
         self.members = Members(self)
         self.telegram = Telegram(self)
         self.tunnel = Tunnel(self) if self.config.get("tunnel") else None
+        threading.Thread(target=self._relay_loop, daemon=True).start()
+
+    def _relay_loop(self):
+        while True:
+            time.sleep(6 * 3600)
+            publish_address(self)
 
     # ----- persistence -----
 
@@ -2247,6 +2284,7 @@ class BotServer:
         except OSError:
             pass
         self.log(f"🌐 Địa chỉ máy chủ: {url}\n(dán vào app → Backtest → Bot → Máy chủ VPS)", notify=True)
+        threading.Thread(target=publish_address, args=(self,), daemon=True).start()
 
     # ----- control -----
 
@@ -2551,17 +2589,16 @@ class BotServer:
 
         def restart():
             time.sleep(1.5)
-            if not os.environ.get("GOLDBOT_SUPERVISED"):
-                # Not started by run.ps1 (or by an older one): start the new version
-                # ourselves; it steps aside if run.ps1 brings one up first.
-                args = [a for a in sys.argv[1:] if a != "--after-update"]
-                flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-                try:
-                    subprocess.Popen([sys.executable, os.path.join(HERE, "bot_server.py"), "--after-update"] + args,
-                                     cwd=HERE, creationflags=flags, close_fds=True,
-                                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                except OSError:
-                    pass
+            # Start the new version ourselves too: it steps aside if run.ps1 brings one
+            # up first (an older run.ps1 waited for the tunnel and never did).
+            args = [a for a in sys.argv[1:] if a != "--after-update"]
+            flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+            try:
+                subprocess.Popen([sys.executable, os.path.join(HERE, "bot_server.py"), "--after-update"] + args,
+                                 cwd=HERE, creationflags=flags, close_fds=True,
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except OSError:
+                pass
             os._exit(UPDATE_EXIT_CODE)
 
         threading.Thread(target=restart, daemon=True).start()

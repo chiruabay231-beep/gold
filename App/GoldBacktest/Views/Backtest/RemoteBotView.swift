@@ -119,7 +119,7 @@ struct RemoteBotView: View {
         } header: {
             Text("Máy chủ VPS")
         } footer: {
-            Text("Địa chỉ và mật khẩu hiện ra khi cài xong trên VPS; bot Telegram gửi địa chỉ mới mỗi khi VPS khởi động lại (gõ /url). Mật khẩu chỉ lưu trong Keychain của máy này — đừng gửi cho ai.")
+            Text("Địa chỉ và mật khẩu hiện ra khi cài xong trên VPS; khi VPS khởi động lại và địa chỉ đổi, app tự tìm địa chỉ mới (máy chủ 1.8+), không cần Telegram. Mật khẩu chỉ lưu trong Keychain của máy này — đừng gửi cho ai.")
         }
     }
 

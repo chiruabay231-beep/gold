@@ -4,7 +4,7 @@ import UIKit
 /// Updating the bot server on the VPS.
 enum ServerUpdate {
     /// Version of bot-server/bot_server.py this app expects.
-    static let latestVersion = "1.7"
+    static let latestVersion = "1.8"
     static let installCommand = "irm https://raw.githubusercontent.com/chiruabay231-beep/gold/claude/ios-backtest-custom-indicators-jptyoz/bot-server/install.ps1 | iex"
 
     /// The server answered "no such path": it predates the feature.
@@ -55,7 +55,7 @@ struct ServerUpdateSection: View {
                 } label: {
                     Label(copied ? "Đã sao chép" : "Sao chép lệnh", systemImage: copied ? "checkmark" : "doc.on.doc")
                 }
-                Text("Cài đặt, lịch sử và tài khoản MT5 được giữ nguyên. Địa chỉ máy chủ sẽ đổi: lấy địa chỉ mới bằng /url ở bot Telegram (hoặc trên màn hình PowerShell), rồi vào Máy chủ VPS bấm Sửa. Từ lần sau cập nhật ngay trong app, giữ nguyên địa chỉ.")
+                Text("Cài đặt, lịch sử và tài khoản MT5 được giữ nguyên. Từ máy chủ 1.8, cập nhật xong bot tự chạy lại; nếu địa chỉ đổi, app tự tìm địa chỉ mới.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
             }
