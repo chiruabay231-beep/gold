@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.0"
+VERSION = "2.1"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -1417,6 +1417,21 @@ class CopyTrader:
         rt["status"].pop("actions", None)
         rt["status"].pop("copied", None)
         name = f.get("name") or f"#{f['login']}"
+        # What was copied for each main-account ticket, for the member's signal list.
+        copies = st.setdefault("copies", {})
+        for a in reply.get("actions", []):
+            key = str(a.get("master"))
+            if a["kind"] == "opened":
+                copies[key] = {"lots": a["lots"], "price": a.get("price")}
+            elif a["kind"] == "closed":
+                copies.setdefault(key, {"lots": a["lots"]}).update(profit=a.get("profit"))
+            elif a["kind"] == "failed":
+                copies[key] = {"lots": 0, "error": a.get("error", "")}
+        if len(copies) > 300:
+            for old in sorted(copies, key=lambda k: int(k) if k.isdigit() else 0)[:len(copies) - 300]:
+                del copies[old]
+        if any(a["kind"] in ("opened", "closed", "failed") for a in reply.get("actions", [])):
+            self.server.save_state()
         for a in reply.get("actions", []):
             if a["kind"] == "opened":
                 self.event(f"📋 Copy {name}: {'MUA' if a['side'] == 'long' else 'BÁN'} {a['lots']} {a['symbol']} "
@@ -2112,9 +2127,19 @@ class Members:
                 "version": VERSION, "ownerCopyOn": bool(self.server.copier.cfg["enabled"]),
                 "features": self.features}
 
-    def signals(self, limit=60):
+    def signals(self, m=None, limit=60):
+        """The signals; for a member who copies, with the lots copied into their account."""
+        copies = {}
+        if m is not None and m.get("role") == "copy":
+            copies = self.server.copy_state.get(self.follower_id(m), {}).get("copies", {})
+        rows = []
         with self.lock:
-            return {"ok": True, "signals": [{k: v for k, v in s.items() if k != "key"} for s in self.items[:limit]]}
+            for s in self.items[:limit]:
+                row = {k: v for k, v in s.items() if k != "key"}
+                if s["key"].startswith("mt5:") and s["key"][4:] in copies:
+                    row["copy"] = copies[s["key"][4:]]
+                rows.append(row)
+        return {"ok": True, "signals": rows}
 
     @staticmethod
     def follower_id(m):
@@ -2733,7 +2758,7 @@ def make_handler(server):
                     if path == "/member/me":
                         return self._send(200, server.members.me(who))
                     if path == "/member/signals":
-                        return self._send(200, server.members.signals(min(limit, 200)))
+                        return self._send(200, server.members.signals(who, min(limit, 200)))
                     if path == "/member/copy":
                         return self._send(200, server.members.copy_status(who))
                     return self._send(404, {"ok": False, "error": "Không có đường dẫn này"})

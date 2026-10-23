@@ -133,6 +133,8 @@ struct TradeSignal: Decodable, Identifiable {
     var closeTime: Double?
     /// Price distance won (+) or lost (−).
     var result: Double?
+    /// What was copied into this member's account (members who copy).
+    var copy: SignalCopy?
 
     var isOpen: Bool { status == "open" }
     var isBuy: Bool { side == "long" }
@@ -143,6 +145,15 @@ struct TradeSignal: Decodable, Identifiable {
         guard let price else { return nil }
         return (price - entry) * (isBuy ? 1 : -1)
     }
+}
+
+/// The member's copy of a signal: lots opened, and the money once it closed.
+struct SignalCopy: Decodable {
+    var lots: Double
+    var price: Double?
+    var profit: Double?
+    /// Why it was not copied.
+    var error: String?
 }
 
 /// A member's copy account, as the owner's server reports it.

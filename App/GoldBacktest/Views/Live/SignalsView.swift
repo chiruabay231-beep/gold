@@ -228,6 +228,9 @@ struct SignalRow: View {
                      + (s.isOpen ? "" : " · ra \(s.exit.map(Self.price) ?? "–")"))
                     .font(.caption.monospacedDigit())
                     .foregroundColor(.secondary)
+                if let copy = s.copy {
+                    copyLine(copy)
+                }
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 3) {
@@ -240,6 +243,28 @@ struct SignalRow: View {
                     .font(.caption2.monospacedDigit())
                     .foregroundColor(.secondary)
             }
+        }
+    }
+
+    /// "📋 Đã copy 0.05 lot · +12.30 USD" (or why it was not copied).
+    @ViewBuilder
+    private func copyLine(_ copy: SignalCopy) -> some View {
+        if let error = copy.error, copy.lots <= 0 {
+            Label("Không copy được: \(SignalsView.plain(error))", systemImage: "exclamationmark.triangle")
+                .font(.caption)
+                .foregroundColor(.orange)
+                .lineLimit(2)
+        } else {
+            HStack(spacing: 4) {
+                Image(systemName: "doc.on.doc.fill")
+                Text("Đã copy \(CopyTradeView.lots(copy.lots)) lot")
+                if let profit = copy.profit {
+                    Text("· \(String(format: "%+.2f USD", profit))")
+                        .foregroundColor(profit >= 0 ? OrderRow.profitColor : OrderRow.lossColor)
+                }
+            }
+            .font(.caption.weight(.semibold).monospacedDigit())
+            .foregroundColor(Self.purple)
         }
     }
 
