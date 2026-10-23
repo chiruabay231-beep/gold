@@ -751,6 +751,8 @@ struct LiveView: View {
                         // Side by side: both headers inside, so the two frames make one rectangle.
                         headerInside: axisLeading,
                         axisLeading: axisLeading,
+                        // The pending-order panel closes with a tap on the chart.
+                        onBackgroundTap: orderTicket == nil ? nil : { orderTicket = nil },
                         linkedCrosshair: compareMode ? $linkedCrosshairTime : nil,
                         viewport: $viewport)
         }

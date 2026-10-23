@@ -261,6 +261,9 @@ struct CandleChart: View {
     var headerInside = false
     /// Price axis on the left (left chart of the side-by-side split, so the two frames touch).
     var axisLeading = false
+    /// A tap on the chart that hit nothing (no line, drawing or tool): e.g. closes
+    /// the pending-order panel.
+    var onBackgroundTap: (() -> Void)? = nil
     /// Time of the crosshair shared with another chart (compare split): moving
     /// it here moves the other chart's vertical line too.
     var linkedCrosshair: Binding<Date?>? = nil
@@ -1815,6 +1818,7 @@ struct CandleChart: View {
             onSelectDrawing?(nil)
             return
         }
+        onBackgroundTap?()
         if crosshairMode { crosshair = location }
     }
 
