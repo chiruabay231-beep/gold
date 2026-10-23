@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.9"
+VERSION = "2.0"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -871,6 +871,10 @@ class Mt5Account:
                 if d.position_id:
                     by_position.setdefault(int(d.position_id), []).append(d)
             orders_by_ticket = {int(o.ticket): o for o in orders_raw}
+            symbol_info = {}
+            for name in {r[0].symbol for r in by_position.values() if r}:
+                info = mt5.symbol_info(name)
+                symbol_info[name] = (info.digits, info.description or "") if info else (None, "")
             positions = []
             for pid, rows in by_position.items():
                 ins = [r for r in rows if r.entry == getattr(mt5, "DEAL_ENTRY_IN", 0)]
@@ -881,9 +885,15 @@ class Mt5Account:
                 lots = sum(r.volume for r in outs)
                 exit_price = sum(r.price * r.volume for r in outs) / lots if lots else outs[-1].price
                 reason = {mt5.DEAL_REASON_SL: "stop", mt5.DEAL_REASON_TP: "target"}.get(outs[-1].reason, "manual")
-                # SL/TP when it closed (the deal keeps the position's levels), and those it opened with.
-                stop = getattr(outs[-1], "sl", 0) or (outs[-1].price if reason == "stop" else 0)
-                target = getattr(outs[-1], "tp", 0) or (outs[-1].price if reason == "target" else 0)
+                # SL/TP when it closed: MT5 writes the level that fired in the closing deal's
+                # comment ("[sl 4021.884]"), so the slippage against it can be shown.
+                fired = re.search(r"\[(sl|tp)\s*([0-9.]+)\]", getattr(outs[-1], "comment", "") or "")
+                stop = getattr(outs[-1], "sl", 0) or 0
+                target = getattr(outs[-1], "tp", 0) or 0
+                if fired and fired.group(1) == "sl":
+                    stop = float(fired.group(2))
+                if fired and fired.group(1) == "tp":
+                    target = float(fired.group(2))
                 opening = orders_by_ticket.get(int(getattr(first, "order", 0) or 0))
                 if opening is None and getattr(first, "order", 0) and hasattr(mt5, "history_orders_get"):
                     try:
@@ -898,7 +908,12 @@ class Mt5Account:
                                   "openTime": float(first.time) - offset, "closeTime": float(outs[-1].time) - offset,
                                   "profit": sum(r.profit + r.swap + r.commission + (getattr(r, "fee", 0) or 0) for r in rows),
                                   "reason": reason, "stop": stop or None, "target": target or None,
-                                  "stopOpen": stop_open or None, "targetOpen": target_open or None})
+                                  "stopOpen": stop_open or None, "targetOpen": target_open or None,
+                                  "swap": sum(r.swap for r in rows),
+                                  "commission": sum(r.commission + (getattr(r, "fee", 0) or 0) for r in rows),
+                                  "comment": getattr(first, "comment", "") or "",
+                                  "digits": symbol_info.get(first.symbol, (None, ""))[0],
+                                  "description": symbol_info.get(first.symbol, (None, ""))[1]})
             order_names = {mt5.ORDER_TYPE_BUY: "buy", mt5.ORDER_TYPE_SELL: "sell", mt5.ORDER_TYPE_BUY_LIMIT: "buy limit",
                            mt5.ORDER_TYPE_SELL_LIMIT: "sell limit", mt5.ORDER_TYPE_BUY_STOP: "buy stop",
                            mt5.ORDER_TYPE_SELL_STOP: "sell stop"}

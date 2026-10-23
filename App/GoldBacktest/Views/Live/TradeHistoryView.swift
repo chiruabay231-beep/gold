@@ -20,6 +20,12 @@ struct TradeHistory {
         var target: Double?
         var stopOpen: Double?
         var targetOpen: Double?
+        var swap: Double?
+        var commission: Double?
+        var comment: String?
+        /// Price digits of the symbol (points = price × 10^digits).
+        var digits: Int?
+        var description: String?
         var id: Int { ticket }
     }
 
@@ -80,7 +86,8 @@ struct TradeHistory {
             positions.append(Position(ticket: k, symbol: symbol, side: t.side.rawValue, lots: t.lots, entry: t.entryPrice,
                                       exit: t.exitPrice, openTime: open, closeTime: close, profit: t.profit,
                                       reason: t.reason.rawValue, stop: t.stop, target: t.target,
-                                      stopOpen: t.initialStop, targetOpen: nil))
+                                      stopOpen: t.initialStop, targetOpen: nil, swap: nil, commission: nil,
+                                      comment: nil, digits: nil, description: nil))
             orders.append(Order(ticket: k * 2, symbol: symbol, type: side, lots: t.lots, filled: t.lots, price: t.entryPrice,
                                 state: "filled", time: open, doneTime: open))
             orders.append(Order(ticket: k * 2 + 1, symbol: symbol, type: other, lots: t.lots, filled: t.lots, price: t.exitPrice,
@@ -213,7 +220,7 @@ struct TradeHistoryView: View {
             .background {
                 // Details of a tapped closed position (here: one sheet for the whole list).
                 Color.clear.sheet(item: $selected) { p in
-                    ClosedPositionDetail(position: p, name: Self.name(p.symbol))
+                    ClosedPositionDetail(position: p, name: Self.name(p.symbol), fromMT5: source == .mt5)
                 }
             }
     }
@@ -498,105 +505,174 @@ struct HistoryRow: View {
     }
 }
 
-/// A closed position: prices, times and the SL / TP it had (where it was dragged to).
+/// A closed position like MT5's card: prices, Δ in points, times, SL / TP (the SL
+/// that fired and the slippage against it), swap, fees, comment; then Biểu đồ / Giao dịch.
 struct ClosedPositionDetail: View {
     let position: TradeHistory.Position
     let name: String
+    /// An MT5 account trade (the chart opens the MT5 symbol).
+    var fromMT5 = false
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(LiveMarket.self) private var market
+    @Environment(AppStore.self) private var store
 
     private static let formatter: DateFormatter = {
         let f = DateFormatter()
-        f.dateFormat = "dd/MM HH:mm:ss"
+        f.dateFormat = "yyyy.MM.dd HH:mm:ss"
         return f
     }()
 
+    private var p: TradeHistory.Position { position }
+    private var buy: Bool { p.side == "long" }
+    private var sign: Double { buy ? 1 : -1 }
+    private var digits: Int { p.digits ?? CandleChart.decimals(for: p.entry) }
+    private var pointSize: Double { pow(10, -Double(digits)) }
+
     var body: some View {
-        let p = position
-        let buy = p.side == "long"
-        NavigationStack {
-            List {
-                Section {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(name).font(.system(size: 22, weight: .bold).width(.condensed))
+        VStack(spacing: 10) {
+            card
+            VStack(spacing: 0) {
+                actionButton("Biểu đồ") { openChart(trade: false) }
+                Divider()
+                actionButton("Giao dịch") { openChart(trade: true) }
+            }
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
+        }
+        .padding(.horizontal, 12)
+        .padding(.bottom, 8)
+        .presentationDetents([.height(p.reason == "stop" || p.reason == "target" ? 550 : 500)])
+        .presentationBackground(.clear)
+    }
+
+    private var card: some View {
+        let profitColor = p.profit >= 0 ? HistoryRow.blue : HistoryRow.red
+        let delta = (p.exit - p.entry) * sign
+        return VStack(alignment: .leading, spacing: 0) {
+            // Header tinted by the result, like MT5.
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(name).font(.system(size: 19, weight: .bold).width(.condensed))
                         Text("\(buy ? "buy" : "sell") \(TradeHistoryView.lots(p.lots))")
+                            .font(.system(size: 18, weight: .semibold))
                             .foregroundColor(buy ? HistoryRow.blue : HistoryRow.red)
-                        Spacer()
-                        Text(String(format: "%+.2f", p.profit))
-                            .font(.system(size: 22, weight: .semibold).monospacedDigit())
-                            .foregroundColor(p.profit >= 0 ? HistoryRow.blue : HistoryRow.red)
                     }
-                    row("Vào", TradeHistoryView.price(p.entry), time: p.openTime)
-                    row("Ra", TradeHistoryView.price(p.exit), time: p.closeTime)
+                    if let description = p.description, !description.isEmpty {
+                        Text(description).font(.subheadline).foregroundColor(.secondary)
+                    }
                 }
-                Section {
-                    level("SL", now: p.stop, first: p.stopOpen, color: HistoryRow.red)
-                    level("TP", now: p.target, first: p.targetOpen, color: Color(red: 0.12, green: 0.66, blue: 0.36))
-                    LabeledContent("Đóng do") {
-                        Text(reason).foregroundColor(TradeHistoryView.marker(p.reason))
+                Spacer()
+                Text("#\(p.ticket)").font(.footnote.monospacedDigit()).foregroundColor(.secondary)
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background((p.profit >= 0 ? HistoryRow.blue : HistoryRow.red).opacity(0.1))
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("\(price(p.entry)) → \(price(p.exit))").font(.system(size: 19).monospacedDigit())
+                    Spacer()
+                    Text(String(format: "%.2f", p.profit))
+                        .font(.system(size: 20, weight: .semibold).monospacedDigit())
+                        .foregroundColor(profitColor)
+                }
+                Text("Δ = \(points(delta)) (\(String(format: "%+.2f%%", delta / p.entry * 100)))")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundColor(delta >= 0 ? HistoryRow.blue : HistoryRow.red)
+                Text("\(time(p.openTime)) → \(time(p.closeTime))")
+                    .font(.subheadline.monospacedDigit())
+                Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 6) {
+                    GridRow {
+                        label("S/L:")
+                        Text(p.stop.map(price) ?? "–").foregroundColor(p.reason == "stop" ? HistoryRow.red : .primary)
+                        label("Phí qua đêm:")
+                        money(p.swap)
                     }
-                    LabeledContent("Giữ lệnh", value: duration(p.closeTime - p.openTime))
-                } footer: {
-                    if p.stop == nil, p.target == nil, p.stopOpen == nil {
-                        Text("Lệnh này không có SL/TP (hoặc máy chủ VPS cũ chưa gửi SL/TP: cập nhật máy chủ).")
+                    GridRow {
+                        label("T/P:")
+                        Text(p.target.map(price) ?? "–").foregroundColor(p.reason == "target" ? HistoryRow.blue : .primary)
+                        label("Phí:")
+                        money(p.commission)
                     }
+                }
+                .font(.subheadline.monospacedDigit())
+                slippage
+                moved
+                if let comment = p.comment, !comment.isEmpty {
+                    Text(comment).font(.subheadline).foregroundColor(.secondary)
                 }
             }
-            .navigationTitle("Lệnh #\(p.ticket)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Xong") { dismiss() } } }
+            .padding(14)
         }
-        .presentationDetents([.medium, .large])
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
     }
 
-    private var reason: String {
-        switch position.reason {
-        case "stop": return "Chạm SL"
-        case "target": return "Chạm TP"
-        case "reversal": return "Bot tự đóng (đảo chiều)"
-        default: return "Đóng tay"
-        }
-    }
-
-    private func row(_ title: String, _ price: String, time: Double) -> some View {
-        LabeledContent(title) {
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(price).font(.body.monospacedDigit()).foregroundColor(.primary)
-                Text(Self.formatter.string(from: Date(timeIntervalSince1970: time))).font(.caption).foregroundColor(.secondary)
+    /// Closed by SL or TP: how far the fill was from the level that fired.
+    @ViewBuilder
+    private var slippage: some View {
+        let level = p.reason == "stop" ? p.stop : (p.reason == "target" ? p.target : nil)
+        if let level {
+            let slip = (p.exit - level) * sign
+            let worse = slip < -pointSize / 2
+            HStack(spacing: 6) {
+                Image(systemName: worse ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                Text(p.reason == "stop" ? "Chạm SL \(price(level))" : "Chạm TP \(price(level))")
+                Spacer()
+                Text(abs(slip) < pointSize / 2 ? "khớp đúng giá"
+                     : "trượt \(points(slip)) điểm (\(String(format: "%+.\(digits)f", slip)))")
             }
+            .font(.footnote.monospacedDigit())
+            .foregroundColor(worse ? .orange : .green)
+            .padding(8)
+            .background((worse ? Color.orange : Color.green).opacity(0.1), in: RoundedRectangle(cornerRadius: 8))
+        } else if p.reason == "stop" || p.reason == "target" {
+            Text("Chưa có giá SL/TP lúc đóng (máy chủ cũ): cập nhật máy chủ để xem trượt giá.")
+                .font(.caption).foregroundColor(.secondary)
         }
     }
 
-    /// "4080.50", or "4075.00 → 4080.50 · đã kéo" when it was moved.
-    private func level(_ title: String, now: Double?, first: Double?, color: Color) -> some View {
-        LabeledContent {
-            if let now {
-                if let first, abs(first - now) > 1e-9 {
-                    VStack(alignment: .trailing, spacing: 1) {
-                        Text("\(TradeHistoryView.price(first)) → \(TradeHistoryView.price(now))")
-                            .font(.body.monospacedDigit()).foregroundColor(color)
-                        Text("đã kéo").font(.caption).foregroundColor(.secondary)
-                    }
-                } else {
-                    Text(TradeHistoryView.price(now)).font(.body.monospacedDigit()).foregroundColor(color)
-                }
-            } else if let first {
-                VStack(alignment: .trailing, spacing: 1) {
-                    Text(TradeHistoryView.price(first)).font(.body.monospacedDigit()).foregroundColor(color)
-                    Text("đã bỏ trước khi đóng").font(.caption).foregroundColor(.secondary)
-                }
-            } else {
-                Text("Không đặt").foregroundColor(.secondary)
-            }
-        } label: {
-            Text(title).fontWeight(.semibold).foregroundColor(color)
+    /// The SL/TP moved after opening.
+    @ViewBuilder
+    private var moved: some View {
+        let lines = [("SL", p.stopOpen, p.stop), ("TP", p.targetOpen, p.target)].compactMap { item -> String? in
+            guard let first = item.1, let last = item.2, abs(first - last) > pointSize / 2 else { return nil }
+            return "\(item.0) đã kéo: \(price(first)) → \(price(last))"
+        }
+        if !lines.isEmpty {
+            Text(lines.joined(separator: " · ")).font(.caption.monospacedDigit()).foregroundColor(.secondary)
         }
     }
 
-    private func duration(_ seconds: Double) -> String {
-        let minutes = max(0, Int(seconds / 60))
-        if minutes < 60 { return "\(minutes) phút" }
-        if minutes < 1440 { return "\(minutes / 60) giờ \(minutes % 60) phút" }
-        return "\(minutes / 1440) ngày \(minutes % 1440 / 60) giờ"
+    private func label(_ text: String) -> some View {
+        Text(text).foregroundColor(.secondary)
+    }
+
+    private func money(_ value: Double?) -> some View {
+        Text(value.map { abs($0) < 0.005 ? "-" : String(format: "%.2f", $0) } ?? "-")
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func price(_ value: Double) -> String { String(format: "%.\(digits)f", value) }
+
+    private func points(_ move: Double) -> String { String(format: "%+.0f", move / pointSize) }
+
+    private func time(_ value: Double) -> String { Self.formatter.string(from: Date(timeIntervalSince1970: value)) }
+
+    private func actionButton(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title).font(.title3).frame(maxWidth: .infinity, minHeight: 54)
+        }
+    }
+
+    /// Opens the symbol on the Live chart; "Giao dịch" also shows the BUY/SELL bar.
+    private func openChart(trade: Bool) {
+        if fromMT5 {
+            market.select(source: .mt5, symbol: p.symbol)
+        }
+        if trade { UserDefaults.standard.set(true, forKey: "live.showTradeButtons") }
+        store.selectedTab = .live
+        dismiss()
     }
 }
