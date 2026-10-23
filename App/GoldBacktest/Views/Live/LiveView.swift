@@ -41,6 +41,7 @@ struct LiveView: View {
     @AppStorage("position.riskPercent") private var riskPercent = 1.0
     @AppStorage("position.contractSize") private var contractSize = 100.0
     @State private var showAppSettings = false
+    @State private var confirmCloseAll = false
     @State private var showAutoStopSettings = false
     @State private var replay = ReplaySession()
     @State private var replaySummary: String?
@@ -377,6 +378,7 @@ struct LiveView: View {
                         headerButton(orderTicket != nil ? "Đóng" : "Lệnh chờ",
                                      systemImage: orderTicket != nil ? "xmark" : "plus.forwardslash.minus",
                                      filled: orderTicket != nil) { toggleTicket() }
+                        openPositionsPill
                     }
                 }
             }
@@ -385,6 +387,69 @@ struct LiveView: View {
         .padding(.horizontal, 14)
         .padding(.top, 6)
         .padding(.bottom, 2)
+    }
+
+    /// This market's open positions on the account the chart trades: count, lots, money.
+    private var openSummary: (count: Int, lots: Double, profit: Double) {
+        if tradesMT5 {
+            let rows = mt5.positions(market.symbol)
+            return (rows.count, rows.reduce(0) { $0 + $1.lots },
+                    rows.reduce(0) { $0 + $1.liveProfit(bid: liveQuote.bid, ask: liveQuote.ask) })
+        }
+        let rows = trader.account.positions.filter { $0.symbol == market.symbolKey }
+        return (rows.count, rows.reduce(0) { $0 + $1.lots }, rows.reduce(0) { $0 + (trader.profit($1) ?? 0) })
+    }
+
+    /// Under Lệnh chờ: "2 lệnh · 0.20 / +12.30" and ✕ to close them all.
+    @ViewBuilder
+    private var openPositionsPill: some View {
+        let summary = openSummary
+        if summary.count > 0 {
+            HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("\(summary.count) lệnh · \(QuickTradePanel.lotText(summary.lots))")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(theme.primaryText)
+                    Text(String(format: "%+.2f", summary.profit))
+                        .font(.system(size: 13, weight: .bold).monospacedDigit())
+                        .foregroundColor(summary.profit >= 0 ? theme.up : theme.down)
+                        .contentTransition(.numericText())
+                }
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+                Spacer(minLength: 0)
+                Button { confirmCloseAll = true } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(width: 22, height: 22)
+                        .background(Circle().fill(theme.down))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Đóng tất cả lệnh \(Self.displayName(market.symbol))")
+            }
+            .padding(.leading, 9)
+            .padding(.trailing, 4)
+            .frame(width: 112, height: 34)
+            .background(RoundedRectangle(cornerRadius: 9).fill(theme.grid.opacity(theme.isLight ? 0.6 : 0.9)))
+            .overlay(RoundedRectangle(cornerRadius: 9).stroke((summary.profit >= 0 ? theme.up : theme.down).opacity(0.5), lineWidth: 1))
+            .confirmationDialog("Đóng tất cả \(summary.count) lệnh \(Self.displayName(market.symbol))?",
+                                isPresented: $confirmCloseAll, titleVisibility: .visible) {
+                Button("Đóng \(summary.count) lệnh (\(String(format: "%+.2f", summary.profit)) USD)", role: .destructive) {
+                    closeAllPositions()
+                }
+            }
+        }
+    }
+
+    private func closeAllPositions() {
+        UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        if tradesMT5 {
+            let tickets = mt5.positions(market.symbol).map(\.ticket)
+            sendMT5 { for ticket in tickets { await mt5.close(ticket) } }
+        } else {
+            for p in trader.account.positions where p.symbol == market.symbolKey { trader.close(p) }
+        }
     }
 
     /// The owner trying the member side: tap to go back.

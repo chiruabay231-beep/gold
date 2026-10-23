@@ -56,6 +56,33 @@ struct AccountSummary: View {
     }
 }
 
+/// "Lệnh có trạng thái" with "Đóng tất cả" at the right (asks once first).
+struct PositionsHeader: View {
+    let count: Int
+    var onCloseAll: () -> Void
+
+    @State private var confirm = false
+
+    var body: some View {
+        HStack {
+            Text("Lệnh có trạng thái")
+            Spacer()
+            if count > 0 {
+                Button { confirm = true } label: {
+                    Label("Đóng tất cả", systemImage: "xmark.circle.fill")
+                        .font(.footnote.weight(.semibold))
+                        .textCase(nil)
+                        .foregroundColor(OrderRow.lossColor)
+                }
+                .buttonStyle(.borderless)
+                .confirmationDialog("Đóng tất cả \(count) lệnh?", isPresented: $confirm, titleVisibility: .visible) {
+                    Button("Đóng \(count) lệnh", role: .destructive) { onCloseAll() }
+                }
+            }
+        }
+    }
+}
+
 /// One order in the lists: "XAUUSD buy 0.10" / "4145.150 → 4146.621" / profit.
 struct OrderRow: View {
     let symbol: String
@@ -113,7 +140,7 @@ struct TradePanelView: View {
                         : String(format: "%.0f%% (%d lệnh)", Double(wins) / Double(account.history.count) * 100, account.history.count)),
                 ])
             }
-            Section("Lệnh có trạng thái") {
+            Section {
                 if account.positions.isEmpty { Text("Không có lệnh đang mở").foregroundColor(.secondary) }
                 ForEach(account.positions) { p in
                     let profit = trader.profit(p)
@@ -127,6 +154,10 @@ struct TradePanelView: View {
                         .swipeActions {
                             Button("Đóng", role: .destructive) { trader.close(p) }
                         }
+                }
+            } header: {
+                PositionsHeader(count: account.positions.count) {
+                    for p in trader.account.positions { trader.close(p) }
                 }
             }
             if !account.pending.isEmpty {

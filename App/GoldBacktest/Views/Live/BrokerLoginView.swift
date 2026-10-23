@@ -66,7 +66,7 @@ struct BrokerTradeView: View {
                             .font(.footnote).foregroundColor(.orange)
                     }
                 }
-                Section("Lệnh có trạng thái") {
+                Section {
                     if state.positions.isEmpty { Text("Không có lệnh đang mở").foregroundColor(.secondary) }
                     ForEach(state.positions) { p in
                         OrderRow(symbol: p.symbol, detail: "\(p.side == "long" ? "buy" : "sell") \(Self.lots(p.lots))",
@@ -79,6 +79,11 @@ struct BrokerTradeView: View {
                             .swipeActions {
                                 Button("Đóng", role: .destructive) { Task { await mt5.close(p.ticket) } }
                             }
+                    }
+                } header: {
+                    PositionsHeader(count: state.positions.count) {
+                        let tickets = state.positions.map(\.ticket)
+                        Task { for ticket in tickets { await mt5.close(ticket) } }
                     }
                 }
                 if !state.orders.isEmpty {
