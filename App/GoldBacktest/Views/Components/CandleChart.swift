@@ -287,7 +287,6 @@ struct CandleChart: View {
     @State private var draggedLine: (id: String, price: Double)?
     /// Order whose lines are shown fully (tapped recently); others are faint.
     @State private var activeLineGroup: String?
-    @State private var activeLineToken = 0
     /// Where a long press without moving was released: shows the reset menu there.
     @State private var menuPoint: CGPoint?
 
@@ -825,7 +824,8 @@ struct CandleChart: View {
             let y = s.y(line.price)
             guard y >= layout.plot.minY - 1, y <= layout.plot.maxY + 1 else { continue }
             let active = isLineActive(line)
-            let alpha: Double = active ? 1 : 0.6
+            // With an order selected the others step back.
+            let alpha: Double = active ? 1 : (activeLineGroup == nil ? 0.6 : 0.25)
             let color = line.color.opacity(alpha)
             var path = Path()
             path.move(to: CGPoint(x: 0, y: y))
@@ -1603,15 +1603,28 @@ struct CandleChart: View {
         return activeLineGroup == group
     }
 
-    /// Shows an order's lines fully, then fades them after 2 seconds without touches.
+    /// Selects an order: its entry, SL and TP light up and only they can be dragged,
+    /// until a tap on the chart away from the lines.
     private func activateLines(of id: String) {
         activeLineGroup = Self.lineGroup(id)
-        activeLineToken += 1
-        let token = activeLineToken
-        Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            if token == activeLineToken, draggedLine == nil { activeLineGroup = nil }
+    }
+
+    /// The order being placed is the only one of its kind: always draggable.
+    private static func alwaysDraggable(_ group: String) -> Bool { group == "draft" || group == "ticket" }
+
+    /// Orders under a tap, nearest first. Tapping again where several orders meet
+    /// (same entry) moves on to the next one.
+    private func nextLineGroup(at location: CGPoint, layout: Layout) -> String? {
+        let s = scale(layout: layout)
+        let near = priceLines.filter { abs(s.y($0.price) - location.y) < 16 }
+            .sorted { abs(s.y($0.price) - location.y) < abs(s.y($1.price) - location.y) }
+        var groups: [String] = []
+        for line in near where !groups.contains(Self.lineGroup(line.id)) { groups.append(Self.lineGroup(line.id)) }
+        guard let first = groups.first else { return nil }
+        if let current = activeLineGroup, let index = groups.firstIndex(of: current) {
+            return groups[(index + 1) % groups.count]
         }
+        return first
     }
 
     /// The ✕ button of a closable price line, just left of the price axis.
@@ -1623,7 +1636,12 @@ struct CandleChart: View {
     private func hitPriceLine(at location: CGPoint, layout: Layout) -> ChartPriceLine? {
         let s = scale(layout: layout)
         return priceLines
-            .filter { $0.draggable && abs(s.y($0.price) - location.y) < 16 }
+            .filter { line in
+                let group = Self.lineGroup(line.id)
+                // Only the selected order's lines move (tap its entry first).
+                return line.draggable && (group == activeLineGroup || Self.alwaysDraggable(group))
+                    && abs(s.y(line.price) - location.y) < 16
+            }
             .min { abs(s.y($0.price) - location.y) < abs(s.y($1.price) - location.y) }
     }
 
@@ -1759,12 +1777,14 @@ struct CandleChart: View {
             onPriceLineClose?(line.id)
             return
         }
-        // Tapping a trade line brings its order to the front for a moment.
-        if let line = priceLines.filter({ abs(s.y($0.price) - location.y) < 16 })
-            .min(by: { abs(s.y($0.price) - location.y) < abs(s.y($1.price) - location.y) }) {
-            activateLines(of: line.id)
+        // Tapping a trade line selects its order (again: the next order at that price).
+        if let group = nextLineGroup(at: location, layout: layout) {
+            activeLineGroup = group
+            UISelectionFeedbackGenerator().selectionChanged()
             return
         }
+        // A tap away from the lines lets the selected order go.
+        activeLineGroup = nil
         if let tool = drawingTool {
             // The brush draws with a drag only.
             if tool == .brush { return }
