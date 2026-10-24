@@ -5,11 +5,22 @@ Thư mục `web/` là trang tĩnh, không cần build:
 - `index.html` — trang giới thiệu + web app thành viên (`#member`).
 - `site.config.js` — liên kết liên hệ, tên và giá các gói: sửa ở đây.
 - `assets/app.js`, `assets/style.css` — giao diện và logic.
+- `assets/ict.js` — chỉ báo ICT Killzones + Pivots, FVG/VI, MSS, dòng tiền cá mập
+  (cùng quy tắc với BacktestKit trong app).
 
 Thành viên chỉ nhập mã mời, chủ chỉ nhập mật khẩu máy chủ: trang tìm địa chỉ máy chủ
-qua ntfy.sh (giống app iPhone). Thành viên đọc `/member/me`, `/member/signals`,
-`/member/candles` (nến Exness); chủ đọc `/mt5/trading`, `/mt5/candles`, `/members`.
-Máy chủ VPS cần bản 2.3+. Không có MT5 thì biểu đồ dùng Binance XAUUSDT.
+qua ntfy.sh (giống app iPhone).
+
+- **Chủ** có các tab: Biểu đồ (nến Exness, chỉ báo, BUY/SELL, lệnh chờ, chạm đường giá vào
+  để chọn lệnh rồi kéo SL/TP, đóng nhanh), Lệnh (tài khoản, đóng từng phần, sửa SL/TP, huỷ lệnh
+  chờ), Lịch sử (Hôm nay/Hôm qua/7/30 ngày, SL/TP lúc vào và lúc đóng, trượt giá), Tin tức,
+  Copy (bật/tắt, thêm/sửa/xoá tài khoản copy), Thành viên (tạo mã, khoá, gia hạn, đổi mã,
+  quyền dùng) và Máy chủ (bot, cho phép đặt lệnh, lot tối đa, cập nhật, nhật ký).
+- **Thành viên**: Biểu đồ (tín hiệu tím + chỉ báo nếu được mở), Tín hiệu, Tin tức, Copy lệnh
+  (mã có quyền copy).
+
+Máy chủ VPS cần bản 2.4+ (tin tức đi qua `/news`, `/member/news` vì trình duyệt không đọc
+thẳng được lịch Forex Factory). Không có MT5 thì biểu đồ dùng Binance XAUUSDT.
 
 ## Đăng lên Cloudflare Pages (miễn phí, tên dạng `aurumpro.pages.dev`)
 

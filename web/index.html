@@ -138,43 +138,150 @@
           <div class="who" id="whoName">—</div>
           <div class="muted small" id="whoRole">—</div>
         </div>
-        <button class="btn btn-ghost btn-small" id="logoutBtn">Thoát</button>
+        <div class="head-right">
+          <div class="equity" id="headEquity"></div>
+          <button class="btn btn-ghost btn-small" id="logoutBtn">Thoát</button>
+        </div>
       </div>
       <p class="warn" id="dashError" hidden></p>
 
-      <div class="panel chart-panel">
-        <div class="chart-top">
-          <div><b id="chartSymbol">XAUUSD</b> <span class="muted small" id="chartSource">· giá Exness</span>
-            <span class="live-price" id="livePrice">—</span></div>
-          <div class="tf" id="tfButtons"></div>
+      <nav class="tabs" id="tabs"></nav>
+
+      <!-- Chart -->
+      <div class="tab" data-tab="chart">
+        <div class="panel chart-panel">
+          <div class="chart-top">
+            <div class="chart-title">
+              <button class="sym-btn" id="chartSymbol" type="button">XAUUSD</button>
+              <span class="muted small" id="chartSource">· giá Exness</span>
+              <span class="live-price" id="livePrice">—</span>
+            </div>
+            <div class="chart-tools">
+              <div class="tf" id="tfButtons"></div>
+              <button class="icon-btn" id="indBtn" type="button" title="Chỉ báo">ƒx</button>
+            </div>
+          </div>
+          <div class="flow" id="flowBox" hidden></div>
+          <div class="chart-wrap" id="chartWrap">
+            <div id="chart"></div>
+            <canvas id="overlay"></canvas>
+            <div class="pill-pos" id="posPill" hidden></div>
+            <div class="sel-bar" id="selBar" hidden></div>
+          </div>
+          <p class="muted small chart-note" id="chartNote"></p>
+
+          <div class="ticket" id="ticket" hidden>
+            <div class="trade-bar">
+              <button class="tb sell" id="sellBtn" type="button"><span>SELL</span><b id="bidText">—</b></button>
+              <div class="lots">
+                <button type="button" data-step="-1">−</button>
+                <input id="lotInput" inputmode="decimal" value="0.01">
+                <button type="button" data-step="1">+</button>
+              </div>
+              <button class="tb buy" id="buyBtn" type="button"><span>BUY</span><b id="askText">—</b></button>
+            </div>
+            <button class="linkish pending-toggle" id="pendingToggle" type="button">▾ Lệnh chờ · SL/TP</button>
+            <div class="pending" id="pendingBox" hidden>
+              <div class="fields">
+                <label>Giá chờ<input id="pPrice" inputmode="decimal" placeholder="kéo đường tím"></label>
+                <label>SL<input id="pStop" inputmode="decimal" placeholder="không"></label>
+                <label>TP<input id="pTarget" inputmode="decimal" placeholder="không"></label>
+              </div>
+              <div class="pending-actions">
+                <button class="btn btn-small pend sell" id="pSell" type="button">SELL LIMIT</button>
+                <button class="btn btn-small pend buy" id="pBuy" type="button">BUY LIMIT</button>
+              </div>
+              <p class="muted small">Kéo đường tím trên biểu đồ để chọn giá chờ. SL/TP cũng áp dụng cho lệnh BUY/SELL ngay.</p>
+            </div>
+          </div>
         </div>
-        <div id="chart"></div>
-        <p class="muted small" id="chartNote">Đường tím: tín hiệu đang mở (vào lệnh, SL, TP).</p>
       </div>
 
-      <div class="panel" id="accountPanel" hidden>
-        <h3>Tài khoản</h3>
-        <div class="stats" id="accountStats"></div>
+      <!-- Open trades (owner) -->
+      <div class="tab" data-tab="trade" hidden>
+        <div class="panel">
+          <h3>Tài khoản</h3>
+          <div class="stats" id="accountStats"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3 id="openTitle">Lệnh đang mở</h3><button class="btn btn-ghost btn-small" id="closeAllBtn" hidden>Đóng tất cả ✕</button></div>
+          <div id="openList" class="list"></div>
+        </div>
+        <div class="panel" id="ordersPanel" hidden>
+          <h3>Lệnh chờ</h3>
+          <div id="ordersList" class="list"></div>
+        </div>
       </div>
 
-      <div class="panel">
-        <h3 id="openTitle">Đang mở</h3>
-        <div id="openList" class="list"></div>
+      <!-- History (owner) -->
+      <div class="tab" data-tab="history" hidden>
+        <div class="panel">
+          <div class="panel-head"><h3>Lịch sử</h3><div class="chips" id="histRange"></div></div>
+          <div class="stats" id="histStats"></div>
+          <div id="histList" class="list"></div>
+        </div>
       </div>
-      <div class="panel" id="closedPanel">
-        <h3 id="closedTitle">Đã đóng</h3>
-        <div id="closedList" class="list"></div>
+
+      <!-- Signals (members) -->
+      <div class="tab" data-tab="signals" hidden>
+        <div class="panel">
+          <h3>Đang mở</h3>
+          <div id="sigOpen" class="list"></div>
+        </div>
+        <div class="panel">
+          <h3 id="closedTitle">Đã đóng</h3>
+          <div id="sigClosed" class="list"></div>
+        </div>
       </div>
-      <div class="panel" id="membersPanel" hidden>
-        <h3 id="membersTitle">Thành viên</h3>
-        <div id="membersList" class="list"></div>
-        <p class="muted small">Tạo mã, khoá hoặc gia hạn thành viên trong app (Giao dịch → Tín hiệu → Thành viên &amp; mã mời).</p>
+
+      <!-- News -->
+      <div class="tab" data-tab="news" hidden>
+        <div class="panel" id="nextNews" hidden></div>
+        <div class="panel">
+          <div class="panel-head"><h3>Lịch tin USD tuần này</h3><div class="chips" id="newsFilter"></div></div>
+          <div id="newsList" class="list"></div>
+        </div>
+        <div class="panel">
+          <h3>Tin vàng mới</h3>
+          <div id="headlineList" class="list"></div>
+        </div>
+      </div>
+
+      <!-- Copy trade -->
+      <div class="tab" data-tab="copy" hidden>
+        <div class="panel" id="copyPanel"></div>
+      </div>
+
+      <!-- Members (owner) -->
+      <div class="tab" data-tab="members" hidden>
+        <div class="panel">
+          <div class="panel-head"><h3 id="membersTitle">Thành viên</h3><button class="btn btn-gold btn-small" id="addMemberBtn">+ Thêm</button></div>
+          <div id="membersList" class="list"></div>
+        </div>
+        <div class="panel">
+          <h3>Thành viên được dùng</h3>
+          <div id="featureList" class="toggles"></div>
+        </div>
+      </div>
+
+      <!-- Bot & server (owner) -->
+      <div class="tab" data-tab="bot" hidden>
+        <div class="panel" id="botPanel"></div>
+        <div class="panel" id="mt5Panel"></div>
+        <div class="panel">
+          <h3>Nhật ký</h3>
+          <div id="logList" class="list log"></div>
+        </div>
       </div>
     </section>
+
+    <dialog id="sheet"><div id="sheetBody"></div></dialog>
+    <div class="toast" id="toast" hidden></div>
   </main>
 
   <script src="site.config.js"></script>
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="assets/ict.js"></script>
   <script src="assets/app.js"></script>
 </body>
 </html>

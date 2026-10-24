@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.3"
+VERSION = "2.4"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2007,6 +2007,68 @@ def publish_address(server):
             pass
 
 
+class NewsFeed:
+    """This week's economic calendar (Forex Factory mirror) and gold headlines (Google
+    News), fetched for the website: browsers cannot read those feeds themselves (CORS).
+    Cached for 15 minutes, as the calendar feed asks."""
+
+    CALENDAR = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
+    HEADLINES = "https://news.google.com/rss/search?" + urllib.parse.urlencode(
+        {"q": "giá vàng thế giới OR XAUUSD when:2d", "hl": "vi", "gl": "VN", "ceid": "VN:vi"})
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.cache = None
+        self.time = 0
+
+    @staticmethod
+    def _get(url):
+        request = urllib.request.Request(url, headers={"User-Agent": "GoldBot/" + VERSION})
+        with urllib.request.urlopen(request, timeout=20) as r:
+            return r.read()
+
+    def get(self):
+        with self.lock:
+            if self.cache and now() - self.time < 900:
+                return self.cache
+            events, headlines, problems = [], [], []
+            try:
+                import datetime
+                for row in json.loads(self._get(self.CALENDAR).decode("utf-8")):
+                    try:
+                        when = datetime.datetime.fromisoformat(str(row["date"])).timestamp()
+                    except (KeyError, ValueError):
+                        continue
+                    events.append({"title": row.get("title", ""), "country": row.get("country", ""), "time": when,
+                                   "impact": row.get("impact", ""), "forecast": row.get("forecast", ""),
+                                   "previous": row.get("previous", ""), "actual": row.get("actual", "")})
+                events.sort(key=lambda e: e["time"])
+            except Exception:
+                problems.append("lịch kinh tế")
+            try:
+                import email.utils
+                import xml.etree.ElementTree as ET
+                for item in ET.fromstring(self._get(self.HEADLINES)).iter("item"):
+                    date = item.findtext("pubDate")
+                    try:
+                        when = email.utils.parsedate_to_datetime(date).timestamp() if date else None
+                    except (TypeError, ValueError):
+                        when = None
+                    headlines.append({"title": item.findtext("title") or "", "link": item.findtext("link") or "",
+                                      "source": item.findtext("source") or "", "time": when})
+                headlines.sort(key=lambda h: -(h["time"] or 0))
+                del headlines[40:]
+            except Exception:
+                problems.append("tin tức")
+            result = {"ok": True, "events": events, "headlines": headlines,
+                      "error": "Không tải được " + " và ".join(problems) if problems else ""}
+            if not problems or not self.cache:
+                self.cache = result
+            # A failed fetch is tried again after a minute.
+            self.time = now() if not problems else now() - 840
+            return self.cache
+
+
 class Members:
     """People the owner shares the signals with. Each has an invite code (only its
     hash is kept), a role ("signals": sees the signals; "copy": may also copy them into
@@ -2305,6 +2367,7 @@ class BotServer:
         self.mt5_account = Mt5Account(self)
         self.copier = CopyTrader(self)
         self.members = Members(self)
+        self.news = NewsFeed()
         self.telegram = Telegram(self)
         self.tunnel = Tunnel(self) if self.config.get("tunnel") else None
         threading.Thread(target=self._relay_loop, daemon=True).start()
@@ -2794,6 +2857,10 @@ def make_handler(server):
                         return self._send(200, server.members.signals(who, min(limit, 200)))
                     if path == "/member/copy":
                         return self._send(200, server.members.copy_status(who))
+                    if path == "/member/news":
+                        if not server.members.features["news"]:
+                            raise PermissionError("Tin tức chưa được mở cho thành viên")
+                        return self._send(200, server.news.get())
                     if path == "/member/candles":
                         # Exness (MT5) bars of the signals' symbol, for the members' web chart.
                         symbol = server.members.chart_symbol()
@@ -2804,6 +2871,8 @@ def make_handler(server):
                     return self._send(404, {"ok": False, "error": "Không có đường dẫn này"})
                 if path == "/members":
                     return self._send(200, server.members.list())
+                if path == "/news":
+                    return self._send(200, server.news.get())
                 if path == "/status":
                     return self._send(200, server.status())
                 if path == "/log":
