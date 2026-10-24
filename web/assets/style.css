@@ -534,3 +534,21 @@ button.busy { opacity: .55; }
 .study-row .grow { flex: 1; }
 .study-row button { background: var(--chip); border: 0; color: var(--text); border-radius: 6px; height: 28px; min-width: 30px; cursor: pointer; }
 .add-study { width: 100%; margin-top: 8px; background: var(--input); border: 1px solid var(--line2); border-radius: 10px; color: var(--text); height: 38px; padding: 0 10px; font: 600 14px/1 "Be Vietnam Pro", system-ui, sans-serif; }
+
+/* history summary */
+.hist-custom { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin: 0 0 10px; font-size: 13px; color: var(--muted); }
+.hist-custom label { display: grid; gap: 4px; }
+.hist-custom input { background: var(--input); border: 1px solid var(--line2); border-radius: 8px; color: var(--text); height: 34px; padding: 0 8px; font: 500 14px/1 "Be Vietnam Pro", system-ui, sans-serif; }
+.days { display: grid; }
+.day-row { display: grid; grid-template-columns: 92px 120px 1fr 90px; align-items: center; gap: 10px; padding: 9px 4px; background: none; border: 0; border-top: 1px solid var(--line); color: var(--text); text-align: left; cursor: pointer; font: 500 13.5px/1.2 "Be Vietnam Pro", system-ui, sans-serif; }
+.day-row:first-child { border-top: 0; }
+.day-row:hover, .day-row.on { background: var(--hover); border-radius: 8px; }
+.day-row .d { font-weight: 700; text-transform: capitalize; }
+.day-row .n { color: var(--muted); font-size: 12.5px; }
+.day-row b { text-align: right; font-variant-numeric: tabular-nums; }
+.barwrap { height: 8px; background: var(--chip); border-radius: 4px; overflow: hidden; }
+.dbar { display: block; height: 100%; border-radius: 4px; }
+.dbar.up { background: #2b6bf3; }
+.dbar.down { background: var(--down); }
+.stat b small { font-size: 12px; font-weight: 500; }
+@media (max-width: 600px) { .day-row { grid-template-columns: 74px 1fr 76px; } .day-row .barwrap { display: none; } }

@@ -249,7 +249,19 @@
       <div class="tab" data-tab="history" hidden>
         <div class="panel">
           <div class="panel-head"><h3>Lịch sử</h3><div class="chips" id="histRange"></div></div>
+          <div class="hist-custom" id="histCustom" hidden>
+            <label>Từ ngày <input type="date" id="histFrom"></label>
+            <label>Đến ngày <input type="date" id="histTo"></label>
+            <button class="btn btn-gold btn-small" id="histGo" type="button">Xem</button>
+          </div>
           <div class="stats" id="histStats"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Tổng kết theo ngày</h3><span class="muted small" id="histDaysNote">Chạm một ngày để xem lệnh của ngày đó</span></div>
+          <div id="histDays" class="days"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3 id="histListTitle">Lệnh đã đóng</h3><button class="btn btn-ghost btn-small" id="histAll" type="button" hidden>Xem tất cả</button></div>
           <div id="histList" class="list"></div>
         </div>
       </div>

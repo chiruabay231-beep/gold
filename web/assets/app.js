@@ -224,6 +224,28 @@
   const TFS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
   const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
 
+  /** Money on a line label: "+45.20 USD" style, short. */
+  const money0 = (v) => (v == null || !isFinite(v) ? "" : (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(2));
+
+  /** Bar index of a time, fractional between bars and past either end (by the bar length). */
+  function timeToIndex(bars, t, sec) {
+    const n = bars.length;
+    if (!n) return null;
+    if (t <= bars[0].time) return (t - bars[0].time) / sec;
+    if (t >= bars[n - 1].time) return n - 1 + (t - bars[n - 1].time) / sec;
+    let lo = 0, hi = n - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (bars[m].time <= t) lo = m; else hi = m; }
+    return lo + (t - bars[lo].time) / (bars[hi].time - bars[lo].time);
+  }
+  function indexToTime(bars, l, sec) {
+    const n = bars.length;
+    if (!n) return null;
+    if (l <= 0) return bars[0].time + l * sec;
+    if (l >= n - 1) return bars[n - 1].time + (l - (n - 1)) * sec;
+    const i = Math.floor(l);
+    return bars[i].time + (l - i) * (bars[i + 1].time - bars[i].time);
+  }
+
   /** The spread in points, as MT5 shows it. */
   const spreadText = (bid, ask, digits) => (bid != null && ask != null ? String(Math.round((ask - bid) * Math.pow(10, digits))) : "");
 
@@ -852,45 +874,119 @@
 
     /* ----- history ----- */
 
+    /** [from, to) in UTC seconds for a range of the viewer's local days. */
     rangeTimes(key) {
       const start = new Date(); start.setHours(0, 0, 0, 0);
-      const day = start.getTime() / 1000, nowS = Date.now() / 1000;
-      return { today: [day, nowS + 60], yesterday: [day - 86400, day], week: [day - 6 * 86400, nowS + 60], month: [day - 29 * 86400, nowS + 60] }[key];
+      const day = start.getTime() / 1000, nowS = Date.now() / 1000 + 60;
+      const monday = new Date(start); monday.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+      const first = new Date(start); first.setDate(1);
+      if (key === "custom") {
+        const f = $("histFrom").value, t = $("histTo").value;
+        const a = f ? new Date(f + "T00:00:00") : start, b = t ? new Date(t + "T00:00:00") : start;
+        b.setDate(b.getDate() + 1);
+        return [a.getTime() / 1000, b.getTime() / 1000];
+      }
+      return {
+        today: [day, nowS], yesterday: [day - 86400, day], thisweek: [monday.getTime() / 1000, nowS],
+        thismonth: [first.getTime() / 1000, nowS], week: [day - 6 * 86400, nowS], month: [day - 29 * 86400, nowS],
+      }[key] || [day, nowS];
     },
 
     async loadHistory() {
-      const ranges = [["today", "Hôm nay"], ["yesterday", "Hôm qua"], ["week", "7 ngày"], ["month", "30 ngày"]];
+      const ranges = [["today", "Hôm nay"], ["yesterday", "Hôm qua"], ["thisweek", "Tuần này"], ["thismonth", "Tháng này"], ["week", "7 ngày"], ["month", "30 ngày"], ["custom", "Tùy chỉnh"]];
       $("histRange").innerHTML = ranges.map(([k, n]) => `<button type="button" data-r="${k}" class="${k === this.histRange ? "on" : ""}">${n}</button>`).join("");
-      $("histRange").querySelectorAll("button").forEach((b) => (b.onclick = () => { this.histRange = b.dataset.r; this.loadHistory(); }));
+      $("histRange").querySelectorAll("button").forEach((b) => (b.onclick = () => { this.histRange = b.dataset.r; this.histDay = null; this.loadHistory(); }));
+      $("histCustom").hidden = this.histRange !== "custom";
+      if (this.histRange === "custom") {
+        const iso = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+        if (!$("histFrom").value) { const d = new Date(); d.setDate(d.getDate() - 13); $("histFrom").value = iso(d); }
+        if (!$("histTo").value) $("histTo").value = iso(new Date());
+        $("histGo").onclick = () => { this.histDay = null; this.loadHistory(); };
+      }
       $("histList").innerHTML = '<div class="empty">Đang tải…</div>';
       const [from, to] = this.rangeTimes(this.histRange);
       try {
         const h = await this.call(`/mt5/history?from=${Math.floor(from)}&to=${Math.ceil(to)}`);
-        const list = (h.positions || []).sort((a, b) => b.closeTime - a.closeTime);
-        const wins = list.filter((p) => p.profit > 0).length;
-        const total = list.reduce((a, p) => a + p.profit, 0);
-        const fees = list.reduce((a, p) => a + (p.commission || 0) + (p.swap || 0), 0);
-        $("histStats").innerHTML = [
-          ["Lãi/lỗ", `<span class="${total >= 0 ? "pos" : "neg"}">${signed(total)}</span>`],
-          ["Số lệnh", list.length], ["Thắng / thua", `${wins} / ${list.length - wins}`], ["Phí + swap", signed(fees)],
-        ].map(([k, v]) => `<div class="stat"><span>${k}</span><b>${v}</b></div>`).join("");
-        $("histList").innerHTML = list.length ? list.map((p, i) => {
-          const color = p.reason === "target" ? "var(--up)" : p.reason === "stop" ? "var(--down)" : "#5b6478";
-          const d = p.digits || this.digitsFor(p.symbol);
-          return `<div class="sig clickable" data-i="${i}">
-            <div class="bar" style="background:${color}"></div>
-            <div>
-              <div class="top"><span class="sym">${esc(p.symbol)}</span><span class="side ${p.side === "long" ? "buy" : "sell"}">${sideName(p.side)} ${+p.lots.toFixed(2)}</span>
-                <span class="muted small">${fmt(p.entry, d)} → ${fmt(p.exit, d)}</span></div>
-              <div class="lv">${p.reason === "target" ? "Chạm TP" : p.reason === "stop" ? "Chạm SL" : "Đóng tay"} · ${clock(p.closeTime)}</div>
-            </div>
-            <div class="right"><div class="move ${p.profit >= 0 ? "pos" : "neg"}">${signed(p.profit)}</div></div>
-          </div>`;
-        }).join("") : '<div class="empty">Không có lệnh đã đóng</div>';
-        $("histList").querySelectorAll("[data-i]").forEach((row) => (row.onclick = () => this.closedSheet(list[+row.dataset.i])));
+        this.histData = { list: (h.positions || []).sort((a, b) => b.closeTime - a.closeTime), summary: h.summary || {} };
+        this.renderHistory();
       } catch (e) {
         $("histList").innerHTML = `<div class="empty">${esc(plain(e.message))}</div>`;
       }
+    },
+
+    /** Totals of a list of closed positions. */
+    histTotals(list) {
+      const wins = list.filter((p) => p.profit > 0), losses = list.filter((p) => p.profit < 0);
+      const gain = wins.reduce((a, p) => a + p.profit, 0), loss = -losses.reduce((a, p) => a + p.profit, 0);
+      return {
+        count: list.length, wins: wins.length, losses: losses.length, net: gain - loss, gain, loss,
+        fees: list.reduce((a, p) => a + (p.commission || 0) + (p.swap || 0), 0),
+        lots: list.reduce((a, p) => a + (p.lots || 0), 0),
+        best: list.reduce((m, p) => (m == null || p.profit > m.profit ? p : m), null),
+        worst: list.reduce((m, p) => (m == null || p.profit < m.profit ? p : m), null),
+        tp: list.filter((p) => p.reason === "target").length, sl: list.filter((p) => p.reason === "stop").length,
+      };
+    },
+
+    renderHistory() {
+      const { list: all, summary } = this.histData || { list: [], summary: {} };
+      const dayKey = (t) => { const d = new Date(t * 1000); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+      const t = this.histTotals(all);
+      const pct = t.count ? Math.round(t.wins / t.count * 100) + "%" : "–";
+      const pf = t.loss > 0 ? (t.gain / t.loss).toFixed(2) : t.gain > 0 ? "∞" : "–";
+      const stats = [
+        ["Lãi/lỗ ròng", `<span class="${t.net >= 0 ? "pos" : "neg"}">${signed(t.net)}</span>`],
+        ["Số lệnh", `${t.count} <small class="muted">· ${t.lots.toFixed(2)} lot</small>`],
+        ["Thắng / thua", `${t.wins} / ${t.losses} <small class="muted">· ${pct}</small>`],
+        ["Chạm TP / chạm SL", `${t.tp} / ${t.sl}`],
+        ["Tổng lời / tổng lỗ", `<span class="pos">${signed(t.gain)}</span> / <span class="neg">${signed(-t.loss)}</span>`],
+        ["Profit factor", pf],
+        ["Lệnh lời nhất", t.best && t.best.profit > 0 ? `<span class="pos">${signed(t.best.profit)}</span>` : "–"],
+        ["Lệnh lỗ nhất", t.worst && t.worst.profit < 0 ? `<span class="neg">${signed(t.worst.profit)}</span>` : "–"],
+        ["Phí + swap", signed(t.fees)],
+      ];
+      if (summary.deposit) stats.push(["Nạp", `<span class="pos">${signed(summary.deposit)}</span>`]);
+      if (summary.withdrawal) stats.push(["Rút", `<span class="neg">${signed(summary.withdrawal)}</span>`]);
+      $("histStats").innerHTML = stats.map(([k, v]) => `<div class="stat"><span>${k}</span><b>${v}</b></div>`).join("");
+
+      // One row per day, newest first, with a bar for the day's result.
+      const byDay = new Map();
+      all.forEach((p) => { const k = dayKey(p.closeTime); if (!byDay.has(k)) byDay.set(k, []); byDay.get(k).push(p); });
+      const days = [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1)).map(([k, l]) => [k, this.histTotals(l)]);
+      const max = Math.max(1, ...days.map(([, d]) => Math.abs(d.net)));
+      $("histDays").innerHTML = days.length ? days.map(([k, d]) => {
+        const date = new Date(k + "T12:00:00").toLocaleDateString("vi-VN", { weekday: "short", day: "2-digit", month: "2-digit" });
+        return `<button type="button" class="day-row ${this.histDay === k ? "on" : ""}" data-day="${k}">
+          <span class="d">${date}</span>
+          <span class="n">${d.count} lệnh · ${d.wins}T/${d.losses}B</span>
+          <span class="barwrap"><span class="dbar ${d.net >= 0 ? "up" : "down"}" style="width:${Math.max(2, Math.abs(d.net) / max * 100)}%"></span></span>
+          <b class="${d.net >= 0 ? "pos" : "neg"}">${signed(d.net)}</b></button>`;
+      }).join("") : '<div class="empty">Không có lệnh đã đóng trong khoảng này</div>';
+      $("histDays").querySelectorAll("[data-day]").forEach((b) => (b.onclick = () => {
+        this.histDay = this.histDay === b.dataset.day ? null : b.dataset.day;
+        this.renderHistory();
+      }));
+
+      const list = this.histDay ? all.filter((p) => dayKey(p.closeTime) === this.histDay) : all;
+      $("histAll").hidden = !this.histDay;
+      $("histAll").onclick = () => { this.histDay = null; this.renderHistory(); };
+      $("histListTitle").textContent = this.histDay
+        ? `Lệnh ngày ${new Date(this.histDay + "T12:00:00").toLocaleDateString("vi-VN")} · ${signed(this.histTotals(list).net)}`
+        : `Lệnh đã đóng · ${list.length}`;
+      $("histList").innerHTML = list.length ? list.map((p, i) => {
+        const color = p.reason === "target" ? "var(--up)" : p.reason === "stop" ? "var(--down)" : "#5b6478";
+        const d = p.digits || this.digitsFor(p.symbol);
+        return `<div class="sig clickable" data-i="${i}">
+          <div class="bar" style="background:${color}"></div>
+          <div>
+            <div class="top"><span class="sym">${esc(p.symbol)}</span><span class="side ${p.side === "long" ? "buy" : "sell"}">${sideName(p.side)} ${+p.lots.toFixed(2)}</span>
+              <span class="muted small">${fmt(p.entry, d)} → ${fmt(p.exit, d)}</span></div>
+            <div class="lv">${p.reason === "target" ? "Chạm TP" : p.reason === "stop" ? "Chạm SL" : "Đóng tay"} · ${clock(p.closeTime)}</div>
+          </div>
+          <div class="right"><div class="move ${p.profit >= 0 ? "pos" : "neg"}">${signed(p.profit)}</div></div>
+        </div>`;
+      }).join("") : '<div class="empty">Không có lệnh đã đóng</div>';
+      $("histList").querySelectorAll("[data-i]").forEach((row) => (row.onclick = () => this.closedSheet(list[+row.dataset.i])));
     },
 
     closedSheet(p) {
@@ -1790,6 +1886,7 @@
         this.series.setData(this.viewBars().map(shown));
         if (range) this.chart.timeScale().setVisibleLogicalRange({ from: range.from + older.length, to: range.to + older.length });
         this.computeICT();
+        if (this.layout !== "1" && this.cmpBars && this.cmpBars.length && this.cmpBars[0].time > this.bars[0].time) this.loadOlderCmp();
       } catch { this.noOlder = true; } finally { this.loadingOlder = false; }
     },
 
@@ -1853,21 +1950,24 @@
           const active = sel && sel.kind === "pos" && sel.ticket === p.ticket;
           const w = active ? 2 : 1;
           out.push({ key: `pos:${p.ticket}:entry`, price: p.entry, color: dim(p.side === "long" ? "#2b6bf3" : "#f0455a", active), width: w, style: 0, title: `${sideName(p.side)} ${p.lots} ${signed(p.profit)}` });
-          if (p.stop) out.push({ key: `pos:${p.ticket}:stop`, price: p.stop, color: dim("#f0455a", active), width: w, style: 2, title: `SL ${active ? signed(this.pnlAt(p, p.stop)) : ""}` });
-          if (p.target) out.push({ key: `pos:${p.ticket}:target`, price: p.target, color: dim("#14b88a", active), width: w, style: 2, title: `TP ${active ? signed(this.pnlAt(p, p.target)) : ""}` });
+          if (p.stop) out.push({ key: `pos:${p.ticket}:stop`, price: p.stop, color: dim("#f0455a", active), width: w, style: 2, title: `SL ${money0(this.pnlAt(p, p.stop))}` });
+          if (p.target) out.push({ key: `pos:${p.ticket}:target`, price: p.target, color: dim("#14b88a", active), width: w, style: 2, title: `TP ${money0(this.pnlAt(p, p.target))}` });
         });
         this.orders.filter(onChart).forEach((o) => {
           const active = sel && sel.kind === "ord" && sel.ticket === o.ticket;
           const w = active ? 2 : 1;
           out.push({ key: `ord:${o.ticket}:entry`, price: o.entry, color: dim(o.side === "long" ? "#2b6bf3" : "#f0455a", active), width: w, style: 1, title: `${sideName(o.side)} ${o.kind.toUpperCase()} ${o.lots}` });
-          if (o.stop) out.push({ key: `ord:${o.ticket}:stop`, price: o.stop, color: dim("#f0455a", active), width: w, style: 2, title: "SL" });
-          if (o.target) out.push({ key: `ord:${o.ticket}:target`, price: o.target, color: dim("#14b88a", active), width: w, style: 2, title: "TP" });
+          const om = (lv) => money0(this.valueAt(o.symbol, o.lots, o.side, o.entry, lv));
+          if (o.stop) out.push({ key: `ord:${o.ticket}:stop`, price: o.stop, color: dim("#f0455a", active), width: w, style: 2, title: `SL ${om(o.stop)}` });
+          if (o.target) out.push({ key: `ord:${o.ticket}:target`, price: o.target, color: dim("#14b88a", active), width: w, style: 2, title: `TP ${om(o.target)}` });
         });
         if (this.draft) {
           const price = num($("pPrice").value), stop = num($("pStop").value), target = num($("pTarget").value);
           if (price) out.push({ key: "draft:entry", price, color: "#9b6bff", width: 2, style: 0, title: `${this.pendingKind(this.draftSide(price))} ${this.lots().toFixed(2)}` });
-          if (stop) out.push({ key: "draft:stop", price: stop, color: "#f0455a", width: 1, style: 2, title: `SL ${fmt(Math.abs(price - stop), this.digits)}` });
-          if (target) out.push({ key: "draft:target", price: target, color: "#14b88a", width: 1, style: 2, title: `TP ${fmt(Math.abs(target - price), this.digits)}` });
+          const dside = price ? this.draftSide(price) : "long";
+          const dm = (lv) => money0(this.valueAt(this.symbol, this.lots(), dside, price, lv));
+          if (stop) out.push({ key: "draft:stop", price: stop, color: "#f0455a", width: 1, style: 2, title: `SL ${dm(stop)}` });
+          if (target) out.push({ key: "draft:target", price: target, color: "#14b88a", width: 1, style: 2, title: `TP ${dm(target)}` });
         }
       } else {
         this.signals.filter((s) => s.status === "open" && s.symbol === ($("chartSymbol").textContent || s.symbol)).forEach((s) => {
@@ -1879,11 +1979,21 @@
       return out;
     },
 
-    /** Money at a price for a position, from its live profit (contract size worked out from it). */
+    /** Money at a price for a position: from its live profit (the broker's own contract size), else lots × contract. */
     pnlAt(p, price) {
-      const move = (p.price - p.entry) * (p.side === "long" ? 1 : -1);
-      if (Math.abs(move) < 1e-9) return null;
-      return p.profit / move * (price - p.entry) * (p.side === "long" ? 1 : -1);
+      if (price == null) return null;
+      const dir = p.side === "long" ? 1 : -1;
+      const move = (p.price - p.entry) * dir;
+      if (Math.abs(move) > Math.abs(p.entry) * 0.00005 && p.profit) return p.profit / move * (price - p.entry) * dir;
+      return this.valueAt(p.symbol, p.lots, p.side, p.entry, price);
+    },
+
+    /** Money for `lots` from `entry` to `price` with the usual contract sizes (gold 100, silver 5000, crypto/indices 1, FX 100000). */
+    valueAt(symbol, lots, side, entry, price) {
+      if (price == null || entry == null) return null;
+      const s = String(symbol || "").toUpperCase();
+      const contract = /XAU|GOLD/.test(s) ? 100 : /XAG|SILVER/.test(s) ? 5000 : /BTC|ETH|SOL|XRP|LTC|US30|USTEC|NAS|SPX|US500|DE30|DE40|JP225|UK100|HK50/.test(s) ? 1 : 100000;
+      return (price - entry) * (side === "long" ? 1 : -1) * lots * contract;
     },
 
     syncLines() {
@@ -3160,11 +3270,13 @@
         },
       });
       // Dragging either chart moves both.
-      const link = (from, to) => from.timeScale().subscribeVisibleTimeRangeChange((r) => {
+      const link = (from, to) => from.timeScale().subscribeVisibleLogicalRangeChange((r) => {
         if (!r || this.layout === "1") return;
         const locked = this.rangeLock && this.rangeLock.get(from);
         if (locked && performance.now() - locked < 120) return; // our own echo
         this.syncRange(from, to);
+        // Scrolled back past the second chart's oldest bar: fetch older bars for it.
+        if (from === this.chart2 && r.from < 30) this.loadOlderCmp();
       });
       link(this.chart, this.chart2);
       link(this.chart2, this.chart);
@@ -3295,10 +3407,11 @@
 
     allDrawings() { return [this.drawingsMain, this.drawings2].filter(Boolean); },
 
-    cmpPath(count) {
+    cmpPath(count, before) {
+      const extra = before ? `&before=${before}` : "";
       return this.owner
-        ? `/mt5/candles?symbol=${encodeURIComponent(this.cmpSymbol())}&interval=${this.interval}&count=${count}`
-        : `/member/candles?symbol=compare&interval=${this.interval}&count=${count}`;
+        ? `/mt5/candles?symbol=${encodeURIComponent(this.cmpSymbol())}&interval=${this.interval}&count=${count}${extra}`
+        : `/member/candles?symbol=compare&interval=${this.interval}&count=${count}${extra}`;
     },
 
     /** SMT is on (it needs the related market's bars even with one chart). */
@@ -3329,7 +3442,7 @@
         } catch { bars = []; }
       }
       if (token !== this.cmpToken) return;
-      this.cmpBars = bars; this.cmpQuote = quote; this.cmpLive = live; this.cmpView = null;
+      this.cmpBars = bars; this.cmpQuote = quote; this.cmpLive = live; this.cmpView = null; this.cmpNoOlder = false;
       this.cmpName = name; this.cmpDigits = digits;
       if (live) this.cmpTimer = setInterval(() => this.pollCmp(token), 2000);
       $("chartSymbol2").textContent = name;
@@ -3385,11 +3498,33 @@
     /** Shows the same time span on `to` as on `from`; the lock keeps the two from echoing each other. */
     syncRange(from, to) {
       if (!from || !to || this.layout === "1") return;
-      const r = from.timeScale().getVisibleRange();
-      if (!r) return;
+      const r = from.timeScale().getVisibleLogicalRange();
+      const fromBars = from === this.chart ? this.viewBars() : this.cmpView || [];
+      const toBars = to === this.chart ? this.viewBars() : this.cmpView || [];
+      if (!r || !fromBars.length || !toBars.length) return;
+      // The same moments at each edge, through each chart's own bars: equal zoom and no jump to the start.
+      const sec = TF_SECONDS[this.interval];
+      const a = timeToIndex(toBars, indexToTime(fromBars, r.from, sec), sec);
+      const b = timeToIndex(toBars, indexToTime(fromBars, r.to, sec), sec);
+      if (a == null || b == null || !(b > a)) return;
       this.rangeLock = this.rangeLock || new Map();
       this.rangeLock.set(to, performance.now());
-      try { to.timeScale().setVisibleRange(r); } catch { /* not loaded yet */ }
+      try { to.timeScale().setVisibleLogicalRange({ from: a, to: b }); } catch { /* not loaded yet */ }
+    },
+
+    /** Older bars of the second chart, so it covers what the first one shows. */
+    async loadOlderCmp() {
+      if (this.cmpOlderBusy || !this.cmpLive || !this.cmpBars || !this.cmpBars.length || this.cmpNoOlder) return;
+      this.cmpOlderBusy = true;
+      const token = this.cmpToken;
+      try {
+        const data = await this.call(this.cmpPath(800, this.cmpBars[0].time));
+        if (token !== this.cmpToken) return;
+        const older = this.toBars(data.candles || []).filter((b) => b.time < this.cmpBars[0].time);
+        if (!older.length) { this.cmpNoOlder = true; return; }
+        this.cmpBars = older.concat(this.cmpBars);
+        this.showCmp(true);
+      } catch { this.cmpNoOlder = true; } finally { this.cmpOlderBusy = false; }
     },
 
     /** The indicator and drawing layers paint inside the chart's own frame; this only asks for one. */
