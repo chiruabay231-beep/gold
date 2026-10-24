@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.2"
+VERSION = "2.3"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2127,6 +2127,23 @@ class Members:
                 "version": VERSION, "ownerCopyOn": bool(self.server.copier.cfg["enabled"]),
                 "features": self.features}
 
+    def chart_symbol(self):
+        """The gold symbol of the owner's MT5 account (XAUUSDm on Exness Standard)."""
+        with self.lock:
+            for s in self.items:
+                if "XAU" in s["symbol"].upper():
+                    return s["symbol"]
+        cached = getattr(self, "_chart_symbol", None)
+        if cached:
+            return cached
+        with Mt5.lock:
+            mt5 = Mt5.connect(self.server.config["mt5"])
+            for name in ("XAUUSDm", "XAUUSD", "XAUUSD.r", "XAUUSDc", "GOLD"):
+                if mt5.symbol_info(name) is not None:
+                    self._chart_symbol = name
+                    return name
+        raise ValueError("Tài khoản không có mã vàng")
+
     def signals(self, m=None, limit=60):
         """The signals; for a member who copies, with the lots copied into their account."""
         copies = {}
@@ -2706,13 +2723,12 @@ def make_handler(server):
             pass
 
         def _cors(self):
-            """The members' web page (another site) may call /member/ and /ping only."""
-            path = self.path.partition("?")[0]
-            if path.startswith("/member/") or path == "/ping":
-                self.send_header("Access-Control-Allow-Origin", "*")
-                self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
-                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-                self.send_header("Access-Control-Max-Age", "600")
+            """The website (another origin) calls the server too: members with their code,
+            the owner with the password. Nothing works without one of them."""
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Max-Age", "600")
 
         def _send(self, code, payload):
             data = json.dumps(payload, ensure_ascii=False).encode()
@@ -2778,6 +2794,13 @@ def make_handler(server):
                         return self._send(200, server.members.signals(who, min(limit, 200)))
                     if path == "/member/copy":
                         return self._send(200, server.members.copy_status(who))
+                    if path == "/member/candles":
+                        # Exness (MT5) bars of the signals' symbol, for the members' web chart.
+                        symbol = server.members.chart_symbol()
+                        data = server.mt5_account.candles(symbol, (params.get("interval") or ["1m"])[0],
+                                                          min(int((params.get("count") or ["500"])[0]), 1000),
+                                                          (params.get("before") or [None])[0])
+                        return self._send(200, dict(data, symbol=symbol))
                     return self._send(404, {"ok": False, "error": "Không có đường dẫn này"})
                 if path == "/members":
                     return self._send(200, server.members.list())

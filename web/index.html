@@ -119,12 +119,15 @@
       <div class="login-card">
         <img src="favicon.svg" alt="" width="54" height="54">
         <h1>Aurum Pro</h1>
-        <p class="muted">Nhập mã mời để xem tín hiệu</p>
+        <p class="muted" id="loginHint">Nhập mã mời để xem tín hiệu</p>
         <form id="loginForm" autocomplete="off">
           <input id="codeInput" placeholder="ABCD-EFGH-JKLM" maxlength="40" spellcheck="false" autocapitalize="characters">
+          <input id="passInput" type="password" placeholder="Mật khẩu máy chủ" autocomplete="current-password" hidden>
+          <label class="remember" id="rememberRow" hidden><input type="checkbox" id="rememberInput"> Ghi nhớ trên máy này</label>
           <button class="btn btn-gold" id="loginBtn" type="submit">Vào xem tín hiệu</button>
         </form>
         <p class="error" id="loginError" role="alert"></p>
+        <button class="linkish" id="modeBtn" type="button">Đăng nhập chủ</button>
         <a class="muted small" href="#">← Về trang giới thiệu</a>
       </div>
     </section>
@@ -141,21 +144,31 @@
 
       <div class="panel chart-panel">
         <div class="chart-top">
-          <div><b>XAUUSD</b> <span class="muted small">· giá Binance XAUUSDT</span>
+          <div><b id="chartSymbol">XAUUSD</b> <span class="muted small" id="chartSource">· giá Exness</span>
             <span class="live-price" id="livePrice">—</span></div>
           <div class="tf" id="tfButtons"></div>
         </div>
         <div id="chart"></div>
-        <p class="muted small">Đường tím: tín hiệu đang mở (vào lệnh, SL, TP).</p>
+        <p class="muted small" id="chartNote">Đường tím: tín hiệu đang mở (vào lệnh, SL, TP).</p>
+      </div>
+
+      <div class="panel" id="accountPanel" hidden>
+        <h3>Tài khoản</h3>
+        <div class="stats" id="accountStats"></div>
       </div>
 
       <div class="panel">
-        <h3>Đang mở</h3>
+        <h3 id="openTitle">Đang mở</h3>
         <div id="openList" class="list"></div>
       </div>
-      <div class="panel">
+      <div class="panel" id="closedPanel">
         <h3 id="closedTitle">Đã đóng</h3>
         <div id="closedList" class="list"></div>
+      </div>
+      <div class="panel" id="membersPanel" hidden>
+        <h3 id="membersTitle">Thành viên</h3>
+        <div id="membersList" class="list"></div>
+        <p class="muted small">Tạo mã, khoá hoặc gia hạn thành viên trong app (Giao dịch → Tín hiệu → Thành viên &amp; mã mời).</p>
       </div>
     </section>
   </main>

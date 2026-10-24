@@ -6,9 +6,10 @@ Thư mục `web/` là trang tĩnh, không cần build:
 - `site.config.js` — liên kết liên hệ, tên và giá các gói: sửa ở đây.
 - `assets/app.js`, `assets/style.css` — giao diện và logic.
 
-Thành viên chỉ nhập mã mời: trang tìm địa chỉ máy chủ qua ntfy.sh (giống app iPhone),
-rồi đọc `/member/me` và `/member/signals`. Máy chủ VPS cần bản 2.2+ (cho phép trình
-duyệt gọi các đường dẫn `/member/`).
+Thành viên chỉ nhập mã mời, chủ chỉ nhập mật khẩu máy chủ: trang tìm địa chỉ máy chủ
+qua ntfy.sh (giống app iPhone). Thành viên đọc `/member/me`, `/member/signals`,
+`/member/candles` (nến Exness); chủ đọc `/mt5/trading`, `/mt5/candles`, `/members`.
+Máy chủ VPS cần bản 2.3+. Không có MT5 thì biểu đồ dùng Binance XAUUSDT.
 
 ## Đăng lên Cloudflare Pages (miễn phí, tên dạng `aurumpro.pages.dev`)
 

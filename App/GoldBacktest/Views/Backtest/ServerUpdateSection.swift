@@ -4,7 +4,7 @@ import UIKit
 /// Updating the bot server on the VPS.
 enum ServerUpdate {
     /// Version of bot-server/bot_server.py this app expects.
-    static let latestVersion = "2.2"
+    static let latestVersion = "2.3"
     static let installCommand = "irm https://raw.githubusercontent.com/chiruabay231-beep/gold/claude/ios-backtest-custom-indicators-jptyoz/bot-server/install.ps1 | iex"
 
     /// The server answered "no such path": it predates the feature.
