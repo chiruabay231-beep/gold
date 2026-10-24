@@ -591,5 +591,67 @@
     return { flow, situation, shark };
   }
 
-  window.ICT = { defaults, merge, compute, draw, sharkFlow };
+  /* ---------- SMT divergence against a related market ---------- */
+
+  /**
+   * Two swing highs (lows) in a row where one market makes a higher high (lower low)
+   * and the other does not — the app's rule. Bars of `b` are matched to `a` by time.
+   */
+  function smt(a, b, opts = {}) {
+    const length = Math.max(opts.swing || 3, 1), lookback = opts.lookback || 60, count = opts.count || 10, inverse = !!opts.inverse;
+    const n = a.length;
+    if (n <= length * 2 + 2 || !b.length) return [];
+    const other = new Map(b.map((x) => [x.time, x]));
+    const extreme = (p, high) => {
+      const values = [];
+      for (let i = Math.max(0, p - 1); i <= Math.min(n - 1, p + 1); i++) { const o = other.get(a[i].time); if (o) values.push(high ? o.high : o.low); }
+      return values.length ? (high ? Math.max(...values) : Math.min(...values)) : null;
+    };
+    const highs = [], lows = [];
+    for (let p = length; p < n - length; p++) {
+      let hi = true, lo = true;
+      for (let j = p - length; j <= p + length; j++) {
+        if (j === p) continue;
+        if (a[j].high >= a[p].high) hi = false;
+        if (a[j].low <= a[p].low) lo = false;
+      }
+      if (hi) highs.push(p);
+      if (lo) lows.push(p);
+    }
+    const out = [];
+    for (let k = 1; k < highs.length; k++) {
+      const i1 = highs[k - 1], i2 = highs[k];
+      if (i2 - i1 > lookback) continue;
+      const b1 = extreme(i1, !inverse), b2 = extreme(i2, !inverse);
+      if (b1 == null || b2 == null) continue;
+      if ((a[i2].high > a[i1].high) !== (inverse ? b2 < b1 : b2 > b1)) out.push({ bull: false, start: i1, end: i2, p1: a[i1].high, p2: a[i2].high, t1: a[i1].time, t2: a[i2].time });
+    }
+    for (let k = 1; k < lows.length; k++) {
+      const i1 = lows[k - 1], i2 = lows[k];
+      if (i2 - i1 > lookback) continue;
+      const b1 = extreme(i1, inverse), b2 = extreme(i2, inverse);
+      if (b1 == null || b2 == null) continue;
+      if ((a[i2].low < a[i1].low) !== (inverse ? b2 > b1 : b2 < b1)) out.push({ bull: true, start: i1, end: i2, p1: a[i1].low, p2: a[i2].low, t1: a[i1].time, t2: a[i2].time });
+    }
+    return out.sort((m, k) => m.end - k.end).slice(-count);
+  }
+
+  /** SMT lines with their label; X(index) / Y(price) as in draw(). */
+  function drawSMT(g, list, X, Y, w, colors = {}) {
+    if (!list || !list.length) return;
+    g.save();
+    g.font = "600 10px Be Vietnam Pro, system-ui, sans-serif";
+    list.forEach((d) => {
+      const x1 = X(d.start), x2 = X(d.end), y1 = Y(d.p1), y2 = Y(d.p2);
+      if (x1 == null || x2 == null || y1 == null || y2 == null || x2 < 0 || x1 > w) return;
+      const c = d.bull ? colors.bull || "#089981" : colors.bear || "#f23645";
+      g.strokeStyle = c; g.lineWidth = 1.2; g.setLineDash([]);
+      g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+      g.fillStyle = c; g.textAlign = "center"; g.textBaseline = d.bull ? "top" : "bottom";
+      g.fillText("SMT", (x1 + x2) / 2, (d.bull ? Math.max(y1, y2) + 3 : Math.min(y1, y2) - 3));
+    });
+    g.restore();
+  }
+
+  window.ICT = { defaults, merge, compute, draw, sharkFlow, smt, drawSMT };
 })();

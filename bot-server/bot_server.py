@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.5"
+VERSION = "2.6"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2891,6 +2891,9 @@ def make_handler(server):
                     if path == "/member/candles":
                         # Exness (MT5) bars of the signals' symbol, for the members' web chart.
                         symbol = server.members.chart_symbol()
+                        if (params.get("symbol") or [""])[0] == "compare":
+                            # The SMT pair of the second chart: silver for gold.
+                            symbol = re.sub("XAU", "XAG", symbol, flags=re.I) if "XAU" in symbol.upper() else symbol
                         data = server.mt5_account.candles(symbol, (params.get("interval") or ["1m"])[0],
                                                           min(int((params.get("count") or ["500"])[0]), 1000),
                                                           (params.get("before") or [None])[0])

@@ -23,8 +23,10 @@
       <a href="#plans">Gói</a>
       <a href="#faq">Hỏi đáp</a>
     </nav>
+    <nav class="tabs" id="tabs"></nav>
     <button class="theme-btn" id="themeBtn" type="button" title="Sáng / tối">☀︎</button>
-    <a class="btn btn-gold btn-small" href="#member">Đăng nhập thành viên</a>
+    <button class="btn btn-ghost btn-small nav-logout" id="logoutBtn" type="button" hidden>Thoát</button>
+    <a class="btn btn-gold btn-small nav-login" href="#member">Đăng nhập thành viên</a>
   </header>
 
   <!-- ========== Landing ========== -->
@@ -139,14 +141,8 @@
           <div class="who" id="whoName">—</div>
           <div class="muted small" id="whoRole">—</div>
         </div>
-        <div class="head-right">
-          <div class="equity" id="headEquity"></div>
-          <button class="btn btn-ghost btn-small" id="logoutBtn">Thoát</button>
-        </div>
       </div>
       <p class="warn" id="dashError" hidden></p>
-
-      <nav class="tabs" id="tabs"></nav>
 
       <!-- Chart -->
       <div class="tab" data-tab="chart">
@@ -162,46 +158,55 @@
               <button class="icon-btn" id="indBtn" type="button" title="Chỉ báo">ƒx</button>
               <button class="icon-btn plain" id="drawBtn" type="button" title="Hiện/ẩn thanh công cụ vẽ">✎</button>
               <button class="icon-btn plain" id="replayBtn" type="button" title="Replay">⏮</button>
+              <button class="icon-btn plain" id="layoutBtn" type="button" title="Bố cục: 1 / 2 biểu đồ, SMT">▥</button>
               <button class="icon-btn plain" id="styleBtn" type="button" title="Cài đặt biểu đồ (màu, sáng/tối)">⚙</button>
             </div>
           </div>
-          <div class="flow" id="flowBox" hidden></div>
+          <div class="chart-sub">
+            <div class="flow" id="flowBox" hidden></div>
+            <div class="equity" id="headEquity"></div>
+          </div>
           <div class="chart-body">
             <div class="tool-rail" id="toolRail"></div>
             <div class="flyout" id="flyout" hidden></div>
+            <div class="charts" id="charts">
             <div class="chart-wrap" id="chartWrap">
               <div id="chart"></div>
+              <div class="quick-trade" id="ticket" hidden>
+                <button class="qt sell" id="sellBtn" type="button"><b id="bidText">—</b><span>BÁN</span></button>
+                <div class="qt-lot">
+                  <button type="button" data-step="-1">−</button>
+                  <input id="lotInput" inputmode="decimal" value="0.01" title="Khối lượng (lot)">
+                  <button type="button" data-step="1">+</button>
+                </div>
+                <button class="qt buy" id="buyBtn" type="button"><b id="askText">—</b><span>MUA</span></button>
+                <button class="qt-pend" id="pendingToggle" type="button" title="Lệnh chờ (kéo đường tím)">⏳</button>
+              </div>
               <div class="draw-bar" id="drawBar" hidden></div>
               <div class="fav-bar" id="favBar" hidden></div>
               <div class="pill-pos" id="posPill" hidden></div>
               <div class="sel-bar" id="selBar" hidden></div>
             </div>
+            <div class="chart-wrap second" id="chartWrap2" hidden>
+              <div id="chart2"></div>
+              <div class="c2-head"><button class="sym-btn" id="chartSymbol2" type="button">XAGUSD</button><span class="muted small" id="chartPrice2"></span></div>
+            </div>
+            </div>
           </div>
           <div class="replay-bar" id="replayBar" hidden></div>
           <p class="muted small chart-note" id="chartNote"></p>
 
-          <div class="ticket" id="ticket" hidden>
-            <div class="trade-bar">
-              <button class="tb sell" id="sellBtn" type="button"><span>SELL</span><b id="bidText">—</b></button>
-              <div class="lots">
-                <button type="button" data-step="-1">−</button>
-                <input id="lotInput" inputmode="decimal" value="0.01">
-                <button type="button" data-step="1">+</button>
-              </div>
-              <button class="tb buy" id="buyBtn" type="button"><span>BUY</span><b id="askText">—</b></button>
+          <div class="pending" id="pendingBox" hidden>
+            <div class="pend-head"><b id="pendKind">BUY LIMIT</b><span class="muted small">Đường tím dưới giá = MUA, trên giá = BÁN. Kéo đường đỏ/xanh để chỉnh SL/TP.</span></div>
+            <div class="fields">
+              <label>Giá chờ<input id="pPrice" inputmode="decimal"></label>
+              <label>SL<input id="pStop" inputmode="decimal" placeholder="không"></label>
+              <label>TP<input id="pTarget" inputmode="decimal" placeholder="không"></label>
             </div>
-            <button class="linkish pending-toggle" id="pendingToggle" type="button">▾ Lệnh chờ · SL/TP</button>
-            <div class="pending" id="pendingBox" hidden>
-              <div class="fields">
-                <label>Giá chờ<input id="pPrice" inputmode="decimal" placeholder="kéo đường tím"></label>
-                <label>SL<input id="pStop" inputmode="decimal" placeholder="không"></label>
-                <label>TP<input id="pTarget" inputmode="decimal" placeholder="không"></label>
-              </div>
-              <div class="pending-actions">
-                <button class="btn btn-small pend sell" id="pSell" type="button">SELL LIMIT</button>
-                <button class="btn btn-small pend buy" id="pBuy" type="button">BUY LIMIT</button>
-              </div>
-              <p class="muted small">Kéo đường tím trên biểu đồ để chọn giá chờ. SL/TP cũng áp dụng cho lệnh BUY/SELL ngay.</p>
+            <div class="pending-actions">
+              <label class="check"><input type="checkbox" id="pStopType"> Lệnh Stop (đổi chiều: trên giá = MUA, dưới giá = BÁN)</label>
+              <button class="btn btn-small btn-ghost" id="pCancel" type="button">Huỷ</button>
+              <button class="btn btn-small pend buy" id="pPlace" type="button">Đặt BUY LIMIT</button>
             </div>
           </div>
         </div>

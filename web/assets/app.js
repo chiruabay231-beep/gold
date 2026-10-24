@@ -76,7 +76,7 @@
     const member = location.hash.startsWith("#member");
     $("landing").hidden = member;
     $("member").hidden = !member;
-    document.querySelector(".nav .btn").hidden = member;
+    document.body.classList.toggle("in-member", member);
     if (member) Member.show(); else Member.hide();
   }
   window.addEventListener("hashchange", route);
@@ -366,6 +366,8 @@
 
     openLogin(message) {
       this.stop();
+      $("logoutBtn").hidden = true;
+      $("tabs").innerHTML = "";
       $("loginView").hidden = false;
       $("dashView").hidden = true;
       this.setLoginMode(this.loginMode);
@@ -439,6 +441,7 @@
     },
 
     async openDash() {
+      $("logoutBtn").hidden = false;
       $("loginView").hidden = true;
       $("dashView").hidden = false;
       this.tab = store.get("aurum.tab") || "chart";
@@ -448,7 +451,7 @@
       $("ticket").hidden = !this.owner;
       $("chartSymbol").disabled = !this.owner;
       $("chartNote").textContent = this.owner
-        ? "Chạm vào đường giá vào lệnh để chọn lệnh, rồi kéo SL/TP. Kéo đường tím để đặt giá lệnh chờ."
+        ? "Chạm đường giá vào để chọn lệnh, rồi kéo chính đường đó: lệnh MUA kéo xuống = SL, kéo lên = TP (lệnh BÁN ngược lại). ⏳ mở lệnh chờ: đường tím dưới giá = MUA, trên giá = BÁN."
         : "Đường tím: tín hiệu đang mở (giá vào, SL, TP).";
       if (!this.owner) {
         try { await this.refreshMe(); } catch (e) { if (this.handleAuth(e)) return; }
@@ -704,29 +707,51 @@
       if (this.replay) return this.replayOrder(side);
       if (!this.symbol) return;
       const body = { symbol: this.symbol, side, type: "market", lots: this.lots() };
-      if (this.draft) { body.stop = num($("pStop").value); body.target = num($("pTarget").value); }
       const ok = await act(button, () => this.call("/mt5/order", body), `Đã ${side === "long" ? "MUA" : "BÁN"} ${body.lots} ${this.symbol}`);
       if (ok) this.refresh();
     },
 
-    pendingKind(side, price) {
-      if (price == null) return side === "long" ? "BUY LIMIT" : "SELL LIMIT";
-      if (side === "long") return price < (this.ask || price) ? "BUY LIMIT" : "BUY STOP";
-      return price > (this.bid || price) ? "SELL LIMIT" : "SELL STOP";
+    /** The pending draft is one purple line: under the price it buys, above it sells (a Stop order the other way). */
+    draftSide(price) {
+      const last = this.bars.length ? this.bars[this.bars.length - 1].close : price;
+      const mid = this.bid != null && this.ask != null ? (this.bid + this.ask) / 2 : last;
+      const below = price < mid;
+      return $("pStopType").checked ? (below ? "short" : "long") : (below ? "long" : "short");
     },
+
+    pendingKind(side) { return (side === "long" ? "BUY " : "SELL ") + ($("pStopType").checked ? "STOP" : "LIMIT"); },
 
     updatePendingLabels() {
       const price = num($("pPrice").value);
-      $("pBuy").textContent = this.pendingKind("long", price);
-      $("pSell").textContent = this.pendingKind("short", price);
+      if (price == null) return;
+      const side = this.draftSide(price), kind = this.pendingKind(side);
+      $("pendKind").textContent = kind;
+      const b = $("pPlace");
+      b.textContent = `Đặt ${kind} ${this.lots().toFixed(2)}`;
+      b.className = "btn btn-small pend " + (side === "long" ? "buy" : "sell");
     },
 
-    async pendingOrder(side, button) {
+    /** SL and TP keep their distances from the entry, on the order's side. */
+    placeDraftStops() {
+      const price = num($("pPrice").value);
+      if (price == null || !this.draftDist) return;
+      const long = this.draftSide(price) === "long";
+      $("pStop").value = this.draftDist.risk ? fmt(price + (long ? -1 : 1) * this.draftDist.risk, this.digits) : "";
+      $("pTarget").value = this.draftDist.reward ? fmt(price + (long ? 1 : -1) * this.draftDist.reward, this.digits) : "";
+    },
+
+    readDraftDist() {
+      const p = num($("pPrice").value), sl = num($("pStop").value), tp = num($("pTarget").value);
+      this.draftDist = { risk: sl != null && p != null ? Math.abs(p - sl) : 0, reward: tp != null && p != null ? Math.abs(tp - p) : 0 };
+    },
+
+    async pendingOrder(button) {
       if (this.replay) return toast("Replay chỉ có lệnh thị trường (BUY/SELL trên thanh replay)", true);
       const price = num($("pPrice").value);
-      if (!price) return toast("Nhập giá chờ hoặc kéo đường tím", true);
+      if (!price) return toast("Kéo đường tím tới giá muốn đặt", true);
+      const side = this.draftSide(price);
       const body = { symbol: this.symbol, side, type: "pending", price, lots: this.lots(), stop: num($("pStop").value), target: num($("pTarget").value) };
-      const kind = this.pendingKind(side, price);
+      const kind = this.pendingKind(side);
       const ok = await act(button, () => this.call("/mt5/order", body), `Đã đặt ${kind} ${body.lots} @ ${fmt(price, this.digits)}`);
       if (ok) { this.togglePending(false); this.refresh(); }
     },
@@ -734,12 +759,17 @@
     togglePending(open) {
       const box = $("pendingBox");
       open = open === undefined ? box.hidden : open;
+      if (open && this.replay) return toast("Thoát replay để đặt lệnh chờ", true);
       box.hidden = !open;
-      $("pendingToggle").textContent = (open ? "▴" : "▾") + " Lệnh chờ · SL/TP";
+      $("pendingToggle").classList.toggle("on", open);
       if (open) {
+        const tail = this.bars.slice(-30);
         const last = this.bars.length ? this.bars[this.bars.length - 1].close : null;
-        if (!num($("pPrice").value) && last) $("pPrice").value = fmt(last, this.digits);
+        const r = tail.length ? tail.reduce((a, b) => a + b.high - b.low, 0) / tail.length : (last || 1) * 0.0005;
+        if (!num($("pPrice").value) && last) $("pPrice").value = fmt(last - r * 3, this.digits);
+        if (!this.draftDist) this.draftDist = { risk: +(r * 3).toFixed(this.digits), reward: +(r * 6).toFixed(this.digits) };
         this.draft = true;
+        this.placeDraftStops();
       } else {
         this.draft = null;
         $("pPrice").value = ""; $("pStop").value = ""; $("pTarget").value = "";
@@ -1241,14 +1271,30 @@
               zOrder: () => "bottom",
               renderer: () => ({
                 draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
-                  if (!term.ict) return;
                   const ts = term.chart.timeScale();
-                  window.ICT.draw(context, term.ict, term.ictCfg, (i) => ts.logicalToCoordinate(i), (v) => term.series.priceToCoordinate(v), mediaSize.width, mediaSize.height);
+                  const X = (i) => ts.logicalToCoordinate(i), Y = (v) => term.series.priceToCoordinate(v);
+                  if (term.ict) window.ICT.draw(context, term.ict, term.ictCfg, X, Y, mediaSize.width, mediaSize.height);
+                  if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width);
                 }),
               }),
             }];
           },
+          // Time left in the current bar, under the last price on the price scale.
+          priceAxisViews() { return term.countdownView ? [term.countdownView] : []; },
         });
+        this.countdownView = {
+          coordinate: () => {
+            const v = this.viewBars(), b = v[v.length - 1];
+            const y = b ? this.series.priceToCoordinate(b.close) : null;
+            return y == null ? -100 : y + 19;
+          },
+          text: () => this.countdownText(),
+          textColor: () => "#ffffff",
+          backColor: () => { const v = this.viewBars(), b = v[v.length - 1]; return b && b.close < b.open ? this.chartStyle.down : this.chartStyle.up; },
+          visible: () => !this.replay && this.bars.length > 0 && this.source === "exness",
+          tickVisible: () => false,
+        };
+        setInterval(() => { if (this.tab === "chart" && this.requestICT) this.requestICT(); }, 1000);
         this.drawings = new window.AurumDrawings({
           chart: this.chart, series: this.series, store,
           bars: () => this.viewBars(), sec: () => TF_SECONDS[this.interval], digits: () => this.digits,
@@ -1257,6 +1303,7 @@
         });
         this.chartStyle = loadChartStyle();
         this.applyChartStyle();
+        this.layout = ["1", "h", "v"].includes(store.get("aurum.layout")) ? store.get("aurum.layout") : "1";
         $("tfButtons").innerHTML = TFS.map((i) => `<button type="button" data-tf="${i}">${i}</button>`).join("");
         $("tfButtons").querySelectorAll("button").forEach((b) => (b.onclick = () => {
           this.interval = b.dataset.tf; store.set("aurum.tf", this.interval); this.loadCandles();
@@ -1283,14 +1330,19 @@
         store.set("aurum.lots", $("lotInput").value);
       }));
       $("pendingToggle").onclick = () => this.togglePending();
-      ["pPrice", "pStop", "pTarget"].forEach((id) => ($(id).oninput = () => { this.updatePendingLabels(); this.syncLines(); }));
-      $("pBuy").onclick = (e) => this.pendingOrder("long", e.currentTarget);
-      $("pSell").onclick = (e) => this.pendingOrder("short", e.currentTarget);
+      $("pPrice").oninput = () => { this.placeDraftStops(); this.updatePendingLabels(); this.syncLines(); };
+      ["pStop", "pTarget"].forEach((id) => ($(id).oninput = () => { this.readDraftDist(); this.syncLines(); }));
+      $("pStopType").onchange = () => { this.placeDraftStops(); this.updatePendingLabels(); this.syncLines(); };
+      $("pPlace").onclick = (e) => this.pendingOrder(e.currentTarget);
+      $("pCancel").onclick = () => this.togglePending(false);
+      $("layoutBtn").onclick = (e) => this.layoutMenu(e.currentTarget);
+      $("chartSymbol2").onclick = () => { if (this.owner) this.symbolSheet((sym) => { store.set("aurum.cmpSym", sym); this.loadCmp(); }); };
       $("indBtn").onclick = () => this.indicatorSheet();
       $("drawBtn").onclick = () => this.toggleRail();
       $("styleBtn").onclick = () => this.chartStyleSheet();
       $("replayBtn").onclick = () => this.startReplayPick();
       $("chartSymbol").onclick = () => this.symbolSheet();
+      this.smtOn = store.get("aurum.smt") !== "0";
       $("closeAllBtn").onclick = (e) => this.closeAll(e.currentTarget);
     },
 
@@ -1312,7 +1364,7 @@
       });
     },
 
-    symbolSheet() {
+    symbolSheet(onPick) {
       if (!this.owner) return;
       sheet.open(`<h3>Chọn mã</h3><div class="fields"><label>Tìm<input id="symQ" placeholder="XAU, EURUSD, BTC…" autocomplete="off"></label></div><div id="symList" class="list sym-list"></div>`, (el) => {
         const q = el.querySelector("#symQ");
@@ -1322,8 +1374,10 @@
           const list = (found && found.symbols) || [];
           el.querySelector("#symList").innerHTML = list.map((x) => `<button type="button" class="sym-row" data-s="${esc(x.name)}"><b>${esc(x.name)}</b><span class="muted small">${esc(x.description)}</span></button>`).join("") || '<div class="empty">Không thấy mã</div>';
           el.querySelectorAll(".sym-row").forEach((b) => (b.onclick = () => {
+            sheet.close();
+            if (onPick) { onPick(b.dataset.s); return; }
             this.symbol = b.dataset.s; store.set("aurum.sym", this.symbol);
-            sheet.close(); this.selected = null; this.loadCandles();
+            this.selected = null; this.loadCandles();
           }));
         };
         q.oninput = () => { clearTimeout(timer); timer = setTimeout(search, 250); };
@@ -1406,6 +1460,7 @@
       this.syncLines();
       this.updateFlow();
       this.redraw();
+      if (this.layout !== "1") this.setLayout(this.layout);
     },
 
     // The newest bars every 2 seconds (MT5 has no public stream).
@@ -1519,9 +1574,9 @@
         });
         if (this.draft) {
           const price = num($("pPrice").value), stop = num($("pStop").value), target = num($("pTarget").value);
-          if (price) out.push({ key: "draft:entry", price, color: "#9b6bff", width: 2, style: 0, title: "Giá chờ" });
-          if (stop) out.push({ key: "draft:stop", price: stop, color: "#f0455a", width: 2, style: 2, title: "SL mới" });
-          if (target) out.push({ key: "draft:target", price: target, color: "#14b88a", width: 2, style: 2, title: "TP mới" });
+          if (price) out.push({ key: "draft:entry", price, color: "#9b6bff", width: 2, style: 0, title: `${this.pendingKind(this.draftSide(price))} ${this.lots().toFixed(2)}` });
+          if (stop) out.push({ key: "draft:stop", price: stop, color: "#f0455a", width: 1, style: 2, title: `SL ${fmt(Math.abs(price - stop), this.digits)}` });
+          if (target) out.push({ key: "draft:target", price: target, color: "#14b88a", width: 1, style: 2, title: `TP ${fmt(Math.abs(target - price), this.digits)}` });
         }
       } else {
         this.signals.filter((s) => s.status === "open" && s.symbol === ($("chartSymbol").textContent || s.symbol)).forEach((s) => {
@@ -1621,9 +1676,15 @@
         if (!s) return false;
         const [kind, ticket, field] = key.split(":");
         if (kind !== s.kind || +ticket !== s.ticket) return false;
-        return field !== "entry" || kind === "ord";
+        // A position's entry line is not moved: pulling it down/up sets its SL or TP (by side).
+        return field !== "entry" || kind === "ord" || kind === "pos";
       };
-      const lock = (on) => this.chart.applyOptions({ handleScroll: !on, handleScale: !on });
+      // While dragging, the price scale holds still so the line stays under the finger.
+      const lock = (on) => {
+        this.chart.applyOptions({ handleScroll: !on, handleScale: !on });
+        const ps = this.chart.priceScale("right");
+        if (on) { this.scaleWasAuto = ps.options().autoScale; ps.applyOptions({ autoScale: false }); } else if (this.scaleWasAuto) ps.applyOptions({ autoScale: true });
+      };
       let down = null, longPress = null;
       wrap.addEventListener("pointerdown", (e) => {
         this.closeMenu();
@@ -1647,7 +1708,7 @@
         }
         const w = hit(y, draggable);
         if (!w) return;
-        this.drag = { key: w.key, price: w.price, start: w.price };
+        this.drag = { key: w.key, price: w.price, start: w.price, base: w.key, pull: /^pos:\d+:entry$/.test(w.key) };
         lock(true);
         e.stopPropagation();
       }, true);
@@ -1668,10 +1729,12 @@
         if (!this.drag) return;
         const price = this.series.coordinateToPrice(rel(e).y);
         if (price == null) return;
-        this.drag.price = +price.toFixed(this.digits);
+        let p = +price.toFixed(this.digits);
+        if (this.drag.pull) { this.pullTo(p); return; }
+        if (this.drag.key.startsWith("draft:")) p = this.writeDraft(this.drag.key, p);
+        this.drag.price = p;
         const line = this.lines.get(this.drag.key);
-        if (line) line.applyOptions({ price: this.drag.price, title: this.dragTitle(this.drag) });
-        if (this.drag.key.startsWith("draft:")) this.writeDraft(this.drag.key, this.drag.price);
+        if (line) line.applyOptions({ price: p, title: this.dragTitle(this.drag) });
       });
       window.addEventListener("pointerup", (e) => {
         clearTimeout(longPress);
@@ -1684,7 +1747,14 @@
         }
         if (d) {
           this.drag = null; lock(false);
-          if (Math.abs(d.price - d.start) > 0) this.commitDrag(d); else this.syncLines();
+          const untouched = d.key === d.base ? Math.abs(d.price - d.start) === 0 : d.start != null && Math.abs(d.price - d.start) === 0;
+          if (d.pull && d.key === d.base) {
+            // Only a tap on the entry line: pick the next trade at that price.
+            this.syncLines();
+            if (tap && e.target && wrap.contains(e.target)) { const { x, y } = rel(e); this.tapChart(y, x); }
+            return;
+          }
+          if (untouched) this.syncLines(); else this.commitDrag(d);
           return;
         }
         if (tap && e.target && wrap.contains(e.target)) { const { x, y } = rel(e); this.tapChart(y, x); }
@@ -1725,10 +1795,39 @@
       return `${name} ${fmt(d.price, this.digits)}`;
     },
 
+    /** Moves a draft line; SL/TP stay on the order's side. Returns the price used. */
     writeDraft(key, price) {
-      const id = { "draft:entry": "pPrice", "draft:stop": "pStop", "draft:target": "pTarget" }[key];
-      $(id).value = fmt(price, this.digits);
+      const entry = num($("pPrice").value);
+      const tick = Math.pow(10, -this.digits);
+      if (key === "draft:entry") {
+        $("pPrice").value = fmt(price, this.digits);
+        this.placeDraftStops();
+      } else if (entry != null) {
+        const long = this.draftSide(entry) === "long";
+        const below = (key === "draft:stop") === long;
+        price = below ? Math.min(price, entry - tick) : Math.max(price, entry + tick);
+        $(key === "draft:stop" ? "pStop" : "pTarget").value = fmt(price, this.digits);
+        this.readDraftDist();
+      }
       this.updatePendingLabels();
+      this.syncLines();
+      return price;
+    },
+
+    /** Pulling a position's entry line: below it (a buy) sets the SL, above it the TP; a sell the other way. */
+    pullTo(price) {
+      const d = this.drag;
+      const ticket = +d.base.split(":")[1];
+      const p = this.positions.find((x) => x.ticket === ticket);
+      if (!p) return;
+      const long = p.side === "long";
+      const field = (long ? price < p.entry : price > p.entry) ? "stop" : "target";
+      const key = `pos:${ticket}:${field}`;
+      if (d.key !== key) { d.key = key; d.start = p[field] || null; this.syncLines(); }
+      d.price = price;
+      const opts = { price, color: field === "stop" ? "#f0455a" : "#14b88a", lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: this.dragTitle(d) };
+      const line = this.lines.get(key);
+      if (line) line.applyOptions(opts); else this.lines.set(key, this.series.createPriceLine(opts));
     },
 
     async commitDrag(d) {
@@ -2447,10 +2546,19 @@
         timeScale: { borderColor: light ? "#d6dae1" : "#222c3d", secondsVisible: st.seconds },
         crosshair: { mode: st.crosshairMagnet ? 1 : 0 },
       });
-      this.series.applyOptions({
+      const candles = {
         upColor: st.up, downColor: st.down, wickUpColor: st.wickUp, wickDownColor: st.wickDown,
         borderVisible: st.border, borderUpColor: st.borderUp, borderDownColor: st.borderDown,
-      });
+      };
+      this.series.applyOptions(candles);
+      if (this.chart2) {
+        this.chart2.applyOptions({
+          layout: { background: { color: bg }, textColor: light ? "#4b5563" : "#8b95a7" },
+          grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
+          rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" }, timeScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
+        });
+        this.series2.applyOptions(candles);
+      }
     },
 
     /* ----- favourite drawing tools: a floating bar on the chart ----- */
@@ -2501,7 +2609,160 @@
       try {
         this.ict = window.ICT.compute(bars, TF_SECONDS[this.interval], this.ictCfg, showInd);
       } catch { this.ict = null; }
+      if (this.layout !== "1" && this.series2) this.showCmp(false); else this.computeSMT();
       this.redraw();
+    },
+
+    /** "mm:ss" (or "h:mm:ss") until the current bar closes. */
+    countdownText() {
+      const b = this.bars[this.bars.length - 1];
+      if (!b) return "";
+      const left = Math.max(0, Math.round(b.time + TF_SECONDS[this.interval] - Date.now() / 1000));
+      const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), sec = left % 60;
+      const two = (v) => String(v).padStart(2, "0");
+      return h ? `${h}:${two(m)}:${two(sec)}` : `${two(m)}:${two(sec)}`;
+    },
+
+    /* ----- layout: one chart, or two side by side / stacked with SMT ----- */
+
+    layoutMenu(button) {
+      const r = button.getBoundingClientRect();
+      const items = [["1", "▭ 1 biểu đồ"], ["h", "◫ 2 biểu đồ ngang"], ["v", "⊟ 2 biểu đồ dọc"]].map(([k, n]) => [k, (this.layout === k ? "✓ " : "　") + n]);
+      items.push(["smt", (this.smtOn ? "✓ " : "　") + "SMT (so đỉnh/đáy với mã thứ 2)"]);
+      if (this.owner) items.push(["cmp", `　Mã so sánh: ${this.cmpSymbol()}…`]);
+      const menu = $("ctxMenu");
+      menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
+      menu.hidden = false;
+      menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + "px";
+      menu.style.top = r.bottom + 6 + "px";
+      menu.querySelectorAll("button").forEach((b) => (b.onclick = () => {
+        this.closeMenu();
+        const k = b.dataset.k;
+        if (k === "smt") { this.smtOn = !this.smtOn; store.set("aurum.smt", this.smtOn ? "1" : "0"); this.computeSMT(); return; }
+        if (k === "cmp") { this.symbolSheet((sym) => { store.set("aurum.cmpSym", sym); this.loadCmp(); }); return; }
+        this.setLayout(k);
+      }));
+    },
+
+    setLayout(mode) {
+      this.layout = mode;
+      store.set("aurum.layout", mode);
+      $("charts").className = "charts" + (mode === "h" ? " row" : mode === "v" ? " col" : "");
+      $("chartWrap2").hidden = mode === "1";
+      $("layoutBtn").classList.toggle("on", mode !== "1");
+      if (mode === "1") { clearInterval(this.cmpTimer); this.cmpTimer = null; this.cmpBars = []; this.computeSMT(); return; }
+      this.ensureChart2();
+      this.loadCmp();
+    },
+
+    /** The second chart's symbol: silver for gold (the SMT pair), or the one picked. */
+    cmpSymbol() {
+      if (!this.owner) return "XAG";
+      const sym = this.symbol || "XAUUSD";
+      return store.get("aurum.cmpSym") || (/XAU/i.test(sym) ? sym.replace(/XAU/i, "XAG") : /BTC/i.test(sym) ? sym.replace(/BTC/i, "ETH") : sym);
+    },
+
+    ensureChart2() {
+      if (this.chart2) return;
+      const term = this;
+      this.chart2 = LightweightCharts.createChart($("chart2"), {
+        autoSize: true,
+        layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "Be Vietnam Pro, system-ui" },
+        rightPriceScale: { borderColor: "#222c3d" },
+        timeScale: { borderColor: "#222c3d", timeVisible: true, secondsVisible: false, rightOffset: 8 },
+        localization: { timeFormatter: (t) => new Date(t * 1000).toLocaleString("vi-VN", { timeZone: "UTC", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) },
+        crosshair: { mode: 0 },
+      });
+      this.series2 = this.chart2.addCandlestickSeries({ borderVisible: false });
+      // SMT on the second chart too, at that market's highs and lows.
+      this.series2.attachPrimitive({
+        attached(p) { term.request2 = p.requestUpdate; }, detached() {}, updateAllViews() {},
+        paneViews() {
+          return [{ zOrder: () => "top", renderer: () => ({ draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+            if (!term.smt || !term.cmpView) return;
+            const index = new Map(term.cmpView.map((b, i) => [b.time, i]));
+            const list = term.smt.map((d) => {
+              const i1 = index.get(d.t1), i2 = index.get(d.t2);
+              if (i1 == null || i2 == null) return null;
+              const a = term.cmpView[i1], b = term.cmpView[i2];
+              return { bull: d.bull, start: i1, end: i2, p1: d.bull ? a.low : a.high, p2: d.bull ? b.low : b.high };
+            }).filter(Boolean);
+            const ts = term.chart2.timeScale();
+            window.ICT.drawSMT(context, list, (i) => ts.logicalToCoordinate(i), (v) => term.series2.priceToCoordinate(v), mediaSize.width);
+          }) }) }];
+        },
+      });
+      // The second chart follows the first one's time range.
+      this.chart.timeScale().subscribeVisibleTimeRangeChange((r) => {
+        if (!r || !this.chart2 || this.layout === "1") return;
+        try { this.chart2.timeScale().setVisibleRange(r); } catch { /* not loaded yet */ }
+      });
+      this.applyChartStyle();
+    },
+
+    cmpPath(count) {
+      return this.owner
+        ? `/mt5/candles?symbol=${encodeURIComponent(this.cmpSymbol())}&interval=${this.interval}&count=${count}`
+        : `/member/candles?symbol=compare&interval=${this.interval}&count=${count}`;
+    },
+
+    async loadCmp() {
+      if (this.layout === "1" || !this.chart2) return;
+      clearInterval(this.cmpTimer);
+      const token = (this.cmpToken = (this.cmpToken || 0) + 1);
+      let name = this.cmpSymbol(), digits = 2;
+      try {
+        if (this.source !== "exness") throw new Error("binance");
+        const data = await this.call(this.cmpPath(800));
+        this.cmpBars = this.toBars(data.candles || []);
+        if (this.cmpBars.length < 5) throw new Error("no bars");
+        name = data.symbol || name; digits = data.digits != null ? data.digits : 2;
+        this.cmpTimer = setInterval(() => this.pollCmp(token), 2000);
+      } catch {
+        // Binance silver as the stand-in (member servers before 2.6, or no MT5).
+        try {
+          const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=XAGUSDT&interval=${this.interval}&limit=800`);
+          this.cmpBars = (await res.json()).map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }));
+          name = "XAGUSDT"; digits = 3;
+        } catch { this.cmpBars = []; }
+      }
+      if (token !== this.cmpToken) return;
+      $("chartSymbol2").textContent = name;
+      this.series2.applyOptions({ priceFormat: { type: "price", precision: digits, minMove: Math.pow(10, -digits) } });
+      this.showCmp(true);
+    },
+
+    async pollCmp(token) {
+      try {
+        const fresh = this.toBars((await this.call(this.cmpPath(3))).candles || []);
+        if (token !== this.cmpToken) return;
+        fresh.forEach((b) => {
+          const last = this.cmpBars[this.cmpBars.length - 1];
+          if (!last || b.time > last.time) this.cmpBars.push(b); else if (b.time === last.time) this.cmpBars[this.cmpBars.length - 1] = b;
+        });
+        this.showCmp(false);
+      } catch { /* keep */ }
+    },
+
+    /** The second chart up to the replay moment when replaying. */
+    showCmp(full) {
+      if (!this.series2) return;
+      const until = this.replay ? this.bars[this.replay.idx].time + TF_SECONDS[this.interval] - 1 : Infinity;
+      const view = this.cmpBars.filter((b) => b.time <= until);
+      const changed = full || !this.cmpView || view.length !== this.cmpView.length || this.replay;
+      this.cmpView = view;
+      if (changed) this.series2.setData(view.map(shown)); else if (view.length) this.series2.update(shown(view[view.length - 1]));
+      const last = view[view.length - 1];
+      $("chartPrice2").textContent = last ? last.close.toFixed(3).replace(/0+$/, "").replace(/\.$/, "") : "";
+      if (full) { try { const r = this.chart.timeScale().getVisibleRange(); if (r) this.chart2.timeScale().setVisibleRange(r); } catch { /* later */ } }
+      this.computeSMT();
+    },
+
+    computeSMT() {
+      const on = this.layout !== "1" && this.smtOn && this.cmpBars && this.cmpBars.length && window.ICT;
+      this.smt = on ? window.ICT.smt(this.viewBars(), this.cmpView || this.cmpBars, { swing: 3, lookback: 60, count: 10 }) : null;
+      if (this.requestICT) this.requestICT();
+      if (this.request2) this.request2();
     },
 
     /** The indicator and drawing layers paint inside the chart's own frame; this only asks for one. */
