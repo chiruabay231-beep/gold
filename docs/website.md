@@ -27,7 +27,7 @@ qua ntfy.sh (giống app iPhone).
 Máy chủ VPS cần bản 2.4+ (tin tức đi qua `/news`, `/member/news` vì trình duyệt không đọc
 thẳng được lịch Forex Factory). Không có MT5 thì biểu đồ dùng Binance XAUUSDT.
 
-Khung **5s / 10s / 15s**: MT5 không có nến dưới 1 phút nên nến giây dựng từ Binance ngay trên
+Khung **5s / 10s / 15s / 30s**: MT5 không có nến dưới 1 phút nên nến giây dựng từ Binance ngay trên
 trình duyệt — vàng/bạc từ lệnh khớp hợp đồng XAUUSDT/XAGUSDT (futures), crypto từ nến 1 giây spot
 (BTCUSDT, ETHUSDT…), kéo sang trái để tải thêm, chạy trực tiếp qua websocket. Nến được dời theo
 chênh lệch với giá Exness lúc mở (ghi cạnh tên mã) để đường lệnh/SL/TP và bản vẽ khớp; nút MUA/BÁN
@@ -41,3 +41,13 @@ vẫn đặt vào MT5 theo giá Exness. Mã khác (ngoại hối, chỉ số) kh
 4. Production branch: `claude/ios-backtest-custom-indicators-jptyoz`.
 5. Framework preset: **None**, Build command: để trống, Build output directory: `web`.
 6. Save and Deploy. Mỗi lần đẩy code lên nhánh này, trang tự cập nhật.
+
+## Thông báo & giọng nói (nút 🔔 trên thanh trên)
+
+Giống app: đọc to khi lệnh khớp ("Order filled"), chạm TP ("Target fill"), chạm SL ("Stop loss fill"),
+đóng tay; thành viên nghe khi có tín hiệu MUA/BÁN và khi tín hiệu đóng. Chọn giọng Anh/Việt, tự sửa
+câu đọc, đọc thêm mã/giá/lãi lỗ, hiện thông báo trên trang hoặc thông báo trình duyệt khi ở tab khác.
+Chỉ báo khi trang đang mở. Điện thoại cần chạm vào trang một lần thì trình duyệt mới cho đọc.
+
+Ô "N lệnh · lot · lãi/lỗ" kéo được tới bất kỳ đâu trên trang (giữ vị trí, hiện ở mọi tab);
+bấm đúp vào ⋮⋮ để trả về góc biểu đồ.

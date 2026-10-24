@@ -553,3 +553,36 @@ button.busy { opacity: .55; }
 .dbar.down { background: var(--down); }
 .stat b small { font-size: 12px; font-weight: 500; }
 @media (max-width: 600px) { .day-row { grid-template-columns: 74px 1fr 76px; } .day-row .barwrap { display: none; } }
+
+/* who is signed in, in the top bar next to the theme button */
+.nav-who { display: none; min-width: 0; max-width: 260px; text-align: right; line-height: 1.25; }
+body.in-member .nav-who { display: block; }
+.nav-who .who { font-size: 14px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nav-who .small { font-size: 11.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nav-alert { display: none; }
+body.in-member .nav-alert { display: inline-block; }
+body.in-member .nav-logout { margin-left: 14px; }
+@media (max-width: 900px) { body.in-member .nav .nav-who { margin-left: auto; } body.in-member .nav .theme-btn { margin-left: 0; } }
+@media (max-width: 600px) {
+  .nav-who { max-width: 96px; }
+  .nav-who .who { font-size: 12px; }
+  .nav-who .small { font-size: 10px; }
+  body.in-member .nav-logout { margin-left: 4px; }
+}
+
+/* the open-positions pill, dragged anywhere on the page */
+.pill-pos { touch-action: none; cursor: grab; }
+.pill-pos.dragging { cursor: grabbing; opacity: .9; }
+.pill-pos.floating { position: fixed; bottom: auto; z-index: 40; box-shadow: 0 6px 24px rgba(0, 0, 0, .35); }
+.pill-pos .grip { color: var(--muted); font-size: 11px; letter-spacing: -2px; margin-right: -2px; }
+.fr.wrap { flex-wrap: wrap; }
+body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); padding-right: max(16px, calc((100% - 1680px) / 2)); gap: 14px; }
+.brand span { white-space: nowrap; }
+@media (max-width: 600px) {
+  /* phone: account + buttons on the first row, the tabs on their own row under it */
+  body.in-member .nav { flex-wrap: wrap; row-gap: 8px; padding-top: 8px; padding-bottom: 8px; }
+  body.in-member .nav .tabs { order: 5; flex: 1 1 100%; }
+  body.in-member .nav .nav-who { max-width: none; flex: 1 1 0; min-width: 0; margin-left: 0; text-align: left; }
+  .nav-who .who { font-size: 13px; }
+  .nav-who .small { font-size: 11px; }
+}

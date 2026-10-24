@@ -221,8 +221,8 @@
     return Object.fromEntries(IND.map(([k]) => [k, saved[k] !== false]));
   })();
 
-  const TFS = ["5s", "10s", "15s", "1m", "5m", "15m", "30m", "1h", "4h", "1d"];
-  const TF_SECONDS = { "5s": 5, "10s": 10, "15s": 15, "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
+  const TFS = ["5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "4h", "1d"];
+  const TF_SECONDS = { "5s": 5, "10s": 10, "15s": 15, "30s": 30, "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
   const isSecTF = (tf) => TF_SECONDS[tf] < 60;
 
   /* ----- second bars (5s / 10s / 15s) from Binance: MT5 has nothing under one minute ----- */
@@ -406,6 +406,43 @@
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
   }
 
+  /* ---------------- voice alerts, as in the app: TP / SL hit and fills read out ---------------- */
+
+  const VOICE_DEFAULTS = { enabled: true, lang: "en-US", target: "", stop: "", entry: "", buy: "", sell: "", details: false, popup: true, notify: false };
+  const VOICE_PHRASES = { target: "Target fill", stop: "Stop loss fill", entry: "Order filled", buy: "Buy signal", sell: "Sell signal" };
+  const Voice = {
+    cfg: (() => { try { return Object.assign({}, VOICE_DEFAULTS, JSON.parse(store.get("aurum.voice") || "{}")); } catch { return Object.assign({}, VOICE_DEFAULTS); } })(),
+    save() { store.set("aurum.voice", JSON.stringify(this.cfg)); },
+    vi() { return this.cfg.lang.startsWith("vi"); },
+    phrase(key) { return String(this.cfg[key] || "").trim() || VOICE_PHRASES[key]; },
+    speak(text, force) {
+      if ((!force && !this.cfg.enabled) || !text || !window.speechSynthesis) return;
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = this.cfg.lang;
+      const voice = speechSynthesis.getVoices().find((v) => v.lang.replace("_", "-").toLowerCase().startsWith(this.cfg.lang.toLowerCase().slice(0, 2)));
+      if (voice) u.voice = voice;
+      u.rate = 1; u.volume = 1;
+      speechSynthesis.speak(u);
+    },
+    /** Phones only let a page speak after a tap: the first tap anywhere says nothing, out loud. */
+    unlock() {
+      if (this.unlocked || !window.speechSynthesis) return;
+      this.unlocked = true;
+      const u = new SpeechSynthesisUtterance(" ");
+      u.volume = 0;
+      speechSynthesis.speak(u);
+    },
+    /** Spoken, plus a toast and (with the tab in the background) a browser notification. */
+    alert(spoken, title, body, good) {
+      this.speak(spoken);
+      if (this.cfg.popup) toast(`${title}: ${body}`, good === false);
+      if (this.cfg.notify && document.hidden && window.Notification && Notification.permission === "granted") {
+        try { new Notification(title, { body, icon: "favicon.svg" }); } catch { /* not allowed here */ }
+      }
+    },
+  };
+  document.addEventListener("pointerdown", () => Voice.unlock(), { once: true, capture: true });
+
   /* ---------------- chart look and light / dark theme ---------------- */
 
   function defaultChartStyle() {
@@ -523,6 +560,8 @@
     openLogin(message) {
       this.stop();
       $("logoutBtn").hidden = true;
+      $("posPill").hidden = true;
+      this.known = null; this.knownSignals = null;
       $("tabs").innerHTML = "";
       $("loginView").hidden = false;
       $("dashView").hidden = true;
@@ -702,6 +741,7 @@
       this.account = t;
       this.positions = t.positions || [];
       this.orders = t.orders || [];
+      this.watchTrades(t);
       if (this.selected && !this.findSelected()) this.selected = null;
       $("whoName").textContent = "Chủ máy chủ";
       $("whoRole").innerHTML = t.login
@@ -723,9 +763,64 @@
       if (!this.owner || !mine.length || this.replay) { pill.hidden = true; return; }
       const lots = mine.reduce((a, p) => a + p.lots, 0);
       pill.hidden = false;
-      pill.innerHTML = `<span class="go">${mine.length} lệnh · ${fmt(lots, 2)} lot · <b class="${floating >= 0 ? "pos" : "neg"}">${signed(floating)}</b></span><button type="button" class="x" title="Đóng tất cả">✕</button>`;
-      pill.querySelector(".go").onclick = () => this.setTab("trade");
+      this.placePill();
+      pill.innerHTML = `<span class="grip" title="Kéo để di chuyển · bấm đúp để trả về biểu đồ">⋮⋮</span><span class="go">${mine.length} lệnh · ${fmt(lots, 2)} lot · <b class="${floating >= 0 ? "pos" : "neg"}">${signed(floating)}</b></span><button type="button" class="x" title="Đóng tất cả">✕</button>`;
+      pill.querySelector(".go").onclick = () => { if (!this.pillMoved) this.setTab("trade"); };
       pill.querySelector(".x").onclick = (e) => this.closeAll(e.currentTarget);
+    },
+
+    /** The pill floats where it was dragged to (anywhere on the page), or sits on the chart. */
+    placePill() {
+      const pill = $("posPill");
+      let pos = null;
+      try { pos = JSON.parse(store.get("aurum.pillPos") || "null"); } catch { pos = null; }
+      if (!pos) {
+        if (pill.parentElement !== $("chartWrap")) $("chartWrap").appendChild(pill);
+        pill.classList.remove("floating"); pill.style.left = pill.style.top = "";
+        return;
+      }
+      if (pill.parentElement !== document.body) document.body.appendChild(pill);
+      pill.classList.add("floating");
+      const w = pill.offsetWidth || 200, h = pill.offsetHeight || 34;
+      pill.style.left = Math.max(4, Math.min(window.innerWidth - w - 4, pos.x * window.innerWidth)) + "px";
+      pill.style.top = Math.max(4, Math.min(window.innerHeight - h - 4, pos.y * window.innerHeight)) + "px";
+    },
+
+    bindPill() {
+      const pill = $("posPill");
+      pill.addEventListener("pointerdown", (e) => {
+        if (e.target.closest(".x") || e.button > 0) return;
+        const r = pill.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top, x0 = e.clientX, y0 = e.clientY;
+        let moving = false;
+        this.pillMoved = false;
+        const move = (ev) => {
+          if (!moving && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return;
+          if (!moving) {
+            moving = true; this.pillMoved = true;
+            document.body.appendChild(pill);
+            pill.classList.add("floating", "dragging");
+          }
+          ev.preventDefault();
+          pill.style.left = Math.max(4, Math.min(window.innerWidth - r.width - 4, ev.clientX - dx)) + "px";
+          pill.style.top = Math.max(4, Math.min(window.innerHeight - r.height - 4, ev.clientY - dy)) + "px";
+        };
+        const up = () => {
+          window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up);
+          if (!moving) return;
+          pill.classList.remove("dragging");
+          const b = pill.getBoundingClientRect();
+          store.set("aurum.pillPos", JSON.stringify({ x: b.left / window.innerWidth, y: b.top / window.innerHeight }));
+          // The click that ends a drag does not open the Lệnh tab.
+          setTimeout(() => (this.pillMoved = false), 0);
+        };
+        window.addEventListener("pointermove", move, { passive: false }); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
+      });
+      pill.addEventListener("dblclick", (e) => {
+        if (e.target.closest(".x")) return;
+        store.set("aurum.pillPos", null);
+        this.placePill();
+      });
+      window.addEventListener("resize", () => { if (pill.classList.contains("floating")) this.placePill(); });
     },
 
     async closeAll(button) {
@@ -948,7 +1043,90 @@
     async refreshSignals() {
       const list = await this.call("/member/signals?limit=80");
       this.signals = list.signals || [];
+      this.watchSignals(this.signals);
       if (this.tab === "signals") this.renderSignals();
+    },
+
+    /* ----- voice alerts ----- */
+
+    /** New fills and closes since the last look (the first look only learns what is there, like the app). */
+    watchTrades(t) {
+      const deals = t.deals || [], positions = t.positions || [];
+      const known = this.known;
+      this.known = { deals: new Set(deals.map((d) => d.ticket)), positions: new Set(positions.map((p) => p.ticket)) };
+      if (!known || known.login !== t.login) { this.known.login = t.login; return; }
+      this.known.login = t.login;
+      const vi = Voice.vi(), d2 = (sym) => this.digitsFor(sym);
+      positions.filter((p) => !known.positions.has(p.ticket)).forEach((p) => {
+        let text = Voice.phrase("entry");
+        if (Voice.cfg.details) text += `, ${p.symbol.replace(/m$/, "")} ${fmt(p.entry, d2(p.symbol))}`;
+        Voice.alert(text, "Lệnh đã khớp", `${sideName(p.side)} ${p.lots} lot ${p.symbol} @ ${fmt(p.entry, d2(p.symbol))}`, true);
+      });
+      deals.filter((d) => !known.deals.has(d.ticket)).forEach((d) => {
+        const manual = d.reason !== "target" && d.reason !== "stop";
+        let text = manual ? (vi ? "Đã đóng lệnh" : "Position closed") : Voice.phrase(d.reason);
+        if (Voice.cfg.details) text += vi ? `, ${d.profit >= 0 ? "lời" : "lỗ"} ${Math.round(Math.abs(d.profit))} đô` : `, ${d.profit >= 0 ? "plus" : "minus"} ${Math.round(Math.abs(d.profit))} dollars`;
+        const title = manual ? "Đã đóng lệnh" : d.reason === "target" ? "Chạm TP (Target fill)" : "Chạm SL (Stop loss fill)";
+        Voice.alert(text, title, `${d.symbol} ${signed(d.profit)} ${t.currency || "USD"}`, d.profit >= 0);
+      });
+    },
+
+    /** Members: a new signal, and a signal closing in profit (TP) or at a loss (SL). */
+    watchSignals(list) {
+      const before = this.knownSignals;
+      this.knownSignals = new Map(list.map((x) => [x.id, x.status]));
+      if (!before) return;
+      const vi = Voice.vi();
+      list.forEach((x) => {
+        const was = before.get(x.id);
+        if (was == null && x.status === "open") {
+          Voice.alert(Voice.phrase(x.side === "long" ? "buy" : "sell"), "Tín hiệu mới", `${x.side === "long" ? "MUA" : "BÁN"} ${x.symbol} @ ${fmt(x.entry)}`, true);
+        } else if (was === "open" && x.status !== "open") {
+          const win = (x.result || 0) > 0;
+          let text = Voice.phrase(win ? "target" : "stop");
+          if (Voice.cfg.details && x.result != null) text += vi ? `, ${win ? "lời" : "lỗ"} ${fmt(Math.abs(x.result))} giá` : `, ${win ? "plus" : "minus"} ${fmt(Math.abs(x.result))} points`;
+          Voice.alert(text, win ? "Tín hiệu chạm TP" : "Tín hiệu chạm SL", `${x.symbol} ${x.result != null ? signed(x.result) : ""}`, win);
+        }
+      });
+    },
+
+    voiceSheet() {
+      const c = Voice.cfg;
+      const phraseRow = (key, label) => `<label class="fr"><span class="grow">${label}</span><input class="nm" data-p="${key}" data-t="str" value="${esc(c[key] || "")}" placeholder="${VOICE_PHRASES[key]}"></label>`;
+      const render = () => {
+        const k = fieldKit(c);
+        const can = !!window.speechSynthesis;
+        return k.head("Giọng nói") + (can ? "" : k.note("Trình duyệt này không đọc được giọng nói."))
+          + k.tog("enabled", "Đọc cảnh báo bằng giọng nói")
+          + k.sel("lang", "Giọng", [["en-US", "Tiếng Anh"], ["vi-VN", "Tiếng Việt"]])
+          + k.head("Câu đọc khi")
+          + phraseRow("target", "Chạm TP") + phraseRow("stop", "Chạm SL") + phraseRow("entry", "Lệnh khớp")
+          + (this.owner ? "" : phraseRow("buy", "Tín hiệu MUA") + phraseRow("sell", "Tín hiệu BÁN"))
+          + k.tog("details", "Đọc thêm mã, giá, số tiền lãi/lỗ")
+          + k.head("Hiện thông báo")
+          + k.tog("popup", "Hiện thông báo trên trang")
+          + `<label class="fr"><input type="checkbox" data-p="notify" data-t="bool" data-ask ${c.notify ? "checked" : ""}><span>Thông báo của trình duyệt khi đang mở tab khác</span></label>`
+          + k.note(this.owner
+            ? "Áp dụng cho tài khoản MT5 đang đăng nhập trên máy chủ: lệnh khớp (kể cả lệnh chờ), chạm TP, chạm SL, đóng tay. Chỉ báo khi trang đang mở; lệnh cũ lúc mở trang không đọc lại."
+            : "Đọc khi có tín hiệu mới và khi tín hiệu đóng (lời = TP, lỗ = SL). Chỉ báo khi trang đang mở.")
+          + k.head("Nghe thử")
+          + `<div class="fr wrap">${["target", "stop", "entry"].map((key) => `<button type="button" class="btn btn-ghost btn-small" data-say="${key}">▶ ${esc(Voice.phrase(key))}</button>`).join("")}</div>`;
+      };
+      this.openPanel("Thông báo & giọng nói", [["voice", "Cài đặt"]], render, {
+        root: c,
+        onChange: () => Voice.save(),
+        onReset: (redraw) => { Object.assign(c, VOICE_DEFAULTS); Voice.save(); redraw(); },
+        afterDraw: (panel) => {
+          panel.querySelectorAll("[data-say]").forEach((b) => (b.onclick = () => Voice.speak(Voice.phrase(b.dataset.say), true)));
+          const ask = panel.querySelector("[data-ask]");
+          if (ask) ask.addEventListener("change", async () => {
+            if (!ask.checked || !window.Notification) return;
+            const r = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+            if (r !== "granted") { c.notify = false; Voice.save(); ask.checked = false; toast("Trình duyệt chưa cho phép thông báo", true); }
+          });
+          panel.querySelector('[data-p="lang"]').addEventListener("change", () => this.panelDraw && this.panelDraw());
+        },
+      });
     },
 
     renderSignals() {
@@ -1781,7 +1959,7 @@
         this.chartStyle = loadChartStyle();
         this.applyChartStyle();
         this.layout = ["1", "h", "v"].includes(store.get("aurum.layout")) ? store.get("aurum.layout") : "1";
-        $("tfButtons").innerHTML = TFS.map((i) => `<button type="button" data-tf="${i}"${i === "15s" ? ' class="sec-end" title="Nến giây lấy từ Binance"' : isSecTF(i) ? ' title="Nến giây lấy từ Binance"' : ""}>${i}</button>`).join("");
+        $("tfButtons").innerHTML = TFS.map((i) => `<button type="button" data-tf="${i}"${i === "30s" ? ' class="sec-end" title="Nến giây lấy từ Binance"' : isSecTF(i) ? ' title="Nến giây lấy từ Binance"' : ""}>${i}</button>`).join("");
         $("tfButtons").querySelectorAll("button").forEach((b) => (b.onclick = () => {
           this.interval = b.dataset.tf; store.set("aurum.tf", this.interval); this.loadCandles();
         }));
@@ -3850,6 +4028,8 @@
   $("loginForm").addEventListener("submit", (e) => { e.preventDefault(); Member.login(); });
   $("modeBtn").addEventListener("click", () => Member.setLoginMode(Member.loginMode === "owner" ? "member" : "owner"));
   $("logoutBtn").addEventListener("click", () => Member.logout());
+  $("alertBtn").addEventListener("click", () => Member.voiceSheet());
+  Member.bindPill();
   $("addMemberBtn").addEventListener("click", () => Member.memberSheet(null));
   route();
 })();

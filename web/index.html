@@ -24,6 +24,11 @@
       <a href="#faq">Hỏi đáp</a>
     </nav>
     <nav class="tabs" id="tabs"></nav>
+    <div class="nav-who" id="navWho">
+      <div class="who" id="whoName">—</div>
+      <div class="muted small" id="whoRole">—</div>
+    </div>
+    <button class="theme-btn nav-alert" id="alertBtn" type="button" title="Thông báo &amp; giọng nói">🔔</button>
     <button class="theme-btn" id="themeBtn" type="button" title="Sáng / tối">☀︎</button>
     <button class="btn btn-ghost btn-small nav-logout" id="logoutBtn" type="button" hidden>Thoát</button>
     <a class="btn btn-gold btn-small nav-login" href="#member">Đăng nhập thành viên</a>
@@ -136,12 +141,6 @@
     </section>
 
     <section class="dash" id="dashView" hidden>
-      <div class="dash-head">
-        <div>
-          <div class="who" id="whoName">—</div>
-          <div class="muted small" id="whoRole">—</div>
-        </div>
-      </div>
       <p class="warn" id="dashError" hidden></p>
 
       <!-- Chart -->
