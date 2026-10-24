@@ -3446,5 +3446,6 @@
   $("loginForm").addEventListener("submit", (e) => { e.preventDefault(); Member.login(); });
   $("modeBtn").addEventListener("click", () => Member.setLoginMode(Member.loginMode === "owner" ? "member" : "owner"));
   $("logoutBtn").addEventListener("click", () => Member.logout());
+  $("addMemberBtn").addEventListener("click", () => Member.memberSheet(null));
   route();
 })();
