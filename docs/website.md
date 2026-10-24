@@ -5,8 +5,13 @@ Thư mục `web/` là trang tĩnh, không cần build:
 - `index.html` — trang giới thiệu + web app thành viên (`#member`).
 - `site.config.js` — liên kết liên hệ, tên và giá các gói: sửa ở đây.
 - `assets/app.js`, `assets/style.css` — giao diện và logic.
-- `assets/ict.js` — chỉ báo ICT Killzones + Pivots, FVG/VI, MSS, dòng tiền cá mập
-  (cùng quy tắc với BacktestKit trong app).
+- `assets/ict.js` — chỉ báo ICT Killzones + Pivots, FVG/VI, MSS/BOS, quét thanh khoản, dòng tiền
+  cá mập (cùng quy tắc và cài đặt với BacktestKit trong app), vẽ trong khung hình của biểu đồ.
+- `assets/drawings.js` — công cụ vẽ (xu hướng, Fib, mô hình, vị thế, đo giá, khối lượng, hình, chữ).
+
+Trên biểu đồ: nút ƒx (bật/tắt + cài đặt chi tiết), ✎ (công cụ vẽ), ⏮ (replay: chạm nến bắt đầu,
+▶/⏭/tốc độ, lệnh BUY/SELL thử, giữ đúng thời điểm khi đổi khung). Chuột phải (giữ lâu trên điện
+thoại) mở menu: Đặt lại biểu đồ, Replay từ nến này, đường ngang, lệnh chờ tại giá, bản vẽ, chỉ báo.
 
 Thành viên chỉ nhập mã mời, chủ chỉ nhập mật khẩu máy chủ: trang tìm địa chỉ máy chủ
 qua ntfy.sh (giống app iPhone).

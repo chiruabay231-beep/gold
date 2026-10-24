@@ -455,7 +455,7 @@
     renderPill(floating) {
       const mine = this.positions;
       const pill = $("posPill");
-      if (!this.owner || !mine.length) { pill.hidden = true; return; }
+      if (!this.owner || !mine.length || this.replay) { pill.hidden = true; return; }
       const lots = mine.reduce((a, p) => a + p.lots, 0);
       pill.hidden = false;
       pill.innerHTML = `<span class="go">${mine.length} lệnh · ${fmt(lots, 2)} lot · <b class="${floating >= 0 ? "pos" : "neg"}">${signed(floating)}</b></span><button type="button" class="x" title="Đóng tất cả">✕</button>`;
@@ -602,6 +602,7 @@
     lots() { return Math.max(0.01, Math.round((num($("lotInput").value) || 0.01) * 100) / 100); },
 
     async marketOrder(side, button) {
+      if (this.replay) return this.replayOrder(side);
       if (!this.symbol) return;
       const body = { symbol: this.symbol, side, type: "market", lots: this.lots() };
       if (this.draft) { body.stop = num($("pStop").value); body.target = num($("pTarget").value); }
@@ -622,6 +623,7 @@
     },
 
     async pendingOrder(side, button) {
+      if (this.replay) return toast("Replay chỉ có lệnh thị trường (BUY/SELL trên thanh replay)", true);
       const price = num($("pPrice").value);
       if (!price) return toast("Nhập giá chờ hoặc kéo đường tím", true);
       const body = { symbol: this.symbol, side, type: "pending", price, lots: this.lots(), stop: num($("pStop").value), target: num($("pTarget").value) };
@@ -1127,16 +1129,37 @@
             return { priceRange: { minValue: Math.min(res.priceRange.minValue, ...keep), maxValue: Math.max(res.priceRange.maxValue, ...keep) }, margins: res.margins };
           },
         });
+        this.ictCfg = (() => { try { return window.ICT.merge(JSON.parse(store.get("aurum.ictcfg") || "null")); } catch { return window.ICT.defaults(); } })();
+        this.magnet = store.get("aurum.magnet") !== "0";
+        const term = this;
+        // ICT layer: painted in the chart's own frame (under the candles), so it never lags a drag.
+        this.series.attachPrimitive({
+          attached(p) { term.requestICT = p.requestUpdate; },
+          detached() {},
+          updateAllViews() {},
+          paneViews() {
+            return [{
+              zOrder: () => "bottom",
+              renderer: () => ({
+                draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+                  if (!term.ict) return;
+                  const ts = term.chart.timeScale();
+                  window.ICT.draw(context, term.ict, term.ictCfg, (i) => ts.logicalToCoordinate(i), (v) => term.series.priceToCoordinate(v), mediaSize.width, mediaSize.height);
+                }),
+              }),
+            }];
+          },
+        });
+        this.drawings = new window.AurumDrawings({
+          chart: this.chart, series: this.series, store,
+          bars: () => this.viewBars(), sec: () => TF_SECONDS[this.interval], digits: () => this.digits,
+          symbol: () => this.symbolKey(), magnet: () => this.magnet, onChange: () => this.renderDrawBar(),
+        });
         $("tfButtons").innerHTML = TFS.map((i) => `<button type="button" data-tf="${i}">${i}</button>`).join("");
         $("tfButtons").querySelectorAll("button").forEach((b) => (b.onclick = () => {
           this.interval = b.dataset.tf; store.set("aurum.tf", this.interval); this.loadCandles();
         }));
-        this.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => {
-          this.redraw();
-          if (r && r.from < 30) this.loadOlder();
-        });
-        this.chart.subscribeCrosshairMove(() => this.redraw());
-        new ResizeObserver(() => this.redraw()).observe($("chartWrap"));
+        this.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => { if (r && r.from < 30) this.loadOlder(); });
         this.bindDrag();
         this.bindTicket();
       }
@@ -1162,6 +1185,8 @@
       $("pBuy").onclick = (e) => this.pendingOrder("long", e.currentTarget);
       $("pSell").onclick = (e) => this.pendingOrder("short", e.currentTarget);
       $("indBtn").onclick = () => this.indicatorSheet();
+      $("drawBtn").onclick = () => this.drawSheet();
+      $("replayBtn").onclick = () => this.startReplayPick();
       $("chartSymbol").onclick = () => this.symbolSheet();
       $("closeAllBtn").onclick = (e) => this.closeAll(e.currentTarget);
     },
@@ -1172,8 +1197,11 @@
       sheet.open(`<h3>Chỉ báo</h3>
         <div class="toggles">${IND.filter(([k]) => (k === "flow" ? flowAllowed : allowed)).map(([k, n]) => `<label class="toggle"><span>${n}</span>
           <span class="switch"><input type="checkbox" data-k="${k}" ${showInd[k] ? "checked" : ""}><span></span></span></label>`).join("")}</div>
-        <p class="muted small">Giờ theo New York như bản TradingView. Killzones chỉ hiện ở khung 30m trở xuống.</p>`, (el) => {
-        el.querySelectorAll("input").forEach((i) => (i.onchange = () => {
+        ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button>' : ""}
+        <p class="muted small">Giờ theo New York như bản TradingView. Chuột phải (hoặc giữ lâu) trên biểu đồ để mở menu.</p>`, (el) => {
+        const more = el.querySelector("#ictMore");
+        if (more) more.onclick = () => { sheet.close(); this.ictSettingsSheet(); };
+        el.querySelectorAll("input[data-k]").forEach((i) => (i.onchange = () => {
           showInd[i.dataset.k] = i.checked;
           store.set("aurum.ind", JSON.stringify(showInd));
           this.computeICT(); this.redraw(); this.updateFlow();
@@ -1233,6 +1261,9 @@
     },
 
     async loadCandles() {
+      // Replay keeps its moment across timeframes: the end of the bar shown last.
+      const replayTime = this.replay ? this.bars[this.replay.idx].time + TF_SECONDS[this.replayInterval || this.interval] - 1 : null;
+      this.replayInterval = this.interval;
       document.querySelectorAll("#tfButtons button").forEach((b) => b.classList.toggle("on", b.dataset.tf === this.interval));
       if (this.socket) { this.socket.close(); this.socket = null; }
       clearInterval(this.pollTimer); this.pollTimer = null;
@@ -1251,10 +1282,19 @@
         $("chartSymbol").textContent = data.symbol || this.symbol || "XAUUSD";
         $("chartSource").textContent = "· giá Exness";
         this.bars = bars;
-        this.series.setData(bars.map(shown));
-        this.chart.timeScale().scrollToRealTime();
+        if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); }
+        if (replayTime != null) {
+          for (let k = 0; k < 6 && this.bars[0].time > replayTime && !this.noOlder; k++) await this.loadOlder(true);
+          let i = this.bars.length - 1;
+          while (i > 0 && this.bars[i].time > replayTime) i--;
+          this.replay.idx = Math.max(1, Math.min(i, this.bars.length - 2));
+          this.applyReplay(true);
+        } else {
+          this.series.setData(bars.map(shown));
+          this.chart.timeScale().scrollToRealTime();
+          this.computeICT();
+        }
         this.setQuote(data);
-        this.computeICT();
         this.pollTimer = setInterval(() => this.pollBars(token), 2000);
       } catch {
         if (token !== this.loadToken) return;
@@ -1277,15 +1317,15 @@
         fresh.forEach((b) => {
           const last = this.bars[this.bars.length - 1];
           if (!last || b.time > last.time) { this.bars.push(b); added = true; } else if (b.time === last.time) this.bars[this.bars.length - 1] = b; else return;
-          this.series.update(shown(b));
+          if (!this.replay) this.series.update(shown(b));
         });
+        if (this.replay) return;
         this.setQuote(data);
         if (added || !this.ictTime || Date.now() - this.ictTime > 4000) this.computeICT();
-        this.redraw();
       } catch { /* keep the chart */ } finally { this.polling = false; }
     },
 
-    async loadOlder() {
+    async loadOlder(quiet) {
       if (this.loadingOlder || this.noOlder || this.source !== "exness" || !this.bars.length) return;
       this.loadingOlder = true;
       const token = this.loadToken;
@@ -1296,10 +1336,11 @@
         if (!older.length) { this.noOlder = true; return; }
         const range = this.chart.timeScale().getVisibleLogicalRange();
         this.bars = older.concat(this.bars);
-        this.series.setData(this.bars.map(shown));
+        if (this.replay) this.replay.idx += older.length;
+        if (quiet) return;
+        this.series.setData(this.viewBars().map(shown));
         if (range) this.chart.timeScale().setVisibleLogicalRange({ from: range.from + older.length, to: range.to + older.length });
         this.computeICT();
-        this.redraw();
       } catch { this.noOlder = true; } finally { this.loadingOlder = false; }
     },
 
@@ -1314,6 +1355,8 @@
         const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=XAUUSDT&interval=${interval}&limit=800`);
         const rows = await res.json();
         this.bars = rows.map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }));
+        if (this.replay) this.exitReplay();
+        if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); }
         this.series.setData(this.bars.map(shown));
         this.chart.timeScale().scrollToRealTime();
         this.setQuote({});
@@ -1325,10 +1368,10 @@
         if (!k) return;
         const b = { time: k.t / 1000, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v };
         const last = this.bars[this.bars.length - 1];
-        if (last && b.time === last.time) this.bars[this.bars.length - 1] = b; else if (!last || b.time > last.time) { this.bars.push(b); this.computeICT(); }
+        if (last && b.time === last.time) this.bars[this.bars.length - 1] = b; else if (!last || b.time > last.time) { this.bars.push(b); if (!this.replay) this.computeICT(); }
+        if (this.replay) return;
         this.series.update(shown(b));
         this.setQuote({});
-        this.redraw();
       };
       this.socket = ws;
     },
@@ -1344,6 +1387,15 @@
     /** The lines the chart should show now, keyed so they are updated in place. */
     wantedLines() {
       const out = [];
+      if (this.replay) {
+        const price = this.bars[this.replay.idx].close;
+        this.replay.trades.forEach((t) => {
+          out.push({ key: `rp:${t.id}:entry`, price: t.entry, color: t.side === "long" ? "#2b6bf3" : "#f0455a", width: 1, style: 0, title: `Replay ${sideName(t.side)} ${t.lots} ${signed(this.replayProfit(t, price))}` });
+          if (t.stop) out.push({ key: `rp:${t.id}:stop`, price: t.stop, color: "#f0455a", width: 1, style: 2, title: "SL" });
+          if (t.target) out.push({ key: `rp:${t.id}:target`, price: t.target, color: "#14b88a", width: 1, style: 2, title: "TP" });
+        });
+        return out;
+      }
       if (this.owner) {
         const sel = this.selected;
         const onChart = (x) => x.symbol === this.symbol;
@@ -1400,14 +1452,14 @@
         if (!keys.has(k) && !(this.drag && this.drag.key === k)) { this.series.removePriceLine(line); this.lines.delete(k); }
       }
       this.lineCache = wanted;
-      // While a trade is picked (or a pending price is set), a finger on the chart drags lines, not the page.
-      $("chartWrap").style.touchAction = this.owner && (this.selected || this.draft) ? "none" : "";
+      // While a trade or drawing is picked (or a pending price is set), a finger drags it, not the page.
+      this.updateTouchAction();
     },
 
     renderSelBar() {
       const bar = $("selBar");
       const x = this.findSelected();
-      if (!this.owner || !x) { bar.hidden = true; return; }
+      if (!this.owner || !x || this.replay) { bar.hidden = true; return; }
       const pos = this.selected.kind === "pos";
       bar.hidden = false;
       bar.innerHTML = `<span>${sideName(x.side)}${pos ? "" : " " + x.kind.toUpperCase()} ${x.lots} · #${x.ticket}${pos ? ` · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b>` : ""}</span>
@@ -1442,7 +1494,7 @@
 
     bindDrag() {
       const wrap = $("chartWrap");
-      const yOf = (e) => e.clientY - wrap.getBoundingClientRect().top;
+      const rel = (e) => { const r = wrap.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
       const paneWidth = () => this.chart.timeScale().width();
       const hit = (y, keys) => {
         let best = null;
@@ -1456,6 +1508,7 @@
         return best && best.w;
       };
       const draggable = (key) => {
+        if (!this.owner || this.replay) return false;
         if (key.startsWith("draft:")) return true;
         const s = this.selected;
         if (!s) return false;
@@ -1463,48 +1516,91 @@
         if (kind !== s.kind || +ticket !== s.ticket) return false;
         return field !== "entry" || kind === "ord";
       };
-      let down = null;
+      const lock = (on) => this.chart.applyOptions({ handleScroll: !on, handleScale: !on });
+      let down = null, longPress = null;
       wrap.addEventListener("pointerdown", (e) => {
-        if (!this.owner || e.button > 0 || e.target.closest("#selBar, #posPill")) return;
-        const y = yOf(e), x = e.clientX - wrap.getBoundingClientRect().left;
-        down = { x: e.clientX, y: e.clientY, moved: false };
+        this.closeMenu();
+        if (e.button > 0 || e.target.closest("#selBar, #posPill, #drawBar")) return;
+        const { x, y } = rel(e);
+        down = { x: e.clientX, y: e.clientY, moved: false, menu: false };
         if (x > paneWidth()) return;
+        // A long press opens the chart menu on phones (no right click there).
+        if (e.pointerType !== "mouse") {
+          clearTimeout(longPress);
+          longPress = setTimeout(() => {
+            if (down && !down.moved && !this.drag && !this.drawGesture) { down.menu = true; this.openMenu(e.clientX, e.clientY); }
+          }, 550);
+        }
+        if (this.replayPicking) return;
+        const r = this.drawings ? this.drawings.down(x, y, e) : false;
+        if (r === true) {
+          this.drawGesture = true; lock(true); e.stopPropagation();
+          clearTimeout(longPress);
+          return;
+        }
         const w = hit(y, draggable);
         if (!w) return;
         this.drag = { key: w.key, price: w.price, start: w.price };
-        this.chart.applyOptions({ handleScroll: false, handleScale: false });
+        lock(true);
         e.stopPropagation();
       }, true);
-      ["mousedown", "touchstart"].forEach((t) => wrap.addEventListener(t, (e) => { if (this.drag) e.stopPropagation(); }, { capture: true, passive: true }));
-      wrap.addEventListener("touchmove", (e) => { if (this.drag) e.preventDefault(); }, { passive: false });
+      ["mousedown", "touchstart"].forEach((t) => wrap.addEventListener(t, (e) => { if (this.drag || this.drawGesture) e.stopPropagation(); }, { capture: true, passive: true }));
+      wrap.addEventListener("touchmove", (e) => { if (this.drag || this.drawGesture) e.preventDefault(); }, { passive: false });
       wrap.addEventListener("pointermove", (e) => {
-        if (this.drag || !this.owner || e.pointerType !== "mouse") return;
-        const x = e.clientX - wrap.getBoundingClientRect().left;
-        wrap.style.cursor = x <= paneWidth() && hit(yOf(e), draggable) ? "ns-resize" : "";
+        if (this.drag || this.drawGesture) return;
+        const { x, y } = rel(e);
+        if (this.drawings && this.drawings.pending) { this.drawings.move(x, y); return; }
+        if (e.pointerType !== "mouse") return;
+        const overDrawing = this.drawings && x <= paneWidth() && this.drawings.hitTest(x, y, 8);
+        wrap.style.cursor = this.drawings && this.drawings.tool ? "crosshair"
+          : overDrawing ? "move" : x <= paneWidth() && hit(y, draggable) ? "ns-resize" : "";
       });
       window.addEventListener("pointermove", (e) => {
-        if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) down.moved = true;
+        if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down.moved = true; clearTimeout(longPress); }
+        if (this.drawGesture) { const { x, y } = rel(e); this.drawings.move(x, y); return; }
         if (!this.drag) return;
-        const price = this.series.coordinateToPrice(yOf(e));
+        const price = this.series.coordinateToPrice(rel(e).y);
         if (price == null) return;
         this.drag.price = +price.toFixed(this.digits);
         const line = this.lines.get(this.drag.key);
         if (line) line.applyOptions({ price: this.drag.price, title: this.dragTitle(this.drag) });
         if (this.drag.key.startsWith("draft:")) this.writeDraft(this.drag.key, this.drag.price);
-        this.redraw();
       });
       window.addEventListener("pointerup", (e) => {
-        const d = this.drag, tap = down && !down.moved;
+        clearTimeout(longPress);
+        const d = this.drag, tap = down && !down.moved && !down.menu;
         down = null;
+        if (this.drawGesture) {
+          this.drawGesture = false; lock(false);
+          this.drawings.up();
+          return;
+        }
         if (d) {
-          this.drag = null;
-          this.chart.applyOptions({ handleScroll: true, handleScale: true });
+          this.drag = null; lock(false);
           if (Math.abs(d.price - d.start) > 0) this.commitDrag(d); else this.syncLines();
           return;
         }
-        if (tap && this.owner && e.target && wrap.contains(e.target)) this.tapChart(yOf(e), e.clientX - wrap.getBoundingClientRect().left);
+        if (tap && e.target && wrap.contains(e.target)) { const { x, y } = rel(e); this.tapChart(y, x); }
       });
-      window.addEventListener("pointercancel", () => { if (this.drag) { this.drag = null; this.chart.applyOptions({ handleScroll: true, handleScale: true }); this.syncLines(); } down = null; });
+      window.addEventListener("pointercancel", () => {
+        clearTimeout(longPress);
+        if (this.drag) { this.drag = null; lock(false); this.syncLines(); }
+        if (this.drawGesture) { this.drawGesture = false; lock(false); this.drawings.up(); }
+        down = null;
+      });
+      wrap.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        if (this.drawings && this.drawings.pending) { this.drawings.cancel(); return; }
+        this.openMenu(e.clientX, e.clientY);
+      });
+      window.addEventListener("keydown", (e) => {
+        if (this.tab !== "chart" || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "") || $("sheet").open) return;
+        if (e.key === "Escape") { this.closeMenu(); if (this.drawings) this.drawings.cancel(); if (this.replayPicking) this.exitReplay(); }
+        if ((e.key === "Delete" || e.key === "Backspace") && this.drawings && this.drawings.selected) { this.drawings.remove(this.drawings.selected); e.preventDefault(); }
+        if (this.replay && e.key === "ArrowRight") { this.replayStep(); e.preventDefault(); }
+        if (this.replay && e.key === " ") { this.replayPlay(); e.preventDefault(); }
+      });
+      document.addEventListener("pointerdown", (e) => { if (!e.target.closest("#ctxMenu")) this.closeMenu(); });
     },
 
     dragTitle(d) {
@@ -1536,14 +1632,25 @@
       // Show the new level at once; the next refresh confirms it.
       if (field === "entry") x.entry = d.price; else x[field] = d.price;
       this.syncLines();
-      const ok = await act(null, () => this.call("/mt5/modify", body), `Đã dời ${field === "stop" ? "SL" : field === "target" ? "TP" : "giá"} → ${fmt(d.price, this.digits)}`);
+      await act(null, () => this.call("/mt5/modify", body), `Đã dời ${field === "stop" ? "SL" : field === "target" ? "TP" : "giá"} → ${fmt(d.price, this.digits)}`);
       this.refresh();
-      void ok;
+    },
+
+    /** Logical bar index under a pixel column. */
+    indexAt(x) {
+      const l = this.chart.timeScale().coordinateToLogical(x);
+      return l == null ? null : Math.max(0, Math.min(this.viewBars().length - 1, Math.round(l)));
     },
 
     /** A tap picks a trade by its entry line (the next one when several share a price). */
     tapChart(y, x) {
       if (x > this.chart.timeScale().width()) return;
+      if (this.replayPicking) {
+        const i = this.indexAt(x);
+        if (i != null) this.startReplayAt(i);
+        return;
+      }
+      if (!this.owner || this.replay) return;
       const near = (this.lineCache || []).filter((w) => /^(pos|ord):\d+:entry$/.test(w.key)).filter((w) => {
         const ly = this.series.priceToCoordinate(w.price);
         return ly != null && Math.abs(ly - y) < 12;
@@ -1561,126 +1668,400 @@
       this.syncLines();
     },
 
-    /* ----- ICT overlay ----- */
+    updateTouchAction() {
+      const d = this.drawings;
+      const busy = (this.owner && (this.selected || this.draft)) || (d && (d.tool || d.pending || d.selected)) || this.replayPicking;
+      $("chartWrap").style.touchAction = busy ? "none" : "";
+    },
+
+    resetChart() {
+      const ts = this.chart.timeScale();
+      ts.applyOptions({ barSpacing: $("chart").clientWidth < 500 ? 4 : 6, rightOffset: 8 });
+      ts.resetTimeScale();
+      this.chart.priceScale("right").applyOptions({ autoScale: true });
+      ts.scrollToRealTime();
+    },
+
+    /* ----- chart menu (right click / long press) ----- */
+
+    openMenu(cx, cy) {
+      const wrap = $("chartWrap"), r = wrap.getBoundingClientRect();
+      const x = cx - r.left, y = cy - r.top;
+      const inPane = x <= this.chart.timeScale().width();
+      const price = inPane ? this.series.coordinateToPrice(y) : null;
+      const idx = inPane ? this.indexAt(x) : null;
+      const p = price != null ? +price.toFixed(this.digits) : null;
+      const items = [["reset", "⟲ Đặt lại biểu đồ"]];
+      if (idx != null && !this.replay) items.push(["replay", "⏮ Replay từ nến này"]);
+      if (this.replay) items.push(["exitReplay", "✕ Thoát replay"]);
+      if (p != null) items.push(["hline", `— Vẽ đường ngang tại ${fmt(p, this.digits)}`]);
+      if (p != null && this.owner && !this.replay) items.push(["pending", `⏳ Lệnh chờ tại ${fmt(p, this.digits)}`]);
+      items.push(["tools", "✎ Công cụ vẽ…"]);
+      if (this.drawings && this.drawings.list.length) items.push(["clear", `🗑 Xoá tất cả bản vẽ (${this.drawings.list.length})`]);
+      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"]);
+      const menu = $("ctxMenu");
+      menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
+      menu.hidden = false;
+      const mw = menu.offsetWidth, mh = menu.offsetHeight;
+      menu.style.left = Math.max(8, Math.min(cx, window.innerWidth - mw - 8)) + "px";
+      menu.style.top = Math.max(8, Math.min(cy, window.innerHeight - mh - 8)) + "px";
+      menu.querySelectorAll("button").forEach((b) => (b.onclick = () => {
+        this.closeMenu();
+        const k = b.dataset.k;
+        if (k === "reset") this.resetChart();
+        if (k === "replay") this.startReplayAt(idx);
+        if (k === "exitReplay") this.exitReplay();
+        if (k === "hline") { const dr = this.drawings; dr.setTool("horizontalLine"); dr.pending = null; const d = dr.newDrawing("horizontalLine"); d.pts = [{ t: this.viewBars()[idx || 0].time, p }]; dr.pending = d; dr.finish(); }
+        if (k === "pending") { this.togglePending(true); $("pPrice").value = fmt(p, this.digits); this.updatePendingLabels(); this.syncLines(); }
+        if (k === "tools") this.drawSheet();
+        if (k === "clear" && confirm("Xoá tất cả bản vẽ trên mã này?")) this.drawings.clear();
+        if (k === "ind") this.indicatorSheet();
+        if (k === "ictSettings") this.ictSettingsSheet();
+      }));
+    },
+
+    closeMenu() { const m = $("ctxMenu"); if (m && !m.hidden) m.hidden = true; },
+
+    /* ----- drawing tools ----- */
+
+    symbolKey() { return this.owner ? this.symbol : ($("chartSymbol").textContent || "XAUUSD"); },
+
+    drawSheet() {
+      const D = window.AurumDrawings;
+      sheet.open(`<h3>Công cụ vẽ</h3>
+        ${D.categories.map(([title, tools]) => `<h4>${title}</h4><div class="tool-grid">${tools.map((t) => `<button type="button" data-t="${t}"><span class="ti">${D.tools[t].icon}</span>${esc(D.tools[t].name)}</button>`).join("")}</div>`).join("")}
+        <label class="toggle"><span>Nam châm (bắt vào giá mở/cao/thấp/đóng của nến)</span><span class="switch"><input type="checkbox" id="magnetOn" ${this.magnet ? "checked" : ""}><span></span></span></label>
+        ${this.drawings.list.length ? `<button class="btn btn-ghost wide danger" id="clearDraw">Xoá tất cả bản vẽ (${this.drawings.list.length})</button>` : ""}
+        <p class="muted small">Chọn công cụ rồi chạm/kéo trên biểu đồ. Chạm vào bản vẽ để chọn, kéo để di chuyển, kéo chấm tròn để chỉnh; phím Delete để xoá. Bản vẽ lưu theo từng mã trên máy này.</p>`, (el) => {
+        el.querySelectorAll("[data-t]").forEach((b) => (b.onclick = () => { sheet.close(); this.drawings.setTool(b.dataset.t); }));
+        el.querySelector("#magnetOn").onchange = (e) => { this.magnet = e.target.checked; store.set("aurum.magnet", this.magnet ? "1" : "0"); };
+        const c = el.querySelector("#clearDraw");
+        if (c) c.onclick = () => { if (confirm("Xoá tất cả bản vẽ trên mã này?")) { this.drawings.clear(); sheet.close(); } };
+      });
+    },
+
+    hint(tool) {
+      const n = window.AurumDrawings.tools[tool].n;
+      if (tool === "brush") return "kéo để vẽ";
+      if (tool === "path") return "chạm từng điểm, chạm lại điểm cuối để xong";
+      if (n === 1) return "chạm vào chỗ cần đặt";
+      if (n === 2) return "kéo từ điểm đầu tới điểm cuối (hoặc chạm 2 điểm)";
+      return `chạm ${n} điểm`;
+    },
+
+    renderDrawBar() {
+      const bar = $("drawBar"), d = this.drawings;
+      this.updateTouchAction();
+      if (!d) return;
+      const D = window.AurumDrawings;
+      if (d.tool) {
+        bar.hidden = false;
+        bar.innerHTML = `<span><b>${esc(D.tools[d.tool].name)}</b> · ${this.hint(d.tool)}</span><button type="button" data-a="cancel">Huỷ</button>`;
+      } else if (d.current) {
+        const cur = d.current;
+        const pos = cur.tool === "longPosition" || cur.tool === "shortPosition";
+        bar.hidden = false;
+        bar.innerHTML = `${D.colors.map((c) => `<button type="button" class="sw ${c === cur.color ? "on" : ""}" data-c="${c}" style="background:${c}"></button>`).join("")}
+          <select data-a="width">${[1, 1.5, 2, 3, 4].map((w) => `<option value="${w}" ${w === cur.width ? "selected" : ""}>${w}px</option>`).join("")}</select>
+          <select data-a="style">${[["solid", "——"], ["dashed", "– –"], ["dotted", "···"]].map(([v, n]) => `<option value="${v}" ${v === cur.style ? "selected" : ""}>${n}</option>`).join("")}</select>
+          ${pos ? `<label class="rr">R:R <input data-a="rr" inputmode="decimal" value="${cur.rr}"></label>` : ""}
+          ${cur.tool === "text" ? '<button type="button" data-a="text">Sửa chữ</button>' : ""}
+          <button type="button" data-a="lock" title="Khoá">${cur.locked ? "🔒" : "🔓"}</button>
+          <button type="button" data-a="del" class="danger" title="Xoá">🗑</button>
+          <button type="button" data-a="x" class="muted">✕</button>`;
+      } else { bar.hidden = true; return; }
+      bar.querySelectorAll("[data-c]").forEach((b) => (b.onclick = () => { d.restyle({ color: b.dataset.c }); this.renderDrawBar(); }));
+      bar.querySelectorAll("[data-a]").forEach((b) => {
+        const a = b.dataset.a;
+        if (b.tagName === "SELECT") b.onchange = () => d.restyle({ [a]: a === "width" ? +b.value : b.value });
+        else if (b.tagName === "INPUT") b.onchange = () => d.restyle({ rr: Math.max(0.1, num(b.value) || 2) });
+        else b.onclick = () => {
+          if (a === "cancel") d.cancel();
+          if (a === "del") d.remove(d.selected);
+          if (a === "x") { d.selected = null; d.update(); }
+          if (a === "lock") d.restyle({ locked: !d.current.locked });
+          if (a === "text") { const t = prompt("Nội dung:", d.current.text); if (t != null) d.restyle({ text: t }); }
+          this.renderDrawBar();
+        };
+      });
+    },
+
+    /* ----- replay ----- */
+
+    viewBars() { return this.replay ? this.bars.slice(0, this.replay.idx + 1) : this.bars; },
+
+    startReplayPick() {
+      if (this.replay) { this.exitReplay(); return; }
+      this.replayPicking = true;
+      this.renderReplayBar();
+      this.updateTouchAction();
+    },
+
+    startReplayAt(i) {
+      if (!this.bars.length) return;
+      this.replayPicking = false;
+      const prev = this.replay;
+      this.replay = {
+        idx: Math.max(10, Math.min(this.bars.length - 2, i)), playing: false, timer: null,
+        speed: (prev && prev.speed) || +(store.get("aurum.rspeed") || 1),
+        trades: (prev && prev.trades) || [], closed: (prev && prev.closed) || [],
+      };
+      if (prev) clearInterval(prev.timer);
+      this.selected = null; this.renderSelBar();
+      this.applyReplay(true);
+    },
+
+    applyReplay(scroll) {
+      $("posPill").hidden = true;
+      const view = this.viewBars();
+      this.series.setData(view.map(shown));
+      if (scroll) {
+        // Keep the zoom: the same number of bars, ending at the replay bar.
+        const r = this.chart.timeScale().getVisibleLogicalRange();
+        const span = r ? Math.max(20, r.to - r.from) : 120;
+        this.chart.timeScale().setVisibleLogicalRange({ from: view.length - span + 8, to: view.length + 8 });
+      }
+      this.computeICT();
+      this.updateFlow();
+      this.syncLines();
+      this.renderReplayBar();
+      this.redraw();
+    },
+
+    replayStep() {
+      const r = this.replay;
+      if (!r) return;
+      if (r.idx >= this.bars.length - 1) { this.replayPause(); toast("Đã tới nến mới nhất"); return; }
+      r.idx++;
+      const bar = this.bars[r.idx];
+      this.series.update(shown(bar));
+      this.replayFill(bar);
+      this.computeICT();
+      this.updateFlow();
+      this.syncLines();
+      this.renderReplayBar();
+      this.redraw();
+    },
+
+    replayPlay() {
+      const r = this.replay;
+      if (!r) return;
+      if (r.playing) return this.replayPause();
+      r.playing = true;
+      r.timer = setInterval(() => this.replayStep(), 1000 / r.speed);
+      this.renderReplayBar();
+    },
+
+    replayPause() {
+      const r = this.replay;
+      if (!r) return;
+      r.playing = false;
+      clearInterval(r.timer);
+      this.renderReplayBar();
+    },
+
+    exitReplay() {
+      if (this.replay) clearInterval(this.replay.timer);
+      this.replay = null;
+      this.replayPicking = false;
+      this.series.setData(this.bars.map(shown));
+      this.chart.timeScale().scrollToRealTime();
+      this.computeICT();
+      this.updateFlow();
+      this.syncLines();
+      this.renderReplayBar();
+      this.updateTouchAction();
+      this.redraw();
+    },
+
+    contractSize() {
+      const s = this.symbolKey().toUpperCase();
+      if (/XAU|GOLD/.test(s)) return 100;
+      if (/XAG|SILVER/.test(s)) return 5000;
+      if (/BTC|ETH|US30|USTEC|NAS|SPX|US500|DE30|DE40|JP225|UK100/.test(s)) return 1;
+      return 100000;
+    },
+
+    replayOrder(side) {
+      const r = this.replay;
+      if (!r) return;
+      const bar = this.bars[r.idx];
+      const lots = Math.max(0.01, num($("rLots").value) || 0.01);
+      store.set("aurum.rlots", String(lots));
+      const t = { id: Math.random().toString(36).slice(2, 8), side, lots, entry: bar.close, time: bar.time,
+        stop: num($("rStop").value), target: num($("rTarget").value) };
+      r.trades.push(t);
+      toast(`Replay: ${side === "long" ? "MUA" : "BÁN"} ${lots} @ ${fmt(t.entry, this.digits)}`);
+      this.syncLines();
+      this.renderReplayBar();
+    },
+
+    replayProfit(t, price) { return (price - t.entry) * (t.side === "long" ? 1 : -1) * t.lots * this.contractSize(); },
+
+    replayClose(t, price, reason) {
+      const r = this.replay;
+      r.trades = r.trades.filter((x) => x !== t);
+      r.closed.unshift(Object.assign({}, t, { exit: price, reason, profit: this.replayProfit(t, price) }));
+    },
+
+    /** SL/TP of replay trades hit inside the new bar (SL first when both are inside). */
+    replayFill(bar) {
+      this.replay.trades.slice().forEach((t) => {
+        const long = t.side === "long";
+        if (t.stop && (long ? bar.low <= t.stop : bar.high >= t.stop)) return this.replayClose(t, t.stop, "SL");
+        if (t.target && (long ? bar.high >= t.target : bar.low <= t.target)) this.replayClose(t, t.target, "TP");
+      });
+    },
+
+    renderReplayBar() {
+      const bar = $("replayBar");
+      const r = this.replay;
+      if (this.replayPicking) {
+        bar.hidden = false;
+        bar.innerHTML = `<div class="r-row"><b>⏮ Replay</b><span class="muted">Chạm vào nến muốn bắt đầu</span><button type="button" class="btn btn-ghost btn-small" data-a="exit">Huỷ</button></div>`;
+        bar.querySelector("[data-a=exit]").onclick = () => this.exitReplay();
+        this.updateTouchAction();
+        return;
+      }
+      if (!r) { bar.hidden = true; return; }
+      const cur = this.bars[r.idx];
+      const price = cur.close;
+      const floating = r.trades.reduce((a, t) => a + this.replayProfit(t, price), 0);
+      const done = r.closed.reduce((a, t) => a + t.profit, 0);
+      const wins = r.closed.filter((t) => t.profit > 0).length;
+      bar.hidden = false;
+      bar.innerHTML = `<div class="r-row">
+          <button type="button" class="rb" data-a="exit" title="Thoát replay">✕</button>
+          <button type="button" class="rb" data-a="pick" title="Chọn lại điểm bắt đầu">⟲</button>
+          <button type="button" class="rb play" data-a="play" title="Chạy / dừng (phím cách)">${r.playing ? "⏸" : "▶"}</button>
+          <button type="button" class="rb" data-a="step" title="Nến tiếp theo (→)">⏭</button>
+          <select data-a="speed" title="Tốc độ">${[0.5, 1, 2, 3, 5, 10].map((v) => `<option value="${v}" ${v === r.speed ? "selected" : ""}>${v} nến/giây</option>`).join("")}</select>
+          <span class="r-time">${new Date((cur.time + TZ) * 1000).toLocaleString("vi-VN", { timeZone: "UTC", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })} · <b>${fmt(price, this.digits)}</b></span>
+        </div>
+        <div class="r-row">
+          <button type="button" class="rb sellbg" data-a="sell">SELL</button>
+          <input id="rLots" inputmode="decimal" value="${esc(store.get("aurum.rlots") || "0.01")}" title="Lot">
+          <button type="button" class="rb buybg" data-a="buy">BUY</button>
+          <input id="rStop" inputmode="decimal" placeholder="SL" value="${esc((this.rDraft || {}).stop || "")}">
+          <input id="rTarget" inputmode="decimal" placeholder="TP" value="${esc((this.rDraft || {}).target || "")}">
+          ${r.trades.length ? `<button type="button" class="rb" data-a="closeAll">Đóng ${r.trades.length} lệnh</button>` : ""}
+          <span class="r-pnl">Đang mở <b class="${floating >= 0 ? "pos" : "neg"}">${signed(floating)}</b> · Đã đóng ${r.closed.length ? `${wins}/${r.closed.length} thắng ` : ""}<b class="${done >= 0 ? "pos" : "neg"}">${signed(done)}</b> USD</span>
+        </div>`;
+      const on = (a, f) => { const b = bar.querySelector(`[data-a=${a}]`); if (b) b.onclick = f; };
+      on("exit", () => this.exitReplay());
+      on("pick", () => { this.replayPause(); this.replayPicking = true; this.renderReplayBar(); });
+      on("play", () => this.replayPlay());
+      on("step", () => { this.replayPause(); this.replayStep(); });
+      on("sell", () => this.replayOrder("short"));
+      on("buy", () => this.replayOrder("long"));
+      on("closeAll", () => { r.trades.slice().forEach((t) => this.replayClose(t, price, "Đóng tay")); this.syncLines(); this.renderReplayBar(); });
+      bar.querySelector("[data-a=speed]").onchange = (e) => {
+        r.speed = +e.target.value; store.set("aurum.rspeed", String(r.speed));
+        if (r.playing) { clearInterval(r.timer); r.timer = setInterval(() => this.replayStep(), 1000 / r.speed); }
+      };
+      ["rStop", "rTarget"].forEach((id) => ($(id).oninput = () => { this.rDraft = { stop: $("rStop").value, target: $("rTarget").value }; }));
+    },
+
+    /* ----- indicator settings (like the app's ICT Killzones + Pivots sheet) ----- */
+
+    saveIct() {
+      store.set("aurum.ictcfg", JSON.stringify(this.ictCfg));
+      this.computeICT();
+      this.redraw();
+    },
+
+    ictSettingsSheet() {
+      if (!this.owner && this.features.killzones === false) return toast("Chỉ báo chưa được mở cho bạn", true);
+      const c = this.ictCfg;
+      const hm = (h) => { const m = Math.round(h * 60) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
+      const tfOpts = [[1, "1m"], [5, "5m"], [15, "15m"], [30, "30m"], [60, "1h"], [240, "4h"], [1440, "1D"]];
+      const styles = [["solid", "Liền ——"], ["dashed", "Gạch – –"], ["dotted", "Chấm ···"]];
+      const get = (path) => path.split(".").reduce((o, k) => o[k], c);
+      const tog = (path, label) => `<label class="toggle"><span>${label}</span><span class="switch"><input type="checkbox" data-p="${path}" data-t="bool" ${get(path) ? "checked" : ""}><span></span></span></label>`;
+      const numf = (path, label, step = 1) => `<label class="frow"><span>${label}</span><input data-p="${path}" data-t="num" inputmode="decimal" step="${step}" value="${get(path)}"></label>`;
+      const sel = (path, label, opts) => `<label class="frow"><span>${label}</span><select data-p="${path}" data-t="${typeof opts[0][0] === "number" ? "num" : typeof opts[0][0] === "boolean" ? "boolsel" : "str"}">${opts.map(([v, n]) => `<option value="${v}" ${String(v) === String(get(path)) ? "selected" : ""}>${n}</option>`).join("")}</select></label>`;
+      const color = (path, label) => `<label class="frow"><span>${label}</span><input type="color" data-p="${path}" data-t="str" value="${get(path)}"></label>`;
+      const time = (path) => `<input class="w-time" data-p="${path}" data-t="time" value="${hm(get(path))}" placeholder="HH:MM" maxlength="5" inputmode="numeric">`;
+      const text = (path, w = "") => `<input data-p="${path}" data-t="str" value="${esc(get(path))}" class="${w}">`;
+      const onOff = (path) => `<span class="switch"><input type="checkbox" data-p="${path}" data-t="bool" ${get(path) ? "checked" : ""}><span></span></span>`;
+      const sec = (title, body, note) => `<details class="set"><summary>${title}</summary>${body}${note ? `<p class="muted small">${note}</p>` : ""}</details>`;
+      sheet.open(`<h3>ICT Killzones + Pivots</h3>
+        ${sec("Chung", sel("timeZone", "Múi giờ", [["America/New_York", "New York (mặc định ICT)"], ["UTC", "UTC"], ["Asia/Ho_Chi_Minh", "(UTC+7) Hà Nội"], ["Europe/London", "London"]])
+          + sel("tfLimit", "Chỉ vẽ trên khung ≤", tfOpts.slice(0, 6)) + numf("maxDays", "Số ngày hiển thị") + sel("lineScale", "Độ dày các đường", [[0.75, "Mảnh"], [1, "Vừa"], [1.5, "Dày"], [2, "Rất dày"]]),
+          "Giờ các phiên theo múi giờ ở trên (ICT dùng giờ New York).")}
+        ${sec("Killzones", c.sessions.map((s, i) => `<div class="srow">${onOff(`sessions.${i}.on`)}${text(`sessions.${i}.name`, "w-name")}${time(`sessions.${i}.start`)}–${time(`sessions.${i}.end`)}
+            ${text(`sessions.${i}.hi`, "w-lbl")}${text(`sessions.${i}.lo`, "w-lbl")}<input type="color" data-p="sessions.${i}.color" data-t="str" value="${s.color}"></div>`).join(""))}
+        ${sec("Hộp phiên", tog("showBoxes", "Hiện hộp") + tog("boxLabels", "Tên phiên trên hộp") + tog("boxBorder", "Viền hộp") + numf("boxOpacity", "Độ đậm nền (%)"))}
+        ${sec("Pivot (đỉnh/đáy phiên)", tog("showPivots", "Hiện pivot") + tog("pivotLabels", "Nhãn pivot (AS.H, LO.L…)") + tog("livePivots", "Hiện đỉnh/đáy khi phiên đang chạy")
+          + sel("pivotUntilMitigated", "Kéo dài", [[true, "Tới khi giá phá"], [false, "Qua cả khi bị phá"]]) + tog("keepMitigated", "Giữ pivot đã bị phá")
+          + sel("pivotStyle", "Nét pivot", styles) + sel("mitigatedStyle", "Nét pivot đã bị phá", styles) + numf("pivotWidth", "Độ dày pivot", 0.5) + tog("midpoints", "Đường giữa phiên (50%)"),
+          "Đỉnh và đáy mỗi phiên được kéo sang phải sau khi phiên đóng, tới khi giá chạm qua (bị phá).")}
+        ${sec("Giá mở cửa", c.opens.map((o, i) => `<div class="srow">${onOff(`opens.${i}.on`)}${time(`opens.${i}.hour`)}${text(`opens.${i}.label`, "w-lbl")}<input type="color" data-p="opens.${i}.color" data-t="str" value="${o.color}"></div>`).join("") + sel("openStyle", "Nét", styles))}
+        ${sec("Mốc thời gian (đường dọc)", c.stamps.map((m, i) => `<div class="srow">${onOff(`stamps.${i}.on`)}${time(`stamps.${i}.hour`)}</div>`).join("") + color("stampColor", "Màu") + sel("stampStyle", "Nét", styles))}
+        ${sec("Giờ cắt", tog("cutoff", "Dừng các đường lúc") + `<label class="frow"><span>Giờ cắt</span>${time("cutoffHour")}</label>`, "Pivot và giá mở cửa ngừng kéo dài tại giờ này mỗi ngày, cho biểu đồ gọn.")}
+        ${sec("Đỉnh / đáy ngày", tog("daily", "Đỉnh / đáy từng ngày") + numf("dailyDays", "Số ngày gần nhất") + tog("dailyKeepTouched", "Giá chạm: dừng lại, nét chấm ……")
+          + color("dayHighColor", "Màu đỉnh ngày") + color("dayLowColor", "Màu đáy ngày") + sel("dailyStyle", "Nét", styles),
+          "Đỉnh và đáy của mỗi ngày đã đóng (Đỉnh T3, Đáy T5…), kéo sang phải tới khi có nến chạm: đường dừng ở cây nến đó và chuyển nét chấm (tắt “Giá chạm” thì đường bị chạm biến mất).")}
+        ${sec("Ngày / Tuần / Tháng trước", tog("prevDay", "PDH / PDL (ngày trước)") + tog("prevWeek", "PWH / PWL (tuần trước)") + tog("prevMonth", "PMH / PML (tháng trước)") + color("periodColor", "Màu"))}
+        ${sec("FVG & VI", tog("fvg", "Hiện FVG") + sel("fvgFrom", "Từ khung", tfOpts) + sel("fvgTo", "Đến khung", tfOpts) + tog("fvgStrong", "Chỉ vẽ FVG mạnh (lọc FVG yếu)")
+          + numf("fvgDisplacement", "Nến tạo FVG ≥ × thân nến TB", 0.1) + tog("fvgConfluence", "Tô nền khi trùng FVG khung lớn hơn") + tog("fvgMid", "Đường giữa 50%")
+          + tog("fvgHideFilled", "Ẩn FVG đã bị chạm") + numf("gapKeep", "Chạm rồi bật ngược: giữ (phút)") + numf("fvgMinSize", "Lọc FVG nhỏ (× biên độ nến)", 0.1) + numf("fvgCount", "Giữ FVG gần nhất")
+          + color("fvgBull", "Màu FVG tăng") + color("fvgBear", "Màu FVG giảm") + color("fvgZone", "Nền FVG trùng khung") + color("fvgZoneMid", "Đường giữa FVG trùng khung")
+          + tog("vi", "Hiện VI (Volume Imbalance)") + numf("viCount", "Giữ VI gần nhất") + tog("viHideTouched", "Ẩn VI đã bị chạm") + color("viColor", "Màu VI"))}
+        ${sec("Cấu trúc (MSS / BOS)", tog("mss", "Hiện MSS (đổi cấu trúc)") + tog("bos", "Hiện BOS (phá cấu trúc cùng xu hướng)") + numf("swing", "Swing: số nến mỗi bên") + numf("structureCount", "Giữ số lần phá gần nhất")
+          + color("mssBull", "Màu tăng") + color("mssBear", "Màu giảm"))}
+        ${sec("Quét thanh khoản", tog("sweeps", "Hiện quét thanh khoản") + numf("sweepCount", "Giữ số lần quét gần nhất") + color("sweepColor", "Màu"),
+          "Râu nến đâm qua đỉnh/đáy phiên hoặc PDH/PDL rồi đóng cửa quay lại.")}
+        ${sec("Macros", tog("macros", "Hiện macros") + sel("macroTfLimit", "Chỉ vẽ trên khung ≤", tfOpts.slice(0, 4)) + sel("macroTimeLabels", "Nhãn hộp", [[true, "Giờ"], [false, "Tên"]]) + color("macroColor", "Màu")
+          + c.macroList.map((m, i) => `<div class="srow">${onOff(`macroList.${i}.on`)}${text(`macroList.${i}.name`, "w-name")}${time(`macroList.${i}.start`)}–${time(`macroList.${i}.end`)}</div>`).join(""))}
+        ${sec("Khác", tog("dayOfWeek", "Nhãn thứ trong tuần") + tog("rangeTable", "Bảng biên độ phiên") + numf("rangeAvg", "Trung bình số phiên"))}
+        <button class="btn btn-ghost wide danger" id="ictReset">Đặt lại mặc định</button>`, (el) => {
+        el.querySelectorAll("[data-p]").forEach((input) => {
+          const apply = () => {
+            const path = input.dataset.p.split("."), last = path.pop();
+            const obj = path.reduce((o, k) => o[k], c);
+            const t = input.dataset.t;
+            let v;
+            if (t === "bool") v = input.checked;
+            else if (t === "boolsel") v = input.value === "true";
+            else if (t === "num") { v = num(input.value); if (v == null) return; }
+            else if (t === "time") {
+              const m = /^(\d{1,2}):?(\d{2})$/.exec(input.value.trim());
+              if (!m || +m[1] > 24 || +m[2] > 59) return;
+              v = +m[1] + +m[2] / 60;
+              // A session ending at 00:00 ends at midnight.
+              if (v === 0 && last === "end") v = 24;
+            }
+            else v = input.value;
+            obj[last] = v;
+            this.saveIct();
+          };
+          input.addEventListener(input.type === "checkbox" || input.tagName === "SELECT" || input.type === "color" ? "change" : "input", apply);
+        });
+        el.querySelector("#ictReset").onclick = () => {
+          if (!confirm("Đặt lại mọi cài đặt chỉ báo về mặc định?")) return;
+          this.ictCfg = window.ICT.defaults(); this.saveIct(); sheet.close(); this.ictSettingsSheet();
+        };
+      });
+    },
+
+    /* ----- ICT layer ----- */
 
     computeICT() {
       this.ictTime = Date.now();
       const allowed = this.owner || this.features.killzones !== false;
-      if (!allowed || !this.bars.length || !window.ICT) { this.ict = null; return; }
+      const bars = this.viewBars();
+      if (!allowed || !bars.length || !window.ICT || !this.ictCfg) { this.ict = null; this.redraw(); return; }
       try {
-        this.ict = window.ICT.compute(this.bars, TF_SECONDS[this.interval], showInd);
+        this.ict = window.ICT.compute(bars, TF_SECONDS[this.interval], this.ictCfg, showInd);
       } catch { this.ict = null; }
+      this.redraw();
     },
 
+    /** The indicator and drawing layers paint inside the chart's own frame; this only asks for one. */
     redraw() {
-      if (this.frame) return;
-      this.frame = requestAnimationFrame(() => { this.frame = null; this.draw(); });
-    },
-
-    draw() {
-      const canvas = $("overlay");
-      if (!this.chart || !canvas || this.tab !== "chart") return;
-      const wrap = $("chartWrap");
-      const ts = this.chart.timeScale();
-      const w = ts.width(), h = wrap.clientHeight - ts.height();
-      const dpr = window.devicePixelRatio || 1;
-      if (canvas.width !== Math.round(w * dpr) || canvas.height !== Math.round(h * dpr)) {
-        canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
-        canvas.style.width = w + "px"; canvas.style.height = h + "px";
-      }
-      const g = canvas.getContext("2d");
-      g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      g.clearRect(0, 0, w, h);
-      const o = this.ict;
-      if (!o || !this.bars.length) return;
-      const X = (i) => ts.logicalToCoordinate(i);
-      const Y = (p) => this.series.priceToCoordinate(p);
-      const half = Math.max(1, ((X(1) || 0) - (X(0) || 0)) / 2);
-      const right = w;
-      const xEnd = (end) => (end == null ? right : X(end) + half);
-      g.font = "10px Be Vietnam Pro, system-ui";
-      g.textBaseline = "bottom";
-      const line = (x1, x2, y, color, width = 1, dash = []) => {
-        if (y == null || x2 < 0 || x1 > w) return;
-        g.strokeStyle = color; g.lineWidth = width; g.setLineDash(dash);
-        g.beginPath(); g.moveTo(x1, Math.round(y) + 0.5); g.lineTo(x2, Math.round(y) + 0.5); g.stroke();
-      };
-      const label = (text, x, y, color, align = "right") => {
-        if (!text || y == null) return;
-        g.fillStyle = color; g.textAlign = align;
-        g.fillText(text, Math.min(Math.max(x, 2), w - 2), y - 2);
-      };
-
-      if (o.hidden) { g.fillStyle = "#8b95a7"; g.textAlign = "left"; g.fillText("Killzones chỉ hiện ở khung 30m trở xuống", 8, 16); }
-
-      o.stamps.forEach((i) => {
-        const x = X(i) - half;
-        g.strokeStyle = "#787b8655"; g.lineWidth = 1; g.setLineDash([2, 3]);
-        g.beginPath(); g.moveTo(Math.round(x) + 0.5, 0); g.lineTo(Math.round(x) + 0.5, h); g.stroke();
-      });
-
-      o.boxes.forEach((b) => {
-        const x1 = X(b.start) - half, x2 = X(b.end) + half, y1 = Y(b.high), y2 = Y(b.low);
-        if (x2 < 0 || x1 > w || y1 == null || y2 == null) return;
-        g.fillStyle = b.color + "1f";
-        g.fillRect(x1, y1, x2 - x1, y2 - y1);
-        g.setLineDash([]); g.strokeStyle = b.color + "55"; g.lineWidth = 1;
-        g.strokeRect(Math.round(x1) + 0.5, Math.round(y1) + 0.5, Math.round(x2 - x1), Math.round(y2 - y1));
-        label(b.label, x1 + 2, y1, b.color, "left");
-      });
-
-      o.macros.forEach((b) => {
-        const x1 = X(b.start) - half, x2 = X(b.end) + half, y1 = Y(b.high), y2 = Y(b.low);
-        if (x2 < 0 || x1 > w || y1 == null || y2 == null) return;
-        g.setLineDash([2, 2]); g.strokeStyle = "#787b8699"; g.lineWidth = 1;
-        g.strokeRect(Math.round(x1) + 0.5, Math.round(y1) + 0.5, Math.round(x2 - x1), Math.round(y2 - y1));
-      });
-
-      o.levels.forEach((l) => {
-        if (l.daily && !showInd.daily) return;
-        const x1 = X(l.start), x2 = xEnd(l.end), y = Y(l.price);
-        if (l.daily) {
-          line(x1, x2, y, l.color + (l.mitigated ? "99" : "cc"), 1, l.mitigated ? [2, 3] : []);
-          return;
-        }
-        if (l.open) { line(x1, x2, y, "#787b86aa", 1, [5, 4]); label(l.label, x2 - 2, y, "#8b95a7"); return; }
-        line(x1, x2, y, l.color + (l.mitigated ? "88" : "ee"), 1, []);
-        label(l.label, x2 - 2, y, l.color);
-      });
-
-      if (showInd.fvg) {
-        o.fvgs.forEach((f) => {
-          const x1 = X(f.start) - half, x2 = X(f.end) + half, yt = Y(f.top), yb = Y(f.bottom);
-          if (x2 < 0 || x1 > w || yt == null || yb == null) return;
-          const color = (f.bull ? "#089981" : "#f23645") + (f.touched ? "99" : "ff");
-          if (f.confluence) { g.fillStyle = "#8c8f9926"; g.fillRect(x1, yt, x2 - x1, yb - yt); }
-          line(x1, x2, yt, color, 1.2); line(x1, x2, yb, color, 1.2);
-          line(x1, x2, (yt + yb) / 2, f.confluence ? "#9c27b0" : color, 0.8, [3, 3]);
-        });
-        o.vis.forEach((f) => {
-          const x1 = X(f.start) - half, x2 = X(f.end) + half;
-          const color = "#fa9900" + (f.touched ? "8c" : "ff");
-          line(x1, x2, Y(f.top), color, 0.8, [3, 2]); line(x1, x2, Y(f.bottom), color, 0.8, [3, 2]);
-        });
-      }
-
-      if (showInd.mss) {
-        o.breaks.forEach((b) => {
-          const x1 = X(b.start), x2 = X(b.end), y = Y(b.price);
-          const color = b.bull ? "#089981" : "#f23645";
-          line(x1, x2, y, color, 1, [4, 3]);
-          if (y != null) { g.fillStyle = color; g.textAlign = "center"; g.textBaseline = b.bull ? "bottom" : "top"; g.fillText("MSS", (x1 + x2) / 2, b.bull ? y - 2 : y + 2); g.textBaseline = "bottom"; }
-        });
-      }
-
-      o.sweeps.forEach((s) => {
-        const x = X(s.index), y = Y(s.price);
-        if (x == null || y == null || x < 0 || x > w) return;
-        g.fillStyle = "#fa9900"; g.textAlign = "center"; g.textBaseline = s.bull ? "top" : "bottom";
-        g.fillText("✕ " + s.label, x, s.bull ? y + 3 : y - 3);
-        g.textBaseline = "bottom";
-      });
-      g.setLineDash([]);
+      if (this.requestICT) this.requestICT();
+      if (this.drawings) this.drawings.update();
     },
 
     /* ----- money flow / news flash above the chart ----- */
@@ -1689,7 +2070,7 @@
       const box = $("flowBox");
       const nowS = Date.now() / 1000;
       // A red USD release in the last minute takes the place of the money flow.
-      const fresh = this.goldEvents(3).find((e) => e.time <= nowS && nowS - e.time < 60);
+      const fresh = this.replay ? null : this.goldEvents(3).find((e) => e.time <= nowS && nowS - e.time < 60);
       if (fresh && this.bars.length) {
         const i = this.bars.findIndex((b) => b.time + TF_SECONDS[this.interval] > fresh.time);
         const ref = i >= 0 ? this.bars[i].open : null;
@@ -1700,7 +2081,7 @@
         return;
       }
       const allowed = this.owner || this.features.sharkflow !== false;
-      const f = allowed && showInd.flow && window.ICT ? window.ICT.sharkFlow(this.bars) : null;
+      const f = allowed && showInd.flow && window.ICT ? window.ICT.sharkFlow(this.viewBars()) : null;
       if (!f) { box.hidden = true; return; }
       const pct = (f.flow >= 0 ? "+" : "") + Math.round(f.flow * 100) + "%";
       const verdict = f.flow >= 0.25 ? ["Tiền VÀO mạnh", "pos"] : f.flow >= 0.08 ? ["Tiền đang vào", "pos"] : f.flow > -0.08 ? ["Tiền cân bằng", "muted"] : f.flow > -0.25 ? ["Tiền đang ra", "neg"] : ["Tiền RA mạnh", "neg"];

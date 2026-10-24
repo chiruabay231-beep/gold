@@ -1,53 +1,107 @@
-/* ICT Killzones + Pivots, FVG / volume imbalances, market structure and the shark
- * money flow: the same rules as the app (BacktestKit KillzonePivots / SharkFlow),
- * on bars {time (s, UTC), open, high, low, close, volume}. Everything is returned
- * in bar indexes; the chart layer turns them into pixels. */
+/* ICT Killzones + Pivots, FVG / volume imbalances, market structure, liquidity
+ * sweeps and the shark money flow: the same rules and options as the app
+ * (BacktestKit KillzonePivots / SharkFlow), on bars {time (s, UTC), open, high,
+ * low, close, volume}. compute() returns everything in bar indexes; draw() paints
+ * it inside the chart's own render pass (a lightweight-charts series primitive),
+ * so it moves with the chart without lag. */
 (() => {
   "use strict";
 
-  const ZONE = "America/New_York";
-  const SESSIONS = [
-    { name: "Asia", start: 20, end: 24, hi: "AS.H", lo: "AS.L", color: "#2962ff" },
-    { name: "London", start: 2, end: 5, hi: "LO.H", lo: "LO.L", color: "#f23645" },
-    { name: "NY AM", start: 9.5, end: 11, hi: "NYAM.H", lo: "NYAM.L", color: "#089981" },
-    { name: "NY Lunch", start: 12, end: 13, hi: "NYL.H", lo: "NYL.L", color: "#fabf00" },
-    { name: "NY PM", start: 13.5, end: 16, hi: "NYPM.H", lo: "NYPM.L", color: "#9c27b0" },
-  ];
-  const OPENS = [{ hour: 0, label: "DO" }, { hour: 9.5, label: "09:30" }];
-  const MACROS = [
-    [2 + 33 / 60, 3], [4 + 3 / 60, 4.5], [8 + 50 / 60, 9 + 10 / 60], [9 + 50 / 60, 10 + 10 / 60],
-    [10 + 50 / 60, 11 + 10 / 60], [11 + 50 / 60, 12 + 10 / 60], [13 + 10 / 60, 13 + 40 / 60], [15.25, 15.75],
-  ];
-  const MAX_DAYS = 3;
+  function defaults() {
+    return {
+      timeZone: "America/New_York",
+      tfLimit: 30, maxDays: 3,
+      sessions: [
+        { on: true, name: "Asia", start: 20, end: 24, hi: "AS.H", lo: "AS.L", color: "#2962ff" },
+        { on: true, name: "London", start: 2, end: 5, hi: "LO.H", lo: "LO.L", color: "#f23645" },
+        { on: true, name: "NY AM", start: 9.5, end: 11, hi: "NYAM.H", lo: "NYAM.L", color: "#089981" },
+        { on: true, name: "NY Lunch", start: 12, end: 13, hi: "NYL.H", lo: "NYL.L", color: "#fabf00" },
+        { on: true, name: "NY PM", start: 13.5, end: 16, hi: "NYPM.H", lo: "NYPM.L", color: "#9c27b0" },
+      ],
+      showBoxes: true, boxLabels: true, boxBorder: true, boxOpacity: 12,
+      showPivots: true, pivotLabels: true, livePivots: true, pivotUntilMitigated: true, keepMitigated: true,
+      pivotStyle: "solid", mitigatedStyle: "solid", midpoints: false, pivotWidth: 1,
+      opens: [
+        { on: true, hour: 0, label: "DO", color: "#787b86" },
+        { on: false, hour: 8.5, label: "08:30", color: "#787b86" },
+        { on: true, hour: 9.5, label: "09:30", color: "#787b86" },
+        { on: false, hour: 13.5, label: "13:30", color: "#787b86" },
+      ],
+      openStyle: "dashed",
+      stamps: [{ on: true, hour: 0 }, { on: false, hour: 8.5 }, { on: false, hour: 10 }, { on: false, hour: 14 }],
+      stampColor: "#787b86", stampStyle: "dotted",
+      cutoff: false, cutoffHour: 15,
+      daily: true, dailyDays: 5, dailyKeepTouched: true, dayHighColor: "#089981", dayLowColor: "#f23645", dailyStyle: "solid",
+      prevDay: false, prevWeek: false, prevMonth: false, periodColor: "#787b86",
+      dayOfWeek: false, rangeTable: false, rangeAvg: 5,
+      macros: true, macroTfLimit: 15, macroTimeLabels: true, macroColor: "#787b86",
+      macroList: [
+        { on: true, name: "London 1", start: 2 + 33 / 60, end: 3 },
+        { on: true, name: "London 2", start: 4 + 3 / 60, end: 4.5 },
+        { on: true, name: "NY AM 1", start: 8 + 50 / 60, end: 9 + 10 / 60 },
+        { on: true, name: "NY AM 2", start: 9 + 50 / 60, end: 10 + 10 / 60 },
+        { on: true, name: "NY AM 3", start: 10 + 50 / 60, end: 11 + 10 / 60 },
+        { on: true, name: "NY Lunch", start: 11 + 50 / 60, end: 12 + 10 / 60 },
+        { on: true, name: "NY PM", start: 13 + 10 / 60, end: 13 + 40 / 60 },
+        { on: true, name: "Last Hour", start: 15.25, end: 15.75 },
+      ],
+      fvg: true, fvgFrom: 1, fvgTo: 1440, fvgStrong: true, fvgDisplacement: 1.5, fvgConfluence: true,
+      fvgMid: true, fvgHideFilled: false, gapKeep: 15, fvgMinSize: 0, fvgCount: 40,
+      fvgBull: "#089981", fvgBear: "#f23645", fvgZone: "#8c8f99", fvgZoneMid: "#9c27b0",
+      vi: true, viCount: 20, viHideTouched: false, viColor: "#fa9900",
+      mss: true, bos: false, swing: 5, structureCount: 20, mssBull: "#089981", mssBear: "#f23645",
+      sweeps: true, sweepCount: 20, sweepColor: "#fa9900",
+      lineScale: 1,
+    };
+  }
 
-  // New York offset per hour bucket (DST changes on the hour).
-  const offsetCache = new Map();
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: ZONE, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
-  });
-  function offsetSeconds(t) {
-    const bucket = Math.floor(t / 3600);
-    let o = offsetCache.get(bucket);
+  /** Saved settings over the defaults (keys added later keep their defaults). */
+  function merge(saved) {
+    const d = defaults();
+    if (!saved || typeof saved !== "object") return d;
+    for (const k of Object.keys(d)) {
+      if (!(k in saved)) continue;
+      if (Array.isArray(d[k])) {
+        if (Array.isArray(saved[k])) d[k] = d[k].map((item, i) => Object.assign({}, item, saved[k][i] || {}));
+      } else if (typeof saved[k] === typeof d[k]) d[k] = saved[k];
+    }
+    return d;
+  }
+
+  /* ---------- clock in the indicator's time zone ---------- */
+
+  const formats = new Map();
+  const offsets = new Map();
+  function offsetSeconds(t, zone) {
+    const key = zone + ":" + Math.floor(t / 3600);
+    let o = offsets.get(key);
     if (o === undefined) {
-      const p = Object.fromEntries(parts.formatToParts(new Date(bucket * 3600 * 1000)).map((x) => [x.type, x.value]));
-      const local = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute) / 1000;
-      o = local - bucket * 3600;
-      offsetCache.set(bucket, o);
+      let f = formats.get(zone);
+      if (!f) {
+        f = new Intl.DateTimeFormat("en-US", { timeZone: zone, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+        formats.set(zone, f);
+      }
+      const at = Math.floor(t / 3600) * 3600;
+      const p = Object.fromEntries(f.formatToParts(new Date(at * 1000)).map((x) => [x.type, x.value]));
+      o = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute) / 1000 - at;
+      offsets.set(key, o);
     }
     return o;
   }
 
-  /** Hour of day, day number and week number in New York for each bar. */
-  function clock(bars) {
-    const hour = new Array(bars.length), day = new Array(bars.length), week = new Array(bars.length);
+  function clock(bars, zone) {
+    const n = bars.length, hour = new Array(n), day = new Array(n), week = new Array(n), month = new Array(n), weekday = new Array(n);
     bars.forEach((b, i) => {
-      const local = b.time + offsetSeconds(b.time);
+      const local = b.time + offsetSeconds(b.time, zone);
       const d = Math.floor(local / 86400);
       day[i] = d;
       week[i] = Math.floor((d + 4) / 7);
+      weekday[i] = (d + 4) % 7; // 0 = Sunday
+      const dt = new Date(d * 86400000);
+      month[i] = dt.getUTCFullYear() * 12 + dt.getUTCMonth();
       hour[i] = (local - d * 86400) / 3600;
     });
-    return { hour, day, week };
+    return { hour, day, week, month, weekday };
   }
 
   function windows(ck, start, end) {
@@ -84,11 +138,21 @@
     return out;
   }
 
+  function cutoffIndexes(ck, hour) {
+    const out = [];
+    for (let i = 1; i < ck.hour.length; i++) {
+      if (ck.hour[i] >= hour && (ck.day[i] !== ck.day[i - 1] || ck.hour[i - 1] < hour)) out.push(i);
+    }
+    return out;
+  }
+
   /* ---------- gaps ---------- */
 
-  function rawGaps(c, displacement) {
+  function rawGaps(c, minSize, displacement) {
     const n = c.length, gaps = [];
     if (n < 3) return gaps;
+    const tail = c.slice(-100);
+    const minimum = tail.reduce((a, b) => a + b.high - b.low, 0) / tail.length * Math.max(minSize, 0);
     const sums = [0];
     c.forEach((b) => sums.push(sums[sums.length - 1] + Math.abs(b.close - b.open)));
     const strong = (m, bull) => {
@@ -100,9 +164,9 @@
       return body >= (sums[m] - sums[from]) / (m - from) * displacement;
     };
     for (let i = 2; i < n; i++) {
-      if (c[i].low > c[i - 2].high && strong(i - 1, true)) {
+      if (c[i].low > c[i - 2].high && c[i].low - c[i - 2].high > minimum && strong(i - 1, true)) {
         gaps.push({ bull: true, top: c[i].low, bottom: c[i - 2].high, start: i - 1, end: i - 1 });
-      } else if (c[i].high < c[i - 2].low && strong(i - 1, false)) {
+      } else if (c[i].high < c[i - 2].low && c[i - 2].low - c[i].high > minimum && strong(i - 1, false)) {
         gaps.push({ bull: false, top: c[i - 2].low, bottom: c[i].high, start: i - 1, end: i - 1 });
       }
     }
@@ -122,11 +186,11 @@
     return g;
   }
 
-  // A touched gap stays while price has not traded through it, for 15 minutes.
-  function stillShown(g, c) {
+  // A touched gap stays while price has not traded through it, for `keep` minutes.
+  function stillShown(g, c, keep) {
     if (!g.touched || g.end >= c.length) return true;
     for (let j = g.end; j < c.length; j++) if (g.bull ? c[j].low < g.bottom : c[j].high > g.top) return false;
-    return c[c.length - 1].time - c[g.end].time <= 15 * 60;
+    return c[c.length - 1].time - c[g.end].time <= keep * 60;
   }
 
   function higherTimeframe(sec) {
@@ -147,19 +211,20 @@
     return { bars, first };
   }
 
-  function fairValueGaps(c, sec) {
+  function fairValueGaps(c, sec, cfg) {
     const gaps = [];
-    const raw = rawGaps(c, 1.5);
-    for (let k = raw.length - 1; k >= 0 && gaps.length < 40; k--) {
+    const raw = rawGaps(c, cfg.fvgMinSize, cfg.fvgStrong ? cfg.fvgDisplacement : null);
+    for (let k = raw.length - 1; k >= 0 && gaps.length < cfg.fvgCount; k--) {
       const g = followed(raw[k], raw[k].start, raw[k].start + 1, c);
-      if (stillShown(g, c)) gaps.push(g);
+      if (g.touched && cfg.fvgHideFilled) continue;
+      if (stillShown(g, c, cfg.gapKeep)) gaps.push(g);
     }
     gaps.reverse();
     const higher = higherTimeframe(sec);
-    if (higher && gaps.length) {
+    if (cfg.fvgConfluence && higher && gaps.length) {
       const { bars, first } = aggregate(c, higher);
       const earliest = gaps[0].start;
-      const big = rawGaps(bars, null).map((r) => {
+      const big = rawGaps(bars, cfg.fvgMinSize, null).map((r) => {
         const formed = r.start + 3 < first.length ? first[r.start + 3] - 1 : c.length - 1;
         return followed(r, first[r.start], formed, c);
       }).filter((h) => h.end >= earliest);
@@ -170,12 +235,12 @@
     return gaps;
   }
 
-  function volumeImbalances(c) {
+  function volumeImbalances(c, cfg) {
     const n = c.length, out = [];
     if (n < 3) return out;
     const tail = c.slice(-100);
     const minimum = tail.reduce((a, b) => a + b.high - b.low, 0) / tail.length * 0.03;
-    for (let i = n - 1; i >= 1 && out.length < 20; i--) {
+    for (let i = n - 1; i >= 1 && out.length < cfg.viCount; i--) {
       const a = c[i - 1], b = c[i];
       let raw = null;
       if (a.close > a.open && b.close > b.open && b.open - a.close > minimum && b.low <= a.high) {
@@ -185,13 +250,14 @@
       }
       if (!raw) continue;
       const g = followed(raw, i - 1, i, c);
-      if (stillShown(g, c)) out.push(g);
+      if (g.touched && cfg.viHideTouched) continue;
+      if (stillShown(g, c, cfg.gapKeep)) out.push(g);
     }
     return out.reverse();
   }
 
-  function structureBreaks(c, length = 5) {
-    const n = c.length, out = [];
+  function structureBreaks(c, cfg) {
+    const length = Math.max(1, cfg.swing), n = c.length, out = [];
     if (n <= length * 2 + 1) return out;
     let hi = null, lo = null, trend = 0;
     for (let i = 0; i < n; i++) {
@@ -207,99 +273,148 @@
         if (isLo) lo = { price: c[p].low, index: p };
       }
       if (hi && c[i].close > hi.price) {
-        if (trend === -1) out.push({ bull: true, price: hi.price, start: hi.index, end: i });
+        const shift = trend === -1;
+        if (shift ? cfg.mss : cfg.bos) out.push({ bull: true, shift, price: hi.price, start: hi.index, end: i });
         trend = 1; hi = null;
       }
       if (lo && c[i].close < lo.price) {
-        if (trend === 1) out.push({ bull: false, price: lo.price, start: lo.index, end: i });
+        const shift = trend === 1;
+        if (shift ? cfg.mss : cfg.bos) out.push({ bull: false, shift, price: lo.price, start: lo.index, end: i });
         trend = -1; lo = null;
       }
     }
-    return out.slice(-20);
+    return out.slice(-Math.max(1, cfg.structureCount));
   }
 
-  /* ---------- killzones ---------- */
+  const WEEKDAYS = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
 
-  function compute(c, sec, show) {
-    const out = { boxes: [], levels: [], stamps: [], macros: [], fvgs: [], vis: [], breaks: [], sweeps: [], hidden: false };
+  /* ---------- everything ---------- */
+
+  function compute(c, sec, cfg, show) {
+    const out = { boxes: [], levels: [], stamps: [], macros: [], fvgs: [], vis: [], breaks: [], sweeps: [], days: [], ranges: [], hidden: false };
     if (c.length < 3) return out;
-    if (show.fvg) { out.fvgs = fairValueGaps(c, sec); out.vis = volumeImbalances(c); }
-    if (show.mss) out.breaks = structureBreaks(c);
-    const ck = clock(c);
     const n = c.length;
-    if (show.daily && sec < 86400) out.levels.push(...dailyLevels(c, ck));
-    if (sec > 30 * 60) { out.hidden = show.killzones; return out; }
+    if (show.fvg && cfg.fvg && sec >= cfg.fvgFrom * 60 - 1 && sec <= cfg.fvgTo * 60 + 1) {
+      out.fvgs = fairValueGaps(c, sec, cfg);
+      if (cfg.vi) out.vis = volumeImbalances(c, cfg);
+    }
+    if (show.mss && (cfg.mss || cfg.bos)) out.breaks = structureBreaks(c, cfg);
+    const ck = clock(c, cfg.timeZone);
+    if (show.daily && cfg.daily && sec < 86400) out.levels.push(...dailyLevels(c, ck, cfg));
     if (!show.killzones) return out;
-    const firstDay = ck.day[n - 1] - MAX_DAYS + 1;
+    if (sec > cfg.tfLimit * 60) { out.hidden = true; return out; }
+    const firstDay = ck.day[n - 1] - Math.max(cfg.maxDays, 1) + 1;
+    const cutoffs = cfg.cutoff ? cutoffIndexes(ck, cfg.cutoffHour) : [];
+    const cutAfter = (i) => cutoffs.find((x) => x > i);
 
-    SESSIONS.forEach((s) => {
+    cfg.sessions.forEach((s) => {
+      if (!s.on) return;
+      const ranges = [];
       for (const [a, b] of windows(ck, s.start, s.end)) {
         let high = -Infinity, low = Infinity, hiI = a, loI = a;
         for (let i = a; i <= b; i++) {
           if (c[i].high > high) { high = c[i].high; hiI = i; }
           if (c[i].low < low) { low = c[i].low; loI = i; }
         }
+        ranges.push(high - low);
         if (ck.day[b] < firstDay) continue;
-        out.boxes.push({ start: a, end: b, high, low, label: s.name, color: s.color });
+        if (cfg.showBoxes) out.boxes.push({ start: a, end: b, high, low, label: cfg.boxLabels ? s.name : "", color: s.color });
+        const mid = (high + low) / 2;
         if (b >= n - 1) {
           // Still open: the running high/low.
-          out.levels.push({ price: high, start: hiI, end: null, label: s.hi, color: s.color });
-          out.levels.push({ price: low, start: loI, end: null, label: s.lo, color: s.color });
+          if (cfg.showPivots && cfg.livePivots) {
+            out.levels.push({ kind: "pivot", price: high, start: hiI, end: null, label: s.hi, color: s.color });
+            out.levels.push({ kind: "pivot", price: low, start: loI, end: null, label: s.lo, color: s.color });
+          }
+          if (cfg.midpoints && cfg.livePivots) out.levels.push({ kind: "mid", price: mid, start: a, end: b, label: "", color: s.color });
           continue;
         }
         for (const isHigh of [true, false]) {
           const price = isHigh ? high : low;
           const j = firstBreak(c, price, isHigh, b + 1);
-          if (j !== null && (isHigh ? c[j].close < price : c[j].close > price)) {
+          if (cfg.sweeps && j !== null && (isHigh ? c[j].close < price : c[j].close > price)) {
             out.sweeps.push({ bull: !isHigh, price, index: j, label: isHigh ? s.hi : s.lo });
           }
-          out.levels.push({ price, start: isHigh ? hiI : loI, end: j, label: isHigh ? s.hi : s.lo, color: s.color, mitigated: j !== null });
+          if (!cfg.showPivots || (j !== null && !cfg.keepMitigated)) continue;
+          let end = cfg.pivotUntilMitigated ? j : null;
+          const cut = cutAfter(b);
+          if (cut !== undefined && (end === null || cut < end)) end = cut;
+          out.levels.push({ kind: "pivot", price, start: isHigh ? hiI : loI, end, label: isHigh ? s.hi : s.lo, color: s.color, mitigated: j !== null });
         }
+        if (cfg.midpoints) out.levels.push({ kind: "mid", price: mid, start: a, end: b, label: "", color: s.color });
+      }
+      if (ranges.length) {
+        const recent = ranges.slice(-Math.max(cfg.rangeAvg, 1));
+        out.ranges.push({ name: s.name, color: s.color, latest: ranges[ranges.length - 1], average: recent.reduce((x, y) => x + y, 0) / recent.length });
       }
     });
 
-    if (sec <= 15 * 60) {
-      MACROS.forEach(([s, e]) => {
-        for (const [a, b] of windows(ck, s, e)) {
+    if (cfg.macros && sec <= cfg.macroTfLimit * 60) {
+      cfg.macroList.forEach((m) => {
+        if (!m.on) return;
+        for (const [a, b] of windows(ck, m.start, m.end)) {
           if (ck.day[b] < firstDay) continue;
           let high = -Infinity, low = Infinity;
           for (let i = a; i <= b; i++) { high = Math.max(high, c[i].high); low = Math.min(low, c[i].low); }
-          const h = Math.floor(s), m = Math.round((s - h) * 60);
-          out.macros.push({ start: a, end: b, high, low, label: `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}` });
+          const h = Math.floor(m.start), mm = Math.round((m.start - h) * 60);
+          out.macros.push({ start: a, end: b, high, low, label: cfg.macroTimeLabels ? `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}` : m.name });
         }
       });
     }
 
-    OPENS.forEach((o) => {
+    cfg.opens.forEach((o) => {
+      if (!o.on) return;
       const starts = markIndexes(ck, o.hour, firstDay);
       starts.forEach((st, k) => {
-        out.levels.push({ price: c[st].open, start: st, end: k + 1 < starts.length ? starts[k + 1] - 1 : null, label: o.label, color: "#787b86", open: true });
+        let end = k + 1 < starts.length ? starts[k + 1] - 1 : null;
+        const cut = cutAfter(st);
+        if (cut !== undefined && (end === null || cut < end)) end = cut;
+        out.levels.push({ kind: "open", price: c[st].open, start: st, end, label: o.label, color: o.color });
       });
     });
-    out.stamps = markIndexes(ck, 0, firstDay);
+    cfg.stamps.forEach((m) => { if (m.on) out.stamps.push(...markIndexes(ck, m.hour, firstDay)); });
 
-    // Sweeps of the previous day's high and low.
-    let start = n - 1;
-    while (start > 0 && ck.day[start - 1] === ck.day[n - 1]) start--;
-    if (start > 0) {
-      const prev = ck.day[start - 1];
-      let high = -Infinity, low = Infinity;
-      for (let i = start - 1; i >= 0 && ck.day[i] === prev; i--) { high = Math.max(high, c[i].high); low = Math.min(low, c[i].low); }
-      [[true, high, "PDH"], [false, low, "PDL"]].forEach(([isHigh, price, label]) => {
-        const j = firstBreak(c, price, isHigh, start);
+    // Previous day / week / month highs and lows across the current period.
+    const previous = (id) => {
+      const cur = id[n - 1];
+      let start = n - 1;
+      while (start > 0 && id[start - 1] === cur) start--;
+      if (start === 0) return null;
+      const prev = id[start - 1];
+      let high = -Infinity, low = Infinity, hiI = start - 1, loI = start - 1;
+      for (let i = start - 1; i >= 0 && id[i] === prev; i--) {
+        if (c[i].high > high) { high = c[i].high; hiI = i; }
+        if (c[i].low < low) { low = c[i].low; loI = i; }
+      }
+      return { start, high, low, hiI, loI };
+    };
+    const pd = previous(ck.day);
+    if (cfg.sweeps && pd) {
+      [[true, pd.high, "PDH"], [false, pd.low, "PDL"]].forEach(([isHigh, price, label]) => {
+        const j = firstBreak(c, price, isHigh, pd.start);
         if (j !== null && (isHigh ? c[j].close < price : c[j].close > price)) out.sweeps.push({ bull: !isHigh, price, index: j, label });
       });
     }
-    out.sweeps = out.sweeps.sort((a, b) => a.index - b.index).slice(-20);
+    [[cfg.prevDay, ck.day, "PDH", "PDL"], [cfg.prevWeek, ck.week, "PWH", "PWL"], [cfg.prevMonth, ck.month, "PMH", "PML"]].forEach(([on, id, h, l]) => {
+      if (!on) return;
+      const r = previous(id);
+      if (!r) return;
+      out.levels.push({ kind: "period", price: r.high, start: r.start, end: null, label: h, color: cfg.periodColor });
+      out.levels.push({ kind: "period", price: r.low, start: r.start, end: null, label: l, color: cfg.periodColor });
+    });
+    if (cfg.dayOfWeek) markIndexes(ck, 12, firstDay).forEach((i) => out.days.push({ index: i, label: WEEKDAYS[ck.weekday[i]] }));
+    out.sweeps = out.sweeps.sort((a, b) => a.index - b.index).slice(-Math.max(cfg.sweepCount, 1));
+    if (!cfg.sweeps) out.sweeps = [];
+    if (!cfg.rangeTable) out.ranges = [];
     return out;
   }
 
-  // High and low of each of the last 5 finished days, until a candle reaches them.
-  function dailyLevels(c, ck) {
+  // High and low of each of the last finished days, until a candle reaches them.
+  function dailyLevels(c, ck, cfg) {
     const n = c.length, today = ck.day[n - 1], ranges = [];
     let end = n - 1;
     while (end >= 0 && ck.day[end] === today) end--;
-    while (end >= 0 && ranges.length < 5) {
+    while (end >= 0 && ranges.length < Math.max(cfg.dailyDays, 1)) {
       let start = end;
       while (start > 0 && ck.day[start - 1] === ck.day[end]) start--;
       ranges.push([start, end]);
@@ -309,12 +424,142 @@
     ranges.reverse().forEach(([a, b]) => {
       let hiI = a, loI = a;
       for (let i = a; i <= b; i++) { if (c[i].high > c[hiI].high) hiI = i; if (c[i].low < c[loI].low) loI = i; }
+      const wd = WEEKDAYS[ck.weekday[a]];
       [[true, hiI, c[hiI].high], [false, loI, c[loI].low]].forEach(([isHigh, st, price]) => {
         const touch = firstTouch(c, price, isHigh, b + 1);
-        levels.push({ price, start: st, end: touch, label: "", color: isHigh ? "#089981" : "#f23645", mitigated: touch !== null, daily: true });
+        if (touch !== null && !cfg.dailyKeepTouched) return;
+        levels.push({ kind: "daily", price, start: st, end: touch, label: (isHigh ? "Đỉnh " : "Đáy ") + wd,
+          color: isHigh ? cfg.dayHighColor : cfg.dayLowColor, mitigated: touch !== null });
       });
     });
     return levels;
+  }
+
+  /* ---------- drawing ---------- */
+
+  const DASH = { solid: [], dashed: [6, 4], dotted: [2, 3] };
+
+  /** Paints `o` on a 2D context in CSS pixels; X(index) and Y(price) give coordinates. */
+  function draw(g, o, cfg, X, Y, w, h) {
+    if (!o) return;
+    const s = cfg.lineScale || 1;
+    const x0 = X(0), x1 = X(1);
+    const half = x0 != null && x1 != null ? Math.max(0.5, (x1 - x0) / 2) : 2;
+    const xEnd = (end) => (end == null ? w : X(end) + half);
+    g.save();
+    g.font = "10px Be Vietnam Pro, system-ui, sans-serif";
+    g.textBaseline = "bottom";
+    const line = (a, b, y, color, width = 1, dash = []) => {
+      if (y == null || a == null || b == null || b < 0 || a > w) return;
+      g.strokeStyle = color; g.lineWidth = width * s; g.setLineDash(dash);
+      g.beginPath(); g.moveTo(a, Math.round(y) + 0.5); g.lineTo(b, Math.round(y) + 0.5); g.stroke();
+    };
+    const label = (text, x, y, color, align = "right") => {
+      if (!text || y == null || x == null) return;
+      g.fillStyle = color; g.textAlign = align;
+      g.fillText(text, Math.min(Math.max(x, 2), w - 2), y - 2);
+    };
+    const alpha = (hex, a) => hex + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
+
+    if (o.hidden) { g.fillStyle = "#8b95a7"; g.textAlign = "left"; g.textBaseline = "top"; g.fillText(`Killzones chỉ hiện ở khung ≤ ${cfg.tfLimit >= 60 ? cfg.tfLimit / 60 + "h" : cfg.tfLimit + "m"}`, 8, 8); g.textBaseline = "bottom"; }
+
+    o.stamps.forEach((i) => {
+      const x = X(i);
+      if (x == null || x < 0 || x > w) return;
+      g.strokeStyle = alpha(cfg.stampColor, 0.45); g.lineWidth = 1; g.setLineDash(DASH[cfg.stampStyle] || []);
+      g.beginPath(); g.moveTo(Math.round(x - half) + 0.5, 0); g.lineTo(Math.round(x - half) + 0.5, h); g.stroke();
+    });
+
+    o.boxes.forEach((b) => {
+      const a = X(b.start), e = X(b.end), y1 = Y(b.high), y2 = Y(b.low);
+      if (a == null || e == null || y1 == null || y2 == null) return;
+      const l = a - half, r = e + half;
+      if (r < 0 || l > w) return;
+      g.fillStyle = alpha(b.color, (cfg.boxOpacity || 12) / 100);
+      g.fillRect(l, y1, r - l, y2 - y1);
+      if (cfg.boxBorder) {
+        g.setLineDash([]); g.strokeStyle = alpha(b.color, 0.4); g.lineWidth = 1;
+        g.strokeRect(Math.round(l) + 0.5, Math.round(y1) + 0.5, Math.round(r - l), Math.round(y2 - y1));
+      }
+      label(b.label, l + 2, y1, b.color, "left");
+    });
+
+    o.macros.forEach((b) => {
+      const a = X(b.start), e = X(b.end), y1 = Y(b.high), y2 = Y(b.low);
+      if (a == null || e == null || y1 == null || y2 == null) return;
+      g.setLineDash([2, 2]); g.strokeStyle = alpha(cfg.macroColor, 0.7); g.lineWidth = 1;
+      g.strokeRect(Math.round(a - half) + 0.5, Math.round(y1) + 0.5, Math.round(e - a + 2 * half), Math.round(y2 - y1));
+      g.textAlign = "left"; g.fillStyle = alpha(cfg.macroColor, 0.9);
+      g.fillText(b.label, a - half + 1, y1 - 1);
+    });
+
+    o.levels.forEach((l) => {
+      const a = X(l.start), b = xEnd(l.end), y = Y(l.price);
+      if (a == null) return;
+      if (l.kind === "daily") {
+        line(a, b, y, alpha(l.color, l.mitigated ? 0.6 : 0.85), 1, l.mitigated ? DASH.dotted : DASH[cfg.dailyStyle]);
+        label(l.label, b - 2, y, alpha(l.color, 0.8));
+        return;
+      }
+      if (l.kind === "open") { line(a, b, y, alpha(l.color, 0.75), 1, DASH[cfg.openStyle]); label(l.label, b - 2, y, l.color); return; }
+      if (l.kind === "period") { line(a, b, y, l.color, 1, DASH.dashed); label(l.label, b - 2, y, l.color); return; }
+      if (l.kind === "mid") { line(a, b, y, alpha(l.color, 0.6), 1, DASH.dotted); return; }
+      line(a, b, y, alpha(l.color, l.mitigated ? 0.55 : 0.95), cfg.pivotWidth, DASH[l.mitigated ? cfg.mitigatedStyle : cfg.pivotStyle]);
+      if (cfg.pivotLabels) label(l.label, b - 2, y, l.color);
+    });
+
+    o.fvgs.forEach((f) => {
+      const a = X(f.start), e = X(f.end), yt = Y(f.top), yb = Y(f.bottom);
+      if (a == null || e == null || yt == null || yb == null) return;
+      const l = a - half, r = e + half;
+      if (r < 0 || l > w) return;
+      const color = alpha(f.bull ? cfg.fvgBull : cfg.fvgBear, f.touched ? 0.6 : 1);
+      if (f.confluence) { g.fillStyle = alpha(cfg.fvgZone, 0.15); g.fillRect(l, yt, r - l, yb - yt); }
+      line(l, r, yt, color, 1.2); line(l, r, yb, color, 1.2);
+      if (cfg.fvgMid) line(l, r, (yt + yb) / 2, f.confluence ? cfg.fvgZoneMid : color, 0.8, [3, 3]);
+    });
+    o.vis.forEach((f) => {
+      const a = X(f.start), e = X(f.end);
+      if (a == null || e == null) return;
+      const color = alpha(cfg.viColor, f.touched ? 0.55 : 1);
+      line(a - half, e + half, Y(f.top), color, 0.8, [3, 2]); line(a - half, e + half, Y(f.bottom), color, 0.8, [3, 2]);
+    });
+
+    o.breaks.forEach((b) => {
+      const a = X(b.start), e = X(b.end), y = Y(b.price);
+      if (a == null || e == null || y == null) return;
+      const color = b.bull ? cfg.mssBull : cfg.mssBear;
+      line(a, e, y, color, 1, b.shift ? [4, 3] : []);
+      g.fillStyle = color; g.textAlign = "center"; g.textBaseline = b.bull ? "bottom" : "top";
+      g.fillText(b.shift ? "MSS" : "BOS", (a + e) / 2, b.bull ? y - 2 : y + 2);
+      g.textBaseline = "bottom";
+    });
+
+    o.sweeps.forEach((sw) => {
+      const x = X(sw.index), y = Y(sw.price);
+      if (x == null || y == null || x < 0 || x > w) return;
+      g.fillStyle = cfg.sweepColor; g.textAlign = "center"; g.textBaseline = sw.bull ? "top" : "bottom";
+      g.fillText("✕ " + sw.label, x, sw.bull ? y + 3 : y - 3);
+      g.textBaseline = "bottom";
+    });
+
+    o.days.forEach((d) => {
+      const x = X(d.index);
+      if (x == null || x < 0 || x > w) return;
+      g.fillStyle = "#8b95a7"; g.textAlign = "center"; g.fillText(d.label, x, h - 4);
+    });
+
+    if (o.ranges.length) {
+      g.textAlign = "left"; g.textBaseline = "top";
+      const rows = o.ranges.length + 1, bw = 170, bh = rows * 15 + 8;
+      g.fillStyle = "rgba(12,17,27,.85)"; g.fillRect(w - bw - 8, 8, bw, bh);
+      g.fillStyle = "#8b95a7"; g.fillText("Phiên      gần nhất   TB", w - bw - 2, 12);
+      o.ranges.forEach((r, i) => {
+        g.fillStyle = r.color; g.fillText(r.name, w - bw - 2, 27 + i * 15);
+        g.fillStyle = "#e8ecf3"; g.fillText(r.latest.toFixed(2), w - bw + 66, 27 + i * 15); g.fillText(r.average.toFixed(2), w - bw + 120, 27 + i * 15);
+      });
+    }
+    g.restore();
   }
 
   /* ---------- shark flow ---------- */
@@ -334,7 +579,6 @@
     const threshold = range / length * 0.5;
     const situation = change > threshold ? (flow < -0.05 ? "weakUp" : "strongUp")
       : change < -threshold ? (flow > 0.05 ? "weakDown" : "strongDown") : "flat";
-    // The newest shark bar of the last 30.
     let shark = null, sum = 0;
     for (let i = 0; i < n; i++) {
       if (i >= length) {
@@ -347,5 +591,5 @@
     return { flow, situation, shark };
   }
 
-  window.ICT = { compute, sharkFlow, offsetSeconds };
+  window.ICT = { defaults, merge, compute, draw, sharkFlow };
 })();

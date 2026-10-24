@@ -154,17 +154,18 @@ h1 { font-size: clamp(34px, 5vw, 56px); line-height: 1.12; margin: 18px 0 16px; 
 .sym-btn { background: none; border: 0; color: var(--text); font: 800 16px/1 "Be Vietnam Pro", system-ui, sans-serif; cursor: pointer; padding: 0; }
 .sym-btn:not(:disabled)::after { content: " ▾"; color: var(--muted); font-size: 12px; }
 .sym-btn:disabled { cursor: default; }
-.chart-tools { display: flex; align-items: center; gap: 6px; }
+.chart-tools { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.chart-tools .tf { min-width: 0; flex: 1 1 auto; }
 .live-price { margin-left: 4px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .tf { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
 .tf button, .icon-btn { flex: none; background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font: 600 12px/1 "Be Vietnam Pro", system-ui, sans-serif; cursor: pointer; }
 .tf button.on { background: var(--gold); color: #1a1205; border-color: var(--gold); }
 .icon-btn { font-style: italic; font-weight: 800; color: var(--gold); }
+.icon-btn.plain { font-style: normal; font-size: 13px; color: var(--text); }
 .flow { font-size: 12.5px; line-height: 1.45; padding: 2px 4px 6px; }
 .warn-t { color: #f5a524; }
 .chart-wrap { position: relative; height: min(62vh, 560px); min-height: 320px; }
 #chart { position: absolute; inset: 0; }
-#overlay { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 2; }
 .pill-pos { position: absolute; bottom: 38px; left: 8px; z-index: 3; display: flex; align-items: center; gap: 8px; background: rgba(12, 17, 27, .88);
   border: 1px solid var(--line); border-radius: 999px; padding: 5px 6px 5px 12px; font-size: 12.5px; font-variant-numeric: tabular-nums; backdrop-filter: blur(6px); }
 .pill-pos .go { cursor: pointer; }
@@ -318,3 +319,43 @@ dialog#sheet h3 { margin: 0 30px 6px 0; display: flex; align-items: center; gap:
 .badge.on { background: var(--up); }
 .badge.mem { background: var(--purple); }
 @media (max-width: 520px) { .stats { grid-template-columns: repeat(2, 1fr); } }
+
+/* drawings, chart menu, replay, indicator settings */
+.draw-bar { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  max-width: calc(100% - 16px); overflow-x: auto; scrollbar-width: none; background: rgba(12, 17, 27, .94); border: 1px solid var(--line); border-radius: 12px; padding: 5px 8px; font-size: 12.5px; }
+.draw-bar::-webkit-scrollbar { display: none; }
+.draw-bar button, .draw-bar select { background: #222c3d; color: var(--text); border: 0; border-radius: 8px; height: 26px; min-width: 26px; padding: 0 8px; cursor: pointer; font: 600 12px/1 "Be Vietnam Pro", system-ui, sans-serif; }
+.draw-bar select { min-width: 66px; padding: 0 4px; }
+.draw-bar .sw { width: 20px; min-width: 20px; height: 20px; padding: 0; border-radius: 50%; border: 2px solid transparent; }
+.draw-bar .sw.on { border-color: #fff; }
+.draw-bar .danger { background: rgba(240, 69, 90, .2); }
+.draw-bar .muted { background: transparent; }
+.draw-bar .rr { display: flex; align-items: center; gap: 4px; color: var(--muted); }
+.draw-bar .rr input { width: 44px; height: 26px; background: #0c111b; border: 1px solid var(--line); border-radius: 8px; color: var(--text); text-align: center; }
+.ctx { position: fixed; z-index: 60; min-width: 230px; background: #1a2232; border: 1px solid var(--line); border-radius: 12px; padding: 6px; box-shadow: 0 16px 40px rgba(0, 0, 0, .5); }
+.ctx button { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--text); padding: 9px 10px; border-radius: 8px; font: 500 14px/1.2 "Be Vietnam Pro", system-ui, sans-serif; cursor: pointer; }
+.ctx button:hover { background: #26304a; }
+.replay-bar { margin-top: 8px; display: grid; gap: 6px; background: #0c111b; border: 1px solid var(--gold2); border-radius: 12px; padding: 8px; }
+.r-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 13px; }
+.rb { background: #222c3d; color: var(--text); border: 0; border-radius: 8px; height: 32px; min-width: 32px; padding: 0 10px; cursor: pointer; font: 700 13px/1 "Be Vietnam Pro", system-ui, sans-serif; }
+.rb.play { background: var(--gold); color: #1a1205; min-width: 44px; }
+.replay-bar select, .replay-bar input { height: 32px; background: #151c2a; border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 0 8px; font: 600 13px/1 "Be Vietnam Pro", system-ui, sans-serif; }
+.replay-bar input { width: 74px; }
+.r-time { font-variant-numeric: tabular-nums; margin-left: auto; }
+.r-pnl { margin-left: auto; font-variant-numeric: tabular-nums; }
+.tool-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.tool-grid button { display: flex; align-items: center; gap: 8px; text-align: left; background: #0c111b; border: 1px solid var(--line); color: var(--text); border-radius: 10px; padding: 9px 10px; cursor: pointer; font: 500 13px/1.2 "Be Vietnam Pro", system-ui, sans-serif; }
+.tool-grid button:hover { border-color: var(--gold2); }
+.tool-grid .ti { width: 20px; text-align: center; color: var(--gold); font-size: 15px; }
+details.set { border-top: 1px solid var(--line); padding: 4px 0; }
+details.set summary { cursor: pointer; font-weight: 700; padding: 10px 2px; }
+details.set .toggle:first-child { border-top: 1px solid var(--line); }
+.frow { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 4px; border-top: 1px solid var(--line); font-size: 14px; }
+.frow input, .frow select, .srow input:not([type=checkbox]) { background: #0c111b; border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 7px 8px; font: 600 13px/1 "Be Vietnam Pro", system-ui, sans-serif; }
+.frow input { width: 90px; text-align: right; }
+.frow input[type=color], .srow input[type=color] { width: 42px; height: 32px; padding: 2px; }
+.srow { display: flex; align-items: center; gap: 6px; padding: 7px 2px; border-top: 1px solid var(--line); flex-wrap: wrap; }
+.srow .w-time, .frow .w-time { width: 62px; text-align: center; }
+.srow .w-name { width: 96px; }
+.srow .w-lbl { width: 66px; }
+@media (max-width: 520px) { .tool-grid { grid-template-columns: 1fr; } .r-time, .r-pnl { margin-left: 0; } }
