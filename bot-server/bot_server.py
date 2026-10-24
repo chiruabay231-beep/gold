@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.7"
+VERSION = "2.8"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -555,7 +555,7 @@ def check_stops(mt5, symbol, info, long, stop, target):
     if tick is None or info is None:
         return
     price = tick.bid if long else tick.ask
-    gap = (getattr(info, "trade_stops_level", 0) or 0) * (info.point or 0)
+    gap = (getattr(info, "trade_stops_level", 0) or 0) * (getattr(info, "point", 0) or 0)
     d = info.digits
     if stop:
         if long and stop >= price - gap:
@@ -2034,6 +2034,202 @@ def publish_address(server):
             pass
 
 
+STOP_MAGIC = 20263
+DEFAULT_STOPBOT = {"running": False, "symbol": "", "interval": "1m", "direction": "both", "offset": 0.0,
+                   "stopMode": "candle", "stopDistance": 5.0, "rr": 2.0, "lots": 0.01, "minRange": 0.0,
+                   "maxRange": 0.0, "oco": True, "onePosition": True}
+
+
+class StopBot:
+    """"Stop theo nến" on the MT5 account (the app's CandleStopBot): after each closed
+    candle a buy stop above its high and a sell stop below its low, SL on the other side
+    of the candle (or a fixed distance), TP = rr × risk. Unfilled orders live one candle;
+    when one side fills the other is cancelled (OCO). Runs on the server, so it keeps
+    going when the website or app is closed."""
+
+    def __init__(self, server):
+        self.server = server
+        self.lock = threading.RLock()
+        self.events = []
+        self.last_bar = None
+        self.known = set()     # positions of the bot already seen
+        self.error = ""
+        self.started = None
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    @property
+    def cfg(self):
+        c = self.server.config.setdefault("stopbot", {})
+        for k, v in DEFAULT_STOPBOT.items():
+            c.setdefault(k, v)
+        return c
+
+    def event(self, text, notify=False):
+        with self.lock:
+            self.events.insert(0, {"time": now(), "text": text})
+            del self.events[80:]
+        self.server.log("🎯 Bot Stop: " + text, notify=notify)
+
+    def settings(self, body):
+        c = self.cfg
+        for key, cast in (("symbol", str), ("interval", str), ("direction", str), ("offset", float), ("stopMode", str),
+                          ("stopDistance", float), ("rr", float), ("lots", float), ("minRange", float), ("maxRange", float),
+                          ("oco", bool), ("onePosition", bool)):
+            if key in body:
+                c[key] = cast(body[key])
+        if c["interval"] not in MT5_TIMEFRAMES or c["interval"] == "1w":
+            raise ValueError("Khung không hợp lệ")
+        if c["direction"] not in ("both", "long", "short") or c["stopMode"] not in ("candle", "fixed"):
+            raise ValueError("Cài đặt không hợp lệ")
+        c["lots"] = max(0.01, c["lots"])
+        if "running" in body:
+            on = bool(body["running"])
+            if on and not c["symbol"]:
+                raise ValueError("Chưa chọn mã")
+            if on and not c["running"]:
+                self.last_bar, self.known, self.error, self.started = None, set(), "", now()
+                self.event(f"BẬT · {c['symbol']} {c['interval']} · {c['lots']} lot · R:R {c['rr']}", notify=True)
+            if not on and c["running"]:
+                self.event("TẮT, huỷ lệnh chờ của bot", notify=True)
+                try:
+                    with Mt5.lock:
+                        self._cancel_all(Mt5.connect(self.server.config["mt5"]))
+                except Exception as e:
+                    self.event(f"không huỷ được lệnh chờ: {e}")
+            c["running"] = on
+        self.server.save_config()
+        return self.status()
+
+    def orders_for(self, bar):
+        """The two orders after a closed bar {open, high, low, close} (CandleStopBot.orders)."""
+        c = self.cfg
+        rng = bar["high"] - bar["low"]
+        if rng <= 0 or rng < c["minRange"] or (c["maxRange"] > 0 and rng > c["maxRange"]):
+            return []
+        off, out = max(c["offset"], 0.0), []
+        if c["direction"] != "short":
+            entry = bar["high"] + off
+            stop = bar["low"] - off if c["stopMode"] == "candle" else entry - max(c["stopDistance"], 0)
+            if entry > stop:
+                out.append(("long", entry, stop, entry + c["rr"] * (entry - stop) if c["rr"] > 0 else None))
+        if c["direction"] != "long":
+            entry = bar["low"] - off
+            stop = bar["high"] + off if c["stopMode"] == "candle" else entry + max(c["stopDistance"], 0)
+            if stop > entry:
+                out.append(("short", entry, stop, entry - c["rr"] * (stop - entry) if c["rr"] > 0 else None))
+        return out
+
+    def _mine(self, rows):
+        return [r for r in rows or () if getattr(r, "magic", 0) == STOP_MAGIC]
+
+    def _cancel_all(self, mt5):
+        for o in self._mine(mt5.orders_get(symbol=self.cfg["symbol"])):
+            mt5_send(mt5, {"action": mt5.TRADE_ACTION_REMOVE, "order": o.ticket, "symbol": o.symbol})
+
+    def _loop(self):
+        while True:
+            time.sleep(1.5)
+            if not self.cfg["running"]:
+                continue
+            try:
+                with Mt5.lock:
+                    self._tick()
+                self.error = ""
+            except Exception as e:
+                if str(e) != self.error:
+                    self.event(f"lỗi: {e}")
+                self.error = str(e)
+
+    def _tick(self):
+        c = self.cfg
+        mt5 = Mt5.connect(self.server.config["mt5"])
+        self.server.mt5_account._check_trading(mt5)
+        symbol = c["symbol"]
+        info = mt5.symbol_info(symbol)
+        if info is None or not mt5.symbol_select(symbol, True):
+            raise ValueError(f"MT5 không có mã {symbol}")
+        positions = self._mine(mt5.positions_get(symbol=symbol))
+        orders = self._mine(mt5.orders_get(symbol=symbol))
+        # A side filled: note it and cancel the other side (OCO).
+        tickets = {int(p.ticket) for p in positions}
+        for p in positions:
+            if int(p.ticket) not in self.known:
+                self.event(f"khớp {'MUA' if p.type == mt5.POSITION_TYPE_BUY else 'BÁN'} {p.volume} @ {fmt(p.price_open)}", notify=True)
+        for gone in self.known - tickets:
+            self.event(f"lệnh #{gone} đã đóng")
+        new_fill = bool(tickets - self.known)
+        self.known = tickets
+        if new_fill and c["oco"] and orders:
+            self._cancel_all(mt5)
+            orders = []
+        timeframe = getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[c["interval"]])
+        rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, 2)
+        if rates is None or len(rates) < 2:
+            return
+        bar = rates[-2]  # the last closed candle
+        bar_time = float(bar["time"])
+        if self.last_bar is None:
+            self.last_bar = bar_time  # start with the next close
+            return
+        if bar_time <= self.last_bar:
+            return
+        self.last_bar = bar_time
+        # A new candle closed: last candle's unfilled orders go.
+        if orders:
+            self._cancel_all(mt5)
+        if c["onePosition"] and positions:
+            return
+        tick = mt5.symbol_info_tick(symbol)
+        gap = (getattr(info, "trade_stops_level", 0) or 0) * (getattr(info, "point", 0) or 0)
+        volume = self.server.mt5_account._volume(mt5, info, float(c["lots"]))
+        placed = []
+        for side, entry, stop, target in self.orders_for({k: float(bar[k]) for k in ("open", "high", "low", "close")}):
+            buy = side == "long"
+            # A stop order must be beyond the market: skip a side price has already passed.
+            if tick is not None and (entry <= tick.ask + gap if buy else entry >= tick.bid - gap):
+                continue
+            d = info.digits
+            request = {"action": mt5.TRADE_ACTION_PENDING, "symbol": symbol, "volume": volume,
+                       "type": mt5.ORDER_TYPE_BUY_STOP if buy else mt5.ORDER_TYPE_SELL_STOP,
+                       "price": round(entry, d), "sl": round(stop, d), "tp": round(target, d) if target else 0.0,
+                       "magic": STOP_MAGIC, "comment": "StopBot", "type_time": mt5.ORDER_TIME_GTC,
+                       "deviation": int(self.server.config["mt5"].get("deviation", 30))}
+            _, error = mt5_send(mt5, request)
+            if error:
+                self.event(f"không đặt được {'BUY' if buy else 'SELL'} STOP: {error}")
+            else:
+                placed.append(f"{'BUY' if buy else 'SELL'} STOP {fmt(entry)}")
+        if placed:
+            self.event("nến đóng → " + ", ".join(placed))
+
+    def status(self):
+        c = dict(self.cfg)
+        orders, positions, stats = [], [], {"trades": 0, "wins": 0, "profit": 0.0}
+        try:
+            with Mt5.lock:
+                mt5 = Mt5.connect(self.server.config["mt5"])
+                symbol = c["symbol"] or None
+                for o in self._mine(mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()):
+                    orders.append({"ticket": int(o.ticket), "symbol": o.symbol, "side": "long" if o.type == mt5.ORDER_TYPE_BUY_STOP else "short",
+                                   "lots": o.volume_current, "entry": o.price_open, "stop": o.sl or None, "target": o.tp or None})
+                for p in self._mine(mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()):
+                    positions.append({"ticket": int(p.ticket), "symbol": p.symbol, "side": "long" if p.type == mt5.POSITION_TYPE_BUY else "short",
+                                      "lots": p.volume, "entry": p.price_open, "stop": p.sl or None, "target": p.tp or None,
+                                      "profit": p.profit + getattr(p, "swap", 0)})
+                since = self.started or now() - 86400
+                for d in mt5.history_deals_get(since + Mt5.offset_seconds - 60, now() + Mt5.offset_seconds + 86400) or ():
+                    if getattr(d, "magic", 0) == STOP_MAGIC and d.entry == mt5.DEAL_ENTRY_OUT:
+                        pnl = d.profit + d.commission + d.swap + (getattr(d, "fee", 0) or 0)
+                        stats["trades"] += 1
+                        stats["wins"] += 1 if pnl > 0 else 0
+                        stats["profit"] += pnl
+        except Exception as e:
+            c["statusError"] = str(e)
+        with self.lock:
+            return {"ok": True, "config": c, "orders": orders, "positions": positions, "stats": stats,
+                    "events": self.events[:40], "error": self.error, "startedAt": self.started}
+
+
 class NewsFeed:
     """This week's economic calendar (Forex Factory mirror) and gold headlines (Google
     News), fetched for the website: browsers cannot read those feeds themselves (CORS).
@@ -2395,6 +2591,7 @@ class BotServer:
         self.copier = CopyTrader(self)
         self.members = Members(self)
         self.news = NewsFeed()
+        self.stopbot = StopBot(self)
         self.telegram = Telegram(self)
         self.tunnel = Tunnel(self) if self.config.get("tunnel") else None
         threading.Thread(target=self._relay_loop, daemon=True).start()
@@ -2907,6 +3104,8 @@ def make_handler(server):
                     return self._send(200, server.members.list())
                 if path == "/news":
                     return self._send(200, server.news.get())
+                if path == "/stopbot":
+                    return self._send(200, server.stopbot.status())
                 if path == "/status":
                     return self._send(200, server.status())
                 if path == "/log":
@@ -2959,6 +3158,8 @@ def make_handler(server):
                     if path == "/member/copy/remove":
                         return self._send(200, server.members.copy_remove(who))
                     return self._send(404, {"ok": False, "error": "Không có đường dẫn này"})
+                if path == "/stopbot":
+                    return self._send(200, server.stopbot.settings(body))
                 if path == "/members/save":
                     return self._send(200, server.members.save(body))
                 if path == "/members/code":

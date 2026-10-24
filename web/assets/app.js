@@ -213,7 +213,7 @@
     ["fvg", "FVG & Volume Imbalance"],
     ["mss", "MSS (đổi cấu trúc)"],
     ["flow", "Dòng tiền cá mập"],
-    ["smt", "SMT (so đỉnh/đáy với mã liên quan: bạc cho vàng)"],
+    ["smt", "SMT (khi mở 2 biểu đồ: so đỉnh/đáy với mã thứ 2)"],
   ];
   const showInd = (() => {
     let saved = {};
@@ -473,7 +473,10 @@
       if (!this.owner) this.timers.push(setInterval(() => this.refreshMe().catch((e) => this.handleAuth(e)), 30000));
       this.timers.push(setInterval(() => this.loadNews(), 5 * 60 * 1000));
       if (this.owner) {
-        const badge = () => this.call("/status").then((st) => { this.botStatus = st; this.renderBotBadge(); }).catch(() => {});
+        const badge = () => {
+          this.call("/status").then((st) => { this.botStatus = st; this.renderBotBadge(); }).catch(() => {});
+          this.call("/stopbot").then((st) => { this.stopStatus = st; this.renderBotBadge(); }).catch(() => {});
+        };
         badge();
         this.timers.push(setInterval(badge, 15000));
       }
@@ -844,7 +847,7 @@
       if (t === "copy") this.loadCopy(first);
       if (t === "members" && first) this.loadMembers();
       if (t === "bot") this.loadBot(first);
-      if (t === "autobot") this.loadAutoBot(first);
+      if (t === "autobot") { this.loadAutoBot(first); this.loadStopBot(first); }
     },
 
     /* ----- history ----- */
@@ -1188,6 +1191,89 @@
       });
     },
 
+    /* ----- "Stop theo nến" bot on the server (buy stop above / sell stop below each closed candle) ----- */
+
+    async loadStopBot(first) {
+      const el = $("stopBotPanel");
+      try {
+        const st = await this.call("/stopbot");
+        this.stopStatus = st;
+        this.renderBotBadge();
+        if (first || !el.querySelector("#sbForm") || !el.contains(document.activeElement)) this.renderStopBot(st);
+        else this.renderStopBotLive(st);
+      } catch (e) {
+        el.innerHTML = `<h3>🎯 Bot lệnh Stop theo nến</h3><p class="muted small">${ServerTooOld(e) ? "Cập nhật máy chủ lên bản 2.8 (tab Máy chủ → Cập nhật) để dùng bot này." : esc(plain(e.message))}</p>`;
+      }
+    },
+
+    renderStopBot(st) {
+      const c = st.config || {};
+      const el = $("stopBotPanel");
+      el.innerHTML = `<div class="panel-head"><h3>🎯 Bot lệnh Stop theo nến</h3><span class="badge ${c.running ? "on" : "off"}">${c.running ? "Đang chạy" : "Đang dừng"}</span></div>
+        <p class="muted small">Mỗi khi một nến đóng: đặt <b>BUY STOP</b> trên đỉnh nến và <b>SELL STOP</b> dưới đáy nến, SL ở phía bên kia cây nến, TP = R:R × rủi ro.
+          Lệnh không khớp trong nến sau thì huỷ và đặt lại; một bên khớp thì huỷ bên kia. Chạy trên máy chủ (đóng web vẫn chạy), đặt vào tài khoản MT5 đang đăng nhập — nên thử bằng tài khoản demo.</p>
+        <div id="sbForm">
+          <div class="fields three">
+            <label>Mã<input id="sbSymbol" value="${esc(c.symbol || this.symbol || "XAUUSDm")}"></label>
+            <label>Khung nến<select id="sbInterval">${["1m", "5m", "15m", "30m", "1h", "4h"].map((t) => `<option ${t === (c.interval || "1m") ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+            <label>Chiều<select id="sbDirection">${[["both", "Cả MUA và BÁN"], ["long", "Chỉ BUY STOP"], ["short", "Chỉ SELL STOP"]].map(([v, n]) => `<option value="${v}" ${v === c.direction ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+          </div>
+          <div class="fields three">
+            <label>Lot<input id="sbLots" inputmode="decimal" value="${c.lots}"></label>
+            <label>R:R (TP = R:R × rủi ro, 0 = không TP)<input id="sbRR" inputmode="decimal" value="${c.rr}"></label>
+            <label>Cách đỉnh/đáy (giá)<input id="sbOffset" inputmode="decimal" value="${c.offset}"></label>
+          </div>
+          <div class="fields three">
+            <label>Đặt SL<select id="sbStopMode"><option value="candle" ${c.stopMode !== "fixed" ? "selected" : ""}>Bên kia cây nến</option><option value="fixed" ${c.stopMode === "fixed" ? "selected" : ""}>Cách giá vào cố định</option></select></label>
+            <label>Khoảng SL cố định (giá)<input id="sbStopDist" inputmode="decimal" value="${c.stopDistance}"></label>
+            <label>Bỏ nến nhỏ hơn / lớn hơn (giá)<span class="pair"><input id="sbMin" inputmode="decimal" value="${c.minRange}" placeholder="0"><input id="sbMax" inputmode="decimal" value="${c.maxRange}" placeholder="0 = không giới hạn"></span></label>
+          </div>
+          <label class="check"><input type="checkbox" id="sbOCO" ${c.oco !== false ? "checked" : ""}> Một bên khớp thì huỷ bên kia (OCO)</label>
+          <label class="check"><input type="checkbox" id="sbOne" ${c.onePosition !== false ? "checked" : ""}> Đang có lệnh của bot thì không đặt thêm</label>
+          <div class="row-btns">
+            ${c.running ? '<button class="btn btn-ghost" id="sbStop">■ Tắt bot Stop</button><button class="btn btn-ghost" id="sbSave">Lưu cài đặt</button>' : '<button class="btn btn-gold" id="sbStart">▶ Bật bot Stop</button>'}
+          </div>
+        </div>
+        <div id="sbLive"></div>`;
+      const body = () => ({
+        symbol: $("sbSymbol").value.trim(), interval: $("sbInterval").value, direction: $("sbDirection").value,
+        lots: num($("sbLots").value) || 0.01, rr: num($("sbRR").value) ?? 2, offset: num($("sbOffset").value) || 0,
+        stopMode: $("sbStopMode").value, stopDistance: num($("sbStopDist").value) || 5,
+        minRange: num($("sbMin").value) || 0, maxRange: num($("sbMax").value) || 0,
+        oco: $("sbOCO").checked, onePosition: $("sbOne").checked,
+      });
+      const send = async (button, extra, done) => {
+        const r = await act(button, () => this.call("/stopbot", Object.assign(body(), extra)), done);
+        if (r) { this.stopStatus = r; this.renderStopBot(r); this.renderBotBadge(); this.refresh(); }
+      };
+      const start = $("sbStart"), stop = $("sbStop"), save = $("sbSave");
+      if (start) start.onclick = (e) => send(e.currentTarget, { running: true }, "Đã bật bot Stop: lệnh đầu tiên đặt khi nến tiếp theo đóng");
+      if (stop) stop.onclick = (e) => send(e.currentTarget, { running: false }, "Đã tắt bot Stop và huỷ lệnh chờ của nó");
+      if (save) save.onclick = (e) => send(e.currentTarget, {}, "Đã lưu");
+      this.renderStopBotLive(st);
+    },
+
+    renderStopBotLive(st) {
+      const live = $("sbLive");
+      if (!live) return;
+      const d = (sym) => this.digitsFor(sym);
+      const s = st.stats || {};
+      const rows = (list, pending) => list.map((o) => `<div class="sig"><div class="bar" style="background:${o.side === "long" ? "#2b6bf3" : "var(--down)"};${pending ? "opacity:.5" : ""}"></div>
+        <div><div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${o.side === "long" ? "buy" : "sell"}">${pending ? (o.side === "long" ? "BUY STOP" : "SELL STOP") : sideName(o.side)} ${o.lots}</span>
+          <span class="muted small">@ ${fmt(o.entry, d(o.symbol))}</span></div>
+          <div class="lv">SL ${o.stop ? fmt(o.stop, d(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, d(o.symbol)) : "–"}</div></div>
+        <div class="right">${pending ? '<span class="muted small">chờ khớp</span>' : `<div class="move ${(o.profit || 0) >= 0 ? "pos" : "neg"}">${signed(o.profit || 0)}</div>`}</div></div>`).join("");
+      live.innerHTML = `<div class="stats">
+          <div class="stat"><span>Lệnh đã đóng</span><b>${s.trades || 0}</b></div>
+          <div class="stat"><span>Thắng</span><b>${s.wins || 0}${s.trades ? ` (${Math.round(s.wins / s.trades * 100)}%)` : ""}</b></div>
+          <div class="stat"><span>Lãi/lỗ</span><b class="${(s.profit || 0) >= 0 ? "pos" : "neg"}">${signed(s.profit || 0)}</b></div>
+          <div class="stat"><span>Đang chờ / đang mở</span><b>${(st.orders || []).length} / ${(st.positions || []).length}</b></div>
+        </div>
+        ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
+        <div class="list">${rows(st.positions || [], false)}${rows(st.orders || [], true)}</div>
+        ${(st.events || []).length ? `<h4>Hoạt động</h4><div class="list log">${st.events.slice(0, 15).map((e) => `<div class="log-row"><span class="muted small">${clock(e.time)}</span> ${esc(e.text)}</div>`).join("")}</div>` : ""}`;
+    },
+
     /* ----- the bot (owner only): run a strategy on the server, its trades and results ----- */
 
     async loadAutoBot(first) {
@@ -1210,11 +1296,12 @@
     renderBotBadge() {
       const st = this.botStatus, b = $("botBadge");
       if (!b) return;
-      const run = this.owner && st && st.running;
-      b.hidden = !run;
-      if (!run) return;
-      const s = st.settings || {};
-      b.textContent = `🤖 Bot: ${s.strategyName || "chiến lược"} · ${s.symbol} ${s.interval}`;
+      const parts = [];
+      if (this.owner && st && st.running) { const s = st.settings || {}; parts.push(`🤖 Bot: ${s.strategyName || "chiến lược"} · ${s.symbol} ${s.interval}`); }
+      const sb = this.stopStatus && this.stopStatus.config;
+      if (this.owner && sb && sb.running) parts.push(`🎯 Bot Stop · ${sb.symbol} ${sb.interval}`);
+      b.hidden = !parts.length;
+      b.textContent = parts.join("  ·  ");
       b.onclick = () => this.setTab("autobot");
     },
 
@@ -1414,6 +1501,7 @@
         this.ictCfg = (() => { try { return window.ICT.merge(JSON.parse(store.get("aurum.ictcfg") || "null")); } catch { return window.ICT.defaults(); } })();
         this.magnet = store.get("aurum.magnet") !== "0";
         this.lastSmtSymbol = this.ictCfg.smtSymbol;
+        this.loadStudies();
         const term = this;
         // ICT layer: painted in the chart's own frame (under the candles), so it never lags a drag.
         this.series.attachPrimitive({
@@ -1525,9 +1613,27 @@
         <div class="toggles">${IND.filter(([k]) => (k === "flow" ? flowAllowed : allowed)).map(([k, n]) => `<label class="toggle"><span>${n}</span>
           <span class="switch"><input type="checkbox" data-k="${k}" ${showInd[k] ? "checked" : ""}><span></span></span></label>`).join("")}</div>
         ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button>' : ""}
+        <h4>Chỉ báo kỹ thuật</h4>
+        <div class="list" id="studyList"></div>
+        <select id="addStudy" class="add-study"><option value="">＋ Thêm chỉ báo…</option>${Object.entries(window.TA ? window.TA.STUDIES : {}).map(([k, d]) => `<option value="${k}">${esc(d.name)}</option>`).join("")}</select>
         <p class="muted small">Giờ theo New York như bản TradingView. Chuột phải (hoặc giữ lâu) trên biểu đồ để mở menu.</p>`, (el) => {
         const more = el.querySelector("#ictMore");
         if (more) more.onclick = () => { sheet.close(); this.ictSettingsSheet(); };
+        const listStudies = () => {
+          const box = el.querySelector("#studyList");
+          box.innerHTML = this.studies.length ? this.studies.map((x) => `<div class="study-row" data-id="${x.id}">
+              <span class="dot" style="background:${x.colors[0]}"></span><span class="grow ${x.hidden ? "muted" : ""}">${esc(this.studyLabel(x))}</span>
+              <button type="button" data-a="edit" title="Cài đặt">⚙</button><button type="button" data-a="eye" title="Ẩn/hiện">${x.hidden ? "🙈" : "👁"}</button><button type="button" data-a="del" title="Xoá">✕</button></div>`).join("")
+            : '<div class="empty">Chưa có — chọn ở ô dưới để thêm (EMA, RSI, MACD…)</div>';
+          box.querySelectorAll(".study-row").forEach((row) => {
+            const x = this.studies.find((y) => y.id === row.dataset.id);
+            row.querySelector("[data-a=edit]").onclick = () => { sheet.close(); this.studySettings(x); };
+            row.querySelector("[data-a=eye]").onclick = () => { x.hidden = !x.hidden; this.saveStudies(); listStudies(); };
+            row.querySelector("[data-a=del]").onclick = () => { this.removeStudy(x.id); listStudies(); };
+          });
+        };
+        listStudies();
+        el.querySelector("#addStudy").onchange = (e) => { if (!e.target.value) return; this.addStudy(e.target.value); e.target.value = ""; listStudies(); };
         el.querySelectorAll("input[data-k]").forEach((i) => (i.onchange = () => {
           showInd[i.dataset.k] = i.checked;
           store.set("aurum.ind", JSON.stringify(showInd));
@@ -2700,7 +2806,7 @@
             + tog("vi", "Hiện VI (Volume Imbalance)") + numf("viCount", "Giữ VI gần nhất") + tog("viHideTouched", "Ẩn VI đã bị chạm")
             + head("Cấu trúc") + tog("mss", "MSS (đổi cấu trúc)") + tog("bos", "BOS (phá cấu trúc cùng xu hướng)") + numf("swing", "Swing: số nến mỗi bên") + numf("structureCount", "Giữ số lần phá gần nhất")
             + head("Thanh khoản") + tog("sweeps", "Quét thanh khoản") + numf("sweepCount", "Giữ số lần quét gần nhất")
-            + head("SMT") + `<label class="fr"><input type="checkbox" data-smt ${showInd.smt ? "checked" : ""}><span>Hiện SMT (so đỉnh/đáy với mã liên quan)</span></label>`
+            + head("SMT") + `<label class="fr"><input type="checkbox" data-smt ${showInd.smt ? "checked" : ""}><span>Hiện SMT khi mở 2 biểu đồ (nút ▥)</span></label>`
             + (this.owner ? `<div class="fr"><span class="grow">Mã so sánh</span>${text("smtSymbol", "lb")}<span class="muted small">trống = tự động (${esc(this.cmpSymbol())})</span></div>` : "")
             + tog("smtInverse", "Mã so sánh chạy ngược chiều (DXY)") + numf("smtSwing", "Swing: số nến mỗi bên") + numf("smtLookback", "Hai đỉnh/đáy cách tối đa (nến)") + numf("smtCount", "Giữ SMT gần nhất")
             + head("Macros") + tog("macros", "Hiện macros")
@@ -2835,6 +2941,111 @@
       };
     },
 
+    /* ----- standard indicators (EMA, Bollinger, RSI, MACD…) ----- */
+
+    loadStudies() {
+      try { this.studies = JSON.parse(store.get("aurum.studies") || "null"); } catch { this.studies = null; }
+      if (!Array.isArray(this.studies)) this.studies = [];
+      this.studies = this.studies.filter((x) => window.TA && window.TA.STUDIES[x.type]);
+    },
+
+    saveStudies() {
+      store.set("aurum.studies", JSON.stringify(this.studies));
+      this.applyStudies();
+    },
+
+    addStudy(type) {
+      const def = window.TA.STUDIES[type];
+      const study = { id: Math.random().toString(36).slice(2, 8), type, params: Object.assign({}, def.params), colors: def.colors.slice(), hidden: false };
+      this.studies.push(study);
+      this.saveStudies();
+      return study;
+    },
+
+    removeStudy(id) {
+      this.dropStudySeries(id);
+      this.studies = this.studies.filter((x) => x.id !== id);
+      this.saveStudies();
+    },
+
+    dropStudySeries(id) {
+      const list = this.studySeries && this.studySeries.get(id);
+      if (!list) return;
+      list.forEach((x) => { try { this.chart.removeSeries(x); } catch { /* gone */ } });
+      this.studySeries.delete(id);
+    },
+
+    studyLabel(x) {
+      const def = window.TA.STUDIES[x.type];
+      const nums = Object.entries(x.params).filter(([k, v]) => typeof v === "number" && !["upper", "lower"].includes(k)).map(([, v]) => v);
+      return def.name.split(" (")[0] + (nums.length ? " " + nums.join(" ") : "");
+    },
+
+    /** Overlays on the price, oscillators in bands under it (each with its own scale). */
+    applyStudies() {
+      if (!this.chart || !window.TA || !this.studies) return;
+      this.studySeries = this.studySeries || new Map();
+      const bars = this.viewBars();
+      const shownStudies = this.studies.filter((x) => !x.hidden);
+      for (const id of [...this.studySeries.keys()]) if (!shownStudies.some((x) => x.id === id)) this.dropStudySeries(id);
+      const oscs = shownStudies.filter((x) => !window.TA.STUDIES[x.type].overlay);
+      const h = oscs.length ? Math.min(0.22, 0.6 / oscs.length) : 0;
+      this.chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.06, bottom: oscs.length * h + 0.04 } });
+      shownStudies.forEach((x) => {
+        const def = window.TA.STUDIES[x.type];
+        let outs;
+        try { outs = window.TA.compute(x.type, bars, x.params, x.colors, TZ); } catch { return; }
+        let list = this.studySeries.get(x.id);
+        if (!list || list.length !== outs.length || x.dirty) {
+          this.dropStudySeries(x.id);
+          x.dirty = false;
+          list = outs.map((o, i) => {
+            const scaleId = def.overlay ? (o.bottom ? "vol_" + x.id : "right") : "osc_" + x.id;
+            const base = { priceScaleId: scaleId, priceLineVisible: false, lastValueVisible: !def.overlay || i === 0, title: i === 0 ? this.studyLabel(x) : "" };
+            const series = o.kind === "hist"
+              ? this.chart.addHistogramSeries(Object.assign(base, { priceFormat: o.bottom ? { type: "volume" } : { type: "price", precision: 2, minMove: 0.01 }, lastValueVisible: !o.bottom }))
+              : this.chart.addLineSeries(Object.assign(base, { color: o.color, lineWidth: o.width || 1.5, crosshairMarkerVisible: false }));
+            (o.levels || []).forEach((lv) => series.createPriceLine({ price: lv, color: "#787b86", lineStyle: 2, lineWidth: 1, axisLabelVisible: false }));
+            return series;
+          });
+          this.studySeries.set(x.id, list);
+        }
+        outs.forEach((o, i) => {
+          const data = o.values.map((v, k) => (v == null || !bars[k] ? { time: bars[k].time + TZ } : o.kind === "hist"
+            ? { time: bars[k].time + TZ, value: v, color: o.colorOf ? o.colorOf(k) : o.color }
+            : { time: bars[k].time + TZ, value: v }));
+          list[i].setData(data);
+          if (o.kind !== "hist") list[i].applyOptions({ color: o.color });
+        });
+      });
+      // Bands from the bottom up, in the order they were added; volume sits right above them.
+      oscs.forEach((x, j) => {
+        try { this.chart.priceScale("osc_" + x.id).applyOptions({ scaleMargins: { top: 1 - (j + 1) * h + 0.02, bottom: j * h + 0.005 } }); } catch { /* not created */ }
+      });
+      shownStudies.filter((x) => x.type === "volume").forEach((x) => {
+        try { this.chart.priceScale("vol_" + x.id).applyOptions({ scaleMargins: { top: 1 - oscs.length * h - 0.16, bottom: oscs.length * h + 0.005 } }); } catch { /* not created */ }
+      });
+    },
+
+    studySettings(x) {
+      const def = window.TA.STUDIES[x.type];
+      const before = JSON.stringify({ params: x.params, colors: x.colors });
+      const render = () => {
+        const k = fieldKit(x);
+        const names = { length: "Độ dài", source: "Nguồn", mult: "Hệ số", upper: "Mức trên", lower: "Mức dưới", fast: "Nhanh", slow: "Chậm", signal: "Tín hiệu", k: "%K", d: "%D", smooth: "Làm mượt" };
+        return `<div class="fp-sec">Đầu vào</div>` + Object.keys(x.params).map((p) => p === "source"
+          ? k.sel("params.source", names.source, [["close", "Đóng cửa"], ["open", "Mở cửa"], ["high", "Cao"], ["low", "Thấp"], ["hl2", "(H+L)/2"], ["hlc3", "(H+L+C)/3"]])
+          : k.numf("params." + p, names[p] || p, p === "mult" ? 0.1 : 1)).join("")
+          + `<div class="fp-sec">Màu</div>` + x.colors.map((c, i) => k.color("colors." + i, ["Đường chính", "Đường 2", "Đường 3"][i] || "Màu " + (i + 1))).join("");
+      };
+      this.openPanel(def.name, [["inputs", "Cài đặt"]], render, {
+        root: x,
+        onChange: () => this.saveStudies(),
+        onCancel: () => { Object.assign(x, JSON.parse(before)); this.saveStudies(); },
+        onReset: (redraw) => { x.params = Object.assign({}, def.params); x.colors = def.colors.slice(); this.saveStudies(); redraw(); },
+      });
+    },
+
     /* ----- ICT layer ----- */
 
     computeICT() {
@@ -2846,6 +3057,7 @@
         this.ict = window.ICT.compute(bars, TF_SECONDS[this.interval], this.ictCfg, showInd);
       } catch { this.ict = null; }
       if (this.cmpBars && this.cmpBars.length) this.showCmp(false); else this.computeSMT();
+      this.applyStudies();
       this.redraw();
     },
 
@@ -3075,7 +3287,7 @@
     },
 
     /** SMT is on (it needs the related market's bars even with one chart). */
-    smtWanted() { return !!(showInd.smt && window.ICT && (this.owner || this.features.killzones !== false)); },
+    smtWanted() { return !!(this.layout !== "1" && showInd.smt && window.ICT && (this.owner || this.features.killzones !== false)); },
 
     async loadCmp() {
       const show2 = this.layout !== "1" && this.chart2;

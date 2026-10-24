@@ -526,3 +526,11 @@ button.busy { opacity: .55; }
 .fr .mini { display: flex; align-items: center; gap: 4px; font-size: 12.5px; }
 .bot-badge { margin-left: 6px; background: rgba(155, 107, 255, .15); color: var(--purple); border: 1px solid rgba(155, 107, 255, .4); border-radius: 999px; padding: 3px 10px; font: 600 12px/1.2 "Be Vietnam Pro", system-ui, sans-serif; cursor: pointer; }
 .bot-badge[hidden] { display: none; }
+.fields label .pair { display: flex; gap: 6px; }
+.fields label .pair input { min-width: 0; }
+.study-row { display: flex; align-items: center; gap: 8px; padding: 7px 2px; border-top: 1px solid var(--line); font-size: 14px; }
+.study-row:first-child { border-top: 0; }
+.study-row .dot { width: 10px; height: 10px; margin: 0; flex: none; }
+.study-row .grow { flex: 1; }
+.study-row button { background: var(--chip); border: 0; color: var(--text); border-radius: 6px; height: 28px; min-width: 30px; cursor: pointer; }
+.add-study { width: 100%; margin-top: 8px; background: var(--input); border: 1px solid var(--line2); border-radius: 10px; color: var(--text); height: 38px; padding: 0 10px; font: 600 14px/1 "Be Vietnam Pro", system-ui, sans-serif; }
