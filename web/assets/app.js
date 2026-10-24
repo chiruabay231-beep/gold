@@ -189,8 +189,10 @@
 
   /** Runs a server action from a button: busy state, toast, error message. */
   async function act(button, work, done) {
+    // Buttons with inner parts (the chart's BUY/SELL with live prices) keep them and only dim.
+    const rich = button && button.children.length > 0;
     const label = button ? button.textContent : "";
-    if (button) { button.disabled = true; button.textContent = "…"; }
+    if (button) { button.disabled = true; if (rich) button.classList.add("busy"); else button.textContent = "…"; }
     try {
       const result = await work();
       if (done) toast(done);
@@ -199,7 +201,7 @@
       toast(e instanceof Unreachable ? "Chưa kết nối được, thử lại" : plain(e.message), true);
       return null;
     } finally {
-      if (button) { button.disabled = false; button.textContent = label; }
+      if (button) { button.disabled = false; if (rich) button.classList.remove("busy"); else button.textContent = label; }
     }
   }
 
@@ -220,6 +222,9 @@
 
   const TFS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
   const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
+
+  /** The spread in points, as MT5 shows it. */
+  const spreadText = (bid, ask, digits) => (bid != null && ask != null ? String(Math.round((ask - bid) * Math.pow(10, digits))) : "");
 
   /* ---------------- settings panel fields ---------------- */
 
@@ -549,6 +554,7 @@
       if (!sym && !this.symbol) await this.ownerSymbol();
       this.renderPill(floating);
       this.renderSelBar();
+      this.syncLines2();
       if (this.tab === "trade") this.renderTrade();
     },
 
@@ -703,11 +709,11 @@
 
     lots() { return Math.max(0.01, Math.round((num($("lotInput").value) || 0.01) * 100) / 100); },
 
-    async marketOrder(side, button) {
+    async marketOrder(side, button, symbol = this.symbol, lots = this.lots()) {
       if (this.replay) return this.replayOrder(side);
-      if (!this.symbol) return;
-      const body = { symbol: this.symbol, side, type: "market", lots: this.lots() };
-      const ok = await act(button, () => this.call("/mt5/order", body), `Đã ${side === "long" ? "MUA" : "BÁN"} ${body.lots} ${this.symbol}`);
+      if (!symbol) return;
+      const body = { symbol, side, type: "market", lots };
+      const ok = await act(button, () => this.call("/mt5/order", body), `Đã ${side === "long" ? "MUA" : "BÁN"} ${body.lots} ${symbol}`);
       if (ok) this.refresh();
     },
 
@@ -1295,7 +1301,7 @@
           tickVisible: () => false,
         };
         setInterval(() => { if (this.tab === "chart" && this.requestICT) this.requestICT(); }, 1000);
-        this.drawings = new window.AurumDrawings({
+        this.drawings = this.drawingsMain = new window.AurumDrawings({
           chart: this.chart, series: this.series, store,
           bars: () => this.viewBars(), sec: () => TF_SECONDS[this.interval], digits: () => this.digits,
           symbol: () => this.symbolKey(), magnet: () => this.magnet, onChange: () => this.renderDrawBar(),
@@ -1337,6 +1343,24 @@
       $("pCancel").onclick = () => this.togglePending(false);
       $("layoutBtn").onclick = (e) => this.layoutMenu(e.currentTarget);
       $("chartSymbol2").onclick = () => { if (this.owner) this.symbolSheet((sym) => { store.set("aurum.cmpSym", sym); this.loadCmp(); }); };
+      // The second chart trades its own symbol; ⇄ swaps the two charts.
+      const lots2 = () => Math.max(0.01, Math.round((num($("lotInput2").value) || 0.01) * 100) / 100);
+      $("lotInput2").value = store.get("aurum.lots2") || "0.01";
+      $("lotInput2").onchange = () => { $("lotInput2").value = lots2().toFixed(2); store.set("aurum.lots2", $("lotInput2").value); };
+      document.querySelectorAll("[data-step2]").forEach((b) => (b.onclick = () => {
+        $("lotInput2").value = Math.max(0.01, lots2() + 0.01 * +b.dataset.step2).toFixed(2);
+        store.set("aurum.lots2", $("lotInput2").value);
+      }));
+      $("sellBtn2").onclick = (e) => this.marketOrder("short", e.currentTarget, this.cmpName, lots2());
+      $("buyBtn2").onclick = (e) => this.marketOrder("long", e.currentTarget, this.cmpName, lots2());
+      $("swapBtn").onclick = () => {
+        if (!this.owner || !this.cmpName || this.source !== "exness") return;
+        const main = this.symbol;
+        this.symbol = this.cmpName; store.set("aurum.sym", this.symbol);
+        store.set("aurum.cmpSym", main);
+        this.selected = null; this.togglePending(false);
+        this.loadCandles();
+      };
       $("indBtn").onclick = () => this.indicatorSheet();
       $("drawBtn").onclick = () => this.toggleRail();
       $("styleBtn").onclick = () => this.chartStyleSheet();
@@ -1414,6 +1438,7 @@
       $("livePrice").textContent = fmt(this.bid != null ? this.bid : last, this.digits);
       $("bidText").textContent = fmt(this.bid != null ? this.bid : last, this.digits);
       $("askText").textContent = fmt(this.ask != null ? this.ask : last, this.digits);
+      $("spread").textContent = spreadText(this.bid, this.ask, this.digits);
       if (this.draft) this.updatePendingLabels();
     },
 
@@ -1688,7 +1713,8 @@
       let down = null, longPress = null;
       wrap.addEventListener("pointerdown", (e) => {
         this.closeMenu();
-        if (e.button > 0 || e.target.closest("#selBar, #posPill, #drawBar")) return;
+        this.focusChart(1);
+        if (e.button > 0 || e.target.closest("#selBar, #posPill, #ticket, #drawBar, #favBar")) return;
         const { x, y } = rel(e);
         down = { x: e.clientX, y: e.clientY, moved: false, menu: false };
         if (x > paneWidth()) return;
@@ -2229,9 +2255,10 @@
         if (k === "measure") d.setTool(d.tool === "priceRange" ? null : "priceRange");
         if (k === "zoom") { const ts = this.chart.timeScale(); ts.applyOptions({ barSpacing: Math.min(50, (ts.options().barSpacing || 6) * 1.5) }); }
         if (k === "magnet") { this.magnet = !this.magnet; store.set("aurum.magnet", this.magnet ? "1" : "0"); }
-        if (k === "keep") { d.keepTool = !d.keepTool; store.set("aurum.keepTool", d.keepTool ? "1" : "0"); }
-        if (k === "lock") { d.lockAll = !d.lockAll; store.set("aurum.lockAll", d.lockAll ? "1" : "0"); }
-        if (k === "hide") { d.hidden = !d.hidden; d.selected = null; d.update(); }
+        const all = this.allDrawings();
+        if (k === "keep") { const v = !d.keepTool; all.forEach((x) => (x.keepTool = v)); store.set("aurum.keepTool", v ? "1" : "0"); }
+        if (k === "lock") { const v = !d.lockAll; all.forEach((x) => (x.lockAll = v)); store.set("aurum.lockAll", v ? "1" : "0"); }
+        if (k === "hide") { const v = !d.hidden; all.forEach((x) => { x.hidden = v; x.selected = null; x.update(); }); }
         if (k === "trash" && d.list.length && confirm(`Xoá tất cả ${d.list.length} bản vẽ trên mã này?`)) d.clear();
         this.renderToolRail();
         this.renderDrawBar();
@@ -2357,7 +2384,8 @@
 
     drawingSettings(d, isNew) {
       if (!d) return;
-      const D = window.AurumDrawings, dr = this.drawings;
+      const D = window.AurumDrawings;
+      const dr = this.allDrawings().find((x) => x.list.includes(d) || x.pending === d) || this.drawings;
       const before = JSON.stringify(d);
       const tool = d.tool, pos = D.isPosition(tool);
       const fib = tool === "fibRetracement" || tool === "fibExtension";
@@ -2650,7 +2678,7 @@
       $("charts").className = "charts" + (mode === "h" ? " row" : mode === "v" ? " col" : "");
       $("chartWrap2").hidden = mode === "1";
       $("layoutBtn").classList.toggle("on", mode !== "1");
-      if (mode === "1") { clearInterval(this.cmpTimer); this.cmpTimer = null; this.cmpBars = []; this.computeSMT(); return; }
+      if (mode === "1") { clearInterval(this.cmpTimer); this.cmpTimer = null; this.cmpBars = []; this.computeSMT(); this.focusChart(1); return; }
       this.ensureChart2();
       this.loadCmp();
     },
@@ -2697,8 +2725,132 @@
         if (!r || !this.chart2 || this.layout === "1") return;
         try { this.chart2.timeScale().setVisibleRange(r); } catch { /* not loaded yet */ }
       });
+      // One crosshair across both charts: the same moment on each.
+      const follow = (from, to, toSeries, bars) => from.subscribeCrosshairMove((param) => {
+        if (this.syncingCrosshair || this.layout === "1") return;
+        this.syncingCrosshair = true;
+        try {
+          if (!param || param.time == null || !param.point) to.clearCrosshairPosition();
+          else {
+            const t = param.time - TZ, list = bars();
+            let i = list.length - 1;
+            while (i > 0 && list[i].time > t) i--;
+            if (list[i]) to.setCrosshairPosition(list[i].close, list[i].time + TZ, toSeries);
+          }
+        } catch { /* nothing to show */ }
+        this.syncingCrosshair = false;
+      });
+      follow(this.chart, this.chart2, this.series2, () => this.cmpView || []);
+      follow(this.chart2, this.chart, this.series, () => this.viewBars());
+      // Drawings on the second chart too, kept per symbol like the first one's.
+      this.drawings2 = new window.AurumDrawings({
+        chart: this.chart2, series: this.series2, store,
+        bars: () => this.cmpView || [], sec: () => TF_SECONDS[this.interval], digits: () => this.cmpDigits || 2,
+        symbol: () => this.cmpName || "XAG", magnet: () => this.magnet, onChange: () => this.renderDrawBar(),
+        interval: () => this.interval, onEdit: (d, isNew) => this.drawingSettings(d, isNew),
+      });
+      this.drawingsMain.link([this.drawings2]);
+      this.drawings2.link([this.drawingsMain]);
+      this.drawings2.keepTool = this.drawingsMain.keepTool;
+      this.drawings2.lockAll = this.drawingsMain.lockAll;
+      this.bindDrag2();
       this.applyChartStyle();
     },
+
+    /** Lines of open positions on the second chart's symbol (to edit them, swap the charts). */
+    syncLines2() {
+      if (!this.series2) return;
+      this.lines2 = this.lines2 || new Map();
+      const wanted = [];
+      if (this.owner && this.layout !== "1" && !this.replay) {
+        this.positions.filter((p) => p.symbol === this.cmpName).forEach((p) => {
+          wanted.push({ key: `p:${p.ticket}:e`, price: p.entry, color: p.side === "long" ? "#2b6bf3" : "#f0455a", lineStyle: 0, title: `${sideName(p.side)} ${p.lots} ${signed(p.profit)}` });
+          if (p.stop) wanted.push({ key: `p:${p.ticket}:s`, price: p.stop, color: "#f0455a", lineStyle: 2, title: "SL" });
+          if (p.target) wanted.push({ key: `p:${p.ticket}:t`, price: p.target, color: "#14b88a", lineStyle: 2, title: "TP" });
+        });
+        this.orders.filter((o) => o.symbol === this.cmpName).forEach((o) => {
+          wanted.push({ key: `o:${o.ticket}:e`, price: o.entry, color: o.side === "long" ? "#2b6bf3" : "#f0455a", lineStyle: 1, title: `${sideName(o.side)} ${o.kind.toUpperCase()} ${o.lots}` });
+        });
+      }
+      const keys = new Set(wanted.map((w) => w.key));
+      wanted.forEach((w) => {
+        const opts = { price: w.price, color: w.color, lineWidth: 1, lineStyle: w.lineStyle, axisLabelVisible: true, title: w.title };
+        const line = this.lines2.get(w.key);
+        if (line) line.applyOptions(opts); else this.lines2.set(w.key, this.series2.createPriceLine(opts));
+      });
+      for (const [k, line] of this.lines2) if (!keys.has(k)) { this.series2.removePriceLine(line); this.lines2.delete(k); }
+    },
+
+    /** Drawing on the second chart (its trade lines are read-only). */
+    bindDrag2() {
+      const wrap = $("chartWrap2");
+      const rel = (e) => { const r = wrap.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+      const lock = (on) => {
+        this.chart2.applyOptions({ handleScroll: !on, handleScale: !on });
+        const ps = this.chart2.priceScale("right");
+        if (on) { this.scale2WasAuto = ps.options().autoScale; ps.applyOptions({ autoScale: false }); } else if (this.scale2WasAuto) ps.applyOptions({ autoScale: true });
+      };
+      let gesture = false;
+      wrap.addEventListener("pointerdown", (e) => {
+        this.closeMenu();
+        this.focusChart(2);
+        if (e.button > 0 || e.target.closest("#ticket2, .c2-head, #drawBar")) return;
+        const { x, y } = rel(e);
+        if (x > this.chart2.timeScale().width()) return;
+        const r = this.drawings2.down(x, y, e);
+        if (r === true) { gesture = true; lock(true); e.stopPropagation(); }
+      }, true);
+      ["mousedown", "touchstart"].forEach((t) => wrap.addEventListener(t, (e) => { if (gesture) e.stopPropagation(); }, { capture: true, passive: true }));
+      wrap.addEventListener("touchmove", (e) => { if (gesture) e.preventDefault(); }, { passive: false });
+      wrap.addEventListener("pointermove", (e) => {
+        if (gesture) return;
+        const { x, y } = rel(e);
+        if (this.drawings2.pending) { this.drawings2.move(x, y); return; }
+        if (e.pointerType === "mouse") wrap.style.cursor = this.drawings2.tool ? "crosshair" : x <= this.chart2.timeScale().width() && this.drawings2.hitTest(x, y, 8) ? "move" : "";
+      });
+      window.addEventListener("pointermove", (e) => { if (gesture) { const { x, y } = rel(e); this.drawings2.move(x, y); } });
+      const end = () => { if (!gesture) return; gesture = false; lock(false); this.drawings2.up(); };
+      window.addEventListener("pointerup", end);
+      window.addEventListener("pointercancel", end);
+      wrap.addEventListener("dblclick", () => { if (this.drawings2.current) this.drawingSettings(this.drawings2.current); });
+      wrap.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        if (this.drawings2.pending) { this.drawings2.cancel(); return; }
+        const items = [["reset", "⟲ Đặt lại biểu đồ"], ["tools", "✎ Công cụ vẽ…"]];
+        if (this.drawings2.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"]);
+        if (this.drawings2.list.length) items.push(["clear", `🗑 Xoá tất cả bản vẽ (${this.drawings2.list.length})`]);
+        if (this.owner && this.cmpLive) items.push(["swap", "⇄ Đổi chỗ 2 biểu đồ"]);
+        const menu = $("ctxMenu");
+        menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
+        menu.hidden = false;
+        menu.style.left = Math.max(8, Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8)) + "px";
+        menu.style.top = Math.max(8, Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8)) + "px";
+        menu.querySelectorAll("button").forEach((b) => (b.onclick = () => {
+          this.closeMenu();
+          const k = b.dataset.k;
+          if (k === "reset") { const ts = this.chart2.timeScale(); ts.resetTimeScale(); this.chart2.priceScale("right").applyOptions({ autoScale: true }); ts.scrollToRealTime(); }
+          if (k === "tools") this.drawSheet();
+          if (k === "drawSettings") this.drawingSettings(this.drawings2.current);
+          if (k === "clear" && confirm("Xoá tất cả bản vẽ trên " + this.cmpName + "?")) this.drawings2.clear();
+          if (k === "swap") $("swapBtn").click();
+        }));
+      });
+    },
+
+    /** The chart last touched: its drawing is the one the bar and settings edit. */
+    focusChart(n) {
+      const next = n === 2 && this.drawings2 ? this.drawings2 : this.drawingsMain;
+      $("chartWrap").classList.toggle("focus", n === 1 && this.layout !== "1");
+      $("chartWrap2").classList.toggle("focus", n === 2);
+      // The drawing bar sits on the chart being edited.
+      const wrap = n === 2 && this.drawings2 ? $("chartWrap2") : $("chartWrap");
+      if ($("drawBar").parentElement !== wrap) wrap.appendChild($("drawBar"));
+      if (this.drawings === next) return;
+      this.drawings = next;
+      this.renderDrawBar();
+    },
+
+    allDrawings() { return [this.drawingsMain, this.drawings2].filter(Boolean); },
 
     cmpPath(count) {
       return this.owner
@@ -2717,6 +2869,8 @@
         this.cmpBars = this.toBars(data.candles || []);
         if (this.cmpBars.length < 5) throw new Error("no bars");
         name = data.symbol || name; digits = data.digits != null ? data.digits : 2;
+        this.cmpQuote = { bid: data.bid, ask: data.ask };
+        this.cmpLive = true;
         this.cmpTimer = setInterval(() => this.pollCmp(token), 2000);
       } catch {
         // Binance silver as the stand-in (member servers before 2.6, or no MT5).
@@ -2725,17 +2879,24 @@
           this.cmpBars = (await res.json()).map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }));
           name = "XAGUSDT"; digits = 3;
         } catch { this.cmpBars = []; }
+        this.cmpQuote = {}; this.cmpLive = false;
       }
       if (token !== this.cmpToken) return;
+      this.cmpName = name; this.cmpDigits = digits;
       $("chartSymbol2").textContent = name;
+      $("ticket2").hidden = !this.owner || !this.cmpLive;
+      $("swapBtn").hidden = !this.owner || !this.cmpLive;
+      if (this.drawings2 && this.drawKey2 !== name) { this.drawKey2 = name; this.drawings2.load(); }
       this.series2.applyOptions({ priceFormat: { type: "price", precision: digits, minMove: Math.pow(10, -digits) } });
       this.showCmp(true);
     },
 
     async pollCmp(token) {
       try {
-        const fresh = this.toBars((await this.call(this.cmpPath(3))).candles || []);
+        const data = await this.call(this.cmpPath(3));
+        const fresh = this.toBars(data.candles || []);
         if (token !== this.cmpToken) return;
+        this.cmpQuote = { bid: data.bid, ask: data.ask };
         fresh.forEach((b) => {
           const last = this.cmpBars[this.cmpBars.length - 1];
           if (!last || b.time > last.time) this.cmpBars.push(b); else if (b.time === last.time) this.cmpBars[this.cmpBars.length - 1] = b;
@@ -2753,7 +2914,12 @@
       this.cmpView = view;
       if (changed) this.series2.setData(view.map(shown)); else if (view.length) this.series2.update(shown(view[view.length - 1]));
       const last = view[view.length - 1];
-      $("chartPrice2").textContent = last ? last.close.toFixed(3).replace(/0+$/, "").replace(/\.$/, "") : "";
+      const q = this.cmpQuote || {}, d2 = this.cmpDigits || 2;
+      $("chartPrice2").textContent = last ? fmt(q.bid != null && !this.replay ? q.bid : last.close, d2) : "";
+      $("bidText2").textContent = q.bid != null ? fmt(q.bid, d2) : "—";
+      $("askText2").textContent = q.ask != null ? fmt(q.ask, d2) : "—";
+      $("spread2").textContent = spreadText(q.bid, q.ask, d2);
+      this.syncLines2();
       if (full) { try { const r = this.chart.timeScale().getVisibleRange(); if (r) this.chart2.timeScale().setVisibleRange(r); } catch { /* later */ } }
       this.computeSMT();
     },

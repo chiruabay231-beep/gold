@@ -169,11 +169,15 @@
 
     /* ----- creating ----- */
 
-    setTool(tool) {
+    /** Layers of other charts that share the picked tool (two-chart layouts). */
+    link(peers) { this.peers = peers.filter((p) => p !== this); }
+
+    setTool(tool, fromPeer) {
       this.tool = tool;
       this.pending = null;
       this.selected = null;
       this.update();
+      if (!fromPeer) (this.peers || []).forEach((p) => p.setTool(tool, true));
       this.host.onChange();
     }
 
@@ -226,6 +230,7 @@
       if (!d) return;
       if (isPos(d.tool)) { if (d.pts.length < 3) d.pts.push({ t: d.pts[1].t, p: this.target(d) }); this.fixPosition(d, 1); }
       this.list.push(d);
+      (this.peers || []).forEach((p) => { if (!p.pending) { p.tool = this.tool; p.update(); } });
       this.selected = this.tool ? null : d.id;
       this.hidden = false;
       this.save();
@@ -289,6 +294,7 @@
         return false;
       }
       this.selected = hit.d.id;
+      (this.peers || []).forEach((p) => { if (p.selected) { p.selected = null; p.update(); } });
       if (!hit.d.locked && !this.lockAll) {
         this.gesture = { kind: hit.handle != null ? "handle" : "move", d: hit.d, handle: hit.handle, x, y,
           start: hit.d.pts.map((p) => Object.assign({}, p)), anchor: this.point(x, y, false), moved: false };
@@ -348,9 +354,11 @@
       return true;
     }
 
-    cancel() {
+    cancel(fromPeer) {
       this.pending = null; this.tool = null; this.gesture = null;
-      this.update(); this.host.onChange();
+      this.update();
+      if (!fromPeer) (this.peers || []).forEach((p) => p.cancel(true));
+      this.host.onChange();
     }
 
     get current() { return this.list.find((d) => d.id === this.selected) || null; }

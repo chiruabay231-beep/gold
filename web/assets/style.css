@@ -508,3 +508,13 @@ details.set .toggle:first-child { border-top: 1px solid var(--line); }
   .charts.row .chart-wrap, .charts.col .chart-wrap { height: 44vh; min-height: 240px; }
 }
 body:not(.in-member) .nav-logout { display: none; }
+
+/* two charts: quick trade on each, spread, focus */
+.qt-mid { display: flex; flex-direction: column; align-items: center; gap: 1px; }
+.qt-mid .spread { font-size: 10px; line-height: 1; color: var(--muted); min-height: 10px; font-variant-numeric: tabular-nums; }
+.quick-trade.second { top: 40px; }
+.swap-btn { background: var(--chip); border: 0; color: var(--text); border-radius: 6px; padding: 2px 8px; cursor: pointer; font-size: 13px; }
+.swap-btn[hidden] { display: none; }
+.charts .chart-wrap.focus { box-shadow: 0 0 0 1px var(--gold2); border-radius: 4px; }
+#chartWrap2 .draw-bar { top: auto; bottom: 36px; }
+button.busy { opacity: .55; }

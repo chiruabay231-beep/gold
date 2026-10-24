@@ -174,10 +174,13 @@
               <div id="chart"></div>
               <div class="quick-trade" id="ticket" hidden>
                 <button class="qt sell" id="sellBtn" type="button"><b id="bidText">—</b><span>BÁN</span></button>
-                <div class="qt-lot">
-                  <button type="button" data-step="-1">−</button>
-                  <input id="lotInput" inputmode="decimal" value="0.01" title="Khối lượng (lot)">
-                  <button type="button" data-step="1">+</button>
+                <div class="qt-mid">
+                  <span class="spread" id="spread" title="Spread (điểm)"></span>
+                  <div class="qt-lot">
+                    <button type="button" data-step="-1">−</button>
+                    <input id="lotInput" inputmode="decimal" value="0.01" title="Khối lượng (lot)">
+                    <button type="button" data-step="1">+</button>
+                  </div>
                 </div>
                 <button class="qt buy" id="buyBtn" type="button"><b id="askText">—</b><span>MUA</span></button>
                 <button class="qt-pend" id="pendingToggle" type="button" title="Lệnh chờ (kéo đường tím)">⏳</button>
@@ -189,7 +192,20 @@
             </div>
             <div class="chart-wrap second" id="chartWrap2" hidden>
               <div id="chart2"></div>
-              <div class="c2-head"><button class="sym-btn" id="chartSymbol2" type="button">XAGUSD</button><span class="muted small" id="chartPrice2"></span></div>
+              <div class="c2-head"><button class="sym-btn" id="chartSymbol2" type="button">XAGUSD</button><span class="muted small" id="chartPrice2"></span>
+                <button class="swap-btn" id="swapBtn" type="button" title="Đổi chỗ 2 biểu đồ (biểu đồ chính có đủ lệnh chờ, kéo SL/TP)">⇄</button></div>
+              <div class="quick-trade second" id="ticket2" hidden>
+                <button class="qt sell" id="sellBtn2" type="button"><b id="bidText2">—</b><span>BÁN</span></button>
+                <div class="qt-mid">
+                  <span class="spread" id="spread2" title="Spread (điểm)"></span>
+                  <div class="qt-lot">
+                    <button type="button" data-step2="-1">−</button>
+                    <input id="lotInput2" inputmode="decimal" value="0.01" title="Khối lượng (lot)">
+                    <button type="button" data-step2="1">+</button>
+                  </div>
+                </div>
+                <button class="qt buy" id="buyBtn2" type="button"><b id="askText2">—</b><span>MUA</span></button>
+              </div>
             </div>
             </div>
           </div>
