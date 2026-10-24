@@ -196,7 +196,7 @@
   }
 
   function higherTimeframe(sec) {
-    return { 60: 300, 300: 900, 900: 3600, 1800: 14400, 3600: 14400, 14400: 86400, 86400: 604800 }[sec] || null;
+    return { 5: 60, 10: 60, 15: 60, 60: 300, 300: 900, 900: 3600, 1800: 14400, 3600: 14400, 14400: 86400, 86400: 604800 }[sec] || null;
   }
 
   function aggregate(c, seconds) {
@@ -296,7 +296,8 @@
     const out = { boxes: [], levels: [], stamps: [], macros: [], fvgs: [], vis: [], breaks: [], sweeps: [], days: [], ranges: [], hidden: false };
     if (c.length < 3) return out;
     const n = c.length;
-    if (show.fvg && cfg.fvg && sec >= cfg.fvgFrom * 60 - 1 && sec <= cfg.fvgTo * 60 + 1) {
+    // Second charts count as the smallest minute setting.
+    if (show.fvg && cfg.fvg && Math.max(sec, 60) >= cfg.fvgFrom * 60 - 1 && sec <= cfg.fvgTo * 60 + 1) {
       out.fvgs = fairValueGaps(c, sec, cfg);
       if (cfg.vi) out.vis = volumeImbalances(c, cfg);
     }

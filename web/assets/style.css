@@ -194,6 +194,7 @@ body.in-member .nav-links, body.in-member .nav-login { display: none; }
 .tf { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
 .tf button, .icon-btn { flex: none; background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font: 600 12px/1 "Be Vietnam Pro", system-ui, sans-serif; cursor: pointer; }
 .tf button.on { background: var(--gold); color: #1a1205; border-color: var(--gold); }
+.tf button.sec-end { margin-right: 6px; }
 .icon-btn { font-style: italic; font-weight: 800; color: var(--gold); }
 .icon-btn.plain { font-style: normal; font-size: 13px; color: var(--text); }
 .flow { font-size: 12.5px; line-height: 1.45; padding: 2px 4px 6px; }

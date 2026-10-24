@@ -53,7 +53,7 @@
     [1, true, "#787b86"], [1.272, true, "#2962ff"], [1.618, true, "#f23645"], [2, true, "#9c27b0"], [2.618, true, "#e91e63"], [3.618, false, "#ff9800"],
   ];
   const DASH = { solid: [], dashed: [6, 4], dotted: [1.5, 3] };
-  const TFS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
+  const TFS = ["5s", "10s", "15s", "1m", "5m", "15m", "30m", "1h", "4h", "1d"];
 
   const alpha = (hex, a) => (hex || "#787b86").slice(0, 7) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
   const isPos = (t) => t === "longPosition" || t === "shortPosition";

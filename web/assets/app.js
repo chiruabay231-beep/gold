@@ -221,8 +221,136 @@
     return Object.fromEntries(IND.map(([k]) => [k, saved[k] !== false]));
   })();
 
-  const TFS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
-  const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
+  const TFS = ["5s", "10s", "15s", "1m", "5m", "15m", "30m", "1h", "4h", "1d"];
+  const TF_SECONDS = { "5s": 5, "10s": 10, "15s": 15, "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
+  const isSecTF = (tf) => TF_SECONDS[tf] < 60;
+
+  /* ----- second bars (5s / 10s / 15s) from Binance: MT5 has nothing under one minute ----- */
+
+  /** The Binance market for a symbol: gold and silver from the futures trades, crypto from the spot 1-second candles. */
+  function binanceMarket(symbol) {
+    const s = String(symbol || "XAUUSD").toUpperCase();
+    if (/XAU|GOLD/.test(s)) return { name: "XAUUSDT", futures: true, digits: 2 };
+    if (/XAG|SILVER/.test(s)) return { name: "XAGUSDT", futures: true, digits: 3 };
+    const m = s.match(/^(BTC|ETH|SOL|BNB|XRP|DOGE|ADA|LTC|TRX|DOT|LINK|AVAX|TON)/);
+    return m ? { name: m[1] + "USDT", futures: false, digits: null } : null;
+  }
+
+  /** Bars of `sec` seconds built from Binance, with older pages on demand and a live stream. */
+  class SecondFeed {
+    constructor(market, sec) {
+      this.market = market; this.sec = sec; this.bars = []; this.offset = 0;
+      this.oldestId = null; this.oldestMs = null; this.lastId = 0; this.noOlder = false;
+    }
+
+    /** One finished piece (a trade, or one 1-second candle) into its bar; true when it opened a new bar. */
+    add(t, o, h, l, c, v, list) {
+      const bars = list || this.bars, d = this.offset;
+      const time = Math.floor(t / this.sec) * this.sec, last = bars[bars.length - 1];
+      if (last && time < last.time) return false;
+      if (last && last.time === time) {
+        last.high = Math.max(last.high, h + d); last.low = Math.min(last.low, l + d); last.close = c + d; last.volume += v;
+        return false;
+      }
+      bars.push({ time, open: o + d, high: h + d, low: l + d, close: c + d, volume: v });
+      return true;
+    }
+
+    /** The second still trading: each update replaces what the previous one of that second put in. */
+    addOpenSecond(t, o, h, l, c, v) {
+      if (!this.snap || this.snap.t !== t) this.snap = { t, n: this.bars.length, bar: this.bars.length ? Object.assign({}, this.bars[this.bars.length - 1]) : null };
+      else { this.bars.length = this.snap.n; if (this.snap.bar) this.bars[this.snap.n - 1] = Object.assign({}, this.snap.bar); }
+      return this.add(t, o, h, l, c, v);
+    }
+
+    async page(older) {
+      const m = this.market;
+      if (m.futures) {
+        let url = `https://fapi.binance.com/fapi/v1/aggTrades?symbol=${m.name}&limit=1000`;
+        if (older) { if (this.oldestId == null || this.oldestId <= 0) return []; url += `&fromId=${Math.max(0, this.oldestId - 1000)}`; }
+        const rows = (await (await fetch(url)).json()).filter((r) => this.oldestId == null || r.a < this.oldestId);
+        if (rows.length) this.oldestId = rows[0].a;
+        if (!older && rows.length) this.lastId = rows[rows.length - 1].a;
+        return rows.map((r) => [r.T / 1000, +r.p, +r.p, +r.p, +r.p, +r.q]);
+      }
+      let url = `https://api.binance.com/api/v3/klines?symbol=${m.name}&interval=1s&limit=1000`;
+      if (older) url += `&endTime=${this.oldestMs - 1}`;
+      const rows = await (await fetch(url)).json();
+      if (!Array.isArray(rows)) throw new Error("binance");
+      if (rows.length) this.oldestMs = rows[0][0];
+      return rows.map((r) => [r[0] / 1000, +r[1], +r[2], +r[3], +r[4], +r[5]]);
+    }
+
+    /** About `want` bars back from now (a few requests at most). */
+    async history(want) {
+      let pieces = [];
+      for (let k = 0; k < 10; k++) {
+        const got = await this.page(k > 0);
+        if (!got.length) { this.noOlder = true; break; }
+        pieces = got.concat(pieces);
+        if (pieces[pieces.length - 1][0] - pieces[0][0] >= want * this.sec) break;
+      }
+      if (!pieces.length) throw new Error("no data");
+      if (this.market.digits == null) {
+        const p = pieces[pieces.length - 1][4];
+        this.market.digits = p >= 100 ? 2 : p >= 1 ? 4 : 6;
+      }
+      // The newest 1-second candle may still be trading: the stream finishes it.
+      const open = this.market.futures ? null : pieces.pop();
+      pieces.forEach((x) => this.add(...x));
+      if (open) this.addOpenSecond(...open);
+    }
+
+    /** Older bars put in front; how many bars were added. */
+    async older() {
+      if (this.noOlder || this.busy || !this.bars.length) return 0;
+      this.busy = true;
+      try {
+        const got = await this.page(true);
+        if (!got.length) { this.noOlder = true; return 0; }
+        const list = [];
+        got.forEach((x) => this.add(...x, list));
+        const first = this.bars[0], tail = list[list.length - 1];
+        if (tail && tail.time === first.time) {
+          // The bar cut in two by the page edge.
+          first.open = tail.open; first.high = Math.max(first.high, tail.high); first.low = Math.min(first.low, tail.low); first.volume += tail.volume;
+          list.pop();
+        }
+        this.bars.unshift(...list);
+        if (this.snap) this.snap.n += list.length;
+        return list.length;
+      } catch { this.noOlder = true; return 0; } finally { this.busy = false; }
+    }
+
+    /** Live: `onBar(newBar)` after every trade / candle update. */
+    live(onBar) {
+      const m = this.market;
+      const ws = new WebSocket(m.futures
+        ? `wss://fstream.binance.com/ws/${m.name.toLowerCase()}@aggTrade`
+        : `wss://stream.binance.com:9443/ws/${m.name.toLowerCase()}@kline_1s`);
+      ws.onmessage = (ev) => {
+        const x = JSON.parse(ev.data);
+        if (m.futures) {
+          if (x.a == null || x.a <= this.lastId) return;
+          this.lastId = x.a;
+          onBar(this.add(x.T / 1000, +x.p, +x.p, +x.p, +x.p, +x.q));
+        } else if (x.k) {
+          const k = x.k;
+          onBar(this.addOpenSecond(k.t / 1000, +k.o, +k.h, +k.l, +k.c, +k.v));
+        }
+      };
+      this.ws = ws;
+    }
+
+    /** Moves every price by `d` (to sit on the broker's price), and what comes after too. */
+    shift(d) {
+      this.bars.forEach((b) => { b.open += d; b.high += d; b.low += d; b.close += d; });
+      if (this.snap && this.snap.bar) ["open", "high", "low", "close"].forEach((k) => (this.snap.bar[k] += d));
+      this.offset += d;
+    }
+
+    close() { if (this.ws) { this.ws.onmessage = null; this.ws.close(); } this.ws = null; }
+  }
 
   /** Money on a line label: "+45.20 USD" style, short. */
   const money0 = (v) => (v == null || !isFinite(v) ? "" : (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(2));
@@ -1577,7 +1705,7 @@
           grid: { vertLines: { color: "#1a2233" }, horzLines: { color: "#1a2233" } },
           rightPriceScale: { borderColor: "#222c3d" },
           timeScale: { borderColor: "#222c3d", timeVisible: true, secondsVisible: false, rightOffset: 8, barSpacing: el.clientWidth < 500 ? 4 : 6 },
-          localization: { timeFormatter: (t) => new Date(t * 1000).toLocaleString("vi-VN", { timeZone: "UTC", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) },
+          localization: { timeFormatter: (t) => this.timeLabel(t) },
           crosshair: { mode: 0 },
         });
         this.series = this.chart.addCandlestickSeries({
@@ -1640,7 +1768,7 @@
           text: () => this.countdownText(),
           textColor: () => "#ffffff",
           backColor: () => { const v = this.viewBars(), b = v[v.length - 1]; return b && b.close < b.open ? this.chartStyle.down : this.chartStyle.up; },
-          visible: () => !this.replay && this.bars.length > 0 && this.source === "exness",
+          visible: () => !this.replay && this.bars.length > 0 && (this.source === "exness" || !!this.secFeed),
           tickVisible: () => false,
         };
         setInterval(() => { if (this.tab === "chart" && this.requestICT) this.requestICT(); }, 1000);
@@ -1653,16 +1781,23 @@
         this.chartStyle = loadChartStyle();
         this.applyChartStyle();
         this.layout = ["1", "h", "v"].includes(store.get("aurum.layout")) ? store.get("aurum.layout") : "1";
-        $("tfButtons").innerHTML = TFS.map((i) => `<button type="button" data-tf="${i}">${i}</button>`).join("");
+        $("tfButtons").innerHTML = TFS.map((i) => `<button type="button" data-tf="${i}"${i === "15s" ? ' class="sec-end" title="Nến giây lấy từ Binance"' : isSecTF(i) ? ' title="Nến giây lấy từ Binance"' : ""}>${i}</button>`).join("");
         $("tfButtons").querySelectorAll("button").forEach((b) => (b.onclick = () => {
           this.interval = b.dataset.tf; store.set("aurum.tf", this.interval); this.loadCandles();
         }));
-        this.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => { if (r && r.from < 30) this.loadOlder(); });
+        this.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => { if (r && r.from < 30 && !(performance.now() < this.olderHold)) this.loadOlder(); });
         this.bindDrag();
         this.bindTicket();
       }
       this.applySeriesFormat();
       this.loadCandles();
+    },
+
+    /** Crosshair time: with seconds on the second charts. */
+    timeLabel(t) {
+      const o = { timeZone: "UTC", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" };
+      if (isSecTF(this.interval)) o.second = "2-digit";
+      return new Date(t * 1000).toLocaleString("vi-VN", o);
     },
 
     applySeriesFormat() {
@@ -1809,10 +1944,20 @@
       const replayTime = this.replay ? this.bars[this.replay.idx].time + TF_SECONDS[this.replayInterval || this.interval] - 1 : null;
       this.replayInterval = this.interval;
       document.querySelectorAll("#tfButtons button").forEach((b) => b.classList.toggle("on", b.dataset.tf === this.interval));
+      // The picked timeframe in view on a phone, where the row scrolls.
+      const tfBox = $("tfButtons"), tfOn = tfBox.querySelector(".on");
+      if (tfOn) {
+        const a = tfOn.getBoundingClientRect(), c = tfBox.getBoundingClientRect();
+        if (a.left < c.left || a.right > c.right) tfBox.scrollLeft += a.left - c.left - 8;
+      }
       if (this.socket) { this.socket.close(); this.socket = null; }
       clearInterval(this.pollTimer); this.pollTimer = null;
       this.noOlder = false;
+      this.secFeed = null;
       const token = (this.loadToken = (this.loadToken || 0) + 1);
+      this.applyChartStyle();
+      if (this.chart2) this.chart2.applyOptions({ timeScale: { secondsVisible: isSecTF(this.interval) } });
+      if (isSecTF(this.interval)) return this.loadSeconds(token);
       try {
         if (this.owner) await this.ownerSymbol();
         const data = await this.call(this.exnessPath(800));
@@ -1834,8 +1979,7 @@
           this.replay.idx = Math.max(1, Math.min(i, this.bars.length - 2));
           this.applyReplay(true);
         } else {
-          this.series.setData(bars.map(shown));
-          this.chart.timeScale().scrollToRealTime();
+          this.showFresh(bars);
           this.computeICT();
         }
         this.setQuote(data);
@@ -1870,7 +2014,108 @@
       } catch { /* keep the chart */ } finally { this.polling = false; }
     },
 
+    /** New bars (another timeframe or symbol), shown from the newest one. */
+    showFresh(bars) {
+      // At once, before and after the new data: the old timeframe's scroll would otherwise land on the
+      // first bars and start a fetch of older ones that keeps it there.
+      const ts = this.chart.timeScale();
+      ts.scrollToPosition(8, false);
+      this.olderHold = performance.now() + 800;
+      this.series.setData(bars.map(shown));
+      ts.scrollToPosition(8, false);
+    },
+
+    /** 5s / 10s / 15s: Binance bars (MT5 has none under a minute); orders still go to MT5 at its own price. */
+    async loadSeconds(token) {
+      let symbol = $("chartSymbol").textContent || "XAUUSD";
+      if (this.owner) symbol = await this.ownerSymbol().catch(() => this.symbol || "XAUUSD");
+      if (token !== this.loadToken) return;
+      const market = binanceMarket(symbol);
+      if (!market) {
+        toast("Khung giây chỉ có cho vàng, bạc và crypto (lấy nến từ Binance)", true);
+        this.interval = "1m"; store.set("aurum.tf", "1m");
+        return this.loadCandles();
+      }
+      const sec = TF_SECONDS[this.interval];
+      const feed = new SecondFeed(market, sec);
+      $("chartSource").textContent = `· đang tải nến ${this.interval} từ Binance…`;
+      try {
+        await feed.history(Math.max(240, Math.round(3600 / sec)));
+      } catch {
+        if (token !== this.loadToken) return;
+        $("chartSource").textContent = "· không tải được nến giây từ Binance";
+        return;
+      }
+      if (token !== this.loadToken) return;
+      if (this.replay) { clearInterval(this.replay.timer); this.replay = null; this.replayPicking = false; this.renderReplayBar(); }
+      this.secFeed = feed; this.socket = feed;
+      this.source = "binance";
+      this.digits = market.digits;
+      this.applySeriesFormat();
+      $("chartSymbol").textContent = this.owner ? this.symbol : symbol;
+      this.bars = feed.bars;
+      if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); }
+      const label = () => {
+        const d = feed.offset;
+        $("chartSource").textContent = `· nến ${this.interval} Binance ${market.name}` + (d ? ` (căn theo giá Exness ${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(market.digits)})` : "");
+      };
+      label();
+      this.showFresh(this.bars);
+      this.computeICT();
+      this.quoteLive = false;
+      this.setQuote({});
+      feed.live((added) => {
+        if (token !== this.loadToken || this.replay) return;
+        const last = this.bars[this.bars.length - 1];
+        if (last) this.series.update(shown(last));
+        if (!this.quoteLive) this.setQuote({});
+        if (added || !this.ictTime || Date.now() - this.ictTime > 1000) this.computeICT();
+      });
+      // MT5's own bid/ask for the order buttons; the first one also sets the Binance bars onto the broker's price.
+      const quote = async () => {
+        try {
+          const path = this.owner ? `/mt5/candles?symbol=${encodeURIComponent(this.symbol)}&interval=1m&count=1` : "/member/candles?interval=1m&count=1";
+          const data = await this.call(path);
+          if (token !== this.loadToken || data.bid == null) return;
+          this.quoteLive = true;
+          const last = this.bars[this.bars.length - 1];
+          if (!feed.aligned && last && data.ask != null) {
+            feed.aligned = true;
+            const step = Math.pow(10, -market.digits);
+            const d = Math.round(((data.bid + data.ask) / 2 - last.close) / step) * step;
+            // Only the same market (gold on gold): a big gap means another instrument, left as it is.
+            if (Math.abs(d) < last.close * 0.01) {
+              feed.shift(d);
+              this.series.setData(this.viewBars().map(shown));
+              this.computeICT();
+              label();
+            }
+          }
+          this.setQuote(data);
+        } catch { /* Binance alone */ }
+      };
+      if (this.base) { quote(); this.pollTimer = setInterval(quote, 2000); }
+      this.syncLines();
+      this.updateFlow();
+      this.redraw();
+      if (this.layout !== "1") this.setLayout(this.layout); else if (this.smtWanted()) this.loadCmp();
+    },
+
     async loadOlder(quiet) {
+      if (this.secFeed && !this.replay && !quiet) {
+        if (this.loadingOlder) return;
+        this.loadingOlder = true;
+        const token = this.loadToken, feed = this.secFeed;
+        try {
+          const added = await feed.older();
+          if (!added || token !== this.loadToken) return;
+          const range = this.chart.timeScale().getVisibleLogicalRange();
+          this.series.setData(this.bars.map(shown));
+          if (range) this.chart.timeScale().setVisibleLogicalRange({ from: range.from + added, to: range.to + added });
+          this.computeICT();
+        } finally { this.loadingOlder = false; }
+        return;
+      }
       if (this.loadingOlder || this.noOlder || this.source !== "exness" || !this.bars.length) return;
       this.loadingOlder = true;
       const token = this.loadToken;
@@ -1903,8 +2148,7 @@
         this.bars = rows.map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }));
         if (this.replay) this.exitReplay();
         if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); }
-        this.series.setData(this.bars.map(shown));
-        this.chart.timeScale().scrollToRealTime();
+        this.showFresh(this.bars);
         this.setQuote({});
         this.computeICT();
       } catch { /* chart stays empty */ }
@@ -3006,7 +3250,7 @@
         layout: { background: { color: bg }, textColor: light ? "#4b5563" : "#8b95a7" },
         grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
         rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
-        timeScale: { borderColor: light ? "#d6dae1" : "#222c3d", secondsVisible: st.seconds },
+        timeScale: { borderColor: light ? "#d6dae1" : "#222c3d", secondsVisible: st.seconds || isSecTF(this.interval) },
         crosshair: { mode: st.crosshairMagnet ? 1 : 0 },
       });
       const candles = {
@@ -3246,8 +3490,8 @@
         autoSize: true,
         layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "Be Vietnam Pro, system-ui" },
         rightPriceScale: { borderColor: "#222c3d" },
-        timeScale: { borderColor: "#222c3d", timeVisible: true, secondsVisible: false, rightOffset: 8 },
-        localization: { timeFormatter: (t) => new Date(t * 1000).toLocaleString("vi-VN", { timeZone: "UTC", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) },
+        timeScale: { borderColor: "#222c3d", timeVisible: true, secondsVisible: isSecTF(this.interval), rightOffset: 8 },
+        localization: { timeFormatter: (t) => this.timeLabel(t) },
         crosshair: { mode: 0 },
       });
       this.series2 = this.chart2.addCandlestickSeries({ borderVisible: false });
@@ -3420,10 +3664,21 @@
     async loadCmp() {
       const show2 = this.layout !== "1" && this.chart2;
       clearInterval(this.cmpTimer); this.cmpTimer = null;
+      if (this.cmpFeed) { this.cmpFeed.close(); this.cmpFeed = null; }
       if (!show2 && !this.smtWanted()) { this.cmpBars = []; this.cmpView = null; this.computeSMT(); return; }
       const token = (this.cmpToken = (this.cmpToken || 0) + 1);
-      let name = this.cmpSymbol(), digits = 2, live = false, quote = {}, bars = [];
-      try {
+      let name = this.cmpSymbol(), digits = 2, live = false, quote = {}, bars = [], feed = null;
+      if (isSecTF(this.interval)) {
+        // Second bars of the related market from Binance as well.
+        const market = binanceMarket(name);
+        if (market) {
+          feed = new SecondFeed(market, TF_SECONDS[this.interval]);
+          try { await feed.history(Math.max(240, Math.round(3600 / feed.sec))); } catch { feed = null; }
+        }
+        if (token !== this.cmpToken) { if (feed) feed.close(); return; }
+        bars = feed ? feed.bars : [];
+        if (feed) { name = market.name; digits = market.digits; }
+      } else try {
         if (this.source !== "exness") throw new Error("binance");
         const data = await this.call(this.cmpPath(800));
         bars = this.toBars(data.candles || []);
@@ -3445,6 +3700,15 @@
       this.cmpBars = bars; this.cmpQuote = quote; this.cmpLive = live; this.cmpView = null; this.cmpNoOlder = false;
       this.cmpName = name; this.cmpDigits = digits;
       if (live) this.cmpTimer = setInterval(() => this.pollCmp(token), 2000);
+      if (feed) {
+        this.cmpFeed = feed;
+        let shownAt = 0;
+        feed.live((added) => {
+          if (token !== this.cmpToken || this.replay || (!added && performance.now() - shownAt < 250)) return;
+          shownAt = performance.now();
+          this.showCmp(false);
+        });
+      }
       $("chartSymbol2").textContent = name;
       $("ticket2").hidden = !this.owner || !live;
       $("swapBtn").hidden = !this.owner || !live;
@@ -3514,6 +3778,11 @@
 
     /** Older bars of the second chart, so it covers what the first one shows. */
     async loadOlderCmp() {
+      if (this.cmpFeed) {
+        const feed = this.cmpFeed;
+        if (await feed.older() && feed === this.cmpFeed) { this.cmpBars = feed.bars; this.showCmp(true); }
+        return;
+      }
       if (this.cmpOlderBusy || !this.cmpLive || !this.cmpBars || !this.cmpBars.length || this.cmpNoOlder) return;
       this.cmpOlderBusy = true;
       const token = this.cmpToken;

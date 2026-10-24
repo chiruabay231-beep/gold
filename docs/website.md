@@ -27,6 +27,12 @@ qua ntfy.sh (giống app iPhone).
 Máy chủ VPS cần bản 2.4+ (tin tức đi qua `/news`, `/member/news` vì trình duyệt không đọc
 thẳng được lịch Forex Factory). Không có MT5 thì biểu đồ dùng Binance XAUUSDT.
 
+Khung **5s / 10s / 15s**: MT5 không có nến dưới 1 phút nên nến giây dựng từ Binance ngay trên
+trình duyệt — vàng/bạc từ lệnh khớp hợp đồng XAUUSDT/XAGUSDT (futures), crypto từ nến 1 giây spot
+(BTCUSDT, ETHUSDT…), kéo sang trái để tải thêm, chạy trực tiếp qua websocket. Nến được dời theo
+chênh lệch với giá Exness lúc mở (ghi cạnh tên mã) để đường lệnh/SL/TP và bản vẽ khớp; nút MUA/BÁN
+vẫn đặt vào MT5 theo giá Exness. Mã khác (ngoại hối, chỉ số) không có khung giây.
+
 ## Đăng lên Cloudflare Pages (miễn phí, tên dạng `aurumpro.pages.dev`)
 
 1. Tạo tài khoản tại https://dash.cloudflare.com (miễn phí).
