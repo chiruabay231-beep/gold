@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.4"
+VERSION = "2.5"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -541,8 +541,32 @@ def mt5_send(mt5, request):
     if result is None:
         return None, f"order_send lỗi: {mt5.last_error()}"
     if result.retcode not in (mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
+        if result.retcode == getattr(mt5, "TRADE_RETCODE_INVALID_STOPS", 10016):
+            return None, ("SL/TP không hợp lệ (10016): lệnh MUA cần SL dưới giá hiện tại và TP trên giá; "
+                          "lệnh BÁN ngược lại, và cách giá đủ xa theo sàn")
         return None, f"MT5 từ chối ({result.retcode}): {result.comment}"
     return result, None
+
+
+def check_stops(mt5, symbol, info, long, stop, target):
+    """SL/TP of an open position against the price it would close at, with a clear
+    message instead of MT5's bare 10016 "Invalid stops"."""
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None or info is None:
+        return
+    price = tick.bid if long else tick.ask
+    gap = (getattr(info, "trade_stops_level", 0) or 0) * (info.point or 0)
+    d = info.digits
+    if stop:
+        if long and stop >= price - gap:
+            raise ValueError(f"SL của lệnh MUA phải thấp hơn giá hiện tại {price:.{d}f}" + (f" ít nhất {gap:.{d}f}" if gap else ""))
+        if not long and stop <= price + gap:
+            raise ValueError(f"SL của lệnh BÁN phải cao hơn giá hiện tại {price:.{d}f}" + (f" ít nhất {gap:.{d}f}" if gap else ""))
+    if target:
+        if long and target <= price + gap:
+            raise ValueError(f"TP của lệnh MUA phải cao hơn giá hiện tại {price:.{d}f}" + (f" ít nhất {gap:.{d}f}" if gap else ""))
+        if not long and target >= price - gap:
+            raise ValueError(f"TP của lệnh BÁN phải thấp hơn giá hiện tại {price:.{d}f}" + (f" ít nhất {gap:.{d}f}" if gap else ""))
 
 
 # Orders placed by hand from the app; the bot only manages its own magic number.
@@ -802,6 +826,9 @@ class Mt5Account:
             if rows:
                 r = rows[0]
                 info = mt5.symbol_info(r.symbol)
+                check_stops(mt5, r.symbol, info, r.type == mt5.POSITION_TYPE_BUY,
+                            float(body["stop"]) if body.get("stop") else None,
+                            float(body["target"]) if body.get("target") else None)
                 request = {"action": mt5.TRADE_ACTION_SLTP, "symbol": r.symbol, "position": r.ticket,
                            "sl": round(float(body["stop"]), info.digits) if body.get("stop") else 0.0,
                            "tp": round(float(body["target"]), info.digits) if body.get("target") else 0.0}

@@ -2,35 +2,37 @@
  * lines, rays, horizontal / vertical lines, Fibonacci, patterns, long / short
  * positions, price range, volume profiles, shapes and text. Points are kept as
  * {t: UTC seconds, p: price} so drawings stay put across timeframes; they are
- * saved per symbol in this browser and painted inside the chart's render pass. */
+ * saved per symbol in this browser and painted inside the chart's render pass.
+ * Each drawing carries its own look (line, fill, text, Fibonacci levels, the
+ * timeframes it shows on), edited in the settings panel like TradingView's. */
 (() => {
   "use strict";
 
   const COLORS = ["#2962ff", "#f23645", "#089981", "#ff9800", "#9c27b0", "#787b86", "#e8ecf3"];
   const TOOLS = {
-    trendLine: { name: "Đường xu hướng", icon: "╱", n: 2 },
-    trendRay: { name: "Tia xu hướng", icon: "↗", n: 2 },
-    horizontalLine: { name: "Đường nằm ngang", icon: "—", n: 1 },
-    horizontalRay: { name: "Tia nằm ngang", icon: "→", n: 1 },
-    verticalLine: { name: "Đường thẳng đứng", icon: "│", n: 1 },
-    fibRetracement: { name: "Hồi quy Fib (OTE)", icon: "≡", n: 2 },
-    fibExtension: { name: "Fib mở rộng theo xu hướng", icon: "≣", n: 3 },
-    elliottImpulse: { name: "Sóng đẩy Elliott (1·2·3·4·5)", icon: "⌇", n: 6, labels: ["0", "1", "2", "3", "4", "5"] },
-    elliottCorrection: { name: "Sóng điều chỉnh Elliott (A·B·C)", icon: "⌇", n: 4, labels: ["0", "A", "B", "C"] },
-    headShoulders: { name: "Mô hình Đầu Vai", icon: "⛰", n: 7, labels: ["", "Vai trái", "", "Đầu", "", "Vai phải", ""] },
-    trianglePattern: { name: "Mô hình tam giác", icon: "△", n: 4, labels: ["A", "B", "C", "D"] },
-    longPosition: { name: "Vị thế Mua", icon: "▲", n: 2 },
-    shortPosition: { name: "Vị thế Bán", icon: "▼", n: 2 },
-    fixedRangeVolume: { name: "Khối lượng phạm vi cố định", icon: "▤", n: 2 },
-    anchoredVolume: { name: "Khối lượng được neo", icon: "▥", n: 1 },
-    priceRange: { name: "Đo giá", icon: "↕", n: 2 },
-    brush: { name: "Cọ vẽ", icon: "✎", n: -1 },
-    rectangle: { name: "Hình chữ nhật", icon: "▭", n: 2 },
-    arrow: { name: "Mũi tên", icon: "➚", n: 2 },
-    ellipse: { name: "Hình elip", icon: "◯", n: 2 },
-    path: { name: "Đường dẫn", icon: "〰", n: 12 },
-    arrowMarker: { name: "Mũi tên đánh dấu", icon: "➤", n: 2 },
-    text: { name: "Văn bản", icon: "T", n: 1 },
+    trendLine: { name: "Đường xu hướng", n: 2 },
+    trendRay: { name: "Tia xu hướng", n: 2 },
+    horizontalLine: { name: "Đường nằm ngang", n: 1 },
+    horizontalRay: { name: "Tia nằm ngang", n: 1 },
+    verticalLine: { name: "Đường thẳng đứng", n: 1 },
+    fibRetracement: { name: "Fib thoái lui (OTE)", n: 2 },
+    fibExtension: { name: "Fib mở rộng theo xu hướng", n: 3 },
+    elliottImpulse: { name: "Sóng đẩy Elliott (1·2·3·4·5)", n: 6, labels: ["0", "1", "2", "3", "4", "5"] },
+    elliottCorrection: { name: "Sóng điều chỉnh Elliott (A·B·C)", n: 4, labels: ["0", "A", "B", "C"] },
+    headShoulders: { name: "Đầu và vai", n: 7, labels: ["", "Vai trái", "", "Đầu", "", "Vai phải", ""] },
+    trianglePattern: { name: "Mô hình tam giác", n: 4, labels: ["A", "B", "C", "D"] },
+    longPosition: { name: "Vị thế Mua", n: 2 },
+    shortPosition: { name: "Vị thế Bán", n: 2 },
+    fixedRangeVolume: { name: "Khối lượng phạm vi cố định", n: 2 },
+    anchoredVolume: { name: "Khối lượng được neo", n: 1 },
+    priceRange: { name: "Đo giá", n: 2 },
+    brush: { name: "Cọ vẽ", n: -1 },
+    rectangle: { name: "Hình chữ nhật", n: 2 },
+    arrow: { name: "Mũi tên", n: 2 },
+    ellipse: { name: "Hình elip", n: 2 },
+    path: { name: "Đường dẫn", n: 12 },
+    arrowMarker: { name: "Mũi tên đánh dấu", n: 2 },
+    text: { name: "Văn bản", n: 1 },
   };
   const CATEGORIES = [
     ["Công cụ xu hướng", ["trendLine", "trendRay", "horizontalLine", "horizontalRay", "verticalLine"]],
@@ -40,14 +42,25 @@
     ["Hình học", ["brush", "rectangle", "arrow", "ellipse", "path", "arrowMarker"]],
     ["Lưu ý", ["text"]],
   ];
-  const FIB = [1, 0.79, 0.705, 0.62, 0.5, 0, -0.27, -0.62, -1];
-  const FIB_EXT = [0, 0.618, 1, 1.272, 1.618, 2, 2.618];
-  const DASH = { solid: [], dashed: [6, 4], dotted: [2, 3] };
+  // Fibonacci levels: ICT's OTE (0.62–0.79) and targets below 0, like the app; the rest can be turned on.
+  const FIB_LEVELS = [
+    [1, true, "#787b86"], [0.886, false, "#787b86"], [0.79, true, "#f23645"], [0.705, true, "#089981"], [0.62, true, "#ff9800"],
+    [0.5, true, "#4caf50"], [0.382, false, "#00bcd4"], [0.236, false, "#f23645"], [0, true, "#787b86"],
+    [-0.27, true, "#2962ff"], [-0.62, true, "#9c27b0"], [-1, true, "#e91e63"], [-1.618, false, "#f23645"], [-2.618, false, "#9c27b0"],
+  ];
+  const FIB_EXT_LEVELS = [
+    [0, true, "#787b86"], [0.382, false, "#f23645"], [0.5, false, "#4caf50"], [0.618, true, "#089981"], [0.786, false, "#00bcd4"],
+    [1, true, "#787b86"], [1.272, true, "#2962ff"], [1.618, true, "#f23645"], [2, true, "#9c27b0"], [2.618, true, "#e91e63"], [3.618, false, "#ff9800"],
+  ];
+  const DASH = { solid: [], dashed: [6, 4], dotted: [1.5, 3] };
+  const TFS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
 
-  const alpha = (hex, a) => hex + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
+  const alpha = (hex, a) => (hex || "#787b86").slice(0, 7) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
+  const isPos = (t) => t === "longPosition" || t === "shortPosition";
+  const hasFill = (t) => ["rectangle", "ellipse", "headShoulders", "trianglePattern", "fibRetracement", "fibExtension", "longPosition", "shortPosition", "priceRange"].includes(t);
 
   class Drawings {
-    /** host: { chart, series, bars(), sec(), digits(), symbol(), store, onChange(), toolbar element } */
+    /** host: { chart, series, bars(), sec(), interval(), digits(), symbol(), store, magnet(), onChange(), onEdit(d, isNew) } */
     constructor(host) {
       this.host = host;
       this.list = [];
@@ -55,7 +68,6 @@
       this.pending = null; // the drawing being placed
       this.selected = null;
       this.gesture = null;
-      this.hover = null;
       // Toolbar switches: keep the tool after a drawing, lock all, hide all.
       this.keepTool = host.store.get("aurum.keepTool") === "1";
       this.lockAll = host.store.get("aurum.lockAll") === "1";
@@ -80,6 +92,9 @@
     static get tools() { return TOOLS; }
     static get categories() { return CATEGORIES; }
     static get colors() { return COLORS; }
+    static get timeframes() { return TFS; }
+    static isPosition(t) { return isPos(t); }
+    static hasFill(t) { return hasFill(t); }
 
     update() { if (this.requestUpdate) this.requestUpdate(); }
 
@@ -87,7 +102,7 @@
 
     key() { return "aurum.draw." + (this.host.symbol() || "XAUUSD"); }
     load() {
-      try { this.list = JSON.parse(this.host.store.get(this.key()) || "[]"); } catch { this.list = []; }
+      try { this.list = JSON.parse(this.host.store.get(this.key()) || "[]").map((d) => this.upgrade(d)); } catch { this.list = []; }
       this.selected = null; this.pending = null;
       this.update();
       this.host.onChange();
@@ -95,6 +110,14 @@
     save() {
       try { this.host.store.set(this.key(), JSON.stringify(this.list)); } catch { /* full */ }
       this.host.onChange();
+    }
+
+    /** Drawings saved by an earlier version get the options added since. */
+    upgrade(d) {
+      const base = this.defaults(d.tool);
+      for (const k of Object.keys(base)) if (d[k] === undefined) d[k] = base[k];
+      if (isPos(d.tool) && d.pts.length === 2) d.pts.push({ t: d.pts[1].t, p: this.target(d) });
+      return d;
     }
 
     /* ----- coordinates: time ↔ logical index ↔ pixels ----- */
@@ -154,13 +177,46 @@
       this.host.onChange();
     }
 
-    newDrawing(tool) {
-      const st = this.styles[tool] || {};
-      return {
-        id: Math.random().toString(36).slice(2, 10), tool, pts: [],
-        color: st.color || (tool === "longPosition" ? COLORS[2] : tool === "shortPosition" ? COLORS[1] : COLORS[0]),
-        width: st.width || (tool === "brush" ? 2 : 1.5), style: st.style || "solid", rr: st.rr || 2, text: "", locked: false,
+    /** The look of a new drawing of `tool`: the user's saved default over the built-in one. */
+    defaults(tool) {
+      const color = tool === "longPosition" ? COLORS[2] : tool === "shortPosition" ? COLORS[1] : tool === "text" ? "#ff9800" : COLORS[0];
+      const base = {
+        color, width: tool === "brush" ? 2 : 1, style: "solid", rr: 2, locked: false,
+        // Line ends / box extension: "none" | "left" | "right" | "both".
+        extend: "none",
+        mid: false, midColor: "#787b86", midStyle: "dashed",
+        fill: hasFill(tool), fillColor: color, fillOpacity: tool === "headShoulders" || tool === "trianglePattern" ? 10 : 15,
+        text: "", textColor: tool === "text" ? "#ff9800" : color, fontSize: tool === "text" ? 18 : 12, bold: false, italic: false,
+        textBg: false, textBgColor: "#2a3449", textBorder: false, textBorderColor: "#787b86", wrap: false,
+        textV: "top", textH: "center",
+        targetColor: "#089981", stopColor: "#f23645",
+        hideOn: {},
       };
+      if (tool === "fibRetracement" || tool === "fibExtension") {
+        base.fib = {
+          levels: (tool === "fibExtension" ? FIB_EXT_LEVELS : FIB_LEVELS).map(([v, on, c]) => ({ v, on, color: c })),
+          oneColorOn: false, oneColor: "#2962ff", bg: true, bgOpacity: 10, reverse: false, prices: true, values: true,
+          labelSide: tool === "fibExtension" ? "right" : "left", fontSize: 11, trend: true,
+        };
+      }
+      const saved = this.styles[tool];
+      return saved ? Object.assign(base, JSON.parse(JSON.stringify(saved))) : base;
+    }
+
+    newDrawing(tool) {
+      return Object.assign({ id: Math.random().toString(36).slice(2, 10), tool, pts: [] }, this.defaults(tool));
+    }
+
+    /** Remembers the look of `d` as the default for its tool (the "Bản mẫu" menu). */
+    saveAsDefault(d) {
+      const keep = JSON.parse(JSON.stringify(d));
+      ["id", "tool", "pts", "text", "locked"].forEach((k) => delete keep[k]);
+      this.styles[d.tool] = keep;
+      try { this.host.store.set("aurum.drawStyles", JSON.stringify(this.styles)); } catch { /* full */ }
+    }
+    resetDefault(tool) {
+      delete this.styles[tool];
+      try { this.host.store.set("aurum.drawStyles", JSON.stringify(this.styles)); } catch { /* full */ }
     }
 
     finish() {
@@ -168,16 +224,36 @@
       this.pending = null;
       this.tool = d && this.keepTool ? d.tool : null;
       if (!d) return;
-      if (d.tool === "text" && !d.text) {
-        const text = prompt("Nội dung:", "");
-        if (!text) { this.update(); this.host.onChange(); return; }
-        d.text = text;
-      }
+      if (isPos(d.tool)) { if (d.pts.length < 3) d.pts.push({ t: d.pts[1].t, p: this.target(d) }); this.fixPosition(d, 1); }
       this.list.push(d);
       this.selected = this.tool ? null : d.id;
       this.hidden = false;
       this.save();
       this.update();
+      // A new text opens its editor straight away, like TradingView.
+      if (d.tool === "text" && this.host.onEdit) { this.selected = d.id; this.host.onEdit(d, true); }
+    }
+
+    /**
+     * Long: stop below and target above the entry; short the other way. A handle
+     * cannot drag a position inside out. The stop and target share their right edge.
+     */
+    fixPosition(d, moved) {
+      const [e, s, t] = d.pts;
+      // The closest a stop or target may come to the entry (one hundredth of a percent, at least a tick).
+      const tick = Math.max(Math.pow(10, -this.host.digits()), Math.abs(e.p) * 0.0001);
+      const long = d.tool === "longPosition";
+      if (moved === 0 && t) {
+        // The entry stays between the stop and the target.
+        e.p = long ? Math.min(Math.max(e.p, s.p + tick), t.p - tick) : Math.max(Math.min(e.p, s.p - tick), t.p + tick);
+      }
+      s.p = long ? Math.min(s.p, e.p - tick) : Math.max(s.p, e.p + tick);
+      if (t) {
+        t.p = long ? Math.max(t.p, e.p + tick) : Math.min(t.p, e.p - tick);
+        if (moved === 2) s.t = t.t; else t.t = s.t;
+        d.rr = Math.round(Math.abs(t.p - e.p) / Math.abs(e.p - s.p) * 100) / 100;
+      }
+      [e, s, t].forEach((p) => { if (p) p.p = +p.p.toFixed(this.host.digits()); });
     }
 
     /* ----- pointer: returns true when the drawing layer takes the gesture ----- */
@@ -227,7 +303,7 @@
       if (!g) {
         if (this.pending && this.pending.pts.length) {
           const pt = this.point(x, y, this.host.magnet());
-          if (pt) { this.pending.pts[this.pending.pts.length - 1] = pt; this.update(); }
+          if (pt) { this.pending.pts[this.pending.pts.length - 1] = pt; this.constrain(this.pending, this.pending.pts.length - 1); this.update(); }
         }
         return false;
       }
@@ -236,10 +312,10 @@
         const pt = this.point(x, y, this.host.magnet());
         if (!pt) return true;
         const d = this.pending;
-        if (d.tool === "brush") { if (g.moved) d.pts.push(pt); } else d.pts[d.pts.length - 1] = pt;
+        if (d.tool === "brush") { if (g.moved) d.pts.push(pt); } else { d.pts[d.pts.length - 1] = pt; this.constrain(d, d.pts.length - 1); }
       } else if (g.kind === "handle") {
         const pt = this.point(x, y, this.host.magnet());
-        if (pt) g.d.pts[g.handle] = pt;
+        if (pt) { g.d.pts[g.handle] = pt; this.constrain(g.d, g.handle); }
       } else if (g.kind === "move" && g.anchor) {
         const now = this.point(x, y, false);
         if (!now) return true;
@@ -248,6 +324,11 @@
       }
       this.update();
       return true;
+    }
+
+    constrain(d, index) {
+      if (isPos(d.tool) && d.pts.length >= 2) this.fixPosition(d, index);
+      if ((d.tool === "horizontalLine" || d.tool === "horizontalRay") && d.pts.length) d.pts[0].p = +d.pts[0].p.toFixed(this.host.digits());
     }
 
     up() {
@@ -281,13 +362,22 @@
     }
     clear() { this.list = []; this.selected = null; this.save(); this.update(); }
 
+    /** Changes the selected drawing (from the floating bar or the settings panel). */
     restyle(changes) {
       const d = this.current;
       if (!d) return;
       Object.assign(d, changes);
-      this.styles[d.tool] = { color: d.color, width: d.width, style: d.style, rr: d.rr };
-      try { this.host.store.set("aurum.drawStyles", JSON.stringify(this.styles)); } catch { /* full */ }
+      if (changes.color && hasFill(d.tool) && !changes.fillColor) d.fillColor = changes.color;
+      this.changed(d);
+    }
+    changed(d) {
+      if (isPos(d.tool) && d.pts.length >= 3) this.fixPosition(d, 1);
       this.save(); this.update();
+    }
+
+    shownNow(d) {
+      const tf = this.host.interval ? this.host.interval() : null;
+      return !(tf && d.hideOn && d.hideOn[tf]);
     }
 
     /* ----- hit testing ----- */
@@ -296,6 +386,7 @@
       if (this.hidden) return null;
       for (let k = this.list.length - 1; k >= 0; k--) {
         const d = this.list[k];
+        if (!this.shownNow(d)) continue;
         const pts = d.pts.map((p) => [this.x(p.t), this.y(p.p)]);
         if (pts.some(([a, b]) => a == null || b == null)) continue;
         if (d.id === this.selected) {
@@ -307,7 +398,11 @@
       return null;
     }
 
-    handles(d, pts) { return d.tool === "brush" ? [] : pts; }
+    handles(d, pts) {
+      if (d.tool === "brush") return [];
+      if (isPos(d.tool) && pts.length >= 3) return [pts[0], pts[1], [pts[1][0], pts[2][1]]];
+      return pts;
+    }
 
     near(d, pts, x, y, tol) {
       const seg = (a, b) => {
@@ -321,40 +416,47 @@
         case "horizontalLine": return Math.abs(y - p0[1]) <= tol;
         case "horizontalRay": return Math.abs(y - p0[1]) <= tol && x >= p0[0] - tol;
         case "verticalLine": return Math.abs(x - p0[0]) <= tol;
-        case "text": return Math.abs(x - p0[0]) < 80 && Math.abs(y - p0[1]) < 14;
+        case "text": { const b = d._box; return b ? x >= b.x - 4 && x <= b.x + b.w + 4 && y >= b.y - 4 && y <= b.y + b.h + 4 : Math.hypot(x - p0[0], y - p0[1]) < 14; }
         case "anchoredVolume": return Math.abs(x - p0[0]) <= tol || (x >= p0[0] && Math.abs(y - p0[1]) < 40);
-        case "trendRay": {
-          const far = [p0[0] + (p1[0] - p0[0]) * 1000, p0[1] + (p1[1] - p0[1]) * 1000];
-          return seg(p0, far);
-        }
+        case "trendRay": return seg(p0, [p0[0] + (p1[0] - p0[0]) * 1000, p0[1] + (p1[1] - p0[1]) * 1000]);
         case "rectangle": case "ellipse": {
-          // The outline only, so the chart can still be dragged from inside a big box.
+          // The outline only (inside too when filled), so the chart can still be dragged from an empty box.
+          if (d.fill && inBox(p0, p1) && d.tool === "rectangle") return true;
           const box = [[p0[0], p0[1]], [p1[0], p0[1]], [p1[0], p1[1]], [p0[0], p1[1]], [p0[0], p0[1]]];
           for (let i = 1; i < box.length; i++) if (seg(box[i - 1], box[i])) return true;
           return false;
         }
         case "priceRange": case "fixedRangeVolume": case "fibRetracement": return inBox(p0, p1);
-        case "longPosition": case "shortPosition": return inBox(p0, p1) || inBox(p0, [p1[0], this.y(this.target(d))]);
+        case "longPosition": case "shortPosition": {
+          const right = Math.max(p0[0], p1[0], p0[0] + 40);
+          const yT = pts[2] ? pts[2][1] : this.y(this.target(d));
+          return inBox(p0, [right, p1[1]]) || inBox(p0, [right, yT]);
+        }
         default:
           for (let i = 1; i < pts.length; i++) if (seg(pts[i - 1], pts[i])) return true;
           return pts.length === 1 && Math.hypot(p0[0] - x, p0[1] - y) <= tol;
       }
     }
 
-    target(d) { const [a, b] = d.pts; return a.p + (a.p - b.p) * (d.rr || 2); }
+    target(d) {
+      if (d.pts[2]) return d.pts[2].p;
+      const [a, b] = d.pts;
+      return a.p + (a.p - b.p) * (d.rr || 2);
+    }
 
     /* ----- painting ----- */
 
     paint(g, w, h) {
-      if (this.hidden && !this.pending) return;
-      const shown = this.hidden ? [] : this.list;
+      const shown = this.hidden ? [] : this.list.filter((d) => this.shownNow(d));
       const all = this.pending ? shown.concat([this.pending]) : shown;
       if (!all.length) return;
       g.save();
       all.forEach((d) => {
         const pts = d.pts.map((p) => [this.x(p.t), this.y(p.p)]);
         if (pts.some(([a, b]) => a == null || b == null)) return;
+        g.save();
         try { this.paintOne(g, d, pts, w, h); } catch { /* skip a broken drawing */ }
+        g.restore();
         if (d.id === this.selected || d === this.pending) {
           this.handles(d, pts).forEach(([a, b]) => {
             g.setLineDash([]); g.fillStyle = "#0b0f17"; g.strokeStyle = d.color; g.lineWidth = 1.5;
@@ -365,18 +467,59 @@
       g.restore();
     }
 
+    font(d, size) {
+      return `${d.italic ? "italic " : ""}${d.bold ? "700 " : "500 "}${size || d.fontSize || 12}px Be Vietnam Pro, system-ui, sans-serif`;
+    }
+
+    /** Lines of `text` that fit `max` pixels when wrapping. */
+    lines(g, text, max) {
+      const out = [];
+      String(text).split("\n").forEach((para) => {
+        if (!max) { out.push(para); return; }
+        let line = "";
+        para.split(" ").forEach((word) => {
+          const next = line ? line + " " + word : word;
+          if (line && g.measureText(next).width > max) { out.push(line); line = word; } else line = next;
+        });
+        out.push(line);
+      });
+      return out;
+    }
+
+    /** A text block at (x, y) with the drawing's font, background and border; returns its box. */
+    textBlock(g, d, text, x, y, align = "left", base = "top", maxWidth = 0) {
+      if (!text) return null;
+      g.save();
+      g.setLineDash([]);
+      g.font = this.font(d);
+      const size = d.fontSize || 12, lh = Math.round(size * 1.3), pad = d.textBg || d.textBorder ? 6 : 0;
+      const rows = this.lines(g, text, d.wrap ? Math.max(60, maxWidth || 240) : 0);
+      const tw = Math.max(...rows.map((r) => g.measureText(r).width)), th = rows.length * lh;
+      const bx = align === "center" ? x - tw / 2 - pad : align === "right" ? x - tw - pad * 2 : x;
+      const by = base === "middle" ? y - th / 2 - pad : base === "bottom" ? y - th - pad * 2 : y;
+      if (d.textBg) { g.fillStyle = d.textBgColor; g.fillRect(bx, by, tw + pad * 2, th + pad * 2); }
+      if (d.textBorder) { g.strokeStyle = d.textBorderColor; g.lineWidth = 1; g.strokeRect(bx + 0.5, by + 0.5, tw + pad * 2, th + pad * 2); }
+      g.fillStyle = d.textColor || d.color; g.textBaseline = "top"; g.textAlign = "left";
+      rows.forEach((r, i) => g.fillText(r, bx + pad, by + pad + i * lh + (lh - size) / 2));
+      g.restore();
+      return { x: bx, y: by, w: tw + pad * 2, h: th + pad * 2 };
+    }
+
     paintOne(g, d, pts, w, h) {
       const dg = this.host.digits();
       const color = d.color;
-      g.strokeStyle = color; g.fillStyle = color; g.lineWidth = d.width; g.setLineDash(DASH[d.style] || []);
+      const width = d.width || 1;
+      g.strokeStyle = color; g.fillStyle = color; g.lineWidth = width; g.setLineDash(DASH[d.style] || []);
       g.font = "11px Be Vietnam Pro, system-ui, sans-serif"; g.textBaseline = "bottom"; g.textAlign = "left";
-      const lineTo = (pp) => { g.beginPath(); g.moveTo(pp[0][0], pp[0][1]); pp.slice(1).forEach((p) => g.lineTo(p[0], p[1])); g.stroke(); };
+      // Hairlines (0.5px) on whole pixels stay sharp.
+      const px = (v) => (width <= 1 ? Math.round(v) + 0.5 : v);
+      const lineTo = (pp) => { g.beginPath(); g.moveTo(px(pp[0][0]), px(pp[0][1])); pp.slice(1).forEach((p) => g.lineTo(px(p[0]), px(p[1]))); g.stroke(); };
       const tag = (text, x, y, bg, fg = "#fff", align = "left") => {
-        g.save(); g.setLineDash([]);
+        g.save(); g.setLineDash([]); g.font = "11px Be Vietnam Pro, system-ui, sans-serif";
         const tw = g.measureText(text).width + 8;
         const left = align === "right" ? x - tw : align === "center" ? x - tw / 2 : x;
         g.fillStyle = bg; g.fillRect(left, y - 15, tw, 16);
-        g.fillStyle = fg; g.textAlign = "left"; g.fillText(text, left + 4, y - 2);
+        g.fillStyle = fg; g.textAlign = "left"; g.textBaseline = "bottom"; g.fillText(text, left + 4, y - 2);
         g.restore();
       };
       const arrowHead = (a, b, size = 10) => {
@@ -387,89 +530,100 @@
         g.lineTo(b[0] - size * Math.cos(ang + 0.45), b[1] - size * Math.sin(ang + 0.45));
         g.closePath(); g.fill(); g.restore();
       };
+      // The drawing's own text, placed by its "Văn bản" options.
+      const caption = (l, t, r, b) => {
+        if (!d.text || d.tool === "text") return;
+        const x = d.textH === "left" ? l + 4 : d.textH === "right" ? r - 4 : (l + r) / 2;
+        const y = d.textV === "bottom" ? b + 4 : d.textV === "middle" ? (t + b) / 2 : t - 4;
+        this.textBlock(g, d, d.text, x, y, d.textH === "left" ? "left" : d.textH === "right" ? "right" : "center", d.textV === "bottom" ? "top" : d.textV === "middle" ? "middle" : "bottom", Math.abs(r - l));
+      };
       const [p0, p1] = pts;
       switch (d.tool) {
-        case "trendLine": lineTo(pts); break;
-        case "arrow": case "arrowMarker": lineTo(pts); arrowHead(p0, p1, d.tool === "arrowMarker" ? 14 : 10); break;
+        case "trendLine": case "arrow": case "arrowMarker": {
+          let a = p0, b = p1;
+          if (d.tool === "trendLine" && d.extend !== "none") {
+            const dx = b[0] - a[0], dy = b[1] - a[1], k = dx || dy ? 4000 / Math.hypot(dx, dy) : 0;
+            if (d.extend === "left" || d.extend === "both") a = [a[0] - dx * k, a[1] - dy * k];
+            if (d.extend === "right" || d.extend === "both") b = [b[0] + dx * k, b[1] + dy * k];
+          }
+          lineTo([a, b]);
+          if (d.tool !== "trendLine") arrowHead(p0, p1, d.tool === "arrowMarker" ? 14 : 10);
+          if (d.mid) { g.strokeStyle = d.midColor; g.setLineDash(DASH[d.midStyle]); const mx = (p0[0] + p1[0]) / 2, my = (p0[1] + p1[1]) / 2; lineTo([[mx - 6, my], [mx + 6, my]]); }
+          caption(Math.min(p0[0], p1[0]), Math.min(p0[1], p1[1]), Math.max(p0[0], p1[0]), Math.max(p0[1], p1[1]));
+          break;
+        }
         case "trendRay": {
           const dx = p1[0] - p0[0], dy = p1[1] - p0[1], k = dx || dy ? 4000 / Math.hypot(dx, dy) : 0;
-          lineTo([p0, [p0[0] + dx * k, p0[1] + dy * k]]); break;
+          lineTo([p0, [p0[0] + dx * k, p0[1] + dy * k]]);
+          caption(Math.min(p0[0], p1[0]), Math.min(p0[1], p1[1]), Math.max(p0[0], p1[0]), Math.max(p0[1], p1[1]));
+          break;
         }
-        case "horizontalLine": lineTo([[0, p0[1]], [w, p0[1]]]); tag(d.pts[0].p.toFixed(dg), w - 4, p0[1] - 1, color, "#fff", "right"); break;
-        case "horizontalRay": lineTo([p0, [w, p0[1]]]); tag(d.pts[0].p.toFixed(dg), w - 4, p0[1] - 1, color, "#fff", "right"); break;
-        case "verticalLine": lineTo([[p0[0], 0], [p0[0], h]]); break;
-        case "rectangle":
-          g.fillStyle = alpha(color, 0.15); g.fillRect(p0[0], p0[1], p1[0] - p0[0], p1[1] - p0[1]);
-          g.strokeRect(p0[0], p0[1], p1[0] - p0[0], p1[1] - p0[1]); break;
-        case "ellipse":
+        case "horizontalLine": lineTo([[0, p0[1]], [w, p0[1]]]); tag(d.pts[0].p.toFixed(dg), w - 4, p0[1] - 1, color, "#fff", "right"); caption(0, p0[1], w, p0[1]); break;
+        case "horizontalRay": lineTo([p0, [w, p0[1]]]); tag(d.pts[0].p.toFixed(dg), w - 4, p0[1] - 1, color, "#fff", "right"); caption(p0[0], p0[1], w, p0[1]); break;
+        case "verticalLine": lineTo([[p0[0], 0], [p0[0], h]]); caption(p0[0], 20, p0[0], 20); break;
+        case "rectangle": {
+          let l = Math.min(p0[0], p1[0]), r = Math.max(p0[0], p1[0]);
+          const t = Math.min(p0[1], p1[1]), b = Math.max(p0[1], p1[1]);
+          if (d.extend === "left" || d.extend === "both") l = 0;
+          if (d.extend === "right" || d.extend === "both") r = w;
+          if (d.fill) { g.fillStyle = alpha(d.fillColor, d.fillOpacity / 100); g.fillRect(l, t, r - l, b - t); }
+          g.strokeRect(px(l), px(t), Math.round(r - l), Math.round(b - t));
+          if (d.mid) { g.strokeStyle = d.midColor; g.setLineDash(DASH[d.midStyle]); lineTo([[l, (t + b) / 2], [r, (t + b) / 2]]); }
+          caption(l, t, r, b);
+          break;
+        }
+        case "ellipse": {
           g.beginPath(); g.ellipse((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, Math.abs(p1[0] - p0[0]) / 2, Math.abs(p1[1] - p0[1]) / 2, 0, 0, Math.PI * 2);
-          g.fillStyle = alpha(color, 0.12); g.fill(); g.stroke(); break;
+          if (d.fill) { g.fillStyle = alpha(d.fillColor, d.fillOpacity / 100); g.fill(); }
+          g.stroke();
+          caption(Math.min(p0[0], p1[0]), Math.min(p0[1], p1[1]), Math.max(p0[0], p1[0]), Math.max(p0[1], p1[1]));
+          break;
+        }
         case "path": case "brush":
           g.lineJoin = "round"; g.lineCap = "round"; lineTo(pts); break;
         case "elliottImpulse": case "elliottCorrection": case "headShoulders": case "trianglePattern": {
+          if (d.fill && pts.length >= 3) {
+            g.beginPath(); g.moveTo(pts[0][0], pts[0][1]); pts.slice(1).forEach((p) => g.lineTo(p[0], p[1])); g.closePath();
+            g.fillStyle = alpha(d.fillColor, d.fillOpacity / 100); g.fill();
+          }
           lineTo(pts);
           const labels = TOOLS[d.tool].labels;
+          g.font = this.font(d);
           pts.forEach((p, i) => {
             if (!labels[i]) return;
             const up = i === 0 ? p[1] > (pts[1] || p)[1] : p[1] <= pts[i - 1][1];
-            g.textAlign = "center"; g.textBaseline = up ? "bottom" : "top"; g.fillStyle = color;
+            g.textAlign = "center"; g.textBaseline = up ? "bottom" : "top"; g.fillStyle = d.textColor || color;
             g.fillText(labels[i], p[0], up ? p[1] - 4 : p[1] + 4);
           });
+          g.strokeStyle = color;
           if (d.tool === "trianglePattern" && pts.length >= 4) { g.setLineDash([4, 3]); lineTo([pts[0], pts[2]]); lineTo([pts[1], pts[3]]); }
           if (d.tool === "headShoulders" && pts.length >= 5) { g.setLineDash([4, 3]); lineTo([pts[2], pts[4]]); }
           break;
         }
-        case "fibRetracement": {
-          const a = d.pts[0].p, b = d.pts[1].p;
-          const left = Math.min(p0[0], p1[0]), right = Math.max(p0[0], p1[0]);
-          const yOf = (lv) => this.y(b + (a - b) * lv);
-          const y62 = yOf(0.62), y79 = yOf(0.79);
-          if (y62 != null && y79 != null) { g.fillStyle = alpha("#089981", 0.12); g.fillRect(left, Math.min(y62, y79), right - left, Math.abs(y79 - y62)); }
-          FIB.forEach((lv) => {
-            const yy = yOf(lv);
-            if (yy == null) return;
-            const c = lv === 0.705 ? "#089981" : lv < 0 ? "#f23645" : lv === 0.5 ? "#787b86" : color;
-            g.strokeStyle = c; g.setLineDash(lv === 0.5 ? [4, 3] : DASH[d.style] || []);
-            g.beginPath(); g.moveTo(left, yy); g.lineTo(right, yy); g.stroke();
-            g.fillStyle = c; g.textAlign = "right"; g.textBaseline = "bottom";
-            g.fillText(`${lv} (${(b + (a - b) * lv).toFixed(dg)})`, left - 3, yy + 5);
-          });
-          g.setLineDash([3, 3]); g.strokeStyle = alpha(color, 0.5); lineTo([p0, p1]);
-          break;
-        }
-        case "fibExtension": {
-          lineTo(pts.slice(0, 3));
-          if (pts.length < 3) break;
-          const [a, b, c] = d.pts.map((p) => p.p);
-          const left = Math.min(pts[2][0], pts[1][0]), right = Math.max(pts[2][0], pts[1][0]) + 60;
-          FIB_EXT.forEach((lv) => {
-            const price = c + (b - a) * lv, yy = this.y(price);
-            if (yy == null) return;
-            g.strokeStyle = color; g.setLineDash(lv === 1 ? [] : [4, 3]);
-            g.beginPath(); g.moveTo(left, yy); g.lineTo(right, yy); g.stroke();
-            g.fillStyle = color; g.textAlign = "left"; g.fillText(`${lv} (${price.toFixed(dg)})`, right + 3, yy + 5);
-          });
-          break;
-        }
+        case "fibRetracement": case "fibExtension": this.paintFib(g, d, pts, w, lineTo); break;
         case "longPosition": case "shortPosition": {
           const entry = d.pts[0].p, stop = d.pts[1].p, target = this.target(d);
           const ye = p0[1], ys = p1[1], yt = this.y(target);
           const left = Math.min(p0[0], p1[0]), right = Math.max(p0[0], p1[0], p0[0] + 40);
           g.setLineDash([]);
-          g.fillStyle = alpha("#f23645", 0.18); g.fillRect(left, Math.min(ye, ys), right - left, Math.abs(ys - ye));
-          if (yt != null) { g.fillStyle = alpha("#089981", 0.18); g.fillRect(left, Math.min(ye, yt), right - left, Math.abs(yt - ye)); }
-          g.strokeStyle = "#787b86"; g.lineWidth = 1; lineTo([[left, ye], [right, ye]]);
-          const risk = Math.abs(entry - stop);
-          tag(`Mục tiêu ${target.toFixed(dg)} (${(Math.abs(target - entry)).toFixed(dg)})`, left, Math.min(yt, ye) - 2, "#089981");
-          tag(`Dừng ${stop.toFixed(dg)} (${risk.toFixed(dg)})`, left, Math.max(ys, ye) + 16, "#f23645");
-          tag(`${d.tool === "longPosition" ? "MUA" : "BÁN"} ${entry.toFixed(dg)} · R:R ${d.rr}`, left, ye - 2, "#2a3449");
+          const op = (d.fill ? d.fillOpacity : 0) / 100;
+          g.fillStyle = alpha(d.stopColor, op); g.fillRect(left, Math.min(ye, ys), right - left, Math.abs(ys - ye));
+          if (yt != null) { g.fillStyle = alpha(d.targetColor, op); g.fillRect(left, Math.min(ye, yt), right - left, Math.abs(yt - ye)); }
+          g.strokeStyle = "#787b86"; g.lineWidth = width; lineTo([[left, ye], [right, ye]]);
+          const risk = Math.abs(entry - stop), reward = Math.abs(target - entry);
+          const rr = risk ? (reward / risk).toFixed(2) : "–";
+          const pct = (v) => (v / entry * 100).toFixed(2) + "%";
+          const long = d.tool === "longPosition";
+          tag(`Mục tiêu ${target.toFixed(dg)} (${reward.toFixed(dg)} · ${pct(reward)})`, left, long ? yt - 2 : yt + 16, d.targetColor);
+          tag(`Dừng ${stop.toFixed(dg)} (${risk.toFixed(dg)} · ${pct(risk)})`, left, long ? ys + 16 : ys - 2, d.stopColor);
+          tag(`${long ? "MUA" : "BÁN"} ${entry.toFixed(dg)} · R:R ${rr}`, left, ye - 2, "#2a3449");
           break;
         }
         case "priceRange": {
           const a = d.pts[0].p, b = d.pts[1].p, diff = b - a;
           const bars = Math.round(this.timeToLogical(d.pts[1].t) - this.timeToLogical(d.pts[0].t));
           const c = diff >= 0 ? "#2962ff" : "#f23645";
-          g.fillStyle = alpha(c, 0.15); g.fillRect(p0[0], p0[1], p1[0] - p0[0], p1[1] - p0[1]);
+          if (d.fill) { g.fillStyle = alpha(c, d.fillOpacity / 100); g.fillRect(p0[0], p0[1], p1[0] - p0[0], p1[1] - p0[1]); }
           g.strokeStyle = c; g.setLineDash([]);
           lineTo([[(p0[0] + p1[0]) / 2, p0[1]], [(p0[0] + p1[0]) / 2, p1[1]]]);
           g.fillStyle = c; arrowHead([(p0[0] + p1[0]) / 2, p0[1]], [(p0[0] + p1[0]) / 2, p1[1]], 8);
@@ -478,11 +632,51 @@
         }
         case "fixedRangeVolume": case "anchoredVolume": this.paintVolume(g, d, pts, w); break;
         case "text": {
-          g.font = "600 13px Be Vietnam Pro, system-ui, sans-serif"; g.fillStyle = color; g.textAlign = "left"; g.textBaseline = "middle";
-          g.fillText(d.text || "Văn bản", p0[0], p0[1]); break;
+          d._box = this.textBlock(g, d, d.text || "Văn bản", p0[0], p0[1], "left", "middle", 240);
+          break;
         }
         default: lineTo(pts);
       }
+    }
+
+    /** Fibonacci levels with their own colours, background bands, prices and values. */
+    paintFib(g, d, pts, w, lineTo) {
+      const dg = this.host.digits();
+      const f = d.fib || this.defaults(d.tool).fib;
+      let price, left, right;
+      if (d.tool === "fibRetracement") {
+        const a = d.pts[0].p, b = d.pts[1].p;
+        price = (lv) => (f.reverse ? a + (b - a) * lv : b + (a - b) * lv);
+        left = Math.min(pts[0][0], pts[1][0]); right = Math.max(pts[0][0], pts[1][0]);
+        if (f.trend) { g.save(); g.setLineDash([3, 3]); g.strokeStyle = alpha(d.color, 0.6); g.lineWidth = 1; lineTo([pts[0], pts[1]]); g.restore(); }
+      } else {
+        lineTo(pts.slice(0, 3));
+        if (pts.length < 3) return;
+        const [a, b, c] = d.pts.map((p) => p.p);
+        price = (lv) => (f.reverse ? c - (b - a) * lv : c + (b - a) * lv);
+        left = Math.min(pts[2][0], pts[1][0]); right = Math.max(pts[2][0], pts[1][0]) + 60;
+      }
+      const levels = f.levels.filter((l) => l.on).sort((m, n) => m.v - n.v);
+      const colorOf = (l) => (f.oneColorOn ? f.oneColor : l.color);
+      if (f.bg) {
+        for (let i = 1; i < levels.length; i++) {
+          const y1 = this.y(price(levels[i - 1].v)), y2 = this.y(price(levels[i].v));
+          if (y1 == null || y2 == null) continue;
+          g.fillStyle = alpha(colorOf(levels[i]), f.bgOpacity / 100);
+          g.fillRect(left, Math.min(y1, y2), right - left, Math.abs(y2 - y1));
+        }
+      }
+      g.font = `${f.fontSize || 11}px Be Vietnam Pro, system-ui, sans-serif`;
+      levels.forEach((l) => {
+        const v = price(l.v), yy = this.y(v);
+        if (yy == null) return;
+        g.strokeStyle = colorOf(l); g.lineWidth = d.width || 1; g.setLineDash(DASH[d.style] || []);
+        lineTo([[left, yy], [right, yy]]);
+        const label = [f.values ? String(l.v) : "", f.prices ? `(${v.toFixed(dg)})` : ""].filter(Boolean).join(" ");
+        if (!label) return;
+        g.fillStyle = colorOf(l); g.textBaseline = "middle";
+        if (f.labelSide === "right") { g.textAlign = "left"; g.fillText(label, right + 4, yy); } else { g.textAlign = "right"; g.fillText(label, left - 4, yy); }
+      });
     }
 
     /** Volume by price over the bars between the points (to the last bar when anchored). */

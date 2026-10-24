@@ -221,6 +221,54 @@
   const TFS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
   const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
 
+  /* ---------------- settings panel fields ---------------- */
+
+  /** Compact TradingView-style inputs bound by path into `root` (see Member.bindPanel). */
+  function fieldKit(root) {
+    const get = (path) => path.split(".").reduce((o, k) => (o == null ? undefined : o[k]), root);
+    const hm = (h) => { const m = Math.round(h * 60) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
+    const chk = (path) => `<input type="checkbox" data-p="${path}" data-t="bool" ${get(path) ? "checked" : ""}>`;
+    const selI = (path, opts) => `<select data-p="${path}" data-t="${typeof opts[0][0] === "number" ? "num" : typeof opts[0][0] === "boolean" ? "boolsel" : "str"}">${opts.map(([v, n]) => `<option value="${v}" ${String(v) === String(get(path)) ? "selected" : ""}>${n}</option>`).join("")}</select>`;
+    const sw = (path) => `<input type="color" class="sw" data-p="${path}" data-t="str" value="${String(get(path) || "#787b86").slice(0, 7)}">`;
+    return {
+      chk, selI, sw,
+      tog: (path, label) => `<label class="fr">${chk(path)}<span>${label}</span></label>`,
+      numf: (path, label, step = 1) => `<label class="fr"><span class="grow">${label}</span><input class="n" data-p="${path}" data-t="num" inputmode="decimal" step="${step}" value="${get(path)}"></label>`,
+      sel: (path, label, opts) => `<label class="fr"><span class="grow">${label}</span>${selI(path, opts)}</label>`,
+      color: (path, label) => `<label class="fr"><span class="grow">${label}</span>${sw(path)}</label>`,
+      time: (path) => `<input class="t" data-p="${path}" data-t="time" value="${hm(get(path))}" placeholder="HH:MM" maxlength="5" inputmode="numeric">`,
+      text: (path, cls = "nm") => `<input class="${cls}" data-p="${path}" data-t="str" value="${esc(get(path))}">`,
+      head: (t) => `<div class="fp-sec">${t}</div>`,
+      note: (t) => `<p class="fp-note">${t}</p>`,
+    };
+  }
+
+  /** A UTC time as the value of a datetime-local input (the viewer's local time). */
+  function localInput(t) {
+    const d = new Date(t * 1000);
+    const p = (v) => String(v).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+
+  /* ---------------- chart look and light / dark theme ---------------- */
+
+  function defaultChartStyle() {
+    return { theme: "dark", up: "#14b88a", down: "#f0455a", wickUp: "#14b88a", wickDown: "#f0455a", border: false, borderUp: "#14b88a", borderDown: "#f0455a",
+      customBg: false, bg: "#151c2a", vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false };
+  }
+  function loadChartStyle() {
+    try { return Object.assign(defaultChartStyle(), JSON.parse(store.get("aurum.chartStyle") || "{}")); } catch { return defaultChartStyle(); }
+  }
+  function applyTheme(theme) {
+    const dark = theme === "auto" ? !(window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) : theme !== "light";
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.content = dark ? "#0b0f17" : "#f5f6f8";
+    const b = $("themeBtn");
+    if (b) b.textContent = dark ? "☀︎" : "☾";
+  }
+  applyTheme(loadChartStyle().theme);
+
   /* ---------------- drawing toolbar icons ---------------- */
 
   const svg = (body) => `<svg viewBox="0 0 28 28" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
@@ -612,6 +660,8 @@
           label();
         }));
         el.querySelector("#sSave").onclick = async (e) => {
+          const wrong = this.stopsProblem(p, num(el.querySelector("#sStop").value), num(el.querySelector("#sTarget").value));
+          if (wrong) return toast(wrong, true);
           const ok = await act(e.currentTarget, () => this.call("/mt5/modify", { ticket: p.ticket, stop: num(el.querySelector("#sStop").value), target: num(el.querySelector("#sTarget").value) }), "Đã lưu SL/TP");
           if (ok) { sheet.close(); this.refresh(); }
         };
@@ -1203,7 +1253,10 @@
           chart: this.chart, series: this.series, store,
           bars: () => this.viewBars(), sec: () => TF_SECONDS[this.interval], digits: () => this.digits,
           symbol: () => this.symbolKey(), magnet: () => this.magnet, onChange: () => this.renderDrawBar(),
+          interval: () => this.interval, onEdit: (d, isNew) => this.drawingSettings(d, isNew),
         });
+        this.chartStyle = loadChartStyle();
+        this.applyChartStyle();
         $("tfButtons").innerHTML = TFS.map((i) => `<button type="button" data-tf="${i}">${i}</button>`).join("");
         $("tfButtons").querySelectorAll("button").forEach((b) => (b.onclick = () => {
           this.interval = b.dataset.tf; store.set("aurum.tf", this.interval); this.loadCandles();
@@ -1235,6 +1288,7 @@
       $("pSell").onclick = (e) => this.pendingOrder("short", e.currentTarget);
       $("indBtn").onclick = () => this.indicatorSheet();
       $("drawBtn").onclick = () => this.toggleRail();
+      $("styleBtn").onclick = () => this.chartStyleSheet();
       $("replayBtn").onclick = () => this.startReplayPick();
       $("chartSymbol").onclick = () => this.symbolSheet();
       $("closeAllBtn").onclick = (e) => this.closeAll(e.currentTarget);
@@ -1531,8 +1585,12 @@
       const tail = this.bars.slice(-30);
       const range = tail.length ? tail.reduce((s, b) => s + b.high - b.low, 0) / tail.length : x.entry * 0.001;
       const dist = Math.max(range * 4, x.entry * 0.0005);
-      const dir = (x.side === "long" ? 1 : -1) * (a === "target" ? 1 : -1);
-      const level = +(x.entry + dir * dist).toFixed(this.digits);
+      const long = x.side === "long";
+      // From the price the trade would close at now (a losing buy is below its entry), so MT5 accepts it.
+      const now = pos ? x.price : x.entry;
+      const ref = a === "stop" ? (long ? Math.min(now, x.entry) : Math.max(now, x.entry)) : (long ? Math.max(now, x.entry) : Math.min(now, x.entry));
+      const dir = (long ? 1 : -1) * (a === "target" ? 1 : -1);
+      const level = +(ref + dir * dist).toFixed(this.digitsFor(x.symbol));
       const body = { ticket: x.ticket, stop: a === "stop" ? level : x.stop, target: a === "target" ? level : x.target };
       if (!pos) body.price = x.entry;
       await act(button, () => this.call("/mt5/modify", body), `Đã thêm ${a === "stop" ? "SL" : "TP"} — kéo để chỉnh`);
@@ -1637,6 +1695,7 @@
         if (this.drawGesture) { this.drawGesture = false; lock(false); this.drawings.up(); }
         down = null;
       });
+      wrap.addEventListener("dblclick", () => { if (this.drawings && this.drawings.current) this.drawingSettings(this.drawings.current); });
       wrap.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         if (this.drawings && this.drawings.pending) { this.drawings.cancel(); return; }
@@ -1681,11 +1740,22 @@
       const body = { ticket: x.ticket, stop: x.stop, target: x.target };
       if (kind === "ord") body.price = x.entry;
       body[field === "entry" ? "price" : field] = d.price;
+      const wrong = kind === "pos" ? this.stopsProblem(x, body.stop, body.target) : null;
+      if (wrong) { toast(wrong, true); this.syncLines(); return; }
       // Show the new level at once; the next refresh confirms it.
       if (field === "entry") x.entry = d.price; else x[field] = d.price;
       this.syncLines();
       await act(null, () => this.call("/mt5/modify", body), `Đã dời ${field === "stop" ? "SL" : field === "target" ? "TP" : "giá"} → ${fmt(d.price, this.digits)}`);
       this.refresh();
+    },
+
+    /** Why MT5 would refuse these SL/TP for an open position (null when fine). */
+    stopsProblem(p, stop, target) {
+      const long = p.side === "long", now = p.price, d = this.digitsFor(p.symbol);
+      if (now == null) return null;
+      if (stop && (long ? stop >= now : stop <= now)) return `SL của lệnh ${long ? "MUA phải thấp" : "BÁN phải cao"} hơn giá hiện tại ${fmt(now, d)}`;
+      if (target && (long ? target <= now : target >= now)) return `TP của lệnh ${long ? "MUA phải cao" : "BÁN phải thấp"} hơn giá hiện tại ${fmt(now, d)}`;
+      return null;
     },
 
     /** Logical bar index under a pixel column. */
@@ -1750,7 +1820,8 @@
       if (p != null && this.owner && !this.replay) items.push(["pending", `⏳ Lệnh chờ tại ${fmt(p, this.digits)}`]);
       items.push(["tools", "✎ Công cụ vẽ…"]);
       if (this.drawings && this.drawings.list.length) items.push(["clear", `🗑 Xoá tất cả bản vẽ (${this.drawings.list.length})`]);
-      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"]);
+      if (this.drawings && this.drawings.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"]);
+      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
       const menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
       menu.hidden = false;
@@ -1769,6 +1840,8 @@
         if (k === "clear" && confirm("Xoá tất cả bản vẽ trên mã này?")) this.drawings.clear();
         if (k === "ind") this.indicatorSheet();
         if (k === "ictSettings") this.ictSettingsSheet();
+        if (k === "drawSettings") this.drawingSettings(this.drawings.current);
+        if (k === "chartStyle") this.chartStyleSheet();
       }));
     },
 
@@ -1815,10 +1888,10 @@
         const pos = cur.tool === "longPosition" || cur.tool === "shortPosition";
         bar.hidden = false;
         bar.innerHTML = `${D.colors.map((c) => `<button type="button" class="sw ${c === cur.color ? "on" : ""}" data-c="${c}" style="background:${c}"></button>`).join("")}
-          <select data-a="width">${[1, 1.5, 2, 3, 4].map((w) => `<option value="${w}" ${w === cur.width ? "selected" : ""}>${w}px</option>`).join("")}</select>
+          <select data-a="width">${[0.5, 1, 1.5, 2, 3, 4].map((w) => `<option value="${w}" ${w === cur.width ? "selected" : ""}>${w}px</option>`).join("")}</select>
           <select data-a="style">${[["solid", "——"], ["dashed", "– –"], ["dotted", "···"]].map(([v, n]) => `<option value="${v}" ${v === cur.style ? "selected" : ""}>${n}</option>`).join("")}</select>
-          ${pos ? `<label class="rr">R:R <input data-a="rr" inputmode="decimal" value="${cur.rr}"></label>` : ""}
-          ${cur.tool === "text" ? '<button type="button" data-a="text">Sửa chữ</button>' : ""}
+          ${pos ? `<span class="rr">R:R ${cur.rr}</span>` : ""}
+          <button type="button" data-a="settings" title="Cài đặt">⚙</button>
           <button type="button" data-a="lock" title="Khoá">${cur.locked ? "🔒" : "🔓"}</button>
           <button type="button" data-a="del" class="danger" title="Xoá">🗑</button>
           <button type="button" data-a="x" class="muted">✕</button>`;
@@ -1833,7 +1906,7 @@
           if (a === "del") d.remove(d.selected);
           if (a === "x") { d.selected = null; d.update(); }
           if (a === "lock") d.restyle({ locked: !d.current.locked });
-          if (a === "text") { const t = prompt("Nội dung:", d.current.text); if (t != null) d.restyle({ text: t }); }
+          if (a === "settings") this.drawingSettings(d.current);
           this.renderDrawBar();
         };
       });
@@ -2020,6 +2093,7 @@
     renderToolRail() {
       const rail = $("toolRail");
       if (!rail || !this.drawings) return;
+      this.renderFavBar();
       const d = this.drawings;
       const shown = store.get("aurum.rail") !== "0" && !(store.get("aurum.rail") == null && $("chart").clientWidth < 500);
       rail.hidden = !shown;
@@ -2068,13 +2142,20 @@
     openFlyout(g, button) {
       const fly = $("flyout"), d = this.drawings, D = window.AurumDrawings;
       fly.dataset.g = g.id;
-      fly.innerHTML = `<div class="fly-title">${esc(g.title)}</div>` + g.tools.map((t) => `<button type="button" data-t="${t}" class="${d.tool === t ? "on" : ""}">${TOOL_ICON[t] || ""}<span>${esc(D.tools[t].name)}</span></button>`).join("");
+      const fav = this.favorites();
+      fly.innerHTML = `<div class="fly-title">${esc(g.title)}</div>` + g.tools.map((t) => `<div class="fly-row"><button type="button" data-t="${t}" class="${d.tool === t ? "on" : ""}">${TOOL_ICON[t] || ""}<span>${esc(D.tools[t].name)}</span></button><button type="button" class="star ${fav.includes(t) ? "on" : ""}" data-fav="${t}" title="Thêm vào thanh yêu thích">${fav.includes(t) ? "★" : "☆"}</button></div>`).join("");
+      fly.querySelectorAll("[data-fav]").forEach((b) => (b.onclick = (e) => {
+        e.stopPropagation();
+        this.toggleFavorite(b.dataset.fav);
+        const on = this.favorites().includes(b.dataset.fav);
+        b.classList.toggle("on", on); b.textContent = on ? "★" : "☆";
+      }));
       fly.hidden = false;
       // The rail may have been redrawn by the tool change: measure its current button.
       const now = $("toolRail").querySelector(`[data-k="g:${g.id}"]`) || button;
       const body = $("toolRail").parentElement.getBoundingClientRect(), r = now.getBoundingClientRect();
       fly.style.top = Math.max(0, Math.min(r.top - body.top, body.height - fly.offsetHeight)) + "px";
-      fly.querySelectorAll("button").forEach((b) => (b.onclick = (e) => {
+      fly.querySelectorAll("button[data-t]").forEach((b) => (b.onclick = (e) => {
         e.stopPropagation();
         store.set("aurum.rail." + g.id, b.dataset.t);
         d.setTool(b.dataset.t);
@@ -2092,18 +2173,37 @@
 
     /* ----- floating settings panel (the chart stays visible, like TradingView) ----- */
 
-    openPanel(title, tabs, render) {
+    /**
+     * opts: root (the object `data-p` paths point into), onChange(), onReset(redraw),
+     * onCancel(), template(action) for the "Bản mẫu" menu, tab (first tab to show).
+     */
+    openPanel(title, tabs, render, opts = {}) {
       const panel = $("floatPanel");
-      let tab = this.panelTab && tabs.some(([k]) => k === this.panelTab) ? this.panelTab : tabs[0][0];
+      let tab = opts.tab && tabs.some(([k]) => k === opts.tab) ? opts.tab : tabs[0][0];
       const draw = () => {
-        panel.innerHTML = `<div class="fp-head"><b>${esc(title)}</b><button type="button" class="fp-x" data-close>✕</button></div>
+        const scroll = panel.querySelector(".fp-body") ? panel.querySelector(".fp-body").scrollTop : 0;
+        panel.innerHTML = `<div class="fp-head"><b>${esc(title)}</b><button type="button" class="fp-x" data-x>✕</button></div>
           <div class="fp-tabs">${tabs.map(([k, n]) => `<button type="button" data-tab="${k}" class="${k === tab ? "on" : ""}">${n}</button>`).join("")}</div>
           <div class="fp-body">${render(tab)}</div>
-          <div class="fp-foot"><button type="button" class="btn btn-ghost btn-small" data-reset>Mặc định</button><button type="button" class="btn btn-gold btn-small" data-close>Ok</button></div>`;
-        panel.querySelectorAll("[data-close]").forEach((b) => (b.onclick = () => { panel.hidden = true; }));
-        panel.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { tab = this.panelTab = b.dataset.tab; const y = 0; draw(); panel.querySelector(".fp-body").scrollTop = y; }));
-        panel.querySelector("[data-reset]").onclick = () => this.panelReset && this.panelReset(draw);
-        this.bindPanel(panel);
+          <div class="fp-foot">
+            ${opts.template ? '<select data-tpl><option value="">Bản mẫu</option><option value="save">Lưu làm mặc định</option><option value="reset">Về mặc định gốc</option></select>' : ""}
+            ${opts.onReset ? '<button type="button" class="btn btn-ghost btn-small" data-reset>Mặc định</button>' : ""}
+            <span class="grow"></span>
+            ${opts.onCancel ? '<button type="button" class="btn btn-ghost btn-small" data-cancel>Hủy bỏ</button>' : ""}
+            <button type="button" class="btn btn-gold btn-small" data-ok>Ok</button></div>`;
+        const close = () => { panel.hidden = true; if (opts.onClose) opts.onClose(); };
+        panel.querySelector("[data-x]").onclick = () => (opts.onCancel ? opts.onCancel() : null, close());
+        panel.querySelector("[data-ok]").onclick = close;
+        const cancel = panel.querySelector("[data-cancel]");
+        if (cancel) cancel.onclick = () => { opts.onCancel(); close(); };
+        panel.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { tab = b.dataset.tab; draw(); panel.querySelector(".fp-body").scrollTop = 0; }));
+        const reset = panel.querySelector("[data-reset]");
+        if (reset) reset.onclick = () => opts.onReset(draw);
+        const tpl = panel.querySelector("[data-tpl]");
+        if (tpl) tpl.onchange = () => { if (tpl.value) opts.template(tpl.value, draw); tpl.value = ""; };
+        this.bindPanel(panel, opts.root, opts.onChange, draw);
+        if (opts.afterDraw) opts.afterDraw(panel, tab);
+        panel.querySelector(".fp-body").scrollTop = scroll;
         // Drag the panel by its title bar.
         const head = panel.querySelector(".fp-head");
         head.onpointerdown = (e) => {
@@ -2118,19 +2218,21 @@
           window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
         };
       };
+      this.panelDraw = draw;
       draw();
       panel.hidden = false;
     },
 
-    bindPanel(panel) {
-      const c = this.ictCfg;
+    /** Inputs with data-p write into `root` by path; data-redraw re-renders the panel after. */
+    bindPanel(panel, root, onChange, draw) {
       panel.querySelectorAll("[data-p]").forEach((input) => {
         const apply = () => {
           const path = input.dataset.p.split("."), last = path.pop();
-          const obj = path.reduce((o, k) => o[k], c);
+          const obj = path.reduce((o, k) => (o[k] == null ? (o[k] = {}) : o[k]), root);
           const t = input.dataset.t;
           let v;
           if (t === "bool") v = input.checked;
+          else if (t === "notbool") v = !input.checked;
           else if (t === "boolsel") v = input.value === "true";
           else if (t === "num") { v = num(input.value); if (v == null) return; }
           else if (t === "time") {
@@ -2139,11 +2241,102 @@
             v = +m[1] + +m[2] / 60;
             // A session ending at 00:00 ends at midnight.
             if (v === 0 && last === "end") v = 24;
+          } else if (t === "date") {
+            const ms = Date.parse(input.value);
+            if (isNaN(ms)) return;
+            v = ms / 1000;
           } else v = input.value;
           obj[last] = v;
-          this.saveIct();
+          if (onChange) onChange();
+          if (input.dataset.redraw != null && draw) draw();
         };
-        input.addEventListener(input.type === "checkbox" || input.tagName === "SELECT" || input.type === "color" ? "change" : "input", apply);
+        input.addEventListener(input.type === "checkbox" || input.tagName === "SELECT" || input.type === "color" || input.type === "datetime-local" ? "change" : "input", apply);
+      });
+    },
+
+    /* ----- settings of one drawing (Định dạng / Văn bản / Tọa độ / Hiển thị) ----- */
+
+    drawingSettings(d, isNew) {
+      if (!d) return;
+      const D = window.AurumDrawings, dr = this.drawings;
+      const before = JSON.stringify(d);
+      const tool = d.tool, pos = D.isPosition(tool);
+      const fib = tool === "fibRetracement" || tool === "fibExtension";
+      const styles = [["solid", "———"], ["dashed", "– – –"], ["dotted", "·····"]];
+      const widths = [[0.5, "0.5px"], [1, "1px"], [1.5, "1.5px"], [2, "2px"], [3, "3px"], [4, "4px"]];
+      const sizes = [10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 40].map((v) => [v, String(v)]);
+      const k = fieldKit(d);
+      const lineRow = (label = "Đường") => `<div class="fr"><span class="grow">${label}</span>${k.sw("color")}${k.selI("width", widths)}${k.selI("style", styles)}</div>`;
+      const fontRow = (label) => `<div class="fr">${label ? `<span class="grow">${label}</span>` : ""}${k.sw("textColor")}${k.selI("fontSize", sizes)}
+        <label class="fbtn ${d.bold ? "on" : ""}"><input type="checkbox" data-p="bold" data-t="bool" data-redraw ${d.bold ? "checked" : ""}><b>B</b></label>
+        <label class="fbtn ${d.italic ? "on" : ""}"><input type="checkbox" data-p="italic" data-t="bool" data-redraw ${d.italic ? "checked" : ""}><i>I</i></label></div>`;
+      const fillRow = (label = "Hình nền") => `<div class="fr">${k.chk("fill")}<span class="grow">${label}</span>${k.sw("fillColor")}<input type="range" min="0" max="80" data-p="fillOpacity" data-t="num" value="${d.fillOpacity}" class="op"></div>`;
+      const textBox = () => `<textarea class="fp-text" data-p="text" data-t="str" placeholder="Thêm văn bản">${esc(d.text)}</textarea>`;
+      const textOpts = () => `<div class="fr">${k.chk("textBg")}<span class="grow">Hình nền</span>${k.sw("textBgColor")}</div>
+        <div class="fr">${k.chk("textBorder")}<span class="grow">Đường viền</span>${k.sw("textBorderColor")}</div>
+        <div class="fr">${k.chk("wrap")}<span>Tự động xuống dòng</span></div>`;
+      const render = (tab) => {
+        if (tab === "text") {
+          return fontRow() + textBox() + (tool === "text" ? textOpts()
+            : `<div class="fr"><span class="grow">Vị trí chữ</span>${k.selI("textV", [["top", "Trên"], ["middle", "Giữa"], ["bottom", "Dưới"]])}${k.selI("textH", [["left", "Trái"], ["center", "Giữa"], ["right", "Phải"]])}</div>` + textOpts());
+        }
+        if (tab === "coords") {
+          const names = pos ? ["Giá vào", "Dừng lỗ", "Mục tiêu"] : D.tools[tool].labels || [];
+          return d.pts.map((p, i) => `<div class="fp-sec">${esc(names[i] || "Điểm " + (i + 1))}</div>
+            <div class="fr"><span class="grow">Giá</span><input class="n wide-n" data-p="pts.${i}.p" data-t="num" inputmode="decimal" value="${p.p}"></div>
+            <div class="fr"><span class="grow">Thời gian</span><input type="datetime-local" data-p="pts.${i}.t" data-t="date" value="${localInput(p.t)}"></div>`).join("");
+        }
+        if (tab === "view") {
+          return `<div class="fp-sec">Hiện trên khung</div>` + D.timeframes.map((tf) => `<label class="fr"><input type="checkbox" data-p="hideOn.${tf}" data-t="notbool" ${d.hideOn && d.hideOn[tf] ? "" : "checked"}><span>${tf}</span></label>`).join("");
+        }
+        // Định dạng
+        let html = "";
+        if (pos) {
+          html += lineRow("Đường giá vào") + `<div class="fr"><span class="grow">Vùng mục tiêu</span>${k.sw("targetColor")}</div><div class="fr"><span class="grow">Vùng dừng lỗ</span>${k.sw("stopColor")}</div>`
+            + fillRow("Tô nền") + `<p class="fp-note">Kéo chấm tròn để chỉnh giá vào, dừng lỗ và mục tiêu (R:R tự tính). Vị thế không bị kéo ngược chiều.</p>`;
+        } else if (fib) {
+          const f = d.fib;
+          html += lineRow("Đường") + `<div class="fp-sec">Các mức</div><div class="fib-grid">${f.levels.map((l, i) => `<div class="fr">${k.chk(`fib.levels.${i}.on`)}<input class="n" data-p="fib.levels.${i}.v" data-t="num" inputmode="decimal" value="${l.v}">${k.sw(`fib.levels.${i}.color`)}</div>`).join("")}</div>
+            <div class="fr">${k.chk("fib.oneColorOn")}<span class="grow">Sử dụng một màu</span>${k.sw("fib.oneColor")}</div>
+            <div class="fr">${k.chk("fib.bg")}<span class="grow">Hình nền</span><input type="range" min="0" max="50" data-p="fib.bgOpacity" data-t="num" value="${f.bgOpacity}" class="op"></div>
+            <div class="fr">${k.chk("fib.reverse")}<span>Đảo ngược</span></div>
+            <div class="fr">${k.chk("fib.trend")}<span>Đường xu hướng</span></div>
+            <div class="fr">${k.chk("fib.prices")}<span>Các mức giá</span></div>
+            <div class="fr">${k.chk("fib.values")}<span>Mức độ</span></div>
+            <div class="fr"><span class="grow">Nhãn</span>${k.selI("fib.labelSide", [["left", "Bên trái"], ["right", "Bên phải"]])}</div>
+            <div class="fr"><span class="grow">Cỡ chữ</span>${k.selI("fib.fontSize", sizes)}</div>`;
+        } else if (tool === "text") {
+          html += fontRow("Chữ") + textOpts();
+        } else {
+          if (tool === "rectangle" || tool === "trendLine") html += `<div class="fr"><span class="grow">Kéo dài</span>${k.selI("extend", [["none", "Đừng mở rộng"], ["left", "Sang trái"], ["right", "Sang phải"], ["both", "Cả hai phía"]])}</div>`;
+          html += lineRow(tool === "rectangle" || tool === "ellipse" ? "Đường viền" : "Đường");
+          if (tool === "rectangle" || tool === "trendLine") html += `<div class="fr">${k.chk("mid")}<span class="grow">Đường trung bình</span>${k.sw("midColor")}${k.selI("midStyle", styles)}</div>`;
+          if (D.tools[tool].labels) html += fontRow("Nhãn");
+          if (D.hasFill(tool)) html += fillRow();
+        }
+        return html;
+      };
+      const tabs = tool === "text" ? [["text", "Văn bản"], ["coords", "Tọa độ"], ["view", "Hiển thị"]]
+        : [["style", "Định dạng"]].concat(fib || pos || ["brush", "path", "fixedRangeVolume", "anchoredVolume", "priceRange"].includes(tool) ? [] : [["text", "Văn bản"]]).concat([["coords", "Tọa độ"], ["view", "Hiển thị"]]);
+      this.openPanel(D.tools[tool].name, tabs, render, {
+        root: d, tab: isNew && tool === "text" ? "text" : undefined,
+        onChange: () => { dr.changed(d); this.renderDrawBar(); },
+        onCancel: () => {
+          Object.assign(d, JSON.parse(before));
+          if (isNew && tool === "text" && !d.text) dr.remove(d.id); else dr.changed(d);
+        },
+        onClose: () => { if (tool === "text" && !d.text) dr.remove(d.id); this.renderDrawBar(); },
+        template: (action, redraw) => {
+          if (action === "save") { dr.saveAsDefault(d); toast("Đã lưu làm mặc định cho " + D.tools[tool].name); }
+          if (action === "reset") {
+            dr.resetDefault(tool);
+            const keep = { id: d.id, tool: d.tool, pts: d.pts, text: d.text, locked: d.locked };
+            Object.keys(d).forEach((x) => delete d[x]);
+            Object.assign(d, dr.defaults(tool), keep);
+            dr.changed(d); redraw();
+          }
+        },
+        afterDraw: (panel) => { const t = panel.querySelector(".fp-text"); if (t && isNew) setTimeout(() => t.focus(), 30); },
       });
     },
 
@@ -2158,24 +2351,11 @@
     ictSettingsSheet() {
       if (!this.owner && this.features.killzones === false) return toast("Chỉ báo chưa được mở cho bạn", true);
       sheet.close();
-      const c = () => this.ictCfg;
-      const hm = (h) => { const m = Math.round(h * 60) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
       const tfOpts = [[1, "1m"], [5, "5m"], [15, "15m"], [30, "30m"], [60, "1h"], [240, "4h"], [1440, "1D"]];
       const styles = [["solid", "———"], ["dashed", "– – –"], ["dotted", "·····"]];
-      const get = (path) => path.split(".").reduce((o, k) => o[k], c());
-      const chk = (path) => `<input type="checkbox" data-p="${path}" data-t="bool" ${get(path) ? "checked" : ""}>`;
-      const tog = (path, label) => `<label class="fr">${chk(path)}<span>${label}</span></label>`;
-      const numf = (path, label, step = 1) => `<label class="fr"><span class="grow">${label}</span><input class="n" data-p="${path}" data-t="num" inputmode="decimal" step="${step}" value="${get(path)}"></label>`;
-      const selI = (path, opts) => `<select data-p="${path}" data-t="${typeof opts[0][0] === "number" ? "num" : typeof opts[0][0] === "boolean" ? "boolsel" : "str"}">${opts.map(([v, n]) => `<option value="${v}" ${String(v) === String(get(path)) ? "selected" : ""}>${n}</option>`).join("")}</select>`;
-      const sel = (path, label, opts) => `<label class="fr"><span class="grow">${label}</span>${selI(path, opts)}</label>`;
-      const sw = (path) => `<input type="color" class="sw" data-p="${path}" data-t="str" value="${get(path)}">`;
-      const color = (path, label) => `<label class="fr"><span class="grow">${label}</span>${sw(path)}</label>`;
-      const time = (path) => `<input class="t" data-p="${path}" data-t="time" value="${hm(get(path))}" placeholder="HH:MM" maxlength="5" inputmode="numeric">`;
-      const text = (path, cls = "nm") => `<input class="${cls}" data-p="${path}" data-t="str" value="${esc(get(path))}">`;
-      const head = (t) => `<div class="fp-sec">${t}</div>`;
-      const note = (t) => `<p class="fp-note">${t}</p>`;
       const render = (tab) => {
-        const cfg = c();
+        const cfg = this.ictCfg;
+        const { chk, tog, numf, sel, selI, sw, color, time, text, head, note } = fieldKit(cfg);
         if (tab === "inputs") {
           return head("Killzones") + tog("showBoxes", "Hiện hộp phiên")
             + cfg.sessions.map((s, i) => `<div class="fr">${chk(`sessions.${i}.on`)}${sw(`sessions.${i}.color`)}${text(`sessions.${i}.name`)}${time(`sessions.${i}.start`)}<span class="to">—</span>${time(`sessions.${i}.end`)}</div>`).join("")
@@ -2198,7 +2378,7 @@
         }
         if (tab === "style") {
           return head("Hộp phiên") + tog("boxLabels", "Tên phiên trên hộp") + tog("boxBorder", "Viền hộp") + numf("boxOpacity", "Độ đậm nền (%)")
-            + head("Đường") + sel("lineScale", "Độ dày chung", [[0.75, "Mảnh"], [1, "Vừa"], [1.5, "Dày"], [2, "Rất dày"]]) + numf("pivotWidth", "Độ dày pivot", 0.5)
+            + head("Đường") + sel("lineScale", "Độ dày chung", [[0.5, "0.5px"], [0.75, "Mảnh"], [1, "Vừa"], [1.5, "Dày"], [2, "Rất dày"]]) + numf("pivotWidth", "Độ dày pivot", 0.5)
             + sel("pivotStyle", "Nét pivot", styles) + sel("mitigatedStyle", "Nét pivot đã bị phá", styles) + sel("openStyle", "Nét giá mở cửa", styles)
             + color("stampColor", "Màu mốc thời gian") + sel("stampStyle", "Nét mốc thời gian", styles)
             + head("Đỉnh / đáy ngày") + color("dayHighColor", "Màu đỉnh ngày") + color("dayLowColor", "Màu đáy ngày") + sel("dailyStyle", "Nét", styles) + color("periodColor", "Màu PDH/PWH/PMH")
@@ -2212,11 +2392,103 @@
           + head("Macros") + sel("macroTfLimit", "Trên khung ≤", tfOpts.slice(0, 4)) + sel("macroTimeLabels", "Nhãn hộp", [[true, "Giờ"], [false, "Tên"]])
           + head("Khác") + tog("dayOfWeek", "Nhãn thứ trong tuần") + tog("rangeTable", "Bảng biên độ phiên") + numf("rangeAvg", "Trung bình số phiên");
       };
-      this.panelReset = (draw) => {
-        if (!confirm("Đặt lại mọi cài đặt chỉ báo về mặc định?")) return;
-        this.ictCfg = window.ICT.defaults(); this.saveIct(); draw();
+      const open = () => this.openPanel("ICT Killzones + Pivots", [["inputs", "Các đầu vào"], ["style", "Định dạng"], ["view", "Hiển thị"]], render, {
+        root: this.ictCfg,
+        onChange: () => this.saveIct(),
+        onReset: () => {
+          if (!confirm("Đặt lại mọi cài đặt chỉ báo về mặc định?")) return;
+          this.ictCfg = window.ICT.defaults(); this.saveIct(); open();
+        },
+      });
+      open();
+    },
+
+    /* ----- chart look and light / dark theme ----- */
+
+    chartStyleSheet() {
+      const st = this.chartStyle;
+      const render = () => {
+        const k = fieldKit(st);
+        return `<div class="fp-sec">Giao diện web</div>
+          <div class="fr"><span class="grow">Chế độ</span>${k.selI("theme", [["dark", "Tối"], ["light", "Sáng"], ["auto", "Theo máy"]])}</div>
+          <div class="fp-sec">Nến</div>
+          <div class="fr"><span class="grow">Thân nến tăng / giảm</span>${k.sw("up")}${k.sw("down")}</div>
+          <div class="fr">${k.chk("border")}<span class="grow">Viền nến</span>${k.sw("borderUp")}${k.sw("borderDown")}</div>
+          <div class="fr"><span class="grow">Bấc nến tăng / giảm</span>${k.sw("wickUp")}${k.sw("wickDown")}</div>
+          <div class="fp-sec">Nền và lưới</div>
+          <div class="fr">${k.chk("customBg")}<span class="grow">Màu nền riêng</span>${k.sw("bg")}</div>
+          <div class="fr">${k.chk("vGrid")}<span class="grow">Lưới dọc</span>${k.sw("grid")}</div>
+          <div class="fr">${k.chk("hGrid")}<span>Lưới ngang</span></div>
+          <div class="fr">${k.chk("crosshairMagnet")}<span>Con trỏ bắt vào nến</span></div>
+          <div class="fr">${k.chk("seconds")}<span>Hiện giây trên trục thời gian</span></div>`;
       };
-      this.openPanel("ICT Killzones + Pivots", [["inputs", "Các đầu vào"], ["style", "Định dạng"], ["view", "Hiển thị"]], render);
+      this.openPanel("Cài đặt biểu đồ", [["look", "Giao diện"]], render, {
+        root: st,
+        onChange: () => { this.saveChartStyle(); },
+        onReset: (redraw) => { this.chartStyle = defaultChartStyle(); this.saveChartStyle(); this.chartStyleSheet(); void redraw; },
+      });
+    },
+
+    saveChartStyle() {
+      store.set("aurum.chartStyle", JSON.stringify(this.chartStyle));
+      applyTheme(this.chartStyle.theme);
+      this.applyChartStyle();
+    },
+
+    applyChartStyle() {
+      if (!this.chart) return;
+      const st = this.chartStyle, light = document.documentElement.dataset.theme === "light";
+      const bg = st.customBg ? st.bg : (light ? "#ffffff" : "#151c2a");
+      const grid = light && st.grid === "#1a2233" ? "#eef0f4" : st.grid;
+      this.chart.applyOptions({
+        layout: { background: { color: bg }, textColor: light ? "#4b5563" : "#8b95a7" },
+        grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
+        rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
+        timeScale: { borderColor: light ? "#d6dae1" : "#222c3d", secondsVisible: st.seconds },
+        crosshair: { mode: st.crosshairMagnet ? 1 : 0 },
+      });
+      this.series.applyOptions({
+        upColor: st.up, downColor: st.down, wickUpColor: st.wickUp, wickDownColor: st.wickDown,
+        borderVisible: st.border, borderUpColor: st.borderUp, borderDownColor: st.borderDown,
+      });
+    },
+
+    /* ----- favourite drawing tools: a floating bar on the chart ----- */
+
+    favorites() { try { return JSON.parse(store.get("aurum.favTools") || "[]"); } catch { return []; } },
+
+    toggleFavorite(tool) {
+      const fav = this.favorites();
+      const i = fav.indexOf(tool);
+      if (i >= 0) fav.splice(i, 1); else fav.push(tool);
+      store.set("aurum.favTools", JSON.stringify(fav));
+      this.renderFavBar();
+    },
+
+    renderFavBar() {
+      const bar = $("favBar");
+      if (!bar || !this.drawings) return;
+      const fav = this.favorites().filter((t) => window.AurumDrawings.tools[t]);
+      bar.hidden = !fav.length;
+      if (!fav.length) return;
+      const d = this.drawings;
+      bar.innerHTML = `<span class="grip" title="Kéo để di chuyển">⋮⋮</span>` + fav.map((t) => `<button type="button" data-t="${t}" class="${d.tool === t ? "on" : ""}" title="${esc(window.AurumDrawings.tools[t].name)}">${TOOL_ICON[t] || ""}</button>`).join("");
+      bar.querySelectorAll("button").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); d.setTool(d.tool === b.dataset.t ? null : b.dataset.t); }));
+      let pos = null;
+      try { pos = JSON.parse(store.get("aurum.favPos") || "null"); } catch { /* default */ }
+      if (pos) { bar.style.left = pos.x + "px"; bar.style.top = pos.y + "px"; }
+      bar.querySelector(".grip").onpointerdown = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const wrap = $("chartWrap").getBoundingClientRect(), r = bar.getBoundingClientRect();
+        const dx = e.clientX - r.left, dy = e.clientY - r.top;
+        const move = (ev) => {
+          const x = Math.max(0, Math.min(wrap.width - r.width, ev.clientX - wrap.left - dx)), y = Math.max(0, Math.min(wrap.height - r.height, ev.clientY - wrap.top - dy));
+          bar.style.left = x + "px"; bar.style.top = y + "px";
+          store.set("aurum.favPos", JSON.stringify({ x, y }));
+        };
+        const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+        window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+      };
     },
 
     /* ----- ICT layer ----- */
@@ -2275,6 +2547,13 @@
   function ServerTooOld(e) { return /Không có đường dẫn/.test(e.message || ""); }
 
   Member.init();
+  $("themeBtn").addEventListener("click", () => {
+    const st = loadChartStyle();
+    st.theme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    store.set("aurum.chartStyle", JSON.stringify(st));
+    applyTheme(st.theme);
+    if (Member.chart) { Member.chartStyle = st; Member.applyChartStyle(); }
+  });
   if (/[?&]debug\b/.test(location.search)) window.__aurum = Member; // for automated tests
   $("loginForm").addEventListener("submit", (e) => { e.preventDefault(); Member.login(); });
   $("modeBtn").addEventListener("click", () => Member.setLoginMode(Member.loginMode === "owner" ? "member" : "owner"));
