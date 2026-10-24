@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.8"
+VERSION = "2.9"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -972,6 +972,13 @@ class Mt5Account:
                 rates = mt5.copy_rates_from(symbol, timeframe, start, count)
             else:
                 rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, count)
+            # A symbol just added to Market Watch has no history until the terminal fetches it.
+            for _ in range(6):
+                if rates is not None and len(rates):
+                    break
+                time.sleep(0.5)
+                rates = (mt5.copy_rates_from(symbol, timeframe, start, count) if before
+                         else mt5.copy_rates_from_pos(symbol, timeframe, 0, count))
             if rates is None:
                 raise ValueError(f"MT5 không trả nến {symbol}: {mt5.last_error()}")
             bars = Mt5.bars(rates)

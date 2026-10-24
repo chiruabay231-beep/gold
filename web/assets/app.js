@@ -2229,13 +2229,30 @@
       const token = (this.loadToken = (this.loadToken || 0) + 1);
       this.applyChartStyle();
       if (this.chart2) this.chart2.applyOptions({ timeScale: { secondsVisible: isSecTF(this.interval) } });
+      // Another symbol: the old one's quote and price range must not linger on it.
+      const symKey = this.owner ? this.symbol : "member";
+      if (symKey !== this.loadedSymbol) { this.bid = this.ask = null; this.loadedSymbol = symKey; }
       if (isSecTF(this.interval)) return this.loadSeconds(token);
+      let failure = null;
       try {
         if (this.owner) await this.ownerSymbol();
-        const data = await this.call(this.exnessPath(800));
-        if (token !== this.loadToken) return;
-        const bars = this.toBars(data.candles || []);
-        if (bars.length < 5) throw new Error("no bars");
+        // A symbol just added to MT5 has no bars until the terminal fetches its history: ask again a few times.
+        let data = null, bars = [];
+        for (let attempt = 0; attempt < (this.owner ? 4 : 1); attempt++) {
+          if (attempt) {
+            $("chartSource").textContent = `· đang tải nến ${this.symbol} từ MT5…`;
+            await new Promise((r) => setTimeout(r, 1200));
+            if (token !== this.loadToken) return;
+          }
+          try {
+            data = await this.call(this.exnessPath(800));
+            bars = this.toBars(data.candles || []);
+            failure = bars.length < 5 ? new Error("MT5 chưa có nến cho mã này") : null;
+          } catch (e) { failure = e; if (e instanceof Unreachable) break; }
+          if (token !== this.loadToken) return;
+          if (!failure) break;
+        }
+        if (failure) throw failure;
         this.source = "exness";
         if (data.symbol) this.symbol = this.owner ? this.symbol : data.symbol;
         this.digits = data.digits != null ? data.digits : 2;
@@ -2256,9 +2273,11 @@
         }
         this.setQuote(data);
         this.pollTimer = setInterval(() => this.pollBars(token), 2000);
-      } catch {
+      } catch (e) {
         if (token !== this.loadToken) return;
-        await this.loadBinance();
+        const market = binanceMarket(this.owner ? this.symbol : "XAUUSD");
+        if (market) await this.loadBinance(market);
+        else this.showNoBars(token, plain((e || failure || {}).message || ""));
       }
       this.syncLines();
       this.updateFlow();
@@ -2293,6 +2312,8 @@
       const ts = this.chart.timeScale();
       ts.scrollToPosition(8, false);
       this.olderHold = performance.now() + 800;
+      // The price scale follows the new bars (a hand-set range would keep the old symbol's prices).
+      this.chart.priceScale("right").applyOptions({ autoScale: true });
       this.series.setData(bars.map(shown));
       ts.scrollToPosition(8, false);
     },
@@ -2407,15 +2428,30 @@
       } catch { this.noOlder = true; } finally { this.loadingOlder = false; }
     },
 
-    async loadBinance() {
+    /** MT5 gave no bars for a symbol Binance does not have either: say so, and try again shortly. */
+    showNoBars(token, why) {
+      this.source = "none";
+      this.bars = [];
+      if (this.replay) { clearInterval(this.replay.timer); this.replay = null; this.renderReplayBar(); }
+      this.series.setData([]);
+      this.computeICT();
+      $("chartSymbol").textContent = this.symbol || "—";
+      $("chartSource").textContent = `· chưa tải được nến${why ? ": " + why : ""} — tự thử lại…`;
+      this.setQuote({});
+      setTimeout(() => { if (token === this.loadToken) this.loadCandles(); }, 5000);
+    },
+
+    async loadBinance(market) {
+      const m = market || binanceMarket("XAUUSD");
       this.source = "binance";
-      this.digits = 2;
+      this.digits = m.digits != null ? m.digits : 2;
       this.applySeriesFormat();
-      $("chartSymbol").textContent = "XAUUSD";
-      $("chartSource").textContent = "· giá Binance XAUUSDT (tạm)";
-      const interval = this.interval === "30m" ? "30m" : this.interval;
+      $("chartSymbol").textContent = this.owner && this.symbol ? this.symbol : "XAUUSD";
+      $("chartSource").textContent = `· giá Binance ${m.name} (tạm, MT5 chưa trả nến)`;
+      const interval = this.interval;
+      const rest = m.futures ? "https://fapi.binance.com/fapi/v1/klines" : "https://api.binance.com/api/v3/klines";
       try {
-        const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=XAUUSDT&interval=${interval}&limit=800`);
+        const res = await fetch(`${rest}?symbol=${m.name}&interval=${interval}&limit=800`);
         const rows = await res.json();
         this.bars = rows.map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }));
         if (this.replay) this.exitReplay();
@@ -2424,7 +2460,7 @@
         this.setQuote({});
         this.computeICT();
       } catch { /* chart stays empty */ }
-      const ws = new WebSocket(`wss://fstream.binance.com/ws/xauusdt@kline_${interval}`);
+      const ws = new WebSocket(`${m.futures ? "wss://fstream.binance.com/ws/" : "wss://stream.binance.com:9443/ws/"}${m.name.toLowerCase()}@kline_${interval}`);
       ws.onmessage = (ev) => {
         const k = JSON.parse(ev.data).k;
         if (!k) return;
