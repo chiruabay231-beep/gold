@@ -518,3 +518,11 @@ body:not(.in-member) .nav-logout { display: none; }
 .charts .chart-wrap.focus { box-shadow: 0 0 0 1px var(--gold2); border-radius: 4px; }
 #chartWrap2 .draw-bar { top: auto; bottom: 36px; }
 button.busy { opacity: .55; }
+.ctx hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.tpl-row { display: flex; }
+.tpl-row button[data-k] { flex: 1; }
+.ctx .tpl-x { width: 32px !important; flex: none; color: var(--muted) !important; text-align: center !important; }
+.row-btns.end { justify-content: flex-end; }
+.fr .mini { display: flex; align-items: center; gap: 4px; font-size: 12.5px; }
+.bot-badge { margin-left: 6px; background: rgba(155, 107, 255, .15); color: var(--purple); border: 1px solid rgba(155, 107, 255, .4); border-radius: 999px; padding: 3px 10px; font: 600 12px/1.2 "Be Vietnam Pro", system-ui, sans-serif; cursor: pointer; }
+.bot-badge[hidden] { display: none; }

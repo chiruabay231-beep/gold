@@ -200,7 +200,7 @@
         base.fib = {
           levels: (tool === "fibExtension" ? FIB_EXT_LEVELS : FIB_LEVELS).map(([v, on, c]) => ({ v, on, color: c })),
           oneColorOn: false, oneColor: "#2962ff", bg: true, bgOpacity: 10, reverse: false, prices: true, values: true,
-          labelSide: tool === "fibExtension" ? "right" : "left", fontSize: 11, trend: true,
+          labelSide: tool === "fibExtension" ? "right" : "left", fontSize: 11, trend: true, extendLeft: false, extendRight: false,
         };
       }
       const saved = this.styles[tool];
@@ -218,6 +218,34 @@
       this.styles[d.tool] = keep;
       try { this.host.store.set("aurum.drawStyles", JSON.stringify(this.styles)); } catch { /* full */ }
     }
+    /* Named templates per tool ("Lưu bản mẫu vẽ dưới dạng…"), like TradingView. */
+    templates(tool) {
+      try { return (JSON.parse(this.host.store.get("aurum.drawTpl") || "{}")[tool]) || {}; } catch { return {}; }
+    }
+    saveTemplate(d, name) {
+      let all = {};
+      try { all = JSON.parse(this.host.store.get("aurum.drawTpl") || "{}"); } catch { /* new */ }
+      const keep = JSON.parse(JSON.stringify(d));
+      ["id", "tool", "pts", "text", "locked", "_box"].forEach((k) => delete keep[k]);
+      (all[d.tool] = all[d.tool] || {})[name] = keep;
+      try { this.host.store.set("aurum.drawTpl", JSON.stringify(all)); } catch { /* full */ }
+    }
+    deleteTemplate(tool, name) {
+      let all = {};
+      try { all = JSON.parse(this.host.store.get("aurum.drawTpl") || "{}"); } catch { return; }
+      if (all[tool]) delete all[tool][name];
+      try { this.host.store.set("aurum.drawTpl", JSON.stringify(all)); } catch { /* full */ }
+    }
+    /** Applies a named template (or the tool's default when `name` is null) to `d`. */
+    applyTemplate(d, name) {
+      const style = name ? this.templates(d.tool)[name] : this.defaults(d.tool);
+      if (!style) return;
+      const keep = { id: d.id, tool: d.tool, pts: d.pts, text: d.text, locked: d.locked };
+      Object.keys(d).forEach((k) => delete d[k]);
+      Object.assign(d, this.defaults(d.tool), JSON.parse(JSON.stringify(style)), keep);
+      this.changed(d);
+    }
+
     resetDefault(tool) {
       delete this.styles[tool];
       try { this.host.store.set("aurum.drawStyles", JSON.stringify(this.styles)); } catch { /* full */ }
@@ -664,6 +692,9 @@
         price = (lv) => (f.reverse ? c - (b - a) * lv : c + (b - a) * lv);
         left = Math.min(pts[2][0], pts[1][0]); right = Math.max(pts[2][0], pts[1][0]) + 60;
       }
+      // "Kéo dài": the levels run to the left and/or right edge of the chart.
+      if (f.extendLeft) left = 0;
+      if (f.extendRight) right = w;
       const levels = f.levels.filter((l) => l.on).sort((m, n) => m.v - n.v);
       const colorOf = (l) => (f.oneColorOn ? f.oneColor : l.color);
       if (f.bg) {
@@ -683,7 +714,9 @@
         const label = [f.values ? String(l.v) : "", f.prices ? `(${v.toFixed(dg)})` : ""].filter(Boolean).join(" ");
         if (!label) return;
         g.fillStyle = colorOf(l); g.textBaseline = "middle";
-        if (f.labelSide === "right") { g.textAlign = "left"; g.fillText(label, right + 4, yy); } else { g.textAlign = "right"; g.fillText(label, left - 4, yy); }
+        if (f.labelSide === "right") {
+          if (f.extendRight) { g.textAlign = "right"; g.fillText(label, w - 4, yy - 7); } else { g.textAlign = "left"; g.fillText(label, right + 4, yy); }
+        } else if (f.extendLeft) { g.textAlign = "left"; g.fillText(label, 4, yy - 7); } else { g.textAlign = "right"; g.fillText(label, left - 4, yy); }
       });
     }
 

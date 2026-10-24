@@ -52,6 +52,8 @@
       mss: true, bos: false, swing: 5, structureCount: 20, mssBull: "#089981", mssBear: "#f23645",
       sweeps: true, sweepCount: 20, sweepColor: "#fa9900",
       lineScale: 1,
+      // SMT against a related market (silver for gold): empty symbol = automatic.
+      smtSymbol: "", smtInverse: false, smtSwing: 3, smtLookback: 60, smtCount: 10, smtBull: "#089981", smtBear: "#f23645",
     };
   }
 

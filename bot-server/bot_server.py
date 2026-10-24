@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.6"
+VERSION = "2.7"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2455,7 +2455,11 @@ class BotServer:
                 raise ValueError("Khung thời gian trên VPS: 1m, 5m, 15m, 30m, 1h, 4h, 1d")
             if s["broker"] == "mt5" and s["source"] != "mt5":
                 raise ValueError("Đặt lệnh MT5 cần nguồn giá MT5")
-            if not s.get("strategy") and not body.get("sampleStrategy"):
+            if body.get("sampleStrategy") and "strategy" not in body:
+                # A sample picked on the website replaces the strategy sent by the app.
+                s.update(strategy=None, indicators=[], config=None, parameterValues={},
+                         strategyName=str(body["sampleStrategy"]))
+            if not s.get("strategy") and not body.get("sampleStrategy") and not s.get("sampleStrategy"):
                 raise ValueError("Chưa chọn chiến lược")
             s["lots"] = max(0.01, float(s["lots"]))
             check = run_botkit(self.config, self._botkit_request(s, [], body.get("sampleStrategy"), command="validate"))

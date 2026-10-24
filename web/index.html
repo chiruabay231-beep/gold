@@ -152,6 +152,7 @@
               <button class="sym-btn" id="chartSymbol" type="button">XAUUSD</button>
               <span class="muted small" id="chartSource">· giá Exness</span>
               <span class="live-price" id="livePrice">—</span>
+              <button class="bot-badge" id="botBadge" type="button" hidden></button>
             </div>
             <div class="chart-tools">
               <div class="tf" id="tfButtons"></div>
@@ -292,6 +293,21 @@
         <div class="panel">
           <h3>Thành viên được dùng</h3>
           <div id="featureList" class="toggles"></div>
+        </div>
+      </div>
+
+      <!-- Bot (owner) -->
+      <div class="tab" data-tab="autobot" hidden>
+        <div class="panel" id="autoStatus"></div>
+        <div class="panel" id="autoForm"></div>
+        <div class="panel">
+          <div class="panel-head"><h3 id="botPosTitle">Lệnh của bot</h3><button class="btn btn-ghost btn-small" id="botCloseAll" hidden>Đóng tất cả ✕</button></div>
+          <div id="botPositions" class="list"></div>
+        </div>
+        <div class="panel">
+          <h3>Lịch sử bot</h3>
+          <div class="stats" id="botStats"></div>
+          <div id="botHistory" class="list"></div>
         </div>
       </div>
 

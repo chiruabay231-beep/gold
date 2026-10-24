@@ -213,6 +213,7 @@
     ["fvg", "FVG & Volume Imbalance"],
     ["mss", "MSS (đổi cấu trúc)"],
     ["flow", "Dòng tiền cá mập"],
+    ["smt", "SMT (so đỉnh/đáy với mã liên quan: bạc cho vàng)"],
   ];
   const showInd = (() => {
     let saved = {};
@@ -421,7 +422,7 @@
     tabList() {
       if (this.owner) {
         return [["chart", "Biểu đồ"], ["trade", "Lệnh"], ["history", "Lịch sử"], ["news", "Tin tức"],
-          ["copy", "Copy"], ["members", "Thành viên"], ["bot", "Máy chủ"]];
+          ["autobot", "Bot"], ["copy", "Copy"], ["members", "Thành viên"], ["bot", "Máy chủ"]];
       }
       const f = this.features || {};
       return [["chart", "Biểu đồ"], ["signals", "Tín hiệu"]]
@@ -471,6 +472,11 @@
       this.timers.push(setInterval(() => this.loadTab(false), 5000));
       if (!this.owner) this.timers.push(setInterval(() => this.refreshMe().catch((e) => this.handleAuth(e)), 30000));
       this.timers.push(setInterval(() => this.loadNews(), 5 * 60 * 1000));
+      if (this.owner) {
+        const badge = () => this.call("/status").then((st) => { this.botStatus = st; this.renderBotBadge(); }).catch(() => {});
+        badge();
+        this.timers.push(setInterval(badge, 15000));
+      }
       this.timers.push(setInterval(() => this.updateFlow(), 1000));
     },
 
@@ -838,6 +844,7 @@
       if (t === "copy") this.loadCopy(first);
       if (t === "members" && first) this.loadMembers();
       if (t === "bot") this.loadBot(first);
+      if (t === "autobot") this.loadAutoBot(first);
     },
 
     /* ----- history ----- */
@@ -1181,6 +1188,157 @@
       });
     },
 
+    /* ----- the bot (owner only): run a strategy on the server, its trades and results ----- */
+
+    async loadAutoBot(first) {
+      try {
+        const [st, hist] = await Promise.all([this.call("/status"), this.call("/history?limit=200")]);
+        if (first && !this.samples) {
+          const s = await this.call("/samples").catch(() => null);
+          this.samples = (s && s.samples) || [];
+        }
+        this.botStatus = st;
+        this.renderBotBadge();
+        this.renderAutoStatus(st);
+        if (first || !$("autoForm").innerHTML) this.renderAutoForm(st);
+        this.renderBotTrades(st, (hist && hist.history) || []);
+      } catch (e) {
+        if (first) $("autoStatus").innerHTML = `<div class="empty">${esc(plain(e.message))}</div>`;
+      }
+    },
+
+    renderBotBadge() {
+      const st = this.botStatus, b = $("botBadge");
+      if (!b) return;
+      const run = this.owner && st && st.running;
+      b.hidden = !run;
+      if (!run) return;
+      const s = st.settings || {};
+      b.textContent = `🤖 Bot: ${s.strategyName || "chiến lược"} · ${s.symbol} ${s.interval}`;
+      b.onclick = () => this.setTab("autobot");
+    },
+
+    renderAutoStatus(st) {
+      const s = st.settings || {}, acc = st.account || {};
+      const live = s.broker === "mt5";
+      $("autoStatus").innerHTML = `<div class="panel-head"><h3>Bot tự động</h3><span class="badge ${st.running ? "on" : "off"}">${st.running ? "Đang chạy" : "Đang dừng"}</span></div>
+        <div class="stats">
+          <div class="stat"><span>Chiến lược</span><b>${esc(s.strategyName || "–")}</b></div>
+          <div class="stat"><span>Mã · khung</span><b>${esc(s.symbol || "–")} · ${esc(s.interval || "")}</b></div>
+          <div class="stat"><span>Đặt lệnh</span><b>${live ? '<span class="neg">MT5 thật</span>' : "Demo trên máy chủ"}</b></div>
+          <div class="stat"><span>${s.riskPercent ? "Rủi ro mỗi lệnh" : "Khối lượng"}</span><b>${s.riskPercent ? s.riskPercent + "%" : (s.lots || 0.01) + " lot"}</b></div>
+          <div class="stat"><span>Số dư</span><b>${acc.balance != null ? money(acc.balance) : "–"}</b></div>
+          <div class="stat"><span>Vốn</span><b>${acc.equity != null ? money(acc.equity) : "–"}</b></div>
+          <div class="stat"><span>Lãi/lỗ đang chạy</span><b class="${(acc.openProfit || 0) >= 0 ? "pos" : "neg"}">${signed(acc.openProfit || 0)}</b></div>
+          <div class="stat"><span>Nến mới nhất</span><b>${st.lastBarTime ? clock(st.lastBarTime) : "–"}</b></div>
+        </div>
+        ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
+        ${acc.error ? `<p class="warn">${esc(acc.error)}</p>` : ""}
+        <div class="row-btns">
+          ${st.running ? '<button class="btn btn-ghost" id="abStop">■ Dừng bot</button>' : `<button class="btn btn-gold" id="abRestart" ${s.strategyName ? "" : "disabled"}>▶ Chạy lại như cũ</button>`}
+          ${!live ? '<button class="btn btn-ghost" id="abReset">Đặt lại tài khoản demo</button>' : ""}
+        </div>
+        <p class="muted small">Dừng bot không đóng lệnh đang mở: lệnh vẫn giữ SL/TP. Chỉ chủ thấy tab này.</p>`;
+      const stop = $("abStop"), restart = $("abRestart"), reset = $("abReset");
+      if (stop) stop.onclick = async (e) => { await act(e.currentTarget, () => this.call("/stop", {}), "Đã dừng bot"); this.loadAutoBot(false); };
+      if (restart) restart.onclick = async (e) => { await act(e.currentTarget, () => this.call("/start", {}), "Bot đã chạy"); this.loadAutoBot(false); };
+      if (reset) reset.onclick = async (e) => {
+        const v = prompt("Số dư demo mới (USD):", "10000");
+        if (!v || !num(v)) return;
+        await act(e.currentTarget, () => this.call("/reset", { balance: num(v) }), "Đã đặt lại tài khoản demo");
+        this.loadAutoBot(false);
+      };
+    },
+
+    renderAutoForm(st) {
+      const s = st.settings || {};
+      const current = s.strategyName && !s.sampleStrategy ? s.strategyName : null;
+      const tfs = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
+      $("autoForm").innerHTML = `<h3>Chạy bot</h3>
+        <div class="fields two">
+          <label>Chiến lược<select id="abStrategy">
+            ${current ? `<option value="">Đang dùng: ${esc(current)} (từ app)</option>` : ""}
+            ${(this.samples || []).map((n) => `<option value="${esc(n)}" ${s.sampleStrategy === n ? "selected" : ""}>Mẫu: ${esc(n)}</option>`).join("")}
+          </select></label>
+          <label>Nguồn giá<select id="abSource">
+            <option value="mt5" ${s.source === "mt5" ? "selected" : ""}>MT5 (Exness)</option>
+            <option value="binance_futures" ${s.source === "binance_futures" ? "selected" : ""}>Binance Futures</option>
+          </select></label>
+        </div>
+        <div class="fields three">
+          <label>Mã<input id="abSymbol" value="${esc(s.symbol || this.symbol || "XAUUSDm")}"></label>
+          <label>Khung<select id="abInterval">${tfs.map((t) => `<option ${t === s.interval ? "selected" : ""}>${t}</option>`).join("")}</select></label>
+          <label>Đặt lệnh<select id="abBroker">
+            <option value="paper" ${s.broker !== "mt5" ? "selected" : ""}>Demo trên máy chủ</option>
+            <option value="mt5" ${s.broker === "mt5" ? "selected" : ""}>MT5 (tài khoản đang đăng nhập)</option>
+          </select></label>
+        </div>
+        <div class="fields two">
+          <label>Lot mỗi lệnh<input id="abLots" inputmode="decimal" value="${s.lots || 0.01}"></label>
+          <label>Rủi ro % mỗi lệnh (0 = dùng lot)<input id="abRisk" inputmode="decimal" value="${s.riskPercent || 0}"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="abLong" ${s.allowLong !== false ? "checked" : ""}> Cho phép MUA</label>
+        <label class="check"><input type="checkbox" id="abShort" ${s.allowShort !== false ? "checked" : ""}> Cho phép BÁN</label>
+        <label class="check"><input type="checkbox" id="abReverse" ${s.reverse !== false ? "checked" : ""}> Đóng và đảo chiều khi có tín hiệu ngược</label>
+        <button class="btn btn-gold wide" id="abStart">▶ Chạy bot với cài đặt này</button>
+        <p class="muted small">Chiến lược tự viết và quy tắc dừng lỗ nâng cao chọn trong app (Backtest → Bot). Đặt lệnh MT5 cần nguồn giá MT5 và bật "Cho phép đặt lệnh" ở tab Máy chủ.</p>`;
+      $("abSource").onchange = () => {
+        const mt5 = $("abSource").value === "mt5";
+        if (!mt5) { $("abBroker").value = "paper"; if (/m$|XAUUSD$/.test($("abSymbol").value)) $("abSymbol").value = "XAUUSDT"; }
+        else if ($("abSymbol").value === "XAUUSDT") $("abSymbol").value = this.symbol || "XAUUSDm";
+      };
+      $("abStart").onclick = async (e) => {
+        const broker = $("abBroker").value, source = $("abSource").value;
+        if (broker === "mt5" && source !== "mt5") return toast("Đặt lệnh MT5 cần nguồn giá MT5", true);
+        if (broker === "mt5" && !confirm("Bot sẽ đặt lệnh THẬT trên tài khoản MT5 đang đăng nhập. Tiếp tục?")) return;
+        const body = {
+          source, symbol: $("abSymbol").value.trim(), interval: $("abInterval").value, broker,
+          lots: num($("abLots").value) || 0.01, riskPercent: num($("abRisk").value) || 0,
+          allowLong: $("abLong").checked, allowShort: $("abShort").checked, reverse: $("abReverse").checked,
+        };
+        if ($("abStrategy").value) body.sampleStrategy = $("abStrategy").value;
+        const ok = await act(e.currentTarget, () => this.call("/start", body), "Bot đã chạy");
+        if (ok) this.loadAutoBot(false);
+      };
+    },
+
+    renderBotTrades(st, history) {
+      const pos = st.positions || [];
+      const d = (sym) => this.digitsFor(sym);
+      $("botPosTitle").textContent = pos.length ? `Lệnh của bot · ${pos.length}` : "Lệnh của bot";
+      $("botCloseAll").hidden = !pos.length;
+      $("botCloseAll").onclick = async (e) => {
+        if (!confirm(`Đóng ${pos.length} lệnh của bot?`)) return;
+        await act(e.currentTarget, () => this.call("/close", { all: true }), "Đã đóng lệnh của bot");
+        this.loadAutoBot(false);
+      };
+      $("botPositions").innerHTML = pos.length ? pos.map((p, i) => `<div class="sig" data-i="${i}">
+          <div class="bar" style="background:${p.side === "long" ? "#2b6bf3" : "var(--down)"}"></div>
+          <div><div class="top"><span class="sym">${esc(p.symbol)}</span><span class="side ${p.side === "long" ? "buy" : "sell"}">${sideName(p.side)} ${p.lots}</span><span class="muted small">vào ${fmt(p.entryPrice, d(p.symbol))}</span></div>
+            <div class="lv">SL ${p.stop ? fmt(p.stop, d(p.symbol)) : "–"} · TP ${p.target ? fmt(p.target, d(p.symbol)) : "–"}${p.openTime ? " · " + clock(p.openTime) : ""}</div></div>
+          <div class="right"><div class="move ${(p.profit || 0) >= 0 ? "pos" : "neg"}">${signed(p.profit || 0)}</div></div>
+          <button class="x" type="button" title="Đóng lệnh">✕</button></div>`).join("") : '<div class="empty">Bot chưa có lệnh đang mở</div>';
+      $("botPositions").querySelectorAll("[data-i]").forEach((row) => (row.querySelector(".x").onclick = async (e) => {
+        const p = pos[+row.dataset.i];
+        await act(e.currentTarget, () => this.call("/close", { id: p.id }), "Đã đóng lệnh");
+        this.loadAutoBot(false);
+      }));
+      const total = history.reduce((a, t) => a + (t.profit || 0), 0);
+      const wins = history.filter((t) => (t.profit || 0) > 0).length;
+      $("botStats").innerHTML = [
+        ["Lãi/lỗ", `<span class="${total >= 0 ? "pos" : "neg"}">${signed(total)}</span>`], ["Số lệnh", history.length],
+        ["Thắng / thua", `${wins} / ${history.length - wins}`], ["Tỉ lệ thắng", history.length ? Math.round(wins / history.length * 100) + "%" : "–"],
+      ].map(([k, v]) => `<div class="stat"><span>${k}</span><b>${v}</b></div>`).join("");
+      $("botHistory").innerHTML = history.length ? history.slice(0, 80).map((t) => {
+        const color = t.reason === "target" ? "var(--up)" : t.reason === "stop" ? "var(--down)" : "#5b6478";
+        return `<div class="sig"><div class="bar" style="background:${color}"></div>
+          <div><div class="top"><span class="sym">${esc(t.symbol)}</span><span class="side ${t.side === "long" ? "buy" : "sell"}">${sideName(t.side)} ${t.lots}</span>
+            <span class="muted small">${t.entryPrice != null ? fmt(t.entryPrice, d(t.symbol)) + " → " : ""}${fmt(t.exitPrice, d(t.symbol))}</span></div>
+            <div class="lv">${t.reason === "target" ? "Chạm TP" : t.reason === "stop" ? "Chạm SL" : t.reason === "reverse" ? "Đảo chiều" : "Đóng tay"} · ${t.exitTime ? clock(t.exitTime) : ""}</div></div>
+          <div class="right"><div class="move ${(t.profit || 0) >= 0 ? "pos" : "neg"}">${signed(t.profit || 0)}</div></div></div>`;
+      }).join("") : '<div class="empty">Chưa có lệnh đã đóng</div>';
+    },
+
     /* ----- bot & server ----- */
 
     async loadBot(first) {
@@ -1189,24 +1347,13 @@
         const [s, log] = await Promise.all([this.call("/status"), this.call("/log?limit=80")]);
         const st = s.settings || {};
         const acc = s.account || {};
-        $("botPanel").innerHTML = `<div class="panel-head"><h3>Bot tự động</h3><span class="badge ${s.running ? "on" : "off"}">${s.running ? "Đang chạy" : "Đang dừng"}</span></div>
-          <div class="kvs">
-            <div class="kv"><span>Chiến lược</span><b>${esc(st.strategyName || "–")}</b></div>
-            <div class="kv"><span>Mã · khung</span><b>${esc(st.symbol || "–")} · ${esc(st.interval || "")}</b></div>
-            <div class="kv"><span>Đặt lệnh</span><b>${st.broker === "mt5" ? "Lệnh thật MT5" : "Tài khoản demo"} · ${st.lots} lot</b></div>
-            <div class="kv"><span>Tài khoản bot</span><b>${acc.equity != null ? money(acc.equity) + " " + esc(acc.currency || "") : esc(acc.error || "–")}</b></div>
-            ${s.error ? `<div class="kv"><span>Lỗi</span><b class="neg">${esc(s.error)}</b></div>` : ""}
-          </div>
-          <div class="row-btns">${s.running ? '<button class="btn btn-ghost" id="botStop">■ Dừng bot</button>' : `<button class="btn btn-gold" id="botStart" ${st.strategyName ? "" : "disabled"}>▶ Chạy lại</button>`}</div>
-          <p class="muted small">Chọn chiến lược mới và cài bot trong app (Backtest → Bot). Telegram: ${s.telegram && s.telegram.configured ? (s.telegram.linked ? "đã nối" : "chưa nối chat") : "chưa cài"}.</p>
-          <h4>Máy chủ</h4>
+        $("botPanel").innerHTML = `<div class="panel-head"><h3>Máy chủ</h3><button class="bot-badge" id="toBot" type="button">🤖 Bot: ${s.running ? "đang chạy" : "đang dừng"} · mở tab Bot</button></div>
+          <p class="muted small">Telegram: ${s.telegram && s.telegram.configured ? (s.telegram.linked ? "đã nối" : "chưa nối chat") : "chưa cài"}.${st.strategyName ? " Chiến lược bot: " + esc(st.strategyName) + "." : ""}${acc.error ? " " + esc(acc.error) : ""}</p>
           <div class="kvs"><div class="kv"><span>Phiên bản</span><b>${esc(s.version)}</b></div>
             <div class="kv"><span>Chạy từ</span><b>${s.startedAt ? fullTime(s.startedAt) : "–"}</b></div>
             <div class="kv"><span>MT5</span><b>${s.mt5 && s.mt5.connected ? "Đã kết nối" : esc((s.mt5 && s.mt5.error) || "Chưa kết nối")}</b></div></div>
           <button class="btn btn-ghost wide" id="srvUpdate">Cập nhật máy chủ lên bản mới nhất</button>`;
-        const stopBtn = $("botStop"), startBtn = $("botStart");
-        if (stopBtn) stopBtn.onclick = async (e) => { await act(e.currentTarget, () => this.call("/stop", {}), "Đã dừng bot"); this.loadBot(true); };
-        if (startBtn) startBtn.onclick = async (e) => { await act(e.currentTarget, () => this.call("/start", {}), "Bot đã chạy"); this.loadBot(true); };
+        $("toBot").onclick = () => this.setTab("autobot");
         $("srvUpdate").onclick = async (e) => {
           if (!confirm("Cập nhật máy chủ? Máy chủ tự khởi động lại trong khoảng 1 phút.")) return;
           const r = await act(e.currentTarget, () => this.call("/update", {}));
@@ -1266,6 +1413,7 @@
         });
         this.ictCfg = (() => { try { return window.ICT.merge(JSON.parse(store.get("aurum.ictcfg") || "null")); } catch { return window.ICT.defaults(); } })();
         this.magnet = store.get("aurum.magnet") !== "0";
+        this.lastSmtSymbol = this.ictCfg.smtSymbol;
         const term = this;
         // ICT layer: painted in the chart's own frame (under the candles), so it never lags a drag.
         this.series.attachPrimitive({
@@ -1280,7 +1428,7 @@
                   const ts = term.chart.timeScale();
                   const X = (i) => ts.logicalToCoordinate(i), Y = (v) => term.series.priceToCoordinate(v);
                   if (term.ict) window.ICT.draw(context, term.ict, term.ictCfg, X, Y, mediaSize.width, mediaSize.height);
-                  if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width);
+                  if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
                 }),
               }),
             }];
@@ -1342,7 +1490,7 @@
       $("pPlace").onclick = (e) => this.pendingOrder(e.currentTarget);
       $("pCancel").onclick = () => this.togglePending(false);
       $("layoutBtn").onclick = (e) => this.layoutMenu(e.currentTarget);
-      $("chartSymbol2").onclick = () => { if (this.owner) this.symbolSheet((sym) => { store.set("aurum.cmpSym", sym); this.loadCmp(); }); };
+      $("chartSymbol2").onclick = () => { if (this.owner) this.pickCmp(); };
       // The second chart trades its own symbol; ⇄ swaps the two charts.
       const lots2 = () => Math.max(0.01, Math.round((num($("lotInput2").value) || 0.01) * 100) / 100);
       $("lotInput2").value = store.get("aurum.lots2") || "0.01";
@@ -1357,7 +1505,7 @@
         if (!this.owner || !this.cmpName || this.source !== "exness") return;
         const main = this.symbol;
         this.symbol = this.cmpName; store.set("aurum.sym", this.symbol);
-        store.set("aurum.cmpSym", main);
+        this.ictCfg.smtSymbol = main; this.saveIct();
         this.selected = null; this.togglePending(false);
         this.loadCandles();
       };
@@ -1366,7 +1514,7 @@
       $("styleBtn").onclick = () => this.chartStyleSheet();
       $("replayBtn").onclick = () => this.startReplayPick();
       $("chartSymbol").onclick = () => this.symbolSheet();
-      this.smtOn = store.get("aurum.smt") !== "0";
+
       $("closeAllBtn").onclick = (e) => this.closeAll(e.currentTarget);
     },
 
@@ -1383,6 +1531,7 @@
         el.querySelectorAll("input[data-k]").forEach((i) => (i.onchange = () => {
           showInd[i.dataset.k] = i.checked;
           store.set("aurum.ind", JSON.stringify(showInd));
+          if (i.dataset.k === "smt") this.loadCmp();
           this.computeICT(); this.redraw(); this.updateFlow();
         }));
       });
@@ -1485,7 +1634,7 @@
       this.syncLines();
       this.updateFlow();
       this.redraw();
-      if (this.layout !== "1") this.setLayout(this.layout);
+      if (this.layout !== "1") this.setLayout(this.layout); else if (this.smtWanted()) this.loadCmp();
     },
 
     // The newest bars every 2 seconds (MT5 has no public stream).
@@ -2016,6 +2165,7 @@
           <select data-a="width">${[0.5, 1, 1.5, 2, 3, 4].map((w) => `<option value="${w}" ${w === cur.width ? "selected" : ""}>${w}px</option>`).join("")}</select>
           <select data-a="style">${[["solid", "——"], ["dashed", "– –"], ["dotted", "···"]].map(([v, n]) => `<option value="${v}" ${v === cur.style ? "selected" : ""}>${n}</option>`).join("")}</select>
           ${pos ? `<span class="rr">R:R ${cur.rr}</span>` : ""}
+          <button type="button" data-a="tpl" title="Bản mẫu vẽ">▦</button>
           <button type="button" data-a="settings" title="Cài đặt">⚙</button>
           <button type="button" data-a="lock" title="Khoá">${cur.locked ? "🔒" : "🔓"}</button>
           <button type="button" data-a="del" class="danger" title="Xoá">🗑</button>
@@ -2032,6 +2182,7 @@
           if (a === "x") { d.selected = null; d.update(); }
           if (a === "lock") d.restyle({ locked: !d.current.locked });
           if (a === "settings") this.drawingSettings(d.current);
+          if (a === "tpl") { this.templateMenu(b, d, d.current); return; }
           this.renderDrawBar();
         };
       });
@@ -2312,7 +2463,7 @@
           <div class="fp-tabs">${tabs.map(([k, n]) => `<button type="button" data-tab="${k}" class="${k === tab ? "on" : ""}">${n}</button>`).join("")}</div>
           <div class="fp-body">${render(tab)}</div>
           <div class="fp-foot">
-            ${opts.template ? '<select data-tpl><option value="">Bản mẫu</option><option value="save">Lưu làm mặc định</option><option value="reset">Về mặc định gốc</option></select>' : ""}
+            ${opts.template ? `<select data-tpl><option value="">Bản mẫu</option><option value="saveAs">Lưu bản mẫu vẽ dưới dạng…</option><option value="reset">Áp dụng mẫu vẽ mặc định</option><option value="save">Đặt làm mặc định cho công cụ</option>${(opts.templateNames ? opts.templateNames() : []).map((n) => `<option value="tpl:${esc(n)}">▦ ${esc(n)}</option>`).join("")}</select>` : ""}
             ${opts.onReset ? '<button type="button" class="btn btn-ghost btn-small" data-reset>Mặc định</button>' : ""}
             <span class="grow"></span>
             ${opts.onCancel ? '<button type="button" class="btn btn-ghost btn-small" data-cancel>Hủy bỏ</button>' : ""}
@@ -2430,6 +2581,7 @@
             <div class="fr">${k.chk("fib.trend")}<span>Đường xu hướng</span></div>
             <div class="fr">${k.chk("fib.prices")}<span>Các mức giá</span></div>
             <div class="fr">${k.chk("fib.values")}<span>Mức độ</span></div>
+            <div class="fr"><span class="grow">Kéo dài</span><label class="mini">${k.chk("fib.extendLeft")} Sang trái</label><label class="mini">${k.chk("fib.extendRight")} Sang phải</label></div>
             <div class="fr"><span class="grow">Nhãn</span>${k.selI("fib.labelSide", [["left", "Bên trái"], ["right", "Bên phải"]])}</div>
             <div class="fr"><span class="grow">Cỡ chữ</span>${k.selI("fib.fontSize", sizes)}</div>`;
         } else if (tool === "text") {
@@ -2453,17 +2605,60 @@
           if (isNew && tool === "text" && !d.text) dr.remove(d.id); else dr.changed(d);
         },
         onClose: () => { if (tool === "text" && !d.text) dr.remove(d.id); this.renderDrawBar(); },
+        templateNames: () => Object.keys(dr.templates(tool)),
         template: (action, redraw) => {
-          if (action === "save") { dr.saveAsDefault(d); toast("Đã lưu làm mặc định cho " + D.tools[tool].name); }
-          if (action === "reset") {
-            dr.resetDefault(tool);
-            const keep = { id: d.id, tool: d.tool, pts: d.pts, text: d.text, locked: d.locked };
-            Object.keys(d).forEach((x) => delete d[x]);
-            Object.assign(d, dr.defaults(tool), keep);
-            dr.changed(d); redraw();
-          }
+          if (action === "save") { dr.saveAsDefault(d); toast("Đã đặt làm mặc định cho " + D.tools[tool].name); }
+          if (action === "reset") { dr.resetDefault(tool); dr.applyTemplate(d, null); redraw(); }
+          if (action === "saveAs") this.saveTemplateDialog(dr, d, redraw);
+          if (action.startsWith("tpl:")) { dr.applyTemplate(d, action.slice(4)); redraw(); this.renderDrawBar(); }
         },
         afterDraw: (panel) => { const t = panel.querySelector(".fp-text"); if (t && isNew) setTimeout(() => t.focus(), 30); },
+      });
+    },
+
+    /* ----- named drawing templates ----- */
+
+    templateMenu(button, dr, d) {
+      if (!d) return;
+      const names = Object.keys(dr.templates(d.tool));
+      const r = button.getBoundingClientRect();
+      const menu = $("ctxMenu");
+      menu.innerHTML = `<button type="button" data-k="saveAs">Lưu bản mẫu vẽ dưới dạng…</button><button type="button" data-k="default">Áp dụng mẫu vẽ mặc định</button>`
+        + (names.length ? `<hr>` + names.map((n) => `<div class="tpl-row"><button type="button" data-k="tpl" data-n="${esc(n)}">${esc(n)}</button><button type="button" class="tpl-x" data-del="${esc(n)}" title="Xoá bản mẫu">✕</button></div>`).join("") : "");
+      menu.hidden = false;
+      menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + "px";
+      menu.style.top = Math.min(r.bottom + 6, window.innerHeight - menu.offsetHeight - 8) + "px";
+      menu.querySelectorAll("[data-k]").forEach((b) => (b.onclick = () => {
+        this.closeMenu();
+        if (b.dataset.k === "saveAs") this.saveTemplateDialog(dr, d);
+        if (b.dataset.k === "default") { dr.applyTemplate(d, null); this.renderDrawBar(); }
+        if (b.dataset.k === "tpl") { dr.applyTemplate(d, b.dataset.n); this.renderDrawBar(); }
+      }));
+      menu.querySelectorAll("[data-del]").forEach((b) => (b.onclick = (e) => {
+        e.stopPropagation();
+        dr.deleteTemplate(d.tool, b.dataset.del);
+        b.parentElement.remove();
+      }));
+    },
+
+    saveTemplateDialog(dr, d, after) {
+      const names = Object.keys(dr.templates(d.tool));
+      sheet.open(`<h3>Lưu biểu mẫu vẽ</h3>
+        <div class="fields"><label>Tên biểu mẫu mới<input id="tplName" list="tplNames" maxlength="40" placeholder="vd: OTE, RISK, TP"><datalist id="tplNames">${names.map((n) => `<option value="${esc(n)}">`).join("")}</datalist></label></div>
+        <div class="row-btns end"><button class="btn btn-ghost btn-small" data-close>Hủy bỏ</button><button class="btn btn-gold btn-small" id="tplSave" disabled>Lưu</button></div>`, (el) => {
+        const input = el.querySelector("#tplName"), save = el.querySelector("#tplSave");
+        input.oninput = () => { save.disabled = !input.value.trim(); save.textContent = names.includes(input.value.trim()) ? "Ghi đè" : "Lưu"; };
+        const go = () => {
+          const name = input.value.trim();
+          if (!name) return;
+          dr.saveTemplate(d, name);
+          sheet.close();
+          toast(`Đã lưu bản mẫu "${name}" cho ${window.AurumDrawings.tools[d.tool].name}`);
+          if (after) after();
+        };
+        save.onclick = go;
+        input.onkeydown = (e) => { if (e.key === "Enter") go(); };
+        setTimeout(() => input.focus(), 30);
       });
     },
 
@@ -2471,6 +2666,11 @@
 
     saveIct() {
       store.set("aurum.ictcfg", JSON.stringify(this.ictCfg));
+      if (this.ictCfg.smtSymbol !== this.lastSmtSymbol) {
+        this.lastSmtSymbol = this.ictCfg.smtSymbol;
+        clearTimeout(this.cmpReload);
+        this.cmpReload = setTimeout(() => this.loadCmp(), 700);
+      }
       this.computeICT();
       this.redraw();
     },
@@ -2500,6 +2700,9 @@
             + tog("vi", "Hiện VI (Volume Imbalance)") + numf("viCount", "Giữ VI gần nhất") + tog("viHideTouched", "Ẩn VI đã bị chạm")
             + head("Cấu trúc") + tog("mss", "MSS (đổi cấu trúc)") + tog("bos", "BOS (phá cấu trúc cùng xu hướng)") + numf("swing", "Swing: số nến mỗi bên") + numf("structureCount", "Giữ số lần phá gần nhất")
             + head("Thanh khoản") + tog("sweeps", "Quét thanh khoản") + numf("sweepCount", "Giữ số lần quét gần nhất")
+            + head("SMT") + `<label class="fr"><input type="checkbox" data-smt ${showInd.smt ? "checked" : ""}><span>Hiện SMT (so đỉnh/đáy với mã liên quan)</span></label>`
+            + (this.owner ? `<div class="fr"><span class="grow">Mã so sánh</span>${text("smtSymbol", "lb")}<span class="muted small">trống = tự động (${esc(this.cmpSymbol())})</span></div>` : "")
+            + tog("smtInverse", "Mã so sánh chạy ngược chiều (DXY)") + numf("smtSwing", "Swing: số nến mỗi bên") + numf("smtLookback", "Hai đỉnh/đáy cách tối đa (nến)") + numf("smtCount", "Giữ SMT gần nhất")
             + head("Macros") + tog("macros", "Hiện macros")
             + cfg.macroList.map((m, i) => `<div class="fr">${chk(`macroList.${i}.on`)}${text(`macroList.${i}.name`)}${time(`macroList.${i}.start`)}<span class="to">—</span>${time(`macroList.${i}.end`)}</div>`).join("");
         }
@@ -2510,6 +2713,7 @@
             + color("stampColor", "Màu mốc thời gian") + sel("stampStyle", "Nét mốc thời gian", styles)
             + head("Đỉnh / đáy ngày") + color("dayHighColor", "Màu đỉnh ngày") + color("dayLowColor", "Màu đáy ngày") + sel("dailyStyle", "Nét", styles) + color("periodColor", "Màu PDH/PWH/PMH")
             + head("FVG & VI") + color("fvgBull", "FVG tăng") + color("fvgBear", "FVG giảm") + color("fvgZone", "Nền FVG trùng khung") + color("fvgZoneMid", "Đường giữa FVG trùng khung") + color("viColor", "VI")
+            + head("SMT") + color("smtBull", "SMT tăng") + color("smtBear", "SMT giảm")
             + head("Khác") + color("mssBull", "MSS tăng") + color("mssBear", "MSS giảm") + color("sweepColor", "Quét thanh khoản") + color("macroColor", "Macros");
         }
         return head("Chung") + sel("timeZone", "Múi giờ", [["America/New_York", "New York (ICT)"], ["UTC", "UTC"], ["Asia/Ho_Chi_Minh", "Hà Nội (UTC+7)"], ["Europe/London", "London"]])
@@ -2522,6 +2726,10 @@
       const open = () => this.openPanel("ICT Killzones + Pivots", [["inputs", "Các đầu vào"], ["style", "Định dạng"], ["view", "Hiển thị"]], render, {
         root: this.ictCfg,
         onChange: () => this.saveIct(),
+        afterDraw: (panel) => {
+          const box = panel.querySelector("[data-smt]");
+          if (box) box.onchange = () => { showInd.smt = box.checked; store.set("aurum.ind", JSON.stringify(showInd)); this.loadCmp(); };
+        },
         onReset: () => {
           if (!confirm("Đặt lại mọi cài đặt chỉ báo về mặc định?")) return;
           this.ictCfg = window.ICT.defaults(); this.saveIct(); open();
@@ -2637,7 +2845,7 @@
       try {
         this.ict = window.ICT.compute(bars, TF_SECONDS[this.interval], this.ictCfg, showInd);
       } catch { this.ict = null; }
-      if (this.layout !== "1" && this.series2) this.showCmp(false); else this.computeSMT();
+      if (this.cmpBars && this.cmpBars.length) this.showCmp(false); else this.computeSMT();
       this.redraw();
     },
 
@@ -2656,7 +2864,7 @@
     layoutMenu(button) {
       const r = button.getBoundingClientRect();
       const items = [["1", "▭ 1 biểu đồ"], ["h", "◫ 2 biểu đồ ngang"], ["v", "⊟ 2 biểu đồ dọc"]].map(([k, n]) => [k, (this.layout === k ? "✓ " : "　") + n]);
-      items.push(["smt", (this.smtOn ? "✓ " : "　") + "SMT (so đỉnh/đáy với mã thứ 2)"]);
+      items.push(["smt", (showInd.smt ? "✓ " : "　") + "SMT (so đỉnh/đáy với mã thứ 2)"]);
       if (this.owner) items.push(["cmp", `　Mã so sánh: ${this.cmpSymbol()}…`]);
       const menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
@@ -2666,8 +2874,8 @@
       menu.querySelectorAll("button").forEach((b) => (b.onclick = () => {
         this.closeMenu();
         const k = b.dataset.k;
-        if (k === "smt") { this.smtOn = !this.smtOn; store.set("aurum.smt", this.smtOn ? "1" : "0"); this.computeSMT(); return; }
-        if (k === "cmp") { this.symbolSheet((sym) => { store.set("aurum.cmpSym", sym); this.loadCmp(); }); return; }
+        if (k === "smt") { showInd.smt = !showInd.smt; store.set("aurum.ind", JSON.stringify(showInd)); this.loadCmp(); return; }
+        if (k === "cmp") { this.pickCmp(); return; }
         this.setLayout(k);
       }));
     },
@@ -2678,16 +2886,20 @@
       $("charts").className = "charts" + (mode === "h" ? " row" : mode === "v" ? " col" : "");
       $("chartWrap2").hidden = mode === "1";
       $("layoutBtn").classList.toggle("on", mode !== "1");
-      if (mode === "1") { clearInterval(this.cmpTimer); this.cmpTimer = null; this.cmpBars = []; this.computeSMT(); this.focusChart(1); return; }
+      if (mode === "1") { this.focusChart(1); this.loadCmp(); return; }
       this.ensureChart2();
       this.loadCmp();
+    },
+
+    pickCmp() {
+      this.symbolSheet((sym) => { this.ictCfg.smtSymbol = sym; this.saveIct(); this.loadCmp(); });
     },
 
     /** The second chart's symbol: silver for gold (the SMT pair), or the one picked. */
     cmpSymbol() {
       if (!this.owner) return "XAG";
       const sym = this.symbol || "XAUUSD";
-      return store.get("aurum.cmpSym") || (/XAU/i.test(sym) ? sym.replace(/XAU/i, "XAG") : /BTC/i.test(sym) ? sym.replace(/BTC/i, "ETH") : sym);
+      return (this.ictCfg && this.ictCfg.smtSymbol) || (/XAU/i.test(sym) ? sym.replace(/XAU/i, "XAG") : /BTC/i.test(sym) ? sym.replace(/BTC/i, "ETH") : sym);
     },
 
     ensureChart2() {
@@ -2716,15 +2928,19 @@
               return { bull: d.bull, start: i1, end: i2, p1: d.bull ? a.low : a.high, p2: d.bull ? b.low : b.high };
             }).filter(Boolean);
             const ts = term.chart2.timeScale();
-            window.ICT.drawSMT(context, list, (i) => ts.logicalToCoordinate(i), (v) => term.series2.priceToCoordinate(v), mediaSize.width);
+            window.ICT.drawSMT(context, list, (i) => ts.logicalToCoordinate(i), (v) => term.series2.priceToCoordinate(v), mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
           }) }) }];
         },
       });
-      // The second chart follows the first one's time range.
-      this.chart.timeScale().subscribeVisibleTimeRangeChange((r) => {
-        if (!r || !this.chart2 || this.layout === "1") return;
-        try { this.chart2.timeScale().setVisibleRange(r); } catch { /* not loaded yet */ }
+      // Dragging either chart moves both.
+      const link = (from, to) => from.timeScale().subscribeVisibleTimeRangeChange((r) => {
+        if (!r || this.layout === "1") return;
+        const locked = this.rangeLock && this.rangeLock.get(from);
+        if (locked && performance.now() - locked < 120) return; // our own echo
+        this.syncRange(from, to);
       });
+      link(this.chart, this.chart2);
+      link(this.chart2, this.chart);
       // One crosshair across both charts: the same moment on each.
       const follow = (from, to, toSeries, bars) => from.subscribeCrosshairMove((param) => {
         if (this.syncingCrosshair || this.layout === "1") return;
@@ -2858,36 +3074,42 @@
         : `/member/candles?symbol=compare&interval=${this.interval}&count=${count}`;
     },
 
+    /** SMT is on (it needs the related market's bars even with one chart). */
+    smtWanted() { return !!(showInd.smt && window.ICT && (this.owner || this.features.killzones !== false)); },
+
     async loadCmp() {
-      if (this.layout === "1" || !this.chart2) return;
-      clearInterval(this.cmpTimer);
+      const show2 = this.layout !== "1" && this.chart2;
+      clearInterval(this.cmpTimer); this.cmpTimer = null;
+      if (!show2 && !this.smtWanted()) { this.cmpBars = []; this.cmpView = null; this.computeSMT(); return; }
       const token = (this.cmpToken = (this.cmpToken || 0) + 1);
-      let name = this.cmpSymbol(), digits = 2;
+      let name = this.cmpSymbol(), digits = 2, live = false, quote = {}, bars = [];
       try {
         if (this.source !== "exness") throw new Error("binance");
         const data = await this.call(this.cmpPath(800));
-        this.cmpBars = this.toBars(data.candles || []);
-        if (this.cmpBars.length < 5) throw new Error("no bars");
+        bars = this.toBars(data.candles || []);
+        if (bars.length < 5) throw new Error("no bars");
+        // An older member server ignores "compare" and answers gold: that cannot give an SMT.
+        if (!this.owner && data.symbol && data.symbol === $("chartSymbol").textContent) throw new Error("old server");
         name = data.symbol || name; digits = data.digits != null ? data.digits : 2;
-        this.cmpQuote = { bid: data.bid, ask: data.ask };
-        this.cmpLive = true;
-        this.cmpTimer = setInterval(() => this.pollCmp(token), 2000);
+        quote = { bid: data.bid, ask: data.ask };
+        live = true;
       } catch {
         // Binance silver as the stand-in (member servers before 2.6, or no MT5).
         try {
           const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=XAGUSDT&interval=${this.interval}&limit=800`);
-          this.cmpBars = (await res.json()).map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }));
+          bars = (await res.json()).map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }));
           name = "XAGUSDT"; digits = 3;
-        } catch { this.cmpBars = []; }
-        this.cmpQuote = {}; this.cmpLive = false;
+        } catch { bars = []; }
       }
       if (token !== this.cmpToken) return;
+      this.cmpBars = bars; this.cmpQuote = quote; this.cmpLive = live; this.cmpView = null;
       this.cmpName = name; this.cmpDigits = digits;
+      if (live) this.cmpTimer = setInterval(() => this.pollCmp(token), 2000);
       $("chartSymbol2").textContent = name;
-      $("ticket2").hidden = !this.owner || !this.cmpLive;
-      $("swapBtn").hidden = !this.owner || !this.cmpLive;
+      $("ticket2").hidden = !this.owner || !live;
+      $("swapBtn").hidden = !this.owner || !live;
       if (this.drawings2 && this.drawKey2 !== name) { this.drawKey2 = name; this.drawings2.load(); }
-      this.series2.applyOptions({ priceFormat: { type: "price", precision: digits, minMove: Math.pow(10, -digits) } });
+      if (this.series2) this.series2.applyOptions({ priceFormat: { type: "price", precision: digits, minMove: Math.pow(10, -digits) } });
       this.showCmp(true);
     },
 
@@ -2905,30 +3127,42 @@
       } catch { /* keep */ }
     },
 
-    /** The second chart up to the replay moment when replaying. */
+    /** The related market up to the replay moment; drawn on the second chart when it is shown. */
     showCmp(full) {
-      if (!this.series2) return;
       const until = this.replay ? this.bars[this.replay.idx].time + TF_SECONDS[this.interval] - 1 : Infinity;
-      const view = this.cmpBars.filter((b) => b.time <= until);
+      const view = (this.cmpBars || []).filter((b) => b.time <= until);
       const changed = full || !this.cmpView || view.length !== this.cmpView.length || this.replay;
       this.cmpView = view;
-      if (changed) this.series2.setData(view.map(shown)); else if (view.length) this.series2.update(shown(view[view.length - 1]));
-      const last = view[view.length - 1];
-      const q = this.cmpQuote || {}, d2 = this.cmpDigits || 2;
-      $("chartPrice2").textContent = last ? fmt(q.bid != null && !this.replay ? q.bid : last.close, d2) : "";
-      $("bidText2").textContent = q.bid != null ? fmt(q.bid, d2) : "—";
-      $("askText2").textContent = q.ask != null ? fmt(q.ask, d2) : "—";
-      $("spread2").textContent = spreadText(q.bid, q.ask, d2);
-      this.syncLines2();
-      if (full) { try { const r = this.chart.timeScale().getVisibleRange(); if (r) this.chart2.timeScale().setVisibleRange(r); } catch { /* later */ } }
+      if (this.series2 && this.layout !== "1") {
+        if (changed) this.series2.setData(view.map(shown)); else if (view.length) this.series2.update(shown(view[view.length - 1]));
+        const last = view[view.length - 1];
+        const q = this.cmpQuote || {}, d2 = this.cmpDigits || 2;
+        $("chartPrice2").textContent = last ? fmt(q.bid != null && !this.replay ? q.bid : last.close, d2) : "";
+        $("bidText2").textContent = q.bid != null ? fmt(q.bid, d2) : "—";
+        $("askText2").textContent = q.ask != null ? fmt(q.ask, d2) : "—";
+        $("spread2").textContent = spreadText(q.bid, q.ask, d2);
+        this.syncLines2();
+        if (full) this.syncRange(this.chart, this.chart2);
+      }
       this.computeSMT();
     },
 
     computeSMT() {
-      const on = this.layout !== "1" && this.smtOn && this.cmpBars && this.cmpBars.length && window.ICT;
-      this.smt = on ? window.ICT.smt(this.viewBars(), this.cmpView || this.cmpBars, { swing: 3, lookback: 60, count: 10 }) : null;
+      const on = this.smtWanted() && this.cmpView && this.cmpView.length;
+      const c = this.ictCfg || {};
+      this.smt = on ? window.ICT.smt(this.viewBars(), this.cmpView, { swing: c.smtSwing, lookback: c.smtLookback, count: c.smtCount, inverse: c.smtInverse }) : null;
       if (this.requestICT) this.requestICT();
       if (this.request2) this.request2();
+    },
+
+    /** Shows the same time span on `to` as on `from`; the lock keeps the two from echoing each other. */
+    syncRange(from, to) {
+      if (!from || !to || this.layout === "1") return;
+      const r = from.timeScale().getVisibleRange();
+      if (!r) return;
+      this.rangeLock = this.rangeLock || new Map();
+      this.rangeLock.set(to, performance.now());
+      try { to.timeScale().setVisibleRange(r); } catch { /* not loaded yet */ }
     },
 
     /** The indicator and drawing layers paint inside the chart's own frame; this only asks for one. */
