@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.1"
+VERSION = "2.2"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2705,14 +2705,31 @@ def make_handler(server):
         def log_message(self, fmt_, *args):
             pass
 
+        def _cors(self):
+            """The members' web page (another site) may call /member/ and /ping only."""
+            path = self.path.partition("?")[0]
+            if path.startswith("/member/") or path == "/ping":
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+                self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+                self.send_header("Access-Control-Max-Age", "600")
+
         def _send(self, code, payload):
             data = json.dumps(payload, ensure_ascii=False).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
+            self._cors()
             self.end_headers()
             self.wfile.write(data)
+
+        def do_OPTIONS(self):
+            # Browser preflight for the members' web page.
+            self.send_response(204)
+            self._cors()
+            self.send_header("Content-Length", "0")
+            self.end_headers()
 
         def _authorized(self, path):
             """True for the owner; a member (their entry) only on /member/ paths."""

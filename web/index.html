@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Aurum Pro — Tín hiệu vàng theo ICT</title>
+  <meta name="description" content="Aurum Pro: biểu đồ vàng theo ICT, dòng tiền cá mập, tin tức đỏ, bot và tín hiệu XAUUSD theo thời gian thực, copy lệnh vào MT5.">
+  <meta name="theme-color" content="#0b0f17">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+  <header class="nav">
+    <a class="brand" href="#">
+      <img src="favicon.svg" alt="" width="30" height="30">
+      <span>Aurum Pro</span>
+    </a>
+    <nav class="nav-links">
+      <a href="#features">Tính năng</a>
+      <a href="#plans">Gói</a>
+      <a href="#faq">Hỏi đáp</a>
+    </nav>
+    <a class="btn btn-gold btn-small" href="#member">Đăng nhập thành viên</a>
+  </header>
+
+  <!-- ========== Landing ========== -->
+  <main id="landing">
+    <section class="hero">
+      <div class="hero-text">
+        <span class="pill">XAUUSD · ICT · MT5</span>
+        <h1>Giao dịch vàng<br><span class="gold">rõ ràng như dân chuyên</span></h1>
+        <p class="lead">Aurum Pro gom mọi thứ bạn cần để đánh vàng theo ICT vào một app: Killzones, FVG, đỉnh đáy ngày,
+          dòng tiền cá mập, tin tức đỏ báo tốt/xấu ngay khi ra — và tín hiệu thật theo thời gian thực, copy thẳng vào MT5.</p>
+        <div class="cta">
+          <a class="btn btn-gold" id="contactBtn" href="#plans">Nhận mã mời</a>
+          <a class="btn btn-ghost" href="#member">Tôi đã có mã</a>
+        </div>
+        <ul class="trust">
+          <li>Lệnh thật, lịch sử minh bạch</li>
+          <li>Không cần cài gì thêm để xem tín hiệu</li>
+        </ul>
+      </div>
+      <div class="hero-visual" aria-hidden="true">
+        <div class="phone">
+          <div class="phone-head">
+            <span class="sym">XAUUSD</span><span class="dot"></span>
+            <span class="px" id="heroPrice">—</span>
+          </div>
+          <svg id="heroChart" viewBox="0 0 320 300" preserveAspectRatio="none"></svg>
+          <div class="phone-flow"><span>🦈 Dòng tiền</span> <b>Tiền đang vào +12%</b><br>
+            <small>Giá tăng + tiền vào → xu hướng tăng khoẻ</small></div>
+          <div class="phone-bar"><span class="sell">SELL</span><span class="lot">0.10</span><span class="buy">BUY</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="features" class="section">
+      <h2>Tất cả trong một app</h2>
+      <p class="sub">Những công cụ mà trader vàng thường phải ghép từ nhiều nơi.</p>
+      <div class="grid">
+        <article class="card"><div class="ico">🕐</div><h3>ICT Killzones + Pivots</h3>
+          <p>Phiên Á, London, New York, giá mở cửa ngày, đỉnh đáy từng ngày — chạm là dừng và chuyển nét chấm.</p></article>
+        <article class="card"><div class="ico">▭</div><h3>FVG & Volume Imbalance</h3>
+          <p>Lọc FVG mạnh, tô nền khi trùng khung lớn, tự tắt khi giá xuyên qua.</p></article>
+        <article class="card"><div class="ico">🦈</div><h3>Dòng tiền cá mập</h3>
+          <p>Hai dòng chữ dễ hiểu: tiền đang vào hay ra, giá và tiền có đồng thuận không.</p></article>
+        <article class="card"><div class="ico">📰</div><h3>Tin đỏ báo tốt / xấu</h3>
+          <p>Tin USD vừa ra, app báo ngay là tốt hay xấu cho vàng theo phản ứng giá.</p></article>
+        <article class="card"><div class="ico">📣</div><h3>Tín hiệu theo thời gian thực</h3>
+          <p>Giá vào, SL, TP hiện ngay trên biểu đồ của bạn, kèm lịch sử thắng/thua.</p></article>
+        <article class="card"><div class="ico">📋</div><h3>Copy lệnh vào MT5</h3>
+          <p>Mỗi tín hiệu tự mở trên tài khoản của bạn với số lot bạn chọn, đóng cùng lúc.</p></article>
+        <article class="card"><div class="ico">⏮</div><h3>Replay & Backtest</h3>
+          <p>Tua lại thị trường từng nến, backtest chiến lược trên dữ liệu Exness.</p></article>
+        <article class="card"><div class="ico">⚡</div><h3>Đặt lệnh như MT5</h3>
+          <p>Kéo SL/TP trên biểu đồ, lệnh chờ trượt để đặt, đóng từng phần.</p></article>
+      </div>
+    </section>
+
+    <section class="section steps">
+      <h2>Bắt đầu trong 3 bước</h2>
+      <ol>
+        <li><b>Nhận mã mời</b><span>Liên hệ để được cấp mã theo gói bạn chọn.</span></li>
+        <li><b>Nhập mã</b><span>Trên app Aurum Pro hoặc ngay tại trang này — không cần tài khoản.</span></li>
+        <li><b>Theo tín hiệu</b><span>Xem lệnh trực tiếp, hoặc nối MT5 để copy tự động.</span></li>
+      </ol>
+    </section>
+
+    <section id="plans" class="section">
+      <h2>Gói thành viên</h2>
+      <p class="sub">Chọn gói phù hợp — nâng cấp hoặc dừng bất cứ lúc nào.</p>
+      <div class="plans" id="plans-list"></div>
+    </section>
+
+    <section id="faq" class="section faq">
+      <h2>Hỏi đáp</h2>
+      <details><summary>Tôi cần gì để xem tín hiệu?</summary>
+        <p>Chỉ cần mã mời. Mở app Aurum Pro hoặc bấm "Đăng nhập thành viên" trên trang này và nhập mã.</p></details>
+      <details><summary>Copy lệnh hoạt động thế nào?</summary>
+        <p>Bạn nhập tài khoản MT5 của mình (gói Tín hiệu + Copy). Mỗi tín hiệu mới được mở trên tài khoản đó theo hệ số lot bạn chọn, SL/TP và đóng lệnh theo người dẫn.</p></details>
+      <details><summary>Có an toàn không?</summary>
+        <p>Mã mời có thể bị khoá hoặc hết hạn bất cứ lúc nào bởi người cấp. Mật khẩu MT5 chỉ dùng để đặt lệnh copy. Nên chạy thử bằng tài khoản demo trước.</p></details>
+      <details><summary>Có đảm bảo lợi nhuận không?</summary>
+        <p>Không. Giao dịch vàng có rủi ro cao, có thể mất toàn bộ vốn. Kết quả trong quá khứ không đảm bảo kết quả tương lai.</p></details>
+    </section>
+
+    <footer class="footer">
+      <p><b>Cảnh báo rủi ro:</b> giao dịch CFD/vàng có đòn bẩy tiềm ẩn rủi ro mất vốn cao. Thông tin trên trang không phải lời khuyên đầu tư.</p>
+      <p class="muted">© <span id="year"></span> Aurum Pro</p>
+    </footer>
+  </main>
+
+  <!-- ========== Members' web app ========== -->
+  <main id="member" hidden>
+    <section class="login" id="loginView">
+      <div class="login-card">
+        <img src="favicon.svg" alt="" width="54" height="54">
+        <h1>Aurum Pro</h1>
+        <p class="muted">Nhập mã mời để xem tín hiệu</p>
+        <form id="loginForm" autocomplete="off">
+          <input id="codeInput" placeholder="ABCD-EFGH-JKLM" maxlength="40" spellcheck="false" autocapitalize="characters">
+          <button class="btn btn-gold" id="loginBtn" type="submit">Vào xem tín hiệu</button>
+        </form>
+        <p class="error" id="loginError" role="alert"></p>
+        <a class="muted small" href="#">← Về trang giới thiệu</a>
+      </div>
+    </section>
+
+    <section class="dash" id="dashView" hidden>
+      <div class="dash-head">
+        <div>
+          <div class="who" id="whoName">—</div>
+          <div class="muted small" id="whoRole">—</div>
+        </div>
+        <button class="btn btn-ghost btn-small" id="logoutBtn">Thoát</button>
+      </div>
+      <p class="warn" id="dashError" hidden></p>
+
+      <div class="panel chart-panel">
+        <div class="chart-top">
+          <div><b>XAUUSD</b> <span class="muted small">· giá Binance XAUUSDT</span>
+            <span class="live-price" id="livePrice">—</span></div>
+          <div class="tf" id="tfButtons"></div>
+        </div>
+        <div id="chart"></div>
+        <p class="muted small">Đường tím: tín hiệu đang mở (vào lệnh, SL, TP).</p>
+      </div>
+
+      <div class="panel">
+        <h3>Đang mở</h3>
+        <div id="openList" class="list"></div>
+      </div>
+      <div class="panel">
+        <h3 id="closedTitle">Đã đóng</h3>
+        <div id="closedList" class="list"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="site.config.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="assets/app.js"></script>
+</body>
+</html>
