@@ -159,16 +159,20 @@
             <div class="chart-tools">
               <div class="tf" id="tfButtons"></div>
               <button class="icon-btn" id="indBtn" type="button" title="Chỉ báo">ƒx</button>
-              <button class="icon-btn plain" id="drawBtn" type="button" title="Công cụ vẽ">✎</button>
+              <button class="icon-btn plain" id="drawBtn" type="button" title="Hiện/ẩn thanh công cụ vẽ">✎</button>
               <button class="icon-btn plain" id="replayBtn" type="button" title="Replay">⏮</button>
             </div>
           </div>
           <div class="flow" id="flowBox" hidden></div>
-          <div class="chart-wrap" id="chartWrap">
-            <div id="chart"></div>
-            <div class="draw-bar" id="drawBar" hidden></div>
-            <div class="pill-pos" id="posPill" hidden></div>
-            <div class="sel-bar" id="selBar" hidden></div>
+          <div class="chart-body">
+            <div class="tool-rail" id="toolRail"></div>
+            <div class="flyout" id="flyout" hidden></div>
+            <div class="chart-wrap" id="chartWrap">
+              <div id="chart"></div>
+              <div class="draw-bar" id="drawBar" hidden></div>
+              <div class="pill-pos" id="posPill" hidden></div>
+              <div class="sel-bar" id="selBar" hidden></div>
+            </div>
           </div>
           <div class="replay-bar" id="replayBar" hidden></div>
           <p class="muted small chart-note" id="chartNote"></p>
@@ -279,6 +283,7 @@
     </section>
 
     <div class="ctx" id="ctxMenu" hidden></div>
+    <div class="float-panel" id="floatPanel" hidden></div>
     <dialog id="sheet"><div id="sheetBody"></div></dialog>
     <div class="toast" id="toast" hidden></div>
   </main>

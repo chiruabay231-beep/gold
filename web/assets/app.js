@@ -221,6 +221,55 @@
   const TFS = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"];
   const TF_SECONDS = { "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
 
+  /* ---------------- drawing toolbar icons ---------------- */
+
+  const svg = (body) => `<svg viewBox="0 0 28 28" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+  const dot = (x, y) => `<circle cx="${x}" cy="${y}" r="1.8" fill="currentColor"/>`;
+  const TOOL_ICON = {
+    trendLine: svg(`<path d="M6 22 22 6"/>${dot(6, 22)}${dot(22, 6)}`),
+    trendRay: svg(`<path d="M6 22 25 3"/>${dot(6, 22)}${dot(14, 14)}`),
+    horizontalLine: svg(`<path d="M3 14h22"/>${dot(14, 14)}`),
+    horizontalRay: svg(`<path d="M8 14h17"/>${dot(8, 14)}`),
+    verticalLine: svg(`<path d="M14 3v22"/>${dot(14, 14)}`),
+    arrow: svg(`<path d="M6 22 21 7"/><path d="M13 7h8v8"/>`),
+    fibRetracement: svg(`<path d="M4 6h20M4 11h20M4 16h20M4 22h20"/>${dot(6, 22)}${dot(22, 6)}`),
+    fibExtension: svg(`<path d="M4 6h20M4 12h20M4 19h20"/><path d="m5 24 6-8 5 5"/>`),
+    elliottImpulse: svg(`<path d="m3 21 5-8 4 4 6-12 3 6 4-4"/>`),
+    elliottCorrection: svg(`<path d="m4 7 7 12 6-7 7 10"/>`),
+    headShoulders: svg(`<path d="m3 20 4-7 3 4 4-11 4 11 3-4 4 7"/>`),
+    trianglePattern: svg(`<path d="m4 20 8-14 5 10 7-8"/><path d="M4 20 24 8" stroke-dasharray="2 2"/>`),
+    path: svg(`<path d="M4 20c4-10 8 4 12-6s6-6 8-8"/>`),
+    longPosition: svg(`<rect x="5" y="5" width="18" height="9" fill="currentColor" fill-opacity=".25"/><rect x="5" y="14" width="18" height="8"/><path d="M5 14h18"/>`),
+    shortPosition: svg(`<rect x="5" y="6" width="18" height="8"/><rect x="5" y="14" width="18" height="9" fill="currentColor" fill-opacity=".25"/><path d="M5 14h18"/>`),
+    priceRange: svg(`<path d="M14 4v20M10 8l4-4 4 4M10 20l4 4 4-4M6 4h16M6 24h16"/>`),
+    fixedRangeVolume: svg(`<path d="M5 5v18M5 7h8M5 11h14M5 15h10M5 19h6"/>`),
+    anchoredVolume: svg(`<path d="M5 5v18M5 9h12M5 13h16M5 17h9"/>${dot(5, 23)}`),
+    brush: svg(`<path d="M5 22c3 0 4-2 4-4l9-11 3 3-11 9c-2 0-3 1-5 3Z"/>`),
+    rectangle: svg(`<rect x="5" y="8" width="18" height="12"/>${dot(5, 8)}${dot(23, 20)}`),
+    ellipse: svg(`<ellipse cx="14" cy="14" rx="10" ry="7"/>`),
+    arrowMarker: svg(`<path d="M5 14h14M14 8l6 6-6 6"/>`),
+    text: svg(`<path d="M7 7h14M14 7v15M11 22h6"/>`),
+  };
+  const RAIL_ICON = {
+    cursor: svg(`<path d="M14 4v20M4 14h20"/>`),
+    zoom: svg(`<circle cx="12" cy="12" r="7"/><path d="m17 17 6 6M12 9v6M9 12h6"/>`),
+    magnet: svg(`<path d="M7 5v9a7 7 0 0 0 14 0V5h-4v9a3 3 0 0 1-6 0V5Z"/><path d="M7 9h4M17 9h4"/>`),
+    keep: svg(`<path d="M6 21c2 0 3-1 3-3l8-9 2 2-8 8c-1 0-2 1-3 3Z"/><rect x="17" y="17" width="7" height="6" rx="1"/><path d="M18.5 17v-2a2 2 0 0 1 4 0v2"/>`),
+    lock: svg(`<rect x="7" y="13" width="14" height="10" rx="2"/><path d="M10 13V9a4 4 0 0 1 8 0v4"/>`),
+    unlock: svg(`<rect x="7" y="13" width="14" height="10" rx="2"/><path d="M10 13V9a4 4 0 0 1 8 0"/>`),
+    eye: svg(`<path d="M3 14s4-7 11-7 11 7 11 7-4 7-11 7S3 14 3 14Z"/><circle cx="14" cy="14" r="3"/>`),
+    eyeOff: svg(`<path d="M3 14s4-7 11-7 11 7 11 7-4 7-11 7S3 14 3 14Z"/><path d="m5 5 18 18"/>`),
+    trash: svg(`<path d="M6 8h16M11 8V5h6v3M8 8l1 15h10l1-15"/>`),
+  };
+  const RAIL_GROUPS = [
+    { id: "lines", title: "Công cụ đường", tools: ["trendLine", "trendRay", "horizontalLine", "horizontalRay", "verticalLine", "arrow"] },
+    { id: "fib", title: "Gann và Fibonacci", tools: ["fibRetracement", "fibExtension"] },
+    { id: "patterns", title: "Mô hình", tools: ["elliottImpulse", "elliottCorrection", "headShoulders", "trianglePattern", "path"] },
+    { id: "forecast", title: "Dự đoán và đo lường", tools: ["longPosition", "shortPosition", "priceRange", "fixedRangeVolume", "anchoredVolume"] },
+    { id: "shapes", title: "Hình học", tools: ["brush", "rectangle", "ellipse", "arrowMarker"] },
+    { id: "text", title: "Văn bản", tools: ["text"] },
+  ];
+
   /* ---------------- the terminal ---------------- */
 
   const Member = {
@@ -1185,7 +1234,7 @@
       $("pBuy").onclick = (e) => this.pendingOrder("long", e.currentTarget);
       $("pSell").onclick = (e) => this.pendingOrder("short", e.currentTarget);
       $("indBtn").onclick = () => this.indicatorSheet();
-      $("drawBtn").onclick = () => this.drawSheet();
+      $("drawBtn").onclick = () => this.toggleRail();
       $("replayBtn").onclick = () => this.startReplayPick();
       $("chartSymbol").onclick = () => this.symbolSheet();
       $("closeAllBtn").onclick = (e) => this.closeAll(e.currentTarget);
@@ -1600,7 +1649,10 @@
         if (this.replay && e.key === "ArrowRight") { this.replayStep(); e.preventDefault(); }
         if (this.replay && e.key === " ") { this.replayPlay(); e.preventDefault(); }
       });
-      document.addEventListener("pointerdown", (e) => { if (!e.target.closest("#ctxMenu")) this.closeMenu(); });
+      document.addEventListener("pointerdown", (e) => {
+        if (!e.target.closest("#ctxMenu")) this.closeMenu();
+        if (!e.target.closest("#flyout, #toolRail")) this.closeFlyout();
+      });
     },
 
     dragTitle(d) {
@@ -1753,6 +1805,7 @@
       const bar = $("drawBar"), d = this.drawings;
       this.updateTouchAction();
       if (!d) return;
+      this.renderToolRail();
       const D = window.AurumDrawings;
       if (d.tool) {
         bar.hidden = false;
@@ -1962,6 +2015,138 @@
       ["rStop", "rTarget"].forEach((id) => ($(id).oninput = () => { this.rDraft = { stop: $("rStop").value, target: $("rTarget").value }; }));
     },
 
+    /* ----- drawing toolbar on the left of the chart (TradingView-style) ----- */
+
+    renderToolRail() {
+      const rail = $("toolRail");
+      if (!rail || !this.drawings) return;
+      const d = this.drawings;
+      const shown = store.get("aurum.rail") !== "0" && !(store.get("aurum.rail") == null && $("chart").clientWidth < 500);
+      rail.hidden = !shown;
+      $("drawBtn").classList.toggle("on", shown);
+      const last = (g) => store.get("aurum.rail." + g.id) || g.tools[0];
+      const btn = (key, icon, title, on, extra = "") => `<button type="button" data-k="${key}" class="${on ? "on" : ""} ${extra}" title="${esc(title)}">${icon}</button>`;
+      rail.innerHTML = btn("cursor", RAIL_ICON.cursor, "Con trỏ", !d.tool)
+        + RAIL_GROUPS.map((g) => {
+          const t = g.tools.includes(d.tool) ? d.tool : last(g);
+          return btn("g:" + g.id, TOOL_ICON[t] || RAIL_ICON[g.id], g.title + " · " + window.AurumDrawings.tools[t].name, g.tools.includes(d.tool), "grp");
+        }).join("")
+        + '<i class="sep"></i>'
+        + btn("measure", TOOL_ICON.priceRange, "Đo giá", d.tool === "priceRange")
+        + btn("zoom", RAIL_ICON.zoom, "Phóng to (chuột phải → Đặt lại biểu đồ để thu nhỏ)", false)
+        + '<i class="sep"></i>'
+        + btn("magnet", RAIL_ICON.magnet, "Nam châm: bắt vào giá mở/cao/thấp/đóng", this.magnet)
+        + btn("keep", RAIL_ICON.keep, "Giữ chế độ vẽ (vẽ liên tục)", d.keepTool)
+        + btn("lock", d.lockAll ? RAIL_ICON.lock : RAIL_ICON.unlock, "Khoá tất cả bản vẽ", d.lockAll)
+        + btn("hide", d.hidden ? RAIL_ICON.eyeOff : RAIL_ICON.eye, "Ẩn tất cả bản vẽ", d.hidden)
+        + '<i class="sep"></i>'
+        + btn("trash", RAIL_ICON.trash, "Xoá tất cả bản vẽ", false);
+      rail.querySelectorAll("button").forEach((b) => (b.onclick = (e) => {
+        e.stopPropagation();
+        const k = b.dataset.k;
+        if (k.startsWith("g:")) {
+          const g = RAIL_GROUPS.find((x) => x.id === k.slice(2));
+          const open = !$("flyout").hidden && $("flyout").dataset.g === g.id;
+          if (!g.tools.includes(d.tool)) d.setTool(last(g));
+          if (open) this.closeFlyout(); else this.openFlyout(g, b);
+          return;
+        }
+        this.closeFlyout();
+        if (k === "cursor") d.cancel();
+        if (k === "measure") d.setTool(d.tool === "priceRange" ? null : "priceRange");
+        if (k === "zoom") { const ts = this.chart.timeScale(); ts.applyOptions({ barSpacing: Math.min(50, (ts.options().barSpacing || 6) * 1.5) }); }
+        if (k === "magnet") { this.magnet = !this.magnet; store.set("aurum.magnet", this.magnet ? "1" : "0"); }
+        if (k === "keep") { d.keepTool = !d.keepTool; store.set("aurum.keepTool", d.keepTool ? "1" : "0"); }
+        if (k === "lock") { d.lockAll = !d.lockAll; store.set("aurum.lockAll", d.lockAll ? "1" : "0"); }
+        if (k === "hide") { d.hidden = !d.hidden; d.selected = null; d.update(); }
+        if (k === "trash" && d.list.length && confirm(`Xoá tất cả ${d.list.length} bản vẽ trên mã này?`)) d.clear();
+        this.renderToolRail();
+        this.renderDrawBar();
+      }));
+    },
+
+    openFlyout(g, button) {
+      const fly = $("flyout"), d = this.drawings, D = window.AurumDrawings;
+      fly.dataset.g = g.id;
+      fly.innerHTML = `<div class="fly-title">${esc(g.title)}</div>` + g.tools.map((t) => `<button type="button" data-t="${t}" class="${d.tool === t ? "on" : ""}">${TOOL_ICON[t] || ""}<span>${esc(D.tools[t].name)}</span></button>`).join("");
+      fly.hidden = false;
+      // The rail may have been redrawn by the tool change: measure its current button.
+      const now = $("toolRail").querySelector(`[data-k="g:${g.id}"]`) || button;
+      const body = $("toolRail").parentElement.getBoundingClientRect(), r = now.getBoundingClientRect();
+      fly.style.top = Math.max(0, Math.min(r.top - body.top, body.height - fly.offsetHeight)) + "px";
+      fly.querySelectorAll("button").forEach((b) => (b.onclick = (e) => {
+        e.stopPropagation();
+        store.set("aurum.rail." + g.id, b.dataset.t);
+        d.setTool(b.dataset.t);
+        this.closeFlyout();
+      }));
+    },
+
+    closeFlyout() { const f = $("flyout"); if (f && !f.hidden) f.hidden = true; },
+
+    toggleRail() {
+      const shown = !$("toolRail").hidden;
+      store.set("aurum.rail", shown ? "0" : "1");
+      this.renderToolRail();
+    },
+
+    /* ----- floating settings panel (the chart stays visible, like TradingView) ----- */
+
+    openPanel(title, tabs, render) {
+      const panel = $("floatPanel");
+      let tab = this.panelTab && tabs.some(([k]) => k === this.panelTab) ? this.panelTab : tabs[0][0];
+      const draw = () => {
+        panel.innerHTML = `<div class="fp-head"><b>${esc(title)}</b><button type="button" class="fp-x" data-close>✕</button></div>
+          <div class="fp-tabs">${tabs.map(([k, n]) => `<button type="button" data-tab="${k}" class="${k === tab ? "on" : ""}">${n}</button>`).join("")}</div>
+          <div class="fp-body">${render(tab)}</div>
+          <div class="fp-foot"><button type="button" class="btn btn-ghost btn-small" data-reset>Mặc định</button><button type="button" class="btn btn-gold btn-small" data-close>Ok</button></div>`;
+        panel.querySelectorAll("[data-close]").forEach((b) => (b.onclick = () => { panel.hidden = true; }));
+        panel.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { tab = this.panelTab = b.dataset.tab; const y = 0; draw(); panel.querySelector(".fp-body").scrollTop = y; }));
+        panel.querySelector("[data-reset]").onclick = () => this.panelReset && this.panelReset(draw);
+        this.bindPanel(panel);
+        // Drag the panel by its title bar.
+        const head = panel.querySelector(".fp-head");
+        head.onpointerdown = (e) => {
+          if (e.target.closest("button")) return;
+          const r = panel.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
+          const move = (ev) => {
+            panel.style.left = Math.max(0, Math.min(window.innerWidth - r.width, ev.clientX - dx)) + "px";
+            panel.style.top = Math.max(0, Math.min(window.innerHeight - 60, ev.clientY - dy)) + "px";
+            panel.style.right = "auto"; panel.style.bottom = "auto";
+          };
+          const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+          window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+        };
+      };
+      draw();
+      panel.hidden = false;
+    },
+
+    bindPanel(panel) {
+      const c = this.ictCfg;
+      panel.querySelectorAll("[data-p]").forEach((input) => {
+        const apply = () => {
+          const path = input.dataset.p.split("."), last = path.pop();
+          const obj = path.reduce((o, k) => o[k], c);
+          const t = input.dataset.t;
+          let v;
+          if (t === "bool") v = input.checked;
+          else if (t === "boolsel") v = input.value === "true";
+          else if (t === "num") { v = num(input.value); if (v == null) return; }
+          else if (t === "time") {
+            const m = /^(\d{1,2}):?(\d{2})$/.exec(input.value.trim());
+            if (!m || +m[1] > 24 || +m[2] > 59) return;
+            v = +m[1] + +m[2] / 60;
+            // A session ending at 00:00 ends at midnight.
+            if (v === 0 && last === "end") v = 24;
+          } else v = input.value;
+          obj[last] = v;
+          this.saveIct();
+        };
+        input.addEventListener(input.type === "checkbox" || input.tagName === "SELECT" || input.type === "color" ? "change" : "input", apply);
+      });
+    },
+
     /* ----- indicator settings (like the app's ICT Killzones + Pivots sheet) ----- */
 
     saveIct() {
@@ -1972,77 +2157,66 @@
 
     ictSettingsSheet() {
       if (!this.owner && this.features.killzones === false) return toast("Chỉ báo chưa được mở cho bạn", true);
-      const c = this.ictCfg;
+      sheet.close();
+      const c = () => this.ictCfg;
       const hm = (h) => { const m = Math.round(h * 60) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; };
       const tfOpts = [[1, "1m"], [5, "5m"], [15, "15m"], [30, "30m"], [60, "1h"], [240, "4h"], [1440, "1D"]];
-      const styles = [["solid", "Liền ——"], ["dashed", "Gạch – –"], ["dotted", "Chấm ···"]];
-      const get = (path) => path.split(".").reduce((o, k) => o[k], c);
-      const tog = (path, label) => `<label class="toggle"><span>${label}</span><span class="switch"><input type="checkbox" data-p="${path}" data-t="bool" ${get(path) ? "checked" : ""}><span></span></span></label>`;
-      const numf = (path, label, step = 1) => `<label class="frow"><span>${label}</span><input data-p="${path}" data-t="num" inputmode="decimal" step="${step}" value="${get(path)}"></label>`;
-      const sel = (path, label, opts) => `<label class="frow"><span>${label}</span><select data-p="${path}" data-t="${typeof opts[0][0] === "number" ? "num" : typeof opts[0][0] === "boolean" ? "boolsel" : "str"}">${opts.map(([v, n]) => `<option value="${v}" ${String(v) === String(get(path)) ? "selected" : ""}>${n}</option>`).join("")}</select></label>`;
-      const color = (path, label) => `<label class="frow"><span>${label}</span><input type="color" data-p="${path}" data-t="str" value="${get(path)}"></label>`;
-      const time = (path) => `<input class="w-time" data-p="${path}" data-t="time" value="${hm(get(path))}" placeholder="HH:MM" maxlength="5" inputmode="numeric">`;
-      const text = (path, w = "") => `<input data-p="${path}" data-t="str" value="${esc(get(path))}" class="${w}">`;
-      const onOff = (path) => `<span class="switch"><input type="checkbox" data-p="${path}" data-t="bool" ${get(path) ? "checked" : ""}><span></span></span>`;
-      const sec = (title, body, note) => `<details class="set"><summary>${title}</summary>${body}${note ? `<p class="muted small">${note}</p>` : ""}</details>`;
-      sheet.open(`<h3>ICT Killzones + Pivots</h3>
-        ${sec("Chung", sel("timeZone", "Múi giờ", [["America/New_York", "New York (mặc định ICT)"], ["UTC", "UTC"], ["Asia/Ho_Chi_Minh", "(UTC+7) Hà Nội"], ["Europe/London", "London"]])
-          + sel("tfLimit", "Chỉ vẽ trên khung ≤", tfOpts.slice(0, 6)) + numf("maxDays", "Số ngày hiển thị") + sel("lineScale", "Độ dày các đường", [[0.75, "Mảnh"], [1, "Vừa"], [1.5, "Dày"], [2, "Rất dày"]]),
-          "Giờ các phiên theo múi giờ ở trên (ICT dùng giờ New York).")}
-        ${sec("Killzones", c.sessions.map((s, i) => `<div class="srow">${onOff(`sessions.${i}.on`)}${text(`sessions.${i}.name`, "w-name")}${time(`sessions.${i}.start`)}–${time(`sessions.${i}.end`)}
-            ${text(`sessions.${i}.hi`, "w-lbl")}${text(`sessions.${i}.lo`, "w-lbl")}<input type="color" data-p="sessions.${i}.color" data-t="str" value="${s.color}"></div>`).join(""))}
-        ${sec("Hộp phiên", tog("showBoxes", "Hiện hộp") + tog("boxLabels", "Tên phiên trên hộp") + tog("boxBorder", "Viền hộp") + numf("boxOpacity", "Độ đậm nền (%)"))}
-        ${sec("Pivot (đỉnh/đáy phiên)", tog("showPivots", "Hiện pivot") + tog("pivotLabels", "Nhãn pivot (AS.H, LO.L…)") + tog("livePivots", "Hiện đỉnh/đáy khi phiên đang chạy")
-          + sel("pivotUntilMitigated", "Kéo dài", [[true, "Tới khi giá phá"], [false, "Qua cả khi bị phá"]]) + tog("keepMitigated", "Giữ pivot đã bị phá")
-          + sel("pivotStyle", "Nét pivot", styles) + sel("mitigatedStyle", "Nét pivot đã bị phá", styles) + numf("pivotWidth", "Độ dày pivot", 0.5) + tog("midpoints", "Đường giữa phiên (50%)"),
-          "Đỉnh và đáy mỗi phiên được kéo sang phải sau khi phiên đóng, tới khi giá chạm qua (bị phá).")}
-        ${sec("Giá mở cửa", c.opens.map((o, i) => `<div class="srow">${onOff(`opens.${i}.on`)}${time(`opens.${i}.hour`)}${text(`opens.${i}.label`, "w-lbl")}<input type="color" data-p="opens.${i}.color" data-t="str" value="${o.color}"></div>`).join("") + sel("openStyle", "Nét", styles))}
-        ${sec("Mốc thời gian (đường dọc)", c.stamps.map((m, i) => `<div class="srow">${onOff(`stamps.${i}.on`)}${time(`stamps.${i}.hour`)}</div>`).join("") + color("stampColor", "Màu") + sel("stampStyle", "Nét", styles))}
-        ${sec("Giờ cắt", tog("cutoff", "Dừng các đường lúc") + `<label class="frow"><span>Giờ cắt</span>${time("cutoffHour")}</label>`, "Pivot và giá mở cửa ngừng kéo dài tại giờ này mỗi ngày, cho biểu đồ gọn.")}
-        ${sec("Đỉnh / đáy ngày", tog("daily", "Đỉnh / đáy từng ngày") + numf("dailyDays", "Số ngày gần nhất") + tog("dailyKeepTouched", "Giá chạm: dừng lại, nét chấm ……")
-          + color("dayHighColor", "Màu đỉnh ngày") + color("dayLowColor", "Màu đáy ngày") + sel("dailyStyle", "Nét", styles),
-          "Đỉnh và đáy của mỗi ngày đã đóng (Đỉnh T3, Đáy T5…), kéo sang phải tới khi có nến chạm: đường dừng ở cây nến đó và chuyển nét chấm (tắt “Giá chạm” thì đường bị chạm biến mất).")}
-        ${sec("Ngày / Tuần / Tháng trước", tog("prevDay", "PDH / PDL (ngày trước)") + tog("prevWeek", "PWH / PWL (tuần trước)") + tog("prevMonth", "PMH / PML (tháng trước)") + color("periodColor", "Màu"))}
-        ${sec("FVG & VI", tog("fvg", "Hiện FVG") + sel("fvgFrom", "Từ khung", tfOpts) + sel("fvgTo", "Đến khung", tfOpts) + tog("fvgStrong", "Chỉ vẽ FVG mạnh (lọc FVG yếu)")
-          + numf("fvgDisplacement", "Nến tạo FVG ≥ × thân nến TB", 0.1) + tog("fvgConfluence", "Tô nền khi trùng FVG khung lớn hơn") + tog("fvgMid", "Đường giữa 50%")
-          + tog("fvgHideFilled", "Ẩn FVG đã bị chạm") + numf("gapKeep", "Chạm rồi bật ngược: giữ (phút)") + numf("fvgMinSize", "Lọc FVG nhỏ (× biên độ nến)", 0.1) + numf("fvgCount", "Giữ FVG gần nhất")
-          + color("fvgBull", "Màu FVG tăng") + color("fvgBear", "Màu FVG giảm") + color("fvgZone", "Nền FVG trùng khung") + color("fvgZoneMid", "Đường giữa FVG trùng khung")
-          + tog("vi", "Hiện VI (Volume Imbalance)") + numf("viCount", "Giữ VI gần nhất") + tog("viHideTouched", "Ẩn VI đã bị chạm") + color("viColor", "Màu VI"))}
-        ${sec("Cấu trúc (MSS / BOS)", tog("mss", "Hiện MSS (đổi cấu trúc)") + tog("bos", "Hiện BOS (phá cấu trúc cùng xu hướng)") + numf("swing", "Swing: số nến mỗi bên") + numf("structureCount", "Giữ số lần phá gần nhất")
-          + color("mssBull", "Màu tăng") + color("mssBear", "Màu giảm"))}
-        ${sec("Quét thanh khoản", tog("sweeps", "Hiện quét thanh khoản") + numf("sweepCount", "Giữ số lần quét gần nhất") + color("sweepColor", "Màu"),
-          "Râu nến đâm qua đỉnh/đáy phiên hoặc PDH/PDL rồi đóng cửa quay lại.")}
-        ${sec("Macros", tog("macros", "Hiện macros") + sel("macroTfLimit", "Chỉ vẽ trên khung ≤", tfOpts.slice(0, 4)) + sel("macroTimeLabels", "Nhãn hộp", [[true, "Giờ"], [false, "Tên"]]) + color("macroColor", "Màu")
-          + c.macroList.map((m, i) => `<div class="srow">${onOff(`macroList.${i}.on`)}${text(`macroList.${i}.name`, "w-name")}${time(`macroList.${i}.start`)}–${time(`macroList.${i}.end`)}</div>`).join(""))}
-        ${sec("Khác", tog("dayOfWeek", "Nhãn thứ trong tuần") + tog("rangeTable", "Bảng biên độ phiên") + numf("rangeAvg", "Trung bình số phiên"))}
-        <button class="btn btn-ghost wide danger" id="ictReset">Đặt lại mặc định</button>`, (el) => {
-        el.querySelectorAll("[data-p]").forEach((input) => {
-          const apply = () => {
-            const path = input.dataset.p.split("."), last = path.pop();
-            const obj = path.reduce((o, k) => o[k], c);
-            const t = input.dataset.t;
-            let v;
-            if (t === "bool") v = input.checked;
-            else if (t === "boolsel") v = input.value === "true";
-            else if (t === "num") { v = num(input.value); if (v == null) return; }
-            else if (t === "time") {
-              const m = /^(\d{1,2}):?(\d{2})$/.exec(input.value.trim());
-              if (!m || +m[1] > 24 || +m[2] > 59) return;
-              v = +m[1] + +m[2] / 60;
-              // A session ending at 00:00 ends at midnight.
-              if (v === 0 && last === "end") v = 24;
-            }
-            else v = input.value;
-            obj[last] = v;
-            this.saveIct();
-          };
-          input.addEventListener(input.type === "checkbox" || input.tagName === "SELECT" || input.type === "color" ? "change" : "input", apply);
-        });
-        el.querySelector("#ictReset").onclick = () => {
-          if (!confirm("Đặt lại mọi cài đặt chỉ báo về mặc định?")) return;
-          this.ictCfg = window.ICT.defaults(); this.saveIct(); sheet.close(); this.ictSettingsSheet();
-        };
-      });
+      const styles = [["solid", "———"], ["dashed", "– – –"], ["dotted", "·····"]];
+      const get = (path) => path.split(".").reduce((o, k) => o[k], c());
+      const chk = (path) => `<input type="checkbox" data-p="${path}" data-t="bool" ${get(path) ? "checked" : ""}>`;
+      const tog = (path, label) => `<label class="fr">${chk(path)}<span>${label}</span></label>`;
+      const numf = (path, label, step = 1) => `<label class="fr"><span class="grow">${label}</span><input class="n" data-p="${path}" data-t="num" inputmode="decimal" step="${step}" value="${get(path)}"></label>`;
+      const selI = (path, opts) => `<select data-p="${path}" data-t="${typeof opts[0][0] === "number" ? "num" : typeof opts[0][0] === "boolean" ? "boolsel" : "str"}">${opts.map(([v, n]) => `<option value="${v}" ${String(v) === String(get(path)) ? "selected" : ""}>${n}</option>`).join("")}</select>`;
+      const sel = (path, label, opts) => `<label class="fr"><span class="grow">${label}</span>${selI(path, opts)}</label>`;
+      const sw = (path) => `<input type="color" class="sw" data-p="${path}" data-t="str" value="${get(path)}">`;
+      const color = (path, label) => `<label class="fr"><span class="grow">${label}</span>${sw(path)}</label>`;
+      const time = (path) => `<input class="t" data-p="${path}" data-t="time" value="${hm(get(path))}" placeholder="HH:MM" maxlength="5" inputmode="numeric">`;
+      const text = (path, cls = "nm") => `<input class="${cls}" data-p="${path}" data-t="str" value="${esc(get(path))}">`;
+      const head = (t) => `<div class="fp-sec">${t}</div>`;
+      const note = (t) => `<p class="fp-note">${t}</p>`;
+      const render = (tab) => {
+        const cfg = c();
+        if (tab === "inputs") {
+          return head("Killzones") + tog("showBoxes", "Hiện hộp phiên")
+            + cfg.sessions.map((s, i) => `<div class="fr">${chk(`sessions.${i}.on`)}${sw(`sessions.${i}.color`)}${text(`sessions.${i}.name`)}${time(`sessions.${i}.start`)}<span class="to">—</span>${time(`sessions.${i}.end`)}</div>`).join("")
+            + head("Pivots") + tog("showPivots", "Hiện điểm pivot (đỉnh/đáy phiên)") + tog("pivotLabels", "Nhãn pivot") + tog("livePivots", "Hiện khi phiên đang chạy")
+            + sel("pivotUntilMitigated", "Kéo dài", [[true, "Tới khi giá phá"], [false, "Qua cả khi bị phá"]]) + tog("keepMitigated", "Giữ pivot đã bị phá") + tog("midpoints", "Đường giữa phiên (50%)")
+            + cfg.sessions.map((s, i) => `<div class="fr"><span class="grow muted">${esc(s.name)}</span>${text(`sessions.${i}.hi`, "lb")}${text(`sessions.${i}.lo`, "lb")}</div>`).join("")
+            + head("Giá mở cửa") + cfg.opens.map((o, i) => `<div class="fr">${chk(`opens.${i}.on`)}${sw(`opens.${i}.color`)}${text(`opens.${i}.label`, "lb")}${time(`opens.${i}.hour`)}</div>`).join("")
+            + head("Mốc thời gian (đường dọc)") + cfg.stamps.map((m, i) => `<div class="fr">${chk(`stamps.${i}.on`)}${time(`stamps.${i}.hour`)}</div>`).join("")
+            + head("Giờ cắt") + `<div class="fr">${chk("cutoff")}<span class="grow">Dừng các đường lúc</span>${time("cutoffHour")}</div>`
+            + head("Đỉnh / đáy ngày") + tog("daily", "Đỉnh / đáy từng ngày") + numf("dailyDays", "Số ngày gần nhất") + tog("dailyKeepTouched", "Giá chạm: dừng lại, nét chấm ……")
+            + tog("prevDay", "PDH / PDL (ngày trước)") + tog("prevWeek", "PWH / PWL (tuần trước)") + tog("prevMonth", "PMH / PML (tháng trước)")
+            + head("FVG & VI") + tog("fvg", "Hiện FVG") + tog("fvgStrong", "Chỉ FVG mạnh (lọc FVG yếu)") + numf("fvgDisplacement", "Nến tạo FVG ≥ × thân TB", 0.1)
+            + tog("fvgConfluence", "Tô nền khi trùng FVG khung lớn") + tog("fvgMid", "Đường giữa 50%") + tog("fvgHideFilled", "Ẩn FVG đã bị chạm")
+            + numf("gapKeep", "Chạm rồi bật ngược: giữ (phút)") + numf("fvgMinSize", "Lọc FVG nhỏ (× biên độ nến)", 0.1) + numf("fvgCount", "Giữ FVG gần nhất")
+            + tog("vi", "Hiện VI (Volume Imbalance)") + numf("viCount", "Giữ VI gần nhất") + tog("viHideTouched", "Ẩn VI đã bị chạm")
+            + head("Cấu trúc") + tog("mss", "MSS (đổi cấu trúc)") + tog("bos", "BOS (phá cấu trúc cùng xu hướng)") + numf("swing", "Swing: số nến mỗi bên") + numf("structureCount", "Giữ số lần phá gần nhất")
+            + head("Thanh khoản") + tog("sweeps", "Quét thanh khoản") + numf("sweepCount", "Giữ số lần quét gần nhất")
+            + head("Macros") + tog("macros", "Hiện macros")
+            + cfg.macroList.map((m, i) => `<div class="fr">${chk(`macroList.${i}.on`)}${text(`macroList.${i}.name`)}${time(`macroList.${i}.start`)}<span class="to">—</span>${time(`macroList.${i}.end`)}</div>`).join("");
+        }
+        if (tab === "style") {
+          return head("Hộp phiên") + tog("boxLabels", "Tên phiên trên hộp") + tog("boxBorder", "Viền hộp") + numf("boxOpacity", "Độ đậm nền (%)")
+            + head("Đường") + sel("lineScale", "Độ dày chung", [[0.75, "Mảnh"], [1, "Vừa"], [1.5, "Dày"], [2, "Rất dày"]]) + numf("pivotWidth", "Độ dày pivot", 0.5)
+            + sel("pivotStyle", "Nét pivot", styles) + sel("mitigatedStyle", "Nét pivot đã bị phá", styles) + sel("openStyle", "Nét giá mở cửa", styles)
+            + color("stampColor", "Màu mốc thời gian") + sel("stampStyle", "Nét mốc thời gian", styles)
+            + head("Đỉnh / đáy ngày") + color("dayHighColor", "Màu đỉnh ngày") + color("dayLowColor", "Màu đáy ngày") + sel("dailyStyle", "Nét", styles) + color("periodColor", "Màu PDH/PWH/PMH")
+            + head("FVG & VI") + color("fvgBull", "FVG tăng") + color("fvgBear", "FVG giảm") + color("fvgZone", "Nền FVG trùng khung") + color("fvgZoneMid", "Đường giữa FVG trùng khung") + color("viColor", "VI")
+            + head("Khác") + color("mssBull", "MSS tăng") + color("mssBear", "MSS giảm") + color("sweepColor", "Quét thanh khoản") + color("macroColor", "Macros");
+        }
+        return head("Chung") + sel("timeZone", "Múi giờ", [["America/New_York", "New York (ICT)"], ["UTC", "UTC"], ["Asia/Ho_Chi_Minh", "Hà Nội (UTC+7)"], ["Europe/London", "London"]])
+          + sel("tfLimit", "Killzones trên khung ≤", tfOpts.slice(0, 6)) + numf("maxDays", "Số ngày hiển thị")
+          + note("Giờ các phiên theo múi giờ ở trên (ICT dùng giờ New York).")
+          + head("FVG") + `<div class="fr"><span class="grow">Từ khung</span>${selI("fvgFrom", tfOpts)}<span class="to">→</span>${selI("fvgTo", tfOpts)}</div>`
+          + head("Macros") + sel("macroTfLimit", "Trên khung ≤", tfOpts.slice(0, 4)) + sel("macroTimeLabels", "Nhãn hộp", [[true, "Giờ"], [false, "Tên"]])
+          + head("Khác") + tog("dayOfWeek", "Nhãn thứ trong tuần") + tog("rangeTable", "Bảng biên độ phiên") + numf("rangeAvg", "Trung bình số phiên");
+      };
+      this.panelReset = (draw) => {
+        if (!confirm("Đặt lại mọi cài đặt chỉ báo về mặc định?")) return;
+        this.ictCfg = window.ICT.defaults(); this.saveIct(); draw();
+      };
+      this.openPanel("ICT Killzones + Pivots", [["inputs", "Các đầu vào"], ["style", "Định dạng"], ["view", "Hiển thị"]], render);
     },
 
     /* ----- ICT layer ----- */

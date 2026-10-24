@@ -56,6 +56,10 @@
       this.selected = null;
       this.gesture = null;
       this.hover = null;
+      // Toolbar switches: keep the tool after a drawing, lock all, hide all.
+      this.keepTool = host.store.get("aurum.keepTool") === "1";
+      this.lockAll = host.store.get("aurum.lockAll") === "1";
+      this.hidden = false;
       this.styles = {};
       try { this.styles = JSON.parse(host.store.get("aurum.drawStyles") || "{}"); } catch { /* none */ }
       const self = this;
@@ -162,7 +166,7 @@
     finish() {
       const d = this.pending;
       this.pending = null;
-      this.tool = null;
+      this.tool = d && this.keepTool ? d.tool : null;
       if (!d) return;
       if (d.tool === "text" && !d.text) {
         const text = prompt("Nội dung:", "");
@@ -170,7 +174,8 @@
         d.text = text;
       }
       this.list.push(d);
-      this.selected = d.id;
+      this.selected = this.tool ? null : d.id;
+      this.hidden = false;
       this.save();
       this.update();
     }
@@ -208,7 +213,7 @@
         return false;
       }
       this.selected = hit.d.id;
-      if (!hit.d.locked) {
+      if (!hit.d.locked && !this.lockAll) {
         this.gesture = { kind: hit.handle != null ? "handle" : "move", d: hit.d, handle: hit.handle, x, y,
           start: hit.d.pts.map((p) => Object.assign({}, p)), anchor: this.point(x, y, false), moved: false };
       }
@@ -288,6 +293,7 @@
     /* ----- hit testing ----- */
 
     hitTest(x, y, tol) {
+      if (this.hidden) return null;
       for (let k = this.list.length - 1; k >= 0; k--) {
         const d = this.list[k];
         const pts = d.pts.map((p) => [this.x(p.t), this.y(p.p)]);
@@ -340,7 +346,9 @@
     /* ----- painting ----- */
 
     paint(g, w, h) {
-      const all = this.pending ? this.list.concat([this.pending]) : this.list;
+      if (this.hidden && !this.pending) return;
+      const shown = this.hidden ? [] : this.list;
+      const all = this.pending ? shown.concat([this.pending]) : shown;
       if (!all.length) return;
       g.save();
       all.forEach((d) => {
