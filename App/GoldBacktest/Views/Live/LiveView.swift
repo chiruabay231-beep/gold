@@ -42,6 +42,13 @@ struct LiveView: View {
     @AppStorage("position.contractSize") private var contractSize = 100.0
     @State private var showAppSettings = false
     @State private var confirmCloseAll = false
+    /// A timeframe change during replay, waiting for the new bars.
+    @State private var replayResume: ReplayResume?
+
+    struct ReplayResume: Equatable {
+        var time: Date?
+        var interval: BinanceClient.Interval
+    }
     @State private var showAutoStopSettings = false
     @State private var replay = ReplaySession()
     @State private var replaySummary: String?
@@ -158,6 +165,9 @@ struct LiveView: View {
             }
         }
         .task(id: nextNewsTime) { await noteNewsPrice() }
+        .task(id: replayResume) {
+            if let resume = replayResume { await resumeReplay(resume) }
+        }
         .task(id: market.source == .mt5) {
             // Orders on an MT5 chart go to the broker account: keep its positions fresh.
             guard market.source == .mt5 else { return }
@@ -940,11 +950,39 @@ struct LiveView: View {
             + (account.positions.isEmpty ? "" : "\n\(account.positions.count) lệnh còn mở bị bỏ qua.")
     }
 
-    /// Changes timeframe; replay is left first since its bars belong to the old one.
+    /// Changes timeframe. In replay the replay stays at the same moment: the new
+    /// timeframe's bars are loaded (older ones too if needed) and it goes on from there.
     private func selectInterval(_ interval: BinanceClient.Interval) {
-        if replay.isActive { endReplay() }
+        guard interval != market.interval else { return }
+        if replay.isActive {
+            replay.pause()
+            replayResume = ReplayResume(time: replay.isPicking ? nil : replay.currentTime(barSeconds: market.interval.seconds),
+                                        interval: interval)
+        }
         viewport = ChartViewport()
         market.select(interval: interval)
+    }
+
+    /// Waits for the new timeframe's bars, loads older ones until the replay moment is
+    /// covered, then moves the replay onto them.
+    private func resumeReplay(_ resume: ReplayResume) async {
+        for _ in 0..<100 {
+            if market.interval == resume.interval, market.status == .live, market.candles.count > 20 { break }
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            if Task.isCancelled { return }
+        }
+        guard market.interval == resume.interval, replay.isActive else { return }
+        if let time = resume.time {
+            // Enough bars before the moment to read the chart (50 bars), loading older ones if needed.
+            for _ in 0..<10 {
+                guard let first = market.candles.first,
+                      first.time > time.addingTimeInterval(-50 * resume.interval.seconds) else { break }
+                if await market.loadOlder().isEmpty { break }
+            }
+        }
+        replay.switchTimeframe(candles: market.candles, until: resume.time, barSeconds: resume.interval.seconds)
+        viewport = ChartViewport()
+        replayResume = nil
     }
     private var currentDecimals: Int { priceDecimals ?? CandleChart.decimals(for: currentPrice) }
 

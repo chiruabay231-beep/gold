@@ -96,6 +96,26 @@ final class ReplaySession {
         playTask = nil
     }
 
+    /// The replay's "now": the end of the last bar shown.
+    func currentTime(barSeconds: TimeInterval) -> Date? {
+        currentBar.map { $0.time.addingTimeInterval(barSeconds) }
+    }
+
+    /// Another timeframe's bars: the replay goes on from the same moment (the last bar
+    /// closed by `time`), or, while choosing the start bar, shows them all to pick from.
+    func switchTimeframe(candles: [Candle], until time: Date?, barSeconds: TimeInterval) {
+        guard isActive, candles.count > 20 else { return }
+        pause()
+        history = candles
+        if let time, !isPicking {
+            let last = candles.lastIndex { $0.time.addingTimeInterval(barSeconds) <= time } ?? 10
+            cursor = min(max(last, 10), candles.count - 2)
+        } else {
+            cursor = candles.count - 1
+        }
+        refresh()
+    }
+
     /// Older bars loaded while replaying go in front; the cursor keeps its bar.
     func prepend(_ older: [Candle]) {
         guard isActive, let first = history.first else { return }
