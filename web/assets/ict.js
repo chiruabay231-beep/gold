@@ -582,15 +582,19 @@
     const situation = change > threshold ? (flow < -0.05 ? "weakUp" : "strongUp")
       : change < -threshold ? (flow > 0.05 ? "weakDown" : "strongDown") : "flat";
     let shark = null, sum = 0;
+    const sharks = [];
     for (let i = 0; i < n; i++) {
       if (i >= length) {
         const avg = sum / length, ratio = avg > 0 ? weight[i] / avg : 0;
-        if (ratio >= 2.5 && Math.abs(pressure[i]) >= 0.33 && i >= n - 30) shark = { buying: pressure[i] > 0, ratio };
+        if (ratio >= 2.5 && Math.abs(pressure[i]) >= 0.33) {
+          sharks.push({ index: i, buying: pressure[i] > 0, ratio });
+          if (i >= n - 30) shark = { buying: pressure[i] > 0, ratio };
+        }
         sum -= weight[i - length];
       }
       sum += weight[i];
     }
-    return { flow, situation, shark };
+    return { flow, situation, shark, sharks };
   }
 
   /* ---------- SMT divergence against a related market ---------- */
@@ -655,5 +659,26 @@
     g.restore();
   }
 
-  window.ICT = { defaults, merge, compute, draw, sharkFlow, smt, drawSMT };
+  /** Shark bubbles like the app: a big buyer under its candle, a big seller above it. */
+  function drawSharks(g, list, bars, X, Y, w, up, down) {
+    if (!list || !list.length) return;
+    g.save();
+    g.textAlign = "center"; g.textBaseline = "middle";
+    list.forEach((s) => {
+      const b = bars[s.index], x = X(s.index);
+      if (!b || x == null || x < -20 || x > w + 20) return;
+      const r = Math.min(5 + s.ratio * 1.6, 16);
+      const yy = s.buying ? Y(b.low) : Y(b.high);
+      if (yy == null) return;
+      const y = s.buying ? yy + r + 3 : yy - r - 3;
+      const color = s.buying ? up : down;
+      g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2);
+      g.fillStyle = color + "59"; g.fill();
+      g.lineWidth = 1; g.strokeStyle = color; g.stroke();
+      if (r >= 9) { g.font = `${Math.round(r)}px system-ui, sans-serif`; g.fillText("🦈", x, y + 1); }
+    });
+    g.restore();
+  }
+
+  window.ICT = { drawSharks, defaults, merge, compute, draw, sharkFlow, smt, drawSMT };
 })();

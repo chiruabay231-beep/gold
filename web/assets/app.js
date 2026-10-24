@@ -1519,6 +1519,17 @@
                   if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
                 }),
               }),
+            }, {
+              // Shark bubbles over the candles, like the app.
+              zOrder: () => "top",
+              renderer: () => ({
+                draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+                  if (!term.sharks) return;
+                  const ts = term.chart.timeScale();
+                  window.ICT.drawSharks(context, term.sharks, term.viewBars(), (i) => ts.logicalToCoordinate(i), (v) => term.series.priceToCoordinate(v),
+                    mediaSize.width, (term.chartStyle.up || "#14b88a").slice(0, 7), (term.chartStyle.down || "#f0455a").slice(0, 7));
+                }),
+              }),
             }];
           },
           // Time left in the current bar, under the last price on the price scale.
@@ -3052,6 +3063,10 @@
       this.ictTime = Date.now();
       const allowed = this.owner || this.features.killzones !== false;
       const bars = this.viewBars();
+      // Shark bubbles with the money flow (same switch as its two lines).
+      const flowAllowed = this.owner || this.features.sharkflow !== false;
+      const flow = flowAllowed && showInd.flow && window.ICT && bars.length ? window.ICT.sharkFlow(bars) : null;
+      this.sharks = flow ? flow.sharks : null;
       if (!allowed || !bars.length || !window.ICT || !this.ictCfg) { this.ict = null; this.redraw(); return; }
       try {
         this.ict = window.ICT.compute(bars, TF_SECONDS[this.interval], this.ictCfg, showInd);
