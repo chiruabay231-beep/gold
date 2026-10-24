@@ -44,9 +44,11 @@ vẫn đặt vào MT5 theo giá Exness. Mã khác (ngoại hối, chỉ số) kh
 
 ## Thông báo & giọng nói (nút 🔔 trên thanh trên)
 
-Giống app: đọc to khi lệnh khớp ("Order filled"), chạm TP ("Target fill"), chạm SL ("Stop loss fill"),
+Giống app: đọc to khi vào lệnh ("Đã vào lệnh" / "Order filled"), chạm TP ("Lệnh TP" / "Target fill"),
+chạm SL ("Lệnh stoploss" / "Stop loss fill"),
 đóng tay; thành viên nghe khi có tín hiệu MUA/BÁN và khi tín hiệu đóng. Chọn giọng Anh/Việt, tự sửa
-câu đọc, đọc thêm mã/giá/lãi lỗ, hiện thông báo trên trang hoặc thông báo trình duyệt khi ở tab khác.
+câu đọc, chọn từng giọng có trên máy (giọng ★ tự nhiên xếp đầu: Edge có HoaiMy/NamMinh, Chrome có
+Google Tiếng Việt), tốc độ, độ cao giọng, âm lượng, chuông báo trước khi đọc, đọc thêm mã/giá/lãi lỗ, hiện thông báo trên trang hoặc thông báo trình duyệt khi ở tab khác.
 Chỉ báo khi trang đang mở. Điện thoại cần chạm vào trang một lần thì trình duyệt mới cho đọc.
 
 Ô "N lệnh · lot · lãi/lỗ" kéo được tới bất kỳ đâu trên trang (giữ vị trí, hiện ở mọi tab);

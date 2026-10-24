@@ -408,39 +408,111 @@
 
   /* ---------------- voice alerts, as in the app: TP / SL hit and fills read out ---------------- */
 
-  const VOICE_DEFAULTS = { enabled: true, lang: "en-US", target: "", stop: "", entry: "", buy: "", sell: "", details: false, popup: true, notify: false };
-  const VOICE_PHRASES = { target: "Target fill", stop: "Stop loss fill", entry: "Order filled", buy: "Buy signal", sell: "Sell signal" };
+  const VOICE_DEFAULTS = { enabled: true, lang: "vi-VN", voice: "", rate: 0.95, pitch: 1, volume: 1, chime: true, target: "", stop: "", entry: "", buy: "", sell: "", details: false, popup: true, notify: false };
+  /** Default phrases in the voice's own language: an English phrase read by a Vietnamese voice sounds wrong. */
+  const VOICE_PHRASES = {
+    en: { target: "Target fill", stop: "Stop loss fill", entry: "Order filled", buy: "Buy signal", sell: "Sell signal", closed: "Position closed" },
+    vi: { target: "Lệnh TP", stop: "Lệnh stoploss", entry: "Đã vào lệnh", buy: "Tín hiệu mua", sell: "Tín hiệu bán", closed: "Đã đóng lệnh" },
+  };
   const Voice = {
     cfg: (() => { try { return Object.assign({}, VOICE_DEFAULTS, JSON.parse(store.get("aurum.voice") || "{}")); } catch { return Object.assign({}, VOICE_DEFAULTS); } })(),
     save() { store.set("aurum.voice", JSON.stringify(this.cfg)); },
     vi() { return this.cfg.lang.startsWith("vi"); },
-    phrase(key) { return String(this.cfg[key] || "").trim() || VOICE_PHRASES[key]; },
-    speak(text, force) {
-      if ((!force && !this.cfg.enabled) || !text || !window.speechSynthesis) return;
-      const u = new SpeechSynthesisUtterance(text);
-      u.lang = this.cfg.lang;
-      const voice = speechSynthesis.getVoices().find((v) => v.lang.replace("_", "-").toLowerCase().startsWith(this.cfg.lang.toLowerCase().slice(0, 2)));
-      if (voice) u.voice = voice;
-      u.rate = 1; u.volume = 1;
-      speechSynthesis.speak(u);
+    defaults() { return VOICE_PHRASES[this.vi() ? "vi" : "en"]; },
+    phrase(key) { return String(this.cfg[key] || "").trim() || this.defaults()[key]; },
+
+    /** The voices for the chosen language, the clearest first (natural / neural / enhanced ones). */
+    voices() {
+      if (!window.speechSynthesis) return [];
+      const lang = this.cfg.lang.toLowerCase(), short = lang.slice(0, 2);
+      const score = (v) => (/natural|neural/i.test(v.name) ? 40 : 0) + (/online/i.test(v.name) ? 10 : 0) + (/google/i.test(v.name) ? 25 : 0)
+        + (/premium|enhanced|nâng cao|siri/i.test(v.name) ? 30 : 0) + (/^(linh|samantha|ava|allison|zoe)\b/i.test(v.name) ? 8 : 0)
+        + (v.lang.replace("_", "-").toLowerCase() === lang ? 5 : 0) + (/compact|espeak/i.test(v.name) ? -30 : 0);
+      return speechSynthesis.getVoices().filter((v) => v.lang.replace("_", "-").toLowerCase().startsWith(short)).sort((x, y) => score(y) - score(x));
     },
-    /** Phones only let a page speak after a tap: the first tap anywhere says nothing, out loud. */
+    pick() {
+      const list = this.voices();
+      return list.find((v) => v.name === this.cfg.voice) || list[0] || null;
+    },
+
+    /** A short two-note chime before the words, up for good news, down for bad. */
+    chime(good) {
+      const ctx = this.ctx;
+      if (!ctx) return 0;
+      if (ctx.state === "suspended") ctx.resume();
+      const notes = good === false ? [784, 523] : [659, 988];
+      notes.forEach((f, i) => {
+        const o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime + i * 0.14;
+        o.type = "sine"; o.frequency.value = f;
+        g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
+        o.connect(g).connect(ctx.destination); o.start(t); o.stop(t + 0.4);
+      });
+      return 380;
+    },
+
+    speak(text, force, good) {
+      if ((!force && !this.cfg.enabled) || !text || !window.speechSynthesis) return;
+      const say = () => {
+        const u = new SpeechSynthesisUtterance(text);
+        const voice = this.pick();
+        u.lang = voice ? voice.lang : this.cfg.lang;
+        if (voice) u.voice = voice;
+        u.rate = +this.cfg.rate || 0.95; u.pitch = +this.cfg.pitch || 1; u.volume = this.cfg.volume != null ? +this.cfg.volume : 1;
+        this.current = u; // Chrome drops an utterance nothing holds on to
+        if (speechSynthesis.paused) speechSynthesis.resume();
+        speechSynthesis.speak(u);
+      };
+      const go = () => { const wait = this.cfg.chime ? this.chime(good) : 0; if (wait) setTimeout(say, wait); else say(); };
+      // The voice list loads late on first use: without it the browser reads with a voice of another language.
+      if (!speechSynthesis.getVoices().length) {
+        let done = false;
+        const once = () => { if (!done) { done = true; go(); } };
+        speechSynthesis.addEventListener("voiceschanged", once, { once: true });
+        setTimeout(once, 800);
+      } else go();
+    },
+
+    /** Phones only let a page make sound after a tap: the first tap opens the audio and voice. */
     unlock() {
-      if (this.unlocked || !window.speechSynthesis) return;
+      if (this.unlocked) return;
       this.unlocked = true;
+      try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) this.ctx = new AC(); } catch { /* no audio */ }
+      if (!window.speechSynthesis) return;
       const u = new SpeechSynthesisUtterance(" ");
       u.volume = 0;
       speechSynthesis.speak(u);
     },
+
+    /** How a symbol is said: "vàng" rather than X-A-U-U-S-D. */
+    spokenSymbol(sym) {
+      const s = String(sym || "").toUpperCase(), vi = this.vi();
+      if (/XAU|GOLD/.test(s)) return vi ? "vàng" : "gold";
+      if (/XAG|SILVER/.test(s)) return vi ? "bạc" : "silver";
+      if (/BTC/.test(s)) return "bitcoin";
+      if (/ETH/.test(s)) return "ethereum";
+      if (/USTEC|NAS/.test(s)) return "Nasdaq";
+      return s.replace(/M$/, "").replace(/^([A-Z]{3})([A-Z]{3})$/, "$1 $2");
+    },
+    /** A price as it is read: two decimals, with a comma in Vietnamese. */
+    spokenPrice(v) {
+      const t = (Math.round(v * 100) / 100).toFixed(2).replace(/\.?0+$/, "");
+      return this.vi() ? t.replace(".", ",") : t;
+    },
+    spokenMoney(v) {
+      const n = Math.round(Math.abs(v));
+      return this.vi() ? `${v >= 0 ? "lời" : "lỗ"} ${n} đô` : `${v >= 0 ? "plus" : "minus"} ${n} dollars`;
+    },
+
     /** Spoken, plus a toast and (with the tab in the background) a browser notification. */
     alert(spoken, title, body, good) {
-      this.speak(spoken);
+      this.speak(spoken, false, good);
       if (this.cfg.popup) toast(`${title}: ${body}`, good === false);
       if (this.cfg.notify && document.hidden && window.Notification && Notification.permission === "granted") {
         try { new Notification(title, { body, icon: "favicon.svg" }); } catch { /* not allowed here */ }
       }
     },
   };
+  if (window.speechSynthesis) speechSynthesis.getVoices(); // starts loading the list
   document.addEventListener("pointerdown", () => Voice.unlock(), { once: true, capture: true });
 
   /* ---------------- chart look and light / dark theme ---------------- */
@@ -1059,13 +1131,13 @@
       const vi = Voice.vi(), d2 = (sym) => this.digitsFor(sym);
       positions.filter((p) => !known.positions.has(p.ticket)).forEach((p) => {
         let text = Voice.phrase("entry");
-        if (Voice.cfg.details) text += `, ${p.symbol.replace(/m$/, "")} ${fmt(p.entry, d2(p.symbol))}`;
+        if (Voice.cfg.details) text += `, ${p.side === "long" ? (vi ? "mua" : "buy") : (vi ? "bán" : "sell")} ${Voice.spokenSymbol(p.symbol)} ${Voice.spokenPrice(p.entry)}`;
         Voice.alert(text, "Lệnh đã khớp", `${sideName(p.side)} ${p.lots} lot ${p.symbol} @ ${fmt(p.entry, d2(p.symbol))}`, true);
       });
       deals.filter((d) => !known.deals.has(d.ticket)).forEach((d) => {
         const manual = d.reason !== "target" && d.reason !== "stop";
-        let text = manual ? (vi ? "Đã đóng lệnh" : "Position closed") : Voice.phrase(d.reason);
-        if (Voice.cfg.details) text += vi ? `, ${d.profit >= 0 ? "lời" : "lỗ"} ${Math.round(Math.abs(d.profit))} đô` : `, ${d.profit >= 0 ? "plus" : "minus"} ${Math.round(Math.abs(d.profit))} dollars`;
+        let text = manual ? Voice.defaults().closed : Voice.phrase(d.reason);
+        if (Voice.cfg.details) text += `, ${Voice.spokenSymbol(d.symbol)}, ${Voice.spokenMoney(d.profit)}`;
         const title = manual ? "Đã đóng lệnh" : d.reason === "target" ? "Chạm TP (Target fill)" : "Chạm SL (Stop loss fill)";
         Voice.alert(text, title, `${d.symbol} ${signed(d.profit)} ${t.currency || "USD"}`, d.profit >= 0);
       });
@@ -1080,11 +1152,11 @@
       list.forEach((x) => {
         const was = before.get(x.id);
         if (was == null && x.status === "open") {
-          Voice.alert(Voice.phrase(x.side === "long" ? "buy" : "sell"), "Tín hiệu mới", `${x.side === "long" ? "MUA" : "BÁN"} ${x.symbol} @ ${fmt(x.entry)}`, true);
+          Voice.alert(Voice.phrase(x.side === "long" ? "buy" : "sell") + (Voice.cfg.details ? `, ${Voice.spokenSymbol(x.symbol)} ${Voice.spokenPrice(x.entry)}` : ""), "Tín hiệu mới", `${x.side === "long" ? "MUA" : "BÁN"} ${x.symbol} @ ${fmt(x.entry)}`, true);
         } else if (was === "open" && x.status !== "open") {
           const win = (x.result || 0) > 0;
           let text = Voice.phrase(win ? "target" : "stop");
-          if (Voice.cfg.details && x.result != null) text += vi ? `, ${win ? "lời" : "lỗ"} ${fmt(Math.abs(x.result))} giá` : `, ${win ? "plus" : "minus"} ${fmt(Math.abs(x.result))} points`;
+          if (Voice.cfg.details && x.result != null) text += `, ${Voice.spokenSymbol(x.symbol)}, ${vi ? (win ? "lời" : "lỗ") : (win ? "plus" : "minus")} ${Voice.spokenPrice(Math.abs(x.result))} ${vi ? "giá" : "points"}`;
           Voice.alert(text, win ? "Tín hiệu chạm TP" : "Tín hiệu chạm SL", `${x.symbol} ${x.result != null ? signed(x.result) : ""}`, win);
         }
       });
@@ -1092,39 +1164,61 @@
 
     voiceSheet() {
       const c = Voice.cfg;
-      const phraseRow = (key, label) => `<label class="fr"><span class="grow">${label}</span><input class="nm" data-p="${key}" data-t="str" value="${esc(c[key] || "")}" placeholder="${VOICE_PHRASES[key]}"></label>`;
+      const phraseRow = (key, label) => `<label class="fr"><span class="grow">${label}</span><input class="nm" data-p="${key}" data-t="str" value="${esc(c[key] || "")}" placeholder="${esc(Voice.defaults()[key])}"></label>`;
+      const quality = (v) => (/natural|neural|premium|enhanced|nâng cao/i.test(v.name) ? " ★ tự nhiên" : /google|online/i.test(v.name) ? " ☆ trực tuyến" : "");
       const render = () => {
         const k = fieldKit(c);
         const can = !!window.speechSynthesis;
+        const voices = Voice.voices();
+        const best = voices[0];
+        const voiceOpts = [["", `Tự chọn giọng rõ nhất${best ? ` (${best.name})` : ""}`]].concat(voices.map((v) => [v.name, `${v.name} · ${v.lang}${quality(v)}`]));
+        const noVoice = can && speechSynthesis.getVoices().length && !voices.length;
         return k.head("Giọng nói") + (can ? "" : k.note("Trình duyệt này không đọc được giọng nói."))
           + k.tog("enabled", "Đọc cảnh báo bằng giọng nói")
-          + k.sel("lang", "Giọng", [["en-US", "Tiếng Anh"], ["vi-VN", "Tiếng Việt"]])
+          + `<label class="fr"><span class="grow">Ngôn ngữ</span>${k.selI("lang", [["vi-VN", "Tiếng Việt"], ["en-US", "Tiếng Anh (Mỹ)"], ["en-GB", "Tiếng Anh (Anh)"], ["en-AU", "Tiếng Anh (Úc)"]])}</label>`
+          + `<label class="fr"><span class="grow">Giọng</span>${k.selI("voice", voiceOpts).replace("<select", '<select class="voice-sel"')}</label>`
+          + (noVoice ? k.note("Máy này chưa có giọng cho ngôn ngữ này. Windows: Cài đặt → Thời gian & ngôn ngữ → Giọng nói → Thêm giọng. iPhone: Cài đặt → Trợ năng → Nội dung được đọc → Giọng nói (chọn bản Nâng cao). Android: Cài đặt → Chuyển văn bản thành giọng nói → Google.") : "")
+          + k.sel("rate", "Tốc độ", [[0.75, "Rất chậm"], [0.85, "Chậm, rõ"], [0.95, "Vừa"], [1.05, "Hơi nhanh"], [1.2, "Nhanh"]])
+          + k.sel("pitch", "Độ cao giọng", [[0.8, "Trầm"], [1, "Bình thường"], [1.2, "Cao"]])
+          + k.sel("volume", "Âm lượng", [[0.5, "Nhỏ"], [0.8, "Vừa"], [1, "Lớn nhất"]])
+          + k.tog("chime", "Chuông báo trước khi đọc (lên = tốt, xuống = xấu)")
+          + `<div class="fr wrap"><button type="button" class="btn btn-ghost btn-small" data-try>▶ Nghe thử giọng này</button></div>`
+          + k.note("Giọng có ★ đọc tự nhiên và rõ nhất. Trên máy tính, Edge có nhiều giọng tự nhiên nhất (cả tiếng Việt: HoaiMy, NamMinh); Chrome có giọng Google.")
           + k.head("Câu đọc khi")
           + phraseRow("target", "Chạm TP") + phraseRow("stop", "Chạm SL") + phraseRow("entry", "Lệnh khớp")
           + (this.owner ? "" : phraseRow("buy", "Tín hiệu MUA") + phraseRow("sell", "Tín hiệu BÁN"))
           + k.tog("details", "Đọc thêm mã, giá, số tiền lãi/lỗ")
+          + `<div class="fr wrap">${["target", "stop", "entry"].map((key) => `<button type="button" class="btn btn-ghost btn-small" data-say="${key}">▶ ${esc(Voice.phrase(key))}</button>`).join("")}</div>`
           + k.head("Hiện thông báo")
           + k.tog("popup", "Hiện thông báo trên trang")
           + `<label class="fr"><input type="checkbox" data-p="notify" data-t="bool" data-ask ${c.notify ? "checked" : ""}><span>Thông báo của trình duyệt khi đang mở tab khác</span></label>`
           + k.note(this.owner
-            ? "Áp dụng cho tài khoản MT5 đang đăng nhập trên máy chủ: lệnh khớp (kể cả lệnh chờ), chạm TP, chạm SL, đóng tay. Chỉ báo khi trang đang mở; lệnh cũ lúc mở trang không đọc lại."
-            : "Đọc khi có tín hiệu mới và khi tín hiệu đóng (lời = TP, lỗ = SL). Chỉ báo khi trang đang mở.")
-          + k.head("Nghe thử")
-          + `<div class="fr wrap">${["target", "stop", "entry"].map((key) => `<button type="button" class="btn btn-ghost btn-small" data-say="${key}">▶ ${esc(Voice.phrase(key))}</button>`).join("")}</div>`;
+            ? "Áp dụng cho tài khoản MT5 đang đăng nhập trên máy chủ: lệnh khớp (kể cả lệnh chờ), chạm TP, chạm SL, đóng tay. Chỉ báo khi trang đang mở; lệnh cũ lúc mở trang không đọc lại. Điện thoại: chạm vào trang một lần để trình duyệt cho phát tiếng."
+            : "Đọc khi có tín hiệu mới và khi tín hiệu đóng (lời = TP, lỗ = SL). Chỉ báo khi trang đang mở. Điện thoại: chạm vào trang một lần để trình duyệt cho phát tiếng.");
       };
       this.openPanel("Thông báo & giọng nói", [["voice", "Cài đặt"]], render, {
         root: c,
         onChange: () => Voice.save(),
         onReset: (redraw) => { Object.assign(c, VOICE_DEFAULTS); Voice.save(); redraw(); },
         afterDraw: (panel) => {
-          panel.querySelectorAll("[data-say]").forEach((b) => (b.onclick = () => Voice.speak(Voice.phrase(b.dataset.say), true)));
+          Voice.unlock();
+          const sample = () => (Voice.vi() ? `${Voice.phrase("target")}, vàng, lời 120 đô` : `${Voice.phrase("target")}, gold, plus 120 dollars`);
+          panel.querySelector("[data-try]").onclick = () => Voice.speak(sample(), true, true);
+          panel.querySelectorAll("[data-say]").forEach((b) => (b.onclick = () => Voice.speak(Voice.phrase(b.dataset.say), true, b.dataset.say !== "stop")));
+          // Picking a voice reads with it straight away.
+          panel.querySelector(".voice-sel").addEventListener("change", () => Voice.speak(sample(), true, true));
+          // A new language: the voice picked for the old one no longer applies.
+          panel.querySelector('[data-p="lang"]').addEventListener("change", () => { c.voice = ""; Voice.save(); if (this.panelDraw) this.panelDraw(); });
           const ask = panel.querySelector("[data-ask]");
           if (ask) ask.addEventListener("change", async () => {
             if (!ask.checked || !window.Notification) return;
             const r = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
             if (r !== "granted") { c.notify = false; Voice.save(); ask.checked = false; toast("Trình duyệt chưa cho phép thông báo", true); }
           });
-          panel.querySelector('[data-p="lang"]').addEventListener("change", () => this.panelDraw && this.panelDraw());
+          // The voice list arrives late the first time.
+          if (window.speechSynthesis && !speechSynthesis.getVoices().length) {
+            speechSynthesis.addEventListener("voiceschanged", () => { if (!panel.hidden && this.panelDraw) this.panelDraw(); }, { once: true });
+          }
         },
       });
     },

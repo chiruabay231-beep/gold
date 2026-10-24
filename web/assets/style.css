@@ -586,3 +586,4 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
   .nav-who .who { font-size: 13px; }
   .nav-who .small { font-size: 11px; }
 }
+#floatPanel .voice-sel { max-width: 64%; min-width: 0; text-overflow: ellipsis; }
