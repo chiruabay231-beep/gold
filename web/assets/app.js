@@ -758,6 +758,22 @@
     eyeOff: svg(`<path d="M3 14s4-7 11-7 11 7 11 7-4 7-11 7S3 14 3 14Z"/><path d="m5 5 18 18"/>`),
     trash: svg(`<path d="M6 8h16M11 8V5h6v3M8 8l1 15h10l1-15"/>`),
   };
+  /* Line icons of the drawing bar (18px, stroke = text colour). */
+  const svgI = (d) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+  const BAR_ICON = {
+    tpl: svgI('<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><path d="M16.5 13.5v6M13.5 16.5h6"/>'),
+    settings: svgI('<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'),
+    lock: svgI('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/>'),
+    unlock: svgI('<rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 7.5-2"/>'),
+    del: svgI('<path d="M4 7h16M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2M6.5 7l1 12a1.5 1.5 0 0 0 1.5 1.4h6a1.5 1.5 0 0 0 1.5-1.4l1-12M10 11v6M14 11v6"/>'),
+    close: svgI('<path d="M6 6l12 12M18 6L6 18"/>'),
+    chev: '<svg viewBox="0 0 10 6" width="9" height="6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l4 4 4-4"/></svg>',
+  };
+  /** The colours offered for drawings: TradingView-like rows, then a custom one. */
+  const DRAW_PALETTE = ["#2962ff", "#089981", "#f23645", "#ff9800", "#9c27b0", "#00bcd4", "#e91e63", "#f2c14e",
+    "#4caf50", "#673ab7", "#795548", "#ffeb3b", "#ffffff", "#b2b5be", "#787b86", "#131722"];
+  const linePreview = (width, style) => `<svg width="34" height="10" viewBox="0 0 34 10"><line x1="1" y1="5" x2="33" y2="5" stroke="currentColor" stroke-width="${Math.max(1, width)}" stroke-linecap="round" ${style === "dashed" ? 'stroke-dasharray="6 4"' : style === "dotted" ? 'stroke-dasharray="1 4"' : ""}/></svg>`;
+
   const RAIL_GROUPS = [
     { id: "lines", title: "Công cụ đường", tools: ["trendLine", "trendRay", "horizontalLine", "horizontalRay", "verticalLine", "arrow"] },
     { id: "fib", title: "Gann và Fibonacci", tools: ["fibRetracement", "fibExtension"] },
@@ -3255,7 +3271,7 @@
         if (this.replay && e.key === " ") { this.replayPlay(); e.preventDefault(); }
       });
       document.addEventListener("pointerdown", (e) => {
-        if (!e.target.closest("#ctxMenu") && !e.target.closest(".lot-pick")) this.closeMenu();
+        if (!e.target.closest("#ctxMenu") && !e.target.closest(".lot-pick") && !e.target.closest(".db-pick")) this.closeMenu();
         if (!e.target.closest("#flyout, #toolRail")) this.closeFlyout();
       });
     },
@@ -3420,7 +3436,7 @@
       }));
     },
 
-    closeMenu() { const m = $("ctxMenu"); if (m && !m.hidden) m.hidden = true; },
+    closeMenu() { const m = $("ctxMenu"); if (m && !m.hidden) { m.hidden = true; m.classList.remove("db-menu"); } },
 
     /* ----- drawing tools ----- */
 
@@ -3462,22 +3478,24 @@
         const cur = d.current;
         const pos = cur.tool === "longPosition" || cur.tool === "shortPosition";
         bar.hidden = false;
-        bar.innerHTML = `${D.colors.map((c) => `<button type="button" class="sw ${c === cur.color ? "on" : ""}" data-c="${c}" style="background:${c}"></button>`).join("")}
-          <select data-a="width">${[0.5, 1, 1.5, 2, 3, 4].map((w) => `<option value="${w}" ${w === cur.width ? "selected" : ""}>${w}px</option>`).join("")}</select>
-          <select data-a="style">${[["solid", "——"], ["dashed", "– –"], ["dotted", "···"]].map(([v, n]) => `<option value="${v}" ${v === cur.style ? "selected" : ""}>${n}</option>`).join("")}</select>
-          ${pos ? `<span class="rr">R:R ${cur.rr}</span>` : ""}
-          <button type="button" data-a="tpl" title="Bản mẫu vẽ">▦</button>
-          <button type="button" data-a="settings" title="Cài đặt">⚙</button>
-          <button type="button" data-a="lock" title="Khoá">${cur.locked ? "🔒" : "🔓"}</button>
-          <button type="button" data-a="del" class="danger" title="Xoá">🗑</button>
-          <button type="button" data-a="x" class="muted">✕</button>`;
+        // Tool · colour ▾ · width ▾ · style ▾ | templates · settings · lock | delete · close
+        bar.innerHTML = `<span class="db-tool" title="${esc(D.tools[cur.tool].name)}">${TOOL_ICON[cur.tool] || ""}</span><span class="db-sep"></span>
+          <button type="button" data-p="color" class="db-pick" title="Màu"><span class="db-dot" style="background:${esc(cur.color)}"></span>${BAR_ICON.chev}</button>
+          <button type="button" data-p="width" class="db-pick" title="Độ dày">${linePreview(cur.width, "solid")}<span class="db-px">${cur.width}</span>${BAR_ICON.chev}</button>
+          <button type="button" data-p="style" class="db-pick" title="Kiểu nét">${linePreview(1.5, cur.style)}${BAR_ICON.chev}</button>
+          ${pos ? `<span class="db-sep"></span><span class="rr">R:R <b>${cur.rr}</b></span>` : ""}
+          <span class="db-sep"></span>
+          <button type="button" data-a="tpl" title="Bản mẫu vẽ">${BAR_ICON.tpl}</button>
+          <button type="button" data-a="settings" title="Cài đặt">${BAR_ICON.settings}</button>
+          <button type="button" data-a="lock" class="${cur.locked ? "on" : ""}" title="${cur.locked ? "Mở khoá" : "Khoá"}">${cur.locked ? BAR_ICON.lock : BAR_ICON.unlock}</button>
+          <span class="db-sep"></span>
+          <button type="button" data-a="del" class="danger" title="Xoá">${BAR_ICON.del}</button>
+          <button type="button" data-a="x" class="muted" title="Bỏ chọn">${BAR_ICON.close}</button>`;
       } else { bar.hidden = true; return; }
-      bar.querySelectorAll("[data-c]").forEach((b) => (b.onclick = () => { d.restyle({ color: b.dataset.c }); this.renderDrawBar(); }));
+      bar.querySelectorAll("[data-p]").forEach((b) => (b.onclick = () => this.drawPickMenu(b, b.dataset.p)));
       bar.querySelectorAll("[data-a]").forEach((b) => {
         const a = b.dataset.a;
-        if (b.tagName === "SELECT") b.onchange = () => d.restyle({ [a]: a === "width" ? +b.value : b.value });
-        else if (b.tagName === "INPUT") b.onchange = () => d.restyle({ rr: Math.max(0.1, num(b.value) || 2) });
-        else b.onclick = () => {
+        b.onclick = () => {
           if (a === "cancel") d.cancel();
           if (a === "del") d.remove(d.selected);
           if (a === "x") { d.selected = null; d.update(); }
@@ -3487,6 +3505,34 @@
           this.renderDrawBar();
         };
       });
+    },
+
+    /** The colour / width / style choices under a button of the drawing bar. */
+    drawPickMenu(button, kind) {
+      const d = this.drawings, cur = d && d.current;
+      if (!cur) return;
+      const menu = $("ctxMenu");
+      if (kind === "color") {
+        menu.innerHTML = `<div class="db-palette">${DRAW_PALETTE.map((c) => `<button type="button" data-v="${c}" class="${c.toLowerCase() === String(cur.color).toLowerCase() ? "on" : ""}" style="background:${c}" title="${c}"></button>`).join("")}</div>
+          <label class="db-custom"><input type="color" value="${esc(String(cur.color).slice(0, 7))}"> Màu khác…</label>`;
+      } else if (kind === "width") {
+        menu.innerHTML = `<div class="db-list">${[0.5, 1, 1.5, 2, 3, 4].map((w) => `<button type="button" data-v="${w}" class="${w === cur.width ? "on" : ""}">${linePreview(w, "solid")}<span>${w}px</span></button>`).join("")}</div>`;
+      } else {
+        menu.innerHTML = `<div class="db-list">${[["solid", "Liền"], ["dashed", "Gạch"], ["dotted", "Chấm"]].map(([v, n]) => `<button type="button" data-v="${v}" class="${v === cur.style ? "on" : ""}">${linePreview(1.5, v)}<span>${n}</span></button>`).join("")}</div>`;
+      }
+      menu.classList.add("db-menu");
+      menu.hidden = false;
+      const r = button.getBoundingClientRect();
+      menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + "px";
+      menu.style.top = Math.min(r.bottom + 8, window.innerHeight - menu.offsetHeight - 8) + "px";
+      const done = (v) => {
+        d.restyle({ [kind]: kind === "width" ? +v : v });
+        this.closeMenu();
+        this.renderDrawBar();
+      };
+      menu.querySelectorAll("[data-v]").forEach((b) => (b.onclick = () => done(b.dataset.v)));
+      const custom = menu.querySelector("input[type=color]");
+      if (custom) custom.onchange = () => done(custom.value);
     },
 
     /* ----- replay ----- */

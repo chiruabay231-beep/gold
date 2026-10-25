@@ -596,12 +596,16 @@
       const dpr = this.dpr || 1, odd = Math.round(width * dpr) % 2 === 1;
       const px = (v) => (Math.round(v * dpr - (odd ? 0.5 : 0)) + (odd ? 0.5 : 0)) / dpr;
       const lineTo = (pp) => { g.beginPath(); g.moveTo(px(pp[0][0]), px(pp[0][1])); pp.slice(1).forEach((p) => g.lineTo(px(p[0]), px(p[1]))); g.stroke(); };
+      // A label: rounded, a hair of shadow, the text centred in it. (x, y) = its bottom-left as before.
       const tag = (text, x, y, bg, fg = "#fff", align = "left") => {
-        g.save(); g.setLineDash([]); g.font = "11px Be Vietnam Pro, system-ui, sans-serif";
-        const tw = g.measureText(text).width + 8;
-        const left = align === "right" ? x - tw : align === "center" ? x - tw / 2 : x;
-        g.fillStyle = bg; g.fillRect(left, y - 15, tw, 16);
-        g.fillStyle = fg; g.textAlign = "left"; g.textBaseline = "bottom"; g.fillText(text, left + 4, y - 2);
+        g.save(); g.setLineDash([]); g.font = "600 11px Be Vietnam Pro, system-ui, sans-serif";
+        const tw = g.measureText(text).width + 14, th = 19;
+        const left = align === "right" ? x - tw : align === "center" ? x - tw / 2 : x, top = y - th + 1;
+        g.shadowColor = "rgba(0, 0, 0, 0.28)"; g.shadowBlur = 6; g.shadowOffsetY = 1;
+        g.fillStyle = bg; g.beginPath(); g.roundRect(left, top, tw, th, 5); g.fill();
+        g.shadowColor = "transparent";
+        g.strokeStyle = "rgba(255, 255, 255, 0.14)"; g.lineWidth = 1; g.stroke();
+        g.fillStyle = fg; g.textAlign = "left"; g.textBaseline = "middle"; g.fillText(text, left + 7, top + th / 2 + 0.5);
         g.restore();
       };
       const arrowHead = (a, b, size = 10) => {
@@ -689,16 +693,24 @@
           const left = Math.min(p0[0], p1[0]), right = Math.max(p0[0], p1[0], p0[0] + 40);
           g.setLineDash([]);
           const op = (d.fill ? d.fillOpacity : 0) / 100;
-          g.fillStyle = alpha(d.stopColor, op); g.fillRect(left, Math.min(ye, ys), right - left, Math.abs(ys - ye));
-          if (yt != null) { g.fillStyle = alpha(d.targetColor, op); g.fillRect(left, Math.min(ye, yt), right - left, Math.abs(yt - ye)); }
-          g.strokeStyle = "#787b86"; g.lineWidth = width; lineTo([[left, ye], [right, ye]]);
+          // Zones fading towards the entry, a crisp edge at the target and the stop.
+          const zone = (y, c) => {
+            const top = Math.min(ye, y), hgt = Math.abs(y - ye);
+            const grad = g.createLinearGradient(0, y, 0, ye);
+            grad.addColorStop(0, alpha(c, Math.min(1, op * 1.6))); grad.addColorStop(1, alpha(c, op * 0.5));
+            g.fillStyle = grad; g.fillRect(left, top, right - left, hgt);
+            g.strokeStyle = alpha(c, 0.9); g.lineWidth = this.lw(1); lineTo([[left, y], [right, y]]);
+          };
+          zone(ys, d.stopColor);
+          if (yt != null) zone(yt, d.targetColor);
+          g.strokeStyle = "#9aa3b2"; g.lineWidth = width; lineTo([[left, ye], [right, ye]]);
           const risk = Math.abs(entry - stop), reward = Math.abs(target - entry);
           const rr = risk ? (reward / risk).toFixed(2) : "–";
           const pct = (v) => (v / entry * 100).toFixed(2) + "%";
-          const long = d.tool === "longPosition";
-          tag(`Mục tiêu ${target.toFixed(dg)} (${reward.toFixed(dg)} · ${pct(reward)})`, left, long ? yt - 2 : yt + 16, d.targetColor);
-          tag(`Dừng ${stop.toFixed(dg)} (${risk.toFixed(dg)} · ${pct(risk)})`, left, long ? ys + 16 : ys - 2, d.stopColor);
-          tag(`${long ? "MUA" : "BÁN"} ${entry.toFixed(dg)} · R:R ${rr}`, left, ye - 2, "#2a3449");
+          const long = d.tool === "longPosition", mid = (left + right) / 2;
+          tag(`Mục tiêu ${target.toFixed(dg)} · ${reward.toFixed(dg)} (${pct(reward)})`, mid, long ? yt - 4 : yt + 22, d.targetColor, "#fff", "center");
+          tag(`Dừng ${stop.toFixed(dg)} · ${risk.toFixed(dg)} (${pct(risk)})`, mid, long ? ys + 22 : ys - 4, d.stopColor, "#fff", "center");
+          tag(`${long ? "MUA" : "BÁN"} ${entry.toFixed(dg)}  ·  R:R ${rr}`, mid, ye + 9, "rgba(22, 28, 40, 0.92)", "#e8ecf3", "center");
           break;
         }
         case "priceRange": {
@@ -706,10 +718,12 @@
           const bars = Math.round(this.timeToLogical(d.pts[1].t) - this.timeToLogical(d.pts[0].t));
           const c = diff >= 0 ? "#2962ff" : "#f23645";
           if (d.fill) { g.fillStyle = alpha(c, d.fillOpacity / 100); g.fillRect(p0[0], p0[1], p1[0] - p0[0], p1[1] - p0[1]); }
-          g.strokeStyle = c; g.setLineDash([]);
+          g.strokeStyle = alpha(c, 0.85); g.setLineDash([]); g.lineWidth = this.lw(1);
+          lineTo([[p0[0], p0[1]], [p1[0], p0[1]]]); lineTo([[p0[0], p1[1]], [p1[0], p1[1]]]);
+          g.strokeStyle = c; g.lineWidth = width;
           lineTo([[(p0[0] + p1[0]) / 2, p0[1]], [(p0[0] + p1[0]) / 2, p1[1]]]);
           g.fillStyle = c; arrowHead([(p0[0] + p1[0]) / 2, p0[1]], [(p0[0] + p1[0]) / 2, p1[1]], 8);
-          tag(`${diff >= 0 ? "+" : ""}${diff.toFixed(dg)} (${(diff / a * 100).toFixed(2)}%) · ${bars} nến`, (p0[0] + p1[0]) / 2, Math.max(p0[1], p1[1]) + 18, c, "#fff", "center");
+          tag(`${diff >= 0 ? "+" : ""}${diff.toFixed(dg)} (${(diff / a * 100).toFixed(2)}%)  ·  ${bars} nến`, (p0[0] + p1[0]) / 2, Math.max(p0[1], p1[1]) + 24, c, "#fff", "center");
           break;
         }
         case "fixedRangeVolume": case "anchoredVolume": this.paintVolume(g, d, pts, w); break;
