@@ -494,11 +494,41 @@ struct MT5Symbol: Decodable, Identifiable, Hashable {
     var id: String { name }
 }
 
+/// The server's "Stop theo nến" bot (server 2.8+): started from the website or the app,
+/// it places a buy stop / sell stop around each closed candle on the MT5 account.
+struct RemoteStopBot: Decodable {
+    struct Config: Decodable {
+        var running: Bool?
+        var symbol: String?
+        var interval: String?
+        var lots: Double?
+        var rr: Double?
+    }
+    var config: Config?
+
+    var isRunning: Bool { config?.running == true }
+    /// Set up once (a symbol chosen), so it can be started again from the chart.
+    var isConfigured: Bool { !(config?.symbol ?? "").isEmpty }
+}
+
+extension RemoteBotClient {
+    func stopBot() async throws -> RemoteStopBot {
+        try JSONDecoder().decode(RemoteStopBot.self, from: await send("/stopbot", timeout: 15))
+    }
+
+    func setStopBot(running: Bool) async throws -> RemoteStopBot {
+        let body = try JSONSerialization.data(withJSONObject: ["running": running])
+        return try JSONDecoder().decode(RemoteStopBot.self, from: await send("/stopbot", method: "POST", body: body))
+    }
+}
+
 /// The VPS bot as seen from the app, refreshed while its screen is open.
 @MainActor
 @Observable
 final class RemoteBot {
     private(set) var status: RemoteStatus?
+    /// The server's Stop bot; nil on a server older than 2.8.
+    private(set) var stopBot: RemoteStopBot?
     private(set) var log: [RemoteLogEntry] = []
     private(set) var history: [RemoteTrade] = []
     private(set) var error: String?
@@ -559,6 +589,20 @@ final class RemoteBot {
         }
         do {
             status = try await client.status()
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+        stopBot = try? await client.stopBot()
+    }
+
+    /// Turns the server's Stop bot on or off (off also cancels its pending orders).
+    func setStopBot(running: Bool) async {
+        guard let client = RemoteBotSettings.client() else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            stopBot = try await client.setStopBot(running: running)
             error = nil
         } catch {
             self.error = error.localizedDescription

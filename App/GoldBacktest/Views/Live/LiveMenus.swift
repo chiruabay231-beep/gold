@@ -127,10 +127,11 @@ struct LiveMoreSheet: View {
 }
 
 /// Play / pause for the bot, next to BUY/SELL: the bot of this app while it
-/// has been started, otherwise the VPS bot once it has a strategy.
+/// has been started, otherwise the VPS bot or the VPS Stop bot (also the one
+/// started from the website) once it has been set up.
 struct LiveBotControl: View {
     let theme: ChartTheme
-    var height: CGFloat = 66
+    var height: CGFloat = 70
 
     @Environment(AppStore.self) private var store
     @Environment(BotController.self) private var bot
@@ -139,20 +140,24 @@ struct LiveBotControl: View {
     @State private var confirmRealStop = false
     @State private var remote = RemoteBot()
     @State private var confirmResume = false
+    @State private var confirmVpsStop = false
     /// Why the last tap on the VPS bot failed.
     @State private var actionError: String?
 
-    private enum Target { case app, stop, vps }
+    private enum Target { case app, stop, vps, vpsStop }
 
     private var target: Target? {
         let vps = remote.status
         let vpsHasStrategy = !(vps?.settings?.strategyName ?? "").isEmpty
+        let vpsStop = remote.stopBot
         if bot.isRunning { return .app }
         if stopBot.isRunning { return .stop }
         if vps?.running == true { return .vps }
+        if vpsStop?.isRunning == true { return .vpsStop }
         if bot.hasSession, bot.strategyID != nil { return .app }
         if stopBot.hasSession { return .stop }
         if vpsHasStrategy { return .vps }
+        if vpsStop?.isConfigured == true { return .vpsStop }
         return nil
     }
 
@@ -161,7 +166,17 @@ struct LiveBotControl: View {
         case .app: return bot.isRunning
         case .stop: return stopBot.isRunning
         case .vps: return remote.status?.running == true
+        case .vpsStop: return remote.stopBot?.isRunning == true
         case nil: return false
+        }
+    }
+
+    private func title(_ target: Target) -> (String, String) {
+        switch target {
+        case .app: return ("BOT", "app")
+        case .stop: return ("STOP", "app")
+        case .vps: return ("BOT", "VPS")
+        case .vpsStop: return ("STOP", "VPS")
         }
     }
 
@@ -169,20 +184,41 @@ struct LiveBotControl: View {
         Group {
             if let target {
                 Button { tap(target) } label: {
-                    VStack(spacing: 3) {
-                        if remote.isBusy {
-                            ProgressView().tint(running ? .white : theme.accent)
-                        } else {
-                            Image(systemName: running ? "pause.fill" : "play.fill")
-                                .font(.system(size: 20, weight: .bold))
+                    let (name, place) = title(target)
+                    VStack(spacing: 4) {
+                        ZStack {
+                            Circle()
+                                .fill(running ? Color.white.opacity(0.22) : theme.accent.opacity(0.12))
+                                .frame(width: 30, height: 30)
+                            if remote.isBusy {
+                                ProgressView().scaleEffect(0.7).tint(running ? .white : theme.accent)
+                            } else {
+                                Image(systemName: running ? "pause.fill" : "play.fill")
+                                    .font(.system(size: 13, weight: .bold))
+                            }
                         }
-                        Text(target == .vps ? "VPS" : (target == .stop ? "Stop" : "Bot"))
-                            .font(.system(size: 10, weight: .heavy))
+                        VStack(spacing: 0) {
+                            Text(name).font(.system(size: 10, weight: .heavy)).tracking(0.6)
+                            Text(running ? "đang chạy" : place)
+                                .font(.system(size: 8.5, weight: .semibold))
+                                .opacity(0.8)
+                        }
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                     }
-                    .frame(width: 48, height: height)
+                    .frame(width: 52, height: height)
                     .foregroundColor(running ? .white : theme.accent)
-                    .background(RoundedRectangle(cornerRadius: 10).fill(running ? theme.up : theme.accent.opacity(0.08)))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(running ? theme.up : theme.accent.opacity(0.6), lineWidth: 1))
+                    .background {
+                        if running {
+                            LinearGradient(colors: [theme.up, theme.up.opacity(0.75)], startPoint: .top, endPoint: .bottom)
+                        } else {
+                            theme.accent.opacity(theme.isLight ? 0.06 : 0.10)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(running ? theme.up.opacity(0.9) : theme.accent.opacity(0.35), lineWidth: 1))
+                    .shadow(color: (running ? theme.up : Color.black).opacity(running ? 0.30 : 0.08), radius: 6, y: 2)
                 }
                 .buttonStyle(.plain)
                 .disabled(remote.isBusy)
@@ -190,7 +226,7 @@ struct LiveBotControl: View {
             }
         }
         .task {
-            // The VPS bot can be started from Telegram or the Bot tab: keep its state fresh.
+            // The VPS bots can be started from Telegram, the website or the Bot tab: keep their state fresh.
             while !Task.isCancelled {
                 await remote.refreshStatus()
                 try? await Task.sleep(nanoseconds: 10_000_000_000)
@@ -206,6 +242,11 @@ struct LiveBotControl: View {
         } message: {
             Text(resumeMessage)
         }
+        .confirmationDialog("Chạy lại bot Stop trên VPS?", isPresented: $confirmVpsStop, titleVisibility: .visible) {
+            Button("Chạy bot Stop") { Task { await remote.setStopBot(running: true); actionError = remote.error } }
+        } message: {
+            Text(vpsStopMessage)
+        }
         .alert("Bot trên VPS", isPresented: Binding(get: { actionError != nil }, set: { if !$0 { actionError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -217,6 +258,11 @@ struct LiveBotControl: View {
         guard let s = remote.status?.settings else { return "" }
         let orders = s.broker == "mt5" ? "lệnh vào tài khoản MT5" : "tài khoản demo trên VPS"
         return "\(s.strategyName) · \(s.symbol) \(s.interval) · \(orders)"
+    }
+
+    private var vpsStopMessage: String {
+        guard let c = remote.stopBot?.config else { return "" }
+        return "\(c.symbol ?? "") \(c.interval ?? "") · \(PaperTrader.lots(c.lots ?? 0.01)) lot · Buy Stop / Sell Stop quanh mỗi nến đóng, lệnh vào tài khoản MT5"
     }
 
     private func tap(_ target: Target) {
@@ -241,6 +287,12 @@ struct LiveBotControl: View {
                 Task { await remote.stop(); actionError = remote.error }
             } else {
                 confirmResume = true
+            }
+        case .vpsStop:
+            if remote.stopBot?.isRunning == true {
+                Task { await remote.setStopBot(running: false); actionError = remote.error }
+            } else {
+                confirmVpsStop = true
             }
         }
     }

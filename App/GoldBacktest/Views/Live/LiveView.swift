@@ -42,6 +42,10 @@ struct LiveView: View {
     @AppStorage("position.contractSize") private var contractSize = 100.0
     @State private var showAppSettings = false
     @State private var confirmCloseAll = false
+    /// Where the open-positions pill was dragged to, as fractions of the screen (-1: not moved).
+    @AppStorage("live.pillX") private var pillX = -1.0
+    @AppStorage("live.pillY") private var pillY = -1.0
+    @GestureState private var pillDrag: CGSize = .zero
     /// A timeframe change during replay, waiting for the new bars.
     @State private var replayResume: ReplayResume?
 
@@ -133,6 +137,12 @@ struct LiveView: View {
             charts
             indicatorPanes
             if showTradeButtons && !tradeBarOnTop { tradeBar }
+        }
+        // The open positions float over the screen, dragged wherever they are in the way least.
+        .overlay {
+            if canTrade {
+                GeometryReader { geo in floatingPositions(in: geo.size) }
+            }
         }
         .background(theme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
@@ -378,17 +388,11 @@ struct LiveView: View {
                     }
                 }
                 Spacer(minLength: 6)
-                if !memberFeed.memberMode { LiveBotControl(theme: theme) }
+                if !memberFeed.memberMode { LiveBotControl(theme: theme, height: Self.headerButtonHeight * 2 + Self.headerButtonGap) }
                 if canTrade {
-                    VStack(spacing: 6) {
-                        // Shows or hides the SELL | lot | BUY bar under the chart.
-                        headerButton("BUY/SELL", systemImage: showTradeButtons ? "chevron.down" : "arrow.left.arrow.right",
-                                     filled: showTradeButtons) { showTradeButtons.toggle() }
-                            .accessibilityLabel(showTradeButtons ? "Ẩn nút giao dịch" : "Hiện nút giao dịch")
-                        headerButton(orderTicket != nil ? "Đóng" : "Lệnh chờ",
-                                     systemImage: orderTicket != nil ? "xmark" : "plus.forwardslash.minus",
-                                     filled: orderTicket != nil) { toggleTicket() }
-                        openPositionsPill
+                    VStack(spacing: Self.headerButtonGap) {
+                        tradeToggleButton
+                        pendingButton
                     }
                 }
             }
@@ -410,44 +414,81 @@ struct LiveView: View {
         return (rows.count, rows.reduce(0) { $0 + $1.lots }, rows.reduce(0) { $0 + (trader.profit($1) ?? 0) })
     }
 
-    /// Under Lệnh chờ: "2 lệnh · 0.20 / +12.30" and ✕ to close them all.
+    /// "+12.30 · 2 lệnh · 0.20 lot" and ✕ to close them all, floating over the chart.
+    /// Drag it anywhere on the screen (kept for next time); double-tap puts it back.
     @ViewBuilder
-    private var openPositionsPill: some View {
+    private func floatingPositions(in size: CGSize) -> some View {
         let summary = openSummary
         if summary.count > 0 {
-            HStack(spacing: 6) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("\(summary.count) lệnh · \(QuickTradePanel.lotText(summary.lots))")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundColor(theme.primaryText)
-                    Text(String(format: "%+.2f", summary.profit))
-                        .font(.system(size: 13, weight: .bold).monospacedDigit())
-                        .foregroundColor(summary.profit >= 0 ? theme.up : theme.down)
-                        .contentTransition(.numericText())
+            let pill = positionsPill(summary)
+            let center = pillCenter(in: size)
+            pill
+                .position(x: center.x + pillDrag.width, y: center.y + pillDrag.height)
+                .gesture(
+                    DragGesture(minimumDistance: 4)
+                        .updating($pillDrag) { value, state, _ in state = value.translation }
+                        .onEnded { value in
+                            let x = min(max(center.x + value.translation.width, 70), size.width - 70)
+                            let y = min(max(center.y + value.translation.height, 26), size.height - 26)
+                            pillX = Double(x / max(size.width, 1))
+                            pillY = Double(y / max(size.height, 1))
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        }
+                )
+                .onTapGesture(count: 2) {
+                    withAnimation(.spring(response: 0.3)) { pillX = -1; pillY = -1 }
                 }
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
-                Spacer(minLength: 0)
-                Button { confirmCloseAll = true } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundColor(.white)
-                        .frame(width: 22, height: 22)
-                        .background(Circle().fill(theme.down))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Đóng tất cả lệnh \(Self.displayName(market.symbol))")
+                .animation(.spring(response: 0.25, dampingFraction: 0.85), value: pillX)
+        }
+    }
+
+    /// Where the pill sits: where it was left, or under BUY/SELL · Lệnh chờ at first.
+    private func pillCenter(in size: CGSize) -> CGPoint {
+        if pillX >= 0, pillY >= 0 {
+            return CGPoint(x: min(max(pillX * size.width, 70), size.width - 70),
+                           y: min(max(pillY * size.height, 26), size.height - 26))
+        }
+        return CGPoint(x: size.width - 14 - 72, y: 178)
+    }
+
+    private func positionsPill(_ summary: (count: Int, lots: Double, profit: Double)) -> some View {
+        let color = summary.profit >= 0 ? theme.up : theme.down
+        return HStack(spacing: 9) {
+            Capsule().fill(color).frame(width: 3.5, height: 28)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(String(format: "%+.2f", summary.profit))
+                    .font(.system(size: 16, weight: .bold, design: .rounded).monospacedDigit())
+                    .foregroundColor(color)
+                    .contentTransition(.numericText())
+                Text("\(summary.count) lệnh · \(QuickTradePanel.lotText(summary.lots)) lot")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundColor(theme.text)
             }
-            .padding(.leading, 9)
-            .padding(.trailing, 4)
-            .frame(width: 112, height: 34)
-            .background(RoundedRectangle(cornerRadius: 9).fill(theme.grid.opacity(theme.isLight ? 0.6 : 0.9)))
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke((summary.profit >= 0 ? theme.up : theme.down).opacity(0.5), lineWidth: 1))
-            .confirmationDialog("Đóng tất cả \(summary.count) lệnh \(Self.displayName(market.symbol))?",
-                                isPresented: $confirmCloseAll, titleVisibility: .visible) {
-                Button("Đóng \(summary.count) lệnh (\(String(format: "%+.2f", summary.profit)) USD)", role: .destructive) {
-                    closeAllPositions()
-                }
+            .lineLimit(1)
+            .fixedSize()
+            Button { confirmCloseAll = true } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .heavy))
+                    .foregroundColor(theme.down)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(theme.down.opacity(0.14)))
+                    .overlay(Circle().stroke(theme.down.opacity(0.35), lineWidth: 0.8))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Đóng tất cả lệnh \(Self.displayName(market.symbol))")
+        }
+        .padding(.leading, 9)
+        .padding(.trailing, 6)
+        .padding(.vertical, 6)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+        .background(RoundedRectangle(cornerRadius: 15, style: .continuous).fill(theme.background.opacity(0.35)))
+        .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(color.opacity(0.35), lineWidth: 1))
+        .shadow(color: .black.opacity(theme.isLight ? 0.14 : 0.40), radius: 12, y: 5)
+        .contentShape(RoundedRectangle(cornerRadius: 15))
+        .confirmationDialog("Đóng tất cả \(summary.count) lệnh \(Self.displayName(market.symbol))?",
+                            isPresented: $confirmCloseAll, titleVisibility: .visible) {
+            Button("Đóng \(summary.count) lệnh (\(String(format: "%+.2f", summary.profit)) USD)", role: .destructive) {
+                closeAllPositions()
             }
         }
     }
@@ -474,19 +515,77 @@ struct LiveView: View {
         .buttonStyle(.plain)
     }
 
-    private func headerButton(_ title: String, systemImage: String, filled: Bool,
-                              action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 5) {
-                Image(systemName: systemImage).font(.system(size: 12, weight: .bold))
-                Text(title).font(.system(size: 14, weight: .bold))
+    static let headerButtonWidth: CGFloat = 118
+    static let headerButtonHeight: CGFloat = 32
+    static let headerButtonGap: CGFloat = 6
+
+    /// SELL | BUY: shows or hides the SELL · lot · BUY bar. Both words keep their colour;
+    /// while the bar is shown the button is filled red to blue.
+    private var tradeToggleButton: some View {
+        let on = showTradeButtons
+        return Button {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            showTradeButtons.toggle()
+        } label: {
+            HStack(spacing: 0) {
+                Text("SELL")
+                    .foregroundColor(on ? .white : theme.down)
+                    .frame(maxWidth: .infinity)
+                Rectangle()
+                    .fill(on ? Color.white.opacity(0.45) : theme.grid)
+                    .frame(width: 1, height: 15)
+                Text("BUY")
+                    .foregroundColor(on ? .white : theme.accent)
+                    .frame(maxWidth: .infinity)
+            }
+            .font(.system(size: 13, weight: .heavy, design: .rounded))
+            .tracking(0.6)
+            .frame(width: Self.headerButtonWidth, height: Self.headerButtonHeight)
+            .background {
+                if on {
+                    LinearGradient(colors: [theme.down, theme.accent], startPoint: .leading, endPoint: .trailing)
+                } else {
+                    HStack(spacing: 0) {
+                        theme.down.opacity(theme.isLight ? 0.07 : 0.12)
+                        theme.accent.opacity(theme.isLight ? 0.07 : 0.12)
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .stroke(on ? Color.white.opacity(0.25) : theme.grid, lineWidth: 1))
+            .shadow(color: .black.opacity(on ? 0.22 : 0.06), radius: on ? 6 : 3, y: 2)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(on ? "Ẩn nút giao dịch" : "Hiện nút giao dịch")
+    }
+
+    /// Lệnh chờ: the order ticket (limit / stop with SL and TP); "Đóng" while it is open.
+    private var pendingButton: some View {
+        let open = orderTicket != nil
+        return Button { toggleTicket() } label: {
+            HStack(spacing: 6) {
+                Image(systemName: open ? "xmark" : "clock.badge.checkmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(open ? .white : theme.accent)
+                Text(open ? "Đóng" : "Lệnh chờ")
+                    .font(.system(size: 13, weight: .bold, design: .rounded))
+                    .foregroundColor(open ? .white : theme.primaryText)
             }
             .lineLimit(1)
             .minimumScaleFactor(0.8)
-            .frame(width: 112, height: 30)
-            .foregroundColor(filled ? .white : theme.accent)
-            .background(RoundedRectangle(cornerRadius: 9).fill(filled ? theme.accent : theme.accent.opacity(0.08)))
-            .overlay(RoundedRectangle(cornerRadius: 9).stroke(theme.accent.opacity(0.6), lineWidth: 1))
+            .frame(width: Self.headerButtonWidth, height: Self.headerButtonHeight)
+            .background {
+                if open {
+                    LinearGradient(colors: [theme.accent, theme.accent.opacity(0.8)], startPoint: .top, endPoint: .bottom)
+                } else {
+                    theme.grid.opacity(theme.isLight ? 0.35 : 0.55)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 11, style: .continuous)
+                .stroke(open ? Color.white.opacity(0.25) : theme.grid, lineWidth: 1))
+            .shadow(color: .black.opacity(open ? 0.22 : 0.06), radius: open ? 6 : 3, y: 2)
         }
         .buttonStyle(.plain)
     }
