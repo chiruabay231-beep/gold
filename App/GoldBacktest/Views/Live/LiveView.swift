@@ -902,7 +902,11 @@ struct LiveView: View {
                         priceLines: tradeLines,
                         onPriceLineDrag: { id, price, ended in tradeLineDragged(id: id, price: price, ended: ended) },
                         onPriceLineClose: { id in tradeLineClosed(id: id) },
-                        onPickBar: replay.isPicking ? { index in replay.pick(index: index) } : nil,
+                        onPickBar: replay.isPicking ? { index in
+                            UISelectionFeedbackGenerator().selectionChanged()
+                            replay.choose(index: index)
+                        } : nil,
+                        pickIndex: replay.isPicking ? replay.candidate : nil,
                         onNeedOlder: { loadOlderBars() },
                         showHighLowLabels: showHighLow,
                         drawings: hideDrawings ? [] : drawings,

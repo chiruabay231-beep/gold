@@ -13,12 +13,35 @@ struct ReplayControlBar: View {
     var body: some View {
         VStack(spacing: 6) {
             if replay.isPicking {
-                Text("Chạm vào cây nến muốn bắt đầu replay")
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(theme.accent, in: Capsule())
+                // Tap a bar to place the start line (tap again to move it), then Bắt đầu.
+                HStack(spacing: 8) {
+                    Image(systemName: "scissors")
+                    Text(replay.candidate == nil ? "Chạm vào cây nến muốn bắt đầu replay"
+                         : "Phần mờ sẽ bị ẩn · chạm nến khác để đổi")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    if replay.candidate != nil {
+                        Button {
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            replay.startFromCandidate()
+                        } label: {
+                            Text("Bắt đầu")
+                                .font(.system(size: 12, weight: .bold))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 5)
+                                .foregroundColor(theme.accent)
+                                .background(Color.white, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white)
+                .padding(.leading, 12)
+                .padding(.trailing, replay.candidate == nil ? 12 : 4)
+                .padding(.vertical, 4)
+                .frame(minHeight: 32)
+                .background(theme.accent, in: Capsule())
             }
             HStack(spacing: 4) {
                 button("xmark", action: onExit)
@@ -26,9 +49,15 @@ struct ReplayControlBar: View {
                 button("scissors") { replay.repick() }
                     .accessibilityLabel("Chọn lại điểm bắt đầu")
                 button(replay.isPlaying ? "pause.fill" : "play.fill", prominent: true) {
-                    replay.isPlaying ? replay.pause() : replay.play()
+                    if replay.isPicking {
+                        // Play while picking: start from the chosen bar and play at once.
+                        replay.startFromCandidate()
+                        replay.play()
+                    } else {
+                        replay.isPlaying ? replay.pause() : replay.play()
+                    }
                 }
-                .disabled(replay.isPicking || replay.atEnd)
+                .disabled(replay.isPicking ? replay.candidate == nil : replay.atEnd)
                 button("forward.frame.fill") { replay.step() }
                     .disabled(replay.isPicking || replay.atEnd)
                     .accessibilityLabel("Nến tiếp theo")

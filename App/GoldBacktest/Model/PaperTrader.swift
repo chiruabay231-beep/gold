@@ -168,16 +168,22 @@ final class PaperTrader {
 
     /// Starts a fresh replay account; live positions are untouched.
     func beginReplay(balance: Double = 10_000) {
+        if replayAccount == nil { livePrices = (prices, asks) }
         replayAccount = PaperAccount(startingBalance: balance)
         replayTime = nil
         lastEvent = nil
     }
+
+    /// The live bids and asks from before the replay, put back when it ends.
+    @ObservationIgnored private var livePrices: (bids: [String: Double], asks: [String: Double])?
 
     /// Applies a replayed bar: fills orders and stops/targets inside it.
     func replay(bar: Candle, symbol: String, closed: [Candle]) {
         guard isReplaying else { return }
         replayTime = bar.time
         prices[symbol] = bar.close
+        // Replayed bars have no spread: sells close at the bar's price too, not at today's live ask.
+        asks[symbol] = bar.close
         let rules = Self.rules
         var events = account.process(symbol: symbol, candle: bar)
         // Stops follow the bar's best price; reversals are judged at its close.
@@ -193,6 +199,11 @@ final class PaperTrader {
         replayAccount = nil
         replayTime = nil
         lastEvent = nil
+        if let live = livePrices {
+            prices = live.bids
+            asks = live.asks
+            livePrices = nil
+        }
         return finished
     }
 

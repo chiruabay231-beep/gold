@@ -225,6 +225,8 @@ struct CandleChart: View {
     var onPriceLineClose: ((String) -> Void)?
     /// When set, a tap chooses a bar (bar replay start) instead of the usual tap actions.
     var onPickBar: ((Int) -> Void)?
+    /// The bar chosen as the replay start: a line after it and the later bars dimmed.
+    var pickIndex: Int?
     /// Called when scrolling reaches the oldest bars, to load more history.
     var onNeedOlder: (() -> Void)?
     /// Labels for the visible high and low on the price axis.
@@ -294,6 +296,8 @@ struct CandleChart: View {
     @State private var menuPoint: CGPoint?
 
     private let axisWidth: CGFloat = 66
+    /// Height of a price label on the axis (and of the last price row).
+    static let axisLabelHeight: CGFloat = 20
     private var timeAxisHeight: CGFloat { showTimeAxis ? 18 : 0 }
 
     private var headerHeight: CGFloat { showHeader && !headerInside ? 34 : (headerInside ? 0 : 4) }
@@ -877,20 +881,22 @@ struct CandleChart: View {
         }
 
         // Axis labels, nudged apart so they don't overlap.
-        let placed = Self.spread(axisLabels.map { (label: $0, y: s.y($0.price)) }, minGap: 17,
-                                 bounds: (layout.plot.minY + 8)...(layout.plot.maxY - 8))
+        // Price labels on the axis: taller boxes and bolder figures, easy to read at a glance.
+        let tagH = Self.axisLabelHeight
+        let placed = Self.spread(axisLabels.map { (label: $0, y: s.y($0.price)) }, minGap: tagH + 1,
+                                 bounds: (layout.plot.minY + tagH / 2)...(layout.plot.maxY - tagH / 2))
         for (label, y) in placed {
-            let box = CGRect(x: layout.axisX + 1, y: y - 8, width: axisWidth - 2, height: 16)
-            context.fill(Path(roundedRect: box, cornerRadius: 2), with: .color(label.color))
+            let box = CGRect(x: layout.axisX + 1, y: y - tagH / 2, width: axisWidth - 2, height: tagH)
+            context.fill(Path(roundedRect: box, cornerRadius: 3), with: .color(label.color))
             if let border = label.border {
-                context.stroke(Path(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), cornerRadius: 2), with: .color(border), lineWidth: 1)
+                context.stroke(Path(roundedRect: box.insetBy(dx: 0.75, dy: 0.75), cornerRadius: 3), with: .color(border), lineWidth: 1.5)
             }
-            context.draw(Text(label.text).font(.system(size: 10, weight: .medium)).foregroundColor(label.textColor),
+            context.draw(Text(label.text).font(.system(size: 11.5, weight: .semibold).monospacedDigit()).foregroundColor(label.textColor),
                          at: CGPoint(x: box.midX, y: box.midY), anchor: .center)
             if !label.tag.isEmpty {
-                let tagText = Text(label.tag).font(.system(size: 10)).foregroundColor(label.textColor)
-                let width = CGFloat(label.tag.count) * 6 + 10
-                let tag = CGRect(x: layout.axisX - width - 2, y: y - 8, width: width, height: 16)
+                let tagText = Text(label.tag).font(.system(size: 11, weight: .medium)).foregroundColor(label.textColor)
+                let width = CGFloat(label.tag.count) * 6.6 + 12
+                let tag = CGRect(x: layout.axisX - width - 2, y: y - tagH / 2, width: width, height: tagH)
                 context.fill(Path(roundedRect: tag, cornerRadius: 3), with: .color(label.color.opacity(0.85)))
                 context.draw(tagText, at: CGPoint(x: tag.midX, y: tag.midY), anchor: .center)
             }
@@ -907,15 +913,16 @@ struct CandleChart: View {
                 context.stroke(path, with: .color(color.opacity(0.8)), style: StrokeStyle(lineWidth: 0.8, dash: [2, 2]))
             }
             let countdown = countdownInterval.map { Self.countdown(until: last.time.addingTimeInterval($0), now: now) }
-            let boxHeight: CGFloat = countdown == nil ? 16 : 28
+            let row = Self.axisLabelHeight
+            let boxHeight: CGFloat = countdown == nil ? row : row + 14
             let labelY = min(max(y, layout.plot.minY + boxHeight / 2), layout.plot.maxY - boxHeight / 2)
-            let box = CGRect(x: layout.axisX + 1, y: labelY - 8, width: axisWidth - 2, height: boxHeight)
-            context.fill(Path(roundedRect: box, cornerRadius: 2), with: .color(color))
-            context.draw(Text(Self.format(last.close, decimals)).font(.system(size: 10, weight: .semibold)).foregroundColor(.white),
-                         at: CGPoint(x: box.midX, y: box.minY + 8), anchor: .center)
+            let box = CGRect(x: layout.axisX + 1, y: labelY - row / 2, width: axisWidth - 2, height: boxHeight)
+            context.fill(Path(roundedRect: box, cornerRadius: 3), with: .color(color))
+            context.draw(Text(Self.format(last.close, decimals)).font(.system(size: 12, weight: .bold).monospacedDigit()).foregroundColor(.white),
+                         at: CGPoint(x: box.midX, y: box.minY + row / 2), anchor: .center)
             if let countdown {
-                context.draw(Text(countdown).font(.system(size: 10).monospacedDigit()).foregroundColor(.white.opacity(0.9)),
-                             at: CGPoint(x: box.midX, y: box.minY + 20), anchor: .center)
+                context.draw(Text(countdown).font(.system(size: 10.5, weight: .medium).monospacedDigit()).foregroundColor(.white.opacity(0.92)),
+                             at: CGPoint(x: box.midX, y: box.minY + row + 6), anchor: .center)
             }
             // Ask price in an outlined box just above the bid box.
             if let ask = askPrice, ask > last.close {
@@ -928,6 +935,30 @@ struct CandleChart: View {
                     context.draw(Text(Self.format(ask, decimals)).font(.system(size: 10, weight: .medium)).foregroundColor(theme.down),
                                  at: CGPoint(x: askBox.midX, y: askBox.midY), anchor: .center)
                 }
+            }
+        }
+
+        // Bar replay: the chosen start bar, a line at its right edge, and the bars after it dimmed
+        // (they are hidden once the replay starts).
+        if !axisOnly, let pick = pickIndex, candles.indices.contains(pick) {
+            let x = s.x(pick) + s.barWidth / 2 + 1
+            if x < layout.axisX {
+                let left = max(x, 0)
+                context.fill(Path(CGRect(x: left, y: layout.plot.minY, width: layout.axisX - left, height: layout.volume.maxY - layout.plot.minY)),
+                             with: .color(theme.background.opacity(0.72)))
+                var path = Path()
+                path.move(to: CGPoint(x: x, y: layout.plot.minY))
+                path.addLine(to: CGPoint(x: x, y: layout.volume.maxY))
+                context.stroke(path, with: .color(theme.accent), lineWidth: 1.5)
+                var timeFormat = Date.FormatStyle.dateTime.day(.twoDigits).month(.twoDigits).hour().minute()
+                timeFormat.timeZone = timeZone
+                let label = context.resolve(Text("✂︎ " + candles[pick].time.formatted(timeFormat))
+                    .font(.system(size: 11, weight: .semibold)).foregroundColor(.white))
+                let size = label.measure(in: CGSize(width: 300, height: 30))
+                let box = CGRect(x: min(max(x - size.width / 2 - 8, 2), layout.axisX - size.width - 18), y: layout.plot.minY + 6,
+                                 width: size.width + 16, height: size.height + 8)
+                context.fill(Path(roundedRect: box, cornerRadius: 7), with: .color(theme.accent))
+                context.draw(label, at: CGPoint(x: box.midX, y: box.midY), anchor: .center)
             }
         }
 
@@ -949,9 +980,9 @@ struct CandleChart: View {
             path.move(to: CGPoint(x: 0, y: y))
             path.addLine(to: CGPoint(x: layout.axisX, y: y))
             context.stroke(path, with: .color(theme.text.opacity(0.8)), style: StrokeStyle(lineWidth: 0.7, dash: [3, 3]))
-            let priceBox = CGRect(x: layout.axisX + 1, y: y - 8, width: axisWidth - 2, height: 16)
-            context.fill(Path(roundedRect: priceBox, cornerRadius: 2), with: .color(theme.crosshairLabel))
-            context.draw(Text(Self.format(s.price(atY: y), decimals)).font(.system(size: 10)).foregroundColor(.white),
+            let priceBox = CGRect(x: layout.axisX + 1, y: y - Self.axisLabelHeight / 2, width: axisWidth - 2, height: Self.axisLabelHeight)
+            context.fill(Path(roundedRect: priceBox, cornerRadius: 3), with: .color(theme.crosshairLabel))
+            context.draw(Text(Self.format(s.price(atY: y), decimals)).font(.system(size: 11.5, weight: .semibold).monospacedDigit()).foregroundColor(.white),
                          at: CGPoint(x: priceBox.midX, y: priceBox.midY), anchor: .center)
             var crosshairFormat = Date.FormatStyle.dateTime.year(.twoDigits).month(.twoDigits).day(.twoDigits).hour().minute()
             if barInterval < 60 { crosshairFormat = crosshairFormat.second(.twoDigits) }

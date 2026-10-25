@@ -14,6 +14,8 @@ final class ReplaySession {
     private(set) var isActive = false
     /// Waiting for a tap on the chart to choose the start bar.
     private(set) var isPicking = false
+    /// The bar tapped while picking: shown on the chart, started from with "Bắt đầu".
+    private(set) var candidate: Int?
     private(set) var isPlaying = false
     var speed: Double = 2
     private(set) var history: [Candle] = []
@@ -44,8 +46,21 @@ final class ReplaySession {
         isActive = true
         isPicking = true
         isPlaying = false
+        candidate = nil
         refresh()
         trader.beginReplay()
+    }
+
+    /// Marks the tapped bar as the start (another tap moves it); nothing is hidden yet.
+    func choose(index: Int) {
+        guard isActive, isPicking else { return }
+        candidate = min(max(index, 10), history.count - 2)
+    }
+
+    /// Starts from the chosen bar.
+    func startFromCandidate() {
+        guard let candidate else { return }
+        pick(index: candidate)
     }
 
     /// Starts the replay right after `index`; later bars are hidden.
@@ -54,6 +69,7 @@ final class ReplaySession {
         pause()
         cursor = min(max(index, 10), history.count - 2)
         isPicking = false
+        candidate = nil
         refresh()
         trader?.beginReplay()
     }
@@ -63,6 +79,7 @@ final class ReplaySession {
         pause()
         cursor = history.count - 1
         isPicking = true
+        candidate = nil
         refresh()
     }
 
