@@ -4520,28 +4520,24 @@
       return { bid, ask };
     },
 
-    /** The spread on the chart: the bid and the ask as two lines in their own colours (the spread in points
-     *  by the ask), so a sell's SL / a buy's TP can be set knowing they trigger on the ask. */
+    /** The spread on the chart: the bid and the ask as two faint dotted lines in their own colours,
+     *  so a sell's SL / a buy's TP can be set knowing they trigger on the ask. */
     drawSpread(g, width) {
       const q = this.spreadQuote();
       this.showSeriesPrice(!q);
       if (!q) return;
       const st = this.chartStyle;
-      const line = (price, color, text, above) => {
+      const line = (price, color) => {
         const yy = this.series.priceToCoordinate(price);
         if (yy == null) return;
         const y = Math.round(yy) + 0.5;
-        g.strokeStyle = color; g.lineWidth = 1;
+        g.strokeStyle = rgba(color, 0.55);
         g.beginPath(); g.moveTo(0, y); g.lineTo(width, y); g.stroke();
-        g.fillStyle = color;
-        g.textBaseline = above ? "bottom" : "top";
-        g.fillText(text, width - 8, above ? y - 3 : y + 3);
       };
       g.save();
-      g.font = "11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
-      g.textAlign = "right";
-      line(q.bid, (st.bidColor || "#f0455a").slice(0, 7), "Bid", false);
-      line(q.ask, (st.askColor || "#2b6bf3").slice(0, 7), `Ask · spread ${spreadText(q.bid, q.ask, this.digits)}`, true);
+      g.lineWidth = 1; g.setLineDash([2, 3]);
+      line(q.bid, (st.bidColor || "#f0455a").slice(0, 7));
+      line(q.ask, (st.askColor || "#2b6bf3").slice(0, 7));
       g.restore();
     },
 
