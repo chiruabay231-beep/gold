@@ -703,7 +703,8 @@
 
   function defaultChartStyle() {
     return { theme: "dark", up: "#14b88a", down: "#f0455a", wickUp: "#14b88a", wickDown: "#f0455a", border: false, borderUp: "#14b88a", borderDown: "#f0455a",
-      customBg: false, bg: "#151c2a", vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false };
+      customBg: false, bg: "#151c2a", vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
+      askLine: true, askColor: "#f5a524" };
   }
   function loadChartStyle() {
     try { return Object.assign(defaultChartStyle(), JSON.parse(store.get("aurum.chartStyle") || "{}")); } catch { return defaultChartStyle(); }
@@ -2516,6 +2517,7 @@
                   const X = (i) => ts.logicalToCoordinate(i), Y = (v) => term.series.priceToCoordinate(v);
                   if (term.ict) window.ICT.draw(context, term.ict, term.ictCfg, X, Y, mediaSize.width, mediaSize.height);
                   if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
+                  term.drawSpread(context, mediaSize.width);
                 }),
               }),
             }, {
@@ -2538,8 +2540,22 @@
           },
           // Open positions: dotted entry line from the entry candle, a dot on it, side and money label.
           // (a third pane view, above the candles)
-          priceAxisViews() { return term.countdownView ? [term.countdownView] : []; },
+          priceAxisViews() { return term.countdownView ? [term.askView, term.countdownView] : []; },
         });
+        // The ask on the price axis, kept clear of the bid label just under it.
+        this.askView = {
+          coordinate: () => {
+            const q = this.spreadQuote();
+            if (!q) return -100;
+            const ya = this.series.priceToCoordinate(q.ask), yb = this.series.priceToCoordinate(q.bid);
+            return ya == null || yb == null ? -100 : Math.min(ya, yb - 19);
+          },
+          text: () => { const q = this.spreadQuote(); return q ? fmt(q.ask, this.digits) : ""; },
+          textColor: () => "#ffffff",
+          backColor: () => this.chartStyle.askColor || "#f5a524",
+          visible: () => !!this.spreadQuote(),
+          tickVisible: () => false,
+        };
         this.countdownView = {
           coordinate: () => {
             const v = this.viewBars(), b = v[v.length - 1];
@@ -2714,6 +2730,7 @@
       $("askText").textContent = fmt(this.ask != null ? this.ask : last, this.digits);
       $("spread").textContent = spreadText(this.bid, this.ask, this.digits);
       if (this.draft) this.updatePendingLabels();
+      if (this.requestICT) this.requestICT();
     },
 
     async loadCandles() {
@@ -4170,7 +4187,9 @@
           <div class="fr">${k.chk("vGrid")}<span class="grow">Lưới dọc</span>${k.sw("grid")}</div>
           <div class="fr">${k.chk("hGrid")}<span>Lưới ngang</span></div>
           <div class="fr">${k.chk("crosshairMagnet")}<span>Con trỏ bắt vào nến</span></div>
-          <div class="fr">${k.chk("seconds")}<span>Hiện giây trên trục thời gian</span></div>`;
+          <div class="fr">${k.chk("seconds")}<span>Hiện giây trên trục thời gian</span></div>
+          <div class="fp-sec">Giá</div>
+          <div class="fr">${k.chk("askLine")}<span class="grow">Đường Ask và vùng spread</span>${k.sw("askColor")}</div>`;
       };
       this.openPanel("Cài đặt biểu đồ", [["look", "Giao diện"]], render, {
         root: st,
@@ -4375,6 +4394,37 @@
     },
 
     /** "mm:ss" (or "h:mm:ss") until the current bar closes. */
+    /** The live bid/ask for the ask line and spread band: Exness quotes on the chart's own symbol, outside replay. */
+    spreadQuote() {
+      if (!this.chartStyle.askLine || this.replay || this.bid == null || this.ask == null) return null;
+      if (this.source !== "exness" && !this.secFeed) return null;
+      const { bid, ask } = this;
+      if (!(ask > bid) || ask - bid > bid * 0.01) return null;
+      return { bid, ask };
+    },
+
+    /** The spread on the chart: a faint band from the bid to the ask, a dashed ask line and the spread in points,
+     *  so a sell's SL / a buy's TP can be set knowing they trigger on the ask. */
+    drawSpread(g, width) {
+      const q = this.spreadQuote();
+      if (!q) return;
+      const yb = this.series.priceToCoordinate(q.bid), ya = this.series.priceToCoordinate(q.ask);
+      if (yb == null || ya == null) return;
+      const color = (this.chartStyle.askColor || "#f5a524").slice(0, 7);
+      g.save();
+      g.fillStyle = rgba(color, 0.1);
+      g.fillRect(0, ya, width, Math.max(1, yb - ya));
+      const y = Math.round(ya) + 0.5;
+      g.strokeStyle = rgba(color, 0.85); g.lineWidth = 1; g.setLineDash([4, 3]);
+      g.beginPath(); g.moveTo(0, y); g.lineTo(width, y); g.stroke();
+      g.setLineDash([]);
+      g.font = "11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+      g.textAlign = "right"; g.textBaseline = "bottom";
+      g.fillStyle = color;
+      g.fillText(`Ask · spread ${spreadText(q.bid, q.ask, this.digits)}`, width - 8, y - 3);
+      g.restore();
+    },
+
     countdownText() {
       const b = this.bars[this.bars.length - 1];
       if (!b) return "";
