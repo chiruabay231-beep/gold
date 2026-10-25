@@ -53,6 +53,8 @@
     [1, true, "#787b86"], [1.272, true, "#2962ff"], [1.618, true, "#f23645"], [2, true, "#9c27b0"], [2.618, true, "#e91e63"], [3.618, false, "#ff9800"],
   ];
   const DASH = { solid: [], dashed: [6, 4], dotted: [1.5, 3] };
+  // Line tools that straighten to level when let go nearly level.
+  const FLAT_TOOLS = ["trendLine", "trendRay", "arrow"];
   const TFS = ["5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "4h", "1d"];
 
   const alpha = (hex, a) => (hex || "#787b86").slice(0, 7) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
@@ -82,7 +84,14 @@
         paneViews() {
           return [{
             zOrder: () => "top",
-            renderer: () => ({ draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => self.paint(context, mediaSize.width, mediaSize.height)) }),
+            // Painted on the device pixels (scaled back to CSS pixels) so lines snap to whole pixels: sharp.
+            renderer: () => ({ draw: (target) => target.useBitmapCoordinateSpace(({ context, bitmapSize, horizontalPixelRatio: hr, verticalPixelRatio: vr }) => {
+              self.dpr = hr || 1;
+              context.save();
+              context.scale(hr, vr);
+              self.paint(context, bitmapSize.width / hr, bitmapSize.height / vr);
+              context.restore();
+            }) }),
           }];
         },
       };
@@ -211,10 +220,18 @@
       return Object.assign({ id: Math.random().toString(36).slice(2, 10), tool, pts: [] }, this.defaults(tool));
     }
 
+    /** The look just given to a drawing becomes its tool's look for the next ones (like TradingView),
+     * with no need to save it by hand. Position tools keep their own R:R per drawing. */
+    remember(d) {
+      if (!d || !d.tool) return;
+      this.saveAsDefault(d);
+      (this.peers || []).forEach((p) => { p.styles = this.styles; });
+    }
+
     /** Remembers the look of `d` as the default for its tool (the "Bản mẫu" menu). */
     saveAsDefault(d) {
       const keep = JSON.parse(JSON.stringify(d));
-      ["id", "tool", "pts", "text", "locked"].forEach((k) => delete keep[k]);
+      ["id", "tool", "pts", "text", "locked", "_box"].forEach((k) => delete keep[k]);
       this.styles[d.tool] = keep;
       try { this.host.store.set("aurum.drawStyles", JSON.stringify(this.styles)); } catch { /* full */ }
     }
@@ -365,10 +382,24 @@
       if ((d.tool === "horizontalLine" || d.tool === "horizontalRay") && d.pts.length) d.pts[0].p = +d.pts[0].p.toFixed(this.host.digits());
     }
 
+    /** A trend line let go almost level (a few pixels of slope over a long run) becomes exactly level:
+     * measuring between two candles. Steeper lines are left as drawn. `moved` is the point dragged. */
+    flatten(d, moved) {
+      if (!d || !FLAT_TOOLS.includes(d.tool) || d.pts.length < 2) return;
+      const [a, b] = d.pts, xa = this.x(a.t), xb = this.x(b.t), ya = this.y(a.p), yb = this.y(b.p);
+      if ([xa, xb, ya, yb].some((v) => v == null)) return;
+      const dx = Math.abs(xb - xa), dy = Math.abs(yb - ya);
+      if (dy > 0 && dy <= 8 && dx >= 20 && dx >= dy * 6) {
+        if (moved === 0) a.p = b.p; else b.p = a.p;
+      }
+    }
+
     up() {
       const g = this.gesture;
       this.gesture = null;
       if (!g) return false;
+      if (g.kind === "create" && g.moved) this.flatten(this.pending, 1);
+      if (g.kind === "handle" && g.moved) this.flatten(g.d, g.handle);
       if (g.kind === "create") {
         const spec = TOOLS[this.pending.tool];
         // Dragged out a two-point tool (or a brush stroke): done. A tap waits for the next tap.
@@ -405,6 +436,7 @@
       Object.assign(d, changes);
       if (changes.color && hasFill(d.tool) && !changes.fillColor) d.fillColor = changes.color;
       this.changed(d);
+      this.remember(d);
     }
     changed(d) {
       if (isPos(d.tool) && d.pts.length >= 3) this.fixPosition(d, 1);
@@ -494,8 +526,13 @@
         try { this.paintOne(g, d, pts, w, h); } catch { /* skip a broken drawing */ }
         g.restore();
         if (d.id === this.selected || d === this.pending) {
+          // Handles: a soft halo, then a ring in the drawing's colour on the chart's background.
+          const light = document.documentElement.dataset.theme === "light";
           this.handles(d, pts).forEach(([a, b]) => {
-            g.setLineDash([]); g.fillStyle = "#0b0f17"; g.strokeStyle = d.color; g.lineWidth = 1.5;
+            g.setLineDash([]);
+            g.fillStyle = alpha(d.color, 0.18);
+            g.beginPath(); g.arc(a, b, 8, 0, Math.PI * 2); g.fill();
+            g.fillStyle = light ? "#ffffff" : "#0b0f17"; g.strokeStyle = d.color; g.lineWidth = 2;
             g.beginPath(); g.arc(a, b, 4.5, 0, Math.PI * 2); g.fill(); g.stroke();
           });
         }
@@ -541,14 +578,23 @@
       return { x: bx, y: by, w: tw + pad * 2, h: th + pad * 2 };
     }
 
+    /** A line width of at least one device pixel, in whole device pixels (a 0.5px line on a normal
+     * screen was a blurred half pixel). */
+    lw(width) {
+      const dpr = this.dpr || 1;
+      return Math.max(1, Math.round((width || 1) * dpr)) / dpr;
+    }
+
     paintOne(g, d, pts, w, h) {
       const dg = this.host.digits();
       const color = d.color;
-      const width = d.width || 1;
+      const width = this.lw(d.width);
       g.strokeStyle = color; g.fillStyle = color; g.lineWidth = width; g.setLineDash(DASH[d.style] || []);
+      g.lineCap = "butt"; g.lineJoin = "round";
       g.font = "11px Be Vietnam Pro, system-ui, sans-serif"; g.textBaseline = "bottom"; g.textAlign = "left";
-      // Hairlines (0.5px) on whole pixels stay sharp.
-      const px = (v) => (width <= 1 ? Math.round(v) + 0.5 : v);
+      // Points on the device pixel grid (centred on a pixel for an odd number of pixels): sharp lines.
+      const dpr = this.dpr || 1, odd = Math.round(width * dpr) % 2 === 1;
+      const px = (v) => (Math.round(v * dpr - (odd ? 0.5 : 0)) + (odd ? 0.5 : 0)) / dpr;
       const lineTo = (pp) => { g.beginPath(); g.moveTo(px(pp[0][0]), px(pp[0][1])); pp.slice(1).forEach((p) => g.lineTo(px(p[0]), px(p[1]))); g.stroke(); };
       const tag = (text, x, y, bg, fg = "#fff", align = "left") => {
         g.save(); g.setLineDash([]); g.font = "11px Be Vietnam Pro, system-ui, sans-serif";
@@ -684,7 +730,7 @@
         const a = d.pts[0].p, b = d.pts[1].p;
         price = (lv) => (f.reverse ? a + (b - a) * lv : b + (a - b) * lv);
         left = Math.min(pts[0][0], pts[1][0]); right = Math.max(pts[0][0], pts[1][0]);
-        if (f.trend) { g.save(); g.setLineDash([3, 3]); g.strokeStyle = alpha(d.color, 0.6); g.lineWidth = 1; lineTo([pts[0], pts[1]]); g.restore(); }
+        if (f.trend) { g.save(); g.setLineDash([3, 3]); g.strokeStyle = alpha(d.color, 0.6); g.lineWidth = this.lw(1); lineTo([pts[0], pts[1]]); g.restore(); }
       } else {
         lineTo(pts.slice(0, 3));
         if (pts.length < 3) return;
@@ -709,7 +755,7 @@
       levels.forEach((l) => {
         const v = price(l.v), yy = this.y(v);
         if (yy == null) return;
-        g.strokeStyle = colorOf(l); g.lineWidth = d.width || 1; g.setLineDash(DASH[d.style] || []);
+        g.strokeStyle = colorOf(l); g.lineWidth = this.lw(d.width); g.setLineDash(DASH[d.style] || []);
         lineTo([[left, yy], [right, yy]]);
         const label = [f.values ? String(l.v) : "", f.prices ? `(${v.toFixed(dg)})` : ""].filter(Boolean).join(" ");
         if (!label) return;

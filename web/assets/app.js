@@ -3900,7 +3900,7 @@
         : [["style", "Định dạng"]].concat(fib || pos || ["brush", "path", "fixedRangeVolume", "anchoredVolume", "priceRange"].includes(tool) ? [] : [["text", "Văn bản"]]).concat([["coords", "Tọa độ"], ["view", "Hiển thị"]]);
       this.openPanel(D.tools[tool].name, tabs, render, {
         root: d, tab: isNew && tool === "text" ? "text" : undefined,
-        onChange: () => { dr.changed(d); this.renderDrawBar(); },
+        onChange: () => { dr.changed(d); dr.remember(d); this.renderDrawBar(); },
         onCancel: () => {
           Object.assign(d, JSON.parse(before));
           if (isNew && tool === "text" && !d.text) dr.remove(d.id); else dr.changed(d);
