@@ -704,10 +704,14 @@
   function defaultChartStyle() {
     return { theme: "dark", up: "#14b88a", down: "#f0455a", wickUp: "#14b88a", wickDown: "#f0455a", border: false, borderUp: "#14b88a", borderDown: "#f0455a",
       customBg: false, bg: "#151c2a", vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
-      askLine: true, askColor: "#f5a524" };
+      askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3" };
   }
   function loadChartStyle() {
-    try { return Object.assign(defaultChartStyle(), JSON.parse(store.get("aurum.chartStyle") || "{}")); } catch { return defaultChartStyle(); }
+    try {
+      const st = Object.assign(defaultChartStyle(), JSON.parse(store.get("aurum.chartStyle") || "{}"));
+      if (st.askColor === "#f5a524") st.askColor = defaultChartStyle().askColor; // the first, single-line look
+      return st;
+    } catch { return defaultChartStyle(); }
   }
   function applyTheme(theme) {
     const dark = theme === "auto" ? !(window.matchMedia && matchMedia("(prefers-color-scheme: light)").matches) : theme !== "light";
@@ -2490,7 +2494,7 @@
           autoscaleInfoProvider: (original) => {
             const res = original();
             const keep = (this.lineCache || []).filter((w) => {
-              if (w.key.startsWith("draft:")) return true;
+              if (w.key.startsWith("draft:")) return w.key === "draft:entry";
               const s = this.selected;
               return s && w.key.startsWith(`${s.kind}:${s.ticket}:`);
             }).map((w) => w.price);
@@ -2534,13 +2538,13 @@
             }, {
               zOrder: () => "top",
               renderer: () => ({
-                draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => term.drawPositions(context, mediaSize.width)),
+                draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => term.drawTradeLines(context, mediaSize.width)),
               }),
             }];
           },
           // Open positions: dotted entry line from the entry candle, a dot on it, side and money label.
           // (a third pane view, above the candles)
-          priceAxisViews() { return term.countdownView ? [term.askView, term.countdownView] : []; },
+          priceAxisViews() { return term.countdownView ? [term.bidView, term.askView, term.countdownView] : []; },
         });
         // The ask on the price axis, kept clear of the bid label just under it.
         this.askView = {
@@ -2552,14 +2556,23 @@
           },
           text: () => { const q = this.spreadQuote(); return q ? fmt(q.ask, this.digits) : ""; },
           textColor: () => "#ffffff",
-          backColor: () => this.chartStyle.askColor || "#f5a524",
+          backColor: () => this.chartStyle.askColor || "#2b6bf3",
+          visible: () => !!this.spreadQuote(),
+          tickVisible: () => false,
+        };
+        // The bid in its own colour, in place of the candle's last price (hidden while the bid / ask show).
+        this.bidView = {
+          coordinate: () => { const q = this.spreadQuote(), y = q ? this.series.priceToCoordinate(q.bid) : null; return y == null ? -100 : y; },
+          text: () => { const q = this.spreadQuote(); return q ? fmt(q.bid, this.digits) : ""; },
+          textColor: () => "#ffffff",
+          backColor: () => this.chartStyle.bidColor || "#f0455a",
           visible: () => !!this.spreadQuote(),
           tickVisible: () => false,
         };
         this.countdownView = {
           coordinate: () => {
-            const v = this.viewBars(), b = v[v.length - 1];
-            const y = b ? this.series.priceToCoordinate(b.close) : null;
+            const v = this.viewBars(), b = v[v.length - 1], q = this.spreadQuote();
+            const y = b ? this.series.priceToCoordinate(q ? q.bid : b.close) : null;
             return y == null ? -100 : y + 19;
           },
           text: () => this.countdownText(),
@@ -3028,25 +3041,27 @@
           const w = active ? 2 : 1;
           // Entry: a dotted line from the entry candle (with a dot on it) and a label with the money in
           // green or red, painted by the chart layer; the price line only keeps the price on the axis.
-          out.push({ key: `pos:${p.ticket}:entry`, price: p.entry, color: dim(p.side === "long" ? "#2b6bf3" : "#f0455a", active), width: w, style: 0, title: "", entryOf: p, faded: !!(sel && !active) });
-          if (p.stop) out.push({ key: `pos:${p.ticket}:stop`, price: p.stop, color: dim("#f0455a", active), width: w, style: 2, title: `SL ${money0(this.pnlAt(p, p.stop))}` });
-          if (p.target) out.push({ key: `pos:${p.ticket}:target`, price: p.target, color: dim("#14b88a", active), width: w, style: 2, title: `TP ${money0(this.pnlAt(p, p.target))}` });
+          out.push({ key: `pos:${p.ticket}:entry`, price: p.entry, color: dim(p.side === "long" ? "#2b6bf3" : "#f0455a", active), width: w, style: 0, title: "", entryOf: p, faded: !!(sel && !active), from: p.time, drawn: true });
+          if (p.stop) out.push({ key: `pos:${p.ticket}:stop`, price: p.stop, color: dim("#f0455a", active), width: w, style: 2, title: `SL ${money0(this.pnlAt(p, p.stop))}`, from: p.time, drawn: true });
+          if (p.target) out.push({ key: `pos:${p.ticket}:target`, price: p.target, color: dim("#14b88a", active), width: w, style: 2, title: `TP ${money0(this.pnlAt(p, p.target))}`, from: p.time, drawn: true });
         });
         this.orders.filter(onChart).forEach((o) => {
           const active = sel && sel.kind === "ord" && sel.ticket === o.ticket;
           const w = active ? 2 : 1;
-          out.push({ key: `ord:${o.ticket}:entry`, price: o.entry, color: dim(o.side === "long" ? "#2b6bf3" : "#f0455a", active), width: w, style: 1, title: `${sideName(o.side)} ${o.kind.toUpperCase()} ${o.lots}` });
+          out.push({ key: `ord:${o.ticket}:entry`, price: o.entry, color: dim(o.side === "long" ? "#2b6bf3" : "#f0455a", active), width: w, style: 1, title: `${sideName(o.side)} ${o.kind.toUpperCase()} ${o.lots}`, from: o.time, drawn: true });
           const om = (lv) => money0(this.valueAt(o.symbol, o.lots, o.side, o.entry, lv));
-          if (o.stop) out.push({ key: `ord:${o.ticket}:stop`, price: o.stop, color: dim("#f0455a", active), width: w, style: 2, title: `SL ${om(o.stop)}` });
-          if (o.target) out.push({ key: `ord:${o.ticket}:target`, price: o.target, color: dim("#14b88a", active), width: w, style: 2, title: `TP ${om(o.target)}` });
+          if (o.stop) out.push({ key: `ord:${o.ticket}:stop`, price: o.stop, color: dim("#f0455a", active), width: w, style: 2, title: `SL ${om(o.stop)}`, from: o.time, drawn: true });
+          if (o.target) out.push({ key: `ord:${o.ticket}:target`, price: o.target, color: dim("#14b88a", active), width: w, style: 2, title: `TP ${om(o.target)}`, from: o.time, drawn: true });
         });
         if (this.draft) {
           const price = num($("pPrice").value), stop = num($("pStop").value), target = num($("pTarget").value);
-          if (price) out.push({ key: "draft:entry", price, color: "#9b6bff", width: 2, style: 0, title: `${this.pendingKind(this.draftSide(price))} ${this.lots().toFixed(2)}` });
+          // The draft starts at the newest candle, where the order would be placed.
+          const from = this.bars.length ? this.bars[this.bars.length - 1].time : null;
+          if (price) out.push({ key: "draft:entry", price, color: "#9b6bff", width: 2, style: 0, title: `${this.pendingKind(this.draftSide(price))} ${this.lots().toFixed(2)}`, from, drawn: true });
           const dside = price ? this.draftSide(price) : "long";
           const dm = (lv) => money0(this.valueAt(this.symbol, this.lots(), dside, price, lv));
-          if (stop) out.push({ key: "draft:stop", price: stop, color: "#f0455a", width: 1, style: 2, title: `SL ${dm(stop)}` });
-          if (target) out.push({ key: "draft:target", price: target, color: "#14b88a", width: 1, style: 2, title: `TP ${dm(target)}` });
+          if (stop) out.push({ key: "draft:stop", price: stop, color: "#f0455a", width: 1, style: 2, title: `SL ${dm(stop)}`, from, drawn: true });
+          if (target) out.push({ key: "draft:target", price: target, color: "#14b88a", width: 1, style: 2, title: `TP ${dm(target)}`, from, drawn: true });
         }
       } else {
         this.signals.filter((s) => s.status === "open" && s.symbol === ($("chartSymbol").textContent || s.symbol)).forEach((s) => {
@@ -3075,49 +3090,77 @@
       return (price - entry) * (side === "long" ? 1 : -1) * lots * contract;
     },
 
-    /** Each open position: a dotted line at its entry from the candle it opened on (a dot there),
-     * and "BUY 0.1 | −5.75" at the right, the money green when in profit and red at a loss. */
-    drawPositions(g, width) {
-      const list = (this.lineCache || []).filter((w) => w.entryOf);
+    /** Where a trade line starts: the candle at `time` (with a dot there when on screen), else the left edge. */
+    tradeLineStart(time, width) {
+      const bars = this.viewBars();
+      if (!bars.length || time == null || time < bars[0].time) return { x0: 0, dot: false };
+      let i = bars.length - 1;
+      while (i > 0 && bars[i].time > time) i--;
+      const x = this.chart.timeScale().logicalToCoordinate(i);
+      return x == null ? { x0: 0, dot: false } : { x0: Math.max(0, Math.min(width, x)), dot: x >= 0 && x <= width };
+    },
+
+    /** The trade lines as drawn: the cached ones with the line under the finger at its dragged price. */
+    tradeLines() {
+      const d = this.drag;
+      const list = (this.lineCache || []).filter((w) => w.drawn).map((w) => (d && d.key === w.key ? Object.assign({}, w, { price: d.price, title: this.dragTitle(d), width: 2 }) : w));
+      if (d && d.pull && d.key !== d.base && !list.some((w) => w.key === d.key)) {
+        // Pulling a new SL / TP out of a position's entry.
+        const p = this.positions.find((x) => x.ticket === +d.key.split(":")[1]);
+        const stop = d.key.endsWith(":stop");
+        if (p) list.push({ key: d.key, price: d.price, color: stop ? "#f0455a" : "#14b88a", width: 2, style: 2, title: this.dragTitle(d), from: p.time, drawn: true });
+      }
+      return list;
+    },
+
+    /** Positions, pending orders and the draft: each line starts at the candle the trade began on (a dot at
+     * the entry there) instead of crossing the whole chart; labels sit at the right. A position's entry
+     * reads "BUY 0.1 | −5.75", the money green in profit and red at a loss. */
+    drawTradeLines(g, width) {
+      const list = this.tradeLines();
       if (!list.length) return;
-      const ts = this.chart.timeScale(), bars = this.viewBars();
       const light = document.documentElement.dataset.theme === "light";
       g.save();
       g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
       g.textBaseline = "middle";
       list.forEach((w) => {
-        const p = w.entryOf;
         const yy = this.series.priceToCoordinate(w.price);
         if (yy == null) return;
         const y = Math.round(yy) + 0.5;
-        let x0 = 0, dot = false;
-        if (bars.length && p.time != null && p.time >= bars[0].time) {
-          let i = bars.length - 1;
-          while (i > 0 && bars[i].time > p.time) i--;
-          const x = ts.logicalToCoordinate(i);
-          if (x != null) { x0 = Math.max(0, x); dot = x >= 0 && x <= width; }
-        }
+        const { x0, dot } = this.tradeLineStart(w.from, width);
+        const entry = /:entry$/.test(w.key);
         g.globalAlpha = w.faded ? 0.45 : 1;
         g.strokeStyle = w.color; g.lineWidth = Math.max(1, w.width);
-        g.setLineDash([2, 3]);
+        g.setLineDash(w.entryOf ? [2, 3] : w.style === 2 ? [5, 4] : w.style === 1 ? [2, 3] : []);
         g.beginPath(); g.moveTo(x0, y); g.lineTo(width, y); g.stroke();
         g.setLineDash([]);
-        if (dot) {
+        if (dot && entry) {
           g.beginPath(); g.arc(x0, y, 4, 0, Math.PI * 2);
           g.fillStyle = w.color; g.fill();
           g.lineWidth = 1.5; g.strokeStyle = light ? "#ffffff" : "#151c2a"; g.stroke();
         }
-        // Label: side and lots on the side colour, the money on green / red.
-        const left = `${sideName(p.side)} ${p.lots}`, right = signed(p.profit);
-        const lw = g.measureText(left).width + 12, rw = g.measureText(right).width + 12, h = 18;
-        const x = Math.max(4, width - lw - rw - 10), top = y - h / 2;
-        g.fillStyle = p.side === "long" ? "#2b6bf3" : "#f0455a";
-        g.beginPath(); g.roundRect(x, top, lw + rw, h, 4); g.fill();
-        g.fillStyle = (p.profit || 0) >= 0 ? "#14b88a" : "#f0455a";
-        g.beginPath(); g.roundRect(x + lw, top, rw, h, [0, 4, 4, 0]); g.fill();
-        g.fillStyle = "#ffffff";
-        g.fillText(left, x + 6, y + 0.5);
-        g.fillText(right, x + lw + 6, y + 0.5);
+        const h = 18, top = y - h / 2;
+        if (w.entryOf) {
+          // Side and lots on the side colour, the money on green / red.
+          const p = w.entryOf;
+          const left = `${sideName(p.side)} ${p.lots}`, right = signed(p.profit);
+          const lw = g.measureText(left).width + 12, rw = g.measureText(right).width + 12;
+          const x = Math.max(4, width - lw - rw - 10);
+          g.fillStyle = p.side === "long" ? "#2b6bf3" : "#f0455a";
+          g.beginPath(); g.roundRect(x, top, lw + rw, h, 4); g.fill();
+          g.fillStyle = (p.profit || 0) >= 0 ? "#14b88a" : "#f0455a";
+          g.beginPath(); g.roundRect(x + lw, top, rw, h, [0, 4, 4, 0]); g.fill();
+          g.fillStyle = "#ffffff";
+          g.fillText(left, x + 6, y + 0.5);
+          g.fillText(right, x + lw + 6, y + 0.5);
+        } else if (w.title) {
+          const tw = g.measureText(w.title).width + 12;
+          const x = Math.max(4, width - tw - 10);
+          g.fillStyle = w.color;
+          g.beginPath(); g.roundRect(x, top, tw, h, 4); g.fill();
+          g.fillStyle = "#ffffff";
+          g.fillText(w.title, x + 6, y + 0.5);
+        }
         g.globalAlpha = 1;
       });
       g.restore();
@@ -3130,7 +3173,8 @@
       wanted.forEach((w) => {
         keys.add(w.key);
         if (this.drag && this.drag.key === w.key) return; // the finger owns it
-        const opts = { price: w.price, color: w.color, lineWidth: w.width, lineStyle: w.style, axisLabelVisible: true, title: w.title, lineVisible: !w.entryOf };
+        // Drawn lines are painted by the chart layer; the price line only keeps the price on the axis.
+        const opts = { price: w.price, color: w.color, lineWidth: w.width, lineStyle: w.style, axisLabelVisible: true, title: w.drawn ? "" : w.title, lineVisible: !w.drawn };
         const line = this.lines.get(w.key);
         if (line) line.applyOptions(opts); else this.lines.set(w.key, this.series.createPriceLine(opts));
       });
@@ -3187,10 +3231,11 @@
       const wrap = $("chartWrap");
       const rel = (e) => { const r = wrap.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
       const paneWidth = () => this.chart.timeScale().width();
-      const hit = (y, keys) => {
+      const hit = (y, keys, x) => {
         let best = null;
         for (const w of this.lineCache || []) {
           if (!keys(w.key)) continue;
+          if (x != null && w.drawn && x < this.tradeLineStart(w.from, paneWidth()).x0 - 10) continue;
           const ly = this.series.priceToCoordinate(w.price);
           if (ly == null) continue;
           const dist = Math.abs(ly - y);
@@ -3236,7 +3281,7 @@
           clearTimeout(longPress);
           return;
         }
-        const w = hit(y, draggable);
+        const w = hit(y, draggable, x);
         if (!w) return;
         this.drag = { key: w.key, price: w.price, start: w.price, base: w.key, pull: /^pos:\d+:entry$/.test(w.key) };
         lock(true);
@@ -3252,7 +3297,7 @@
         const overDrawing = this.drawings && x <= paneWidth() && this.drawings.hitTest(x, y, 8);
         if (this.drawings) this.drawings.hover(overDrawing ? overDrawing.d.id : null);
         wrap.style.cursor = this.drawings && this.drawings.tool ? "crosshair"
-          : overDrawing ? "move" : x <= paneWidth() && hit(y, draggable) ? "ns-resize" : "";
+          : overDrawing ? "move" : x <= paneWidth() && hit(y, draggable, x) ? "ns-resize" : "";
       });
       wrap.addEventListener("pointerleave", () => { if (this.drawings) this.drawings.hover(null); });
       window.addEventListener("pointermove", (e) => {
@@ -3266,7 +3311,8 @@
         if (this.drag.key.startsWith("draft:")) p = this.writeDraft(this.drag.key, p);
         this.drag.price = p;
         const line = this.lines.get(this.drag.key);
-        if (line) line.applyOptions({ price: p, title: this.dragTitle(this.drag) });
+        if (line) line.applyOptions({ price: p });
+        if (this.requestICT) this.requestICT();
       });
       window.addEventListener("pointerup", (e) => {
         clearTimeout(longPress);
@@ -3357,9 +3403,10 @@
       const key = `pos:${ticket}:${field}`;
       if (d.key !== key) { d.key = key; d.start = p[field] || null; this.syncLines(); }
       d.price = price;
-      const opts = { price, color: field === "stop" ? "#f0455a" : "#14b88a", lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: this.dragTitle(d) };
+      const opts = { price, color: field === "stop" ? "#f0455a" : "#14b88a", lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: "", lineVisible: false };
       const line = this.lines.get(key);
       if (line) line.applyOptions(opts); else this.lines.set(key, this.series.createPriceLine(opts));
+      if (this.requestICT) this.requestICT();
     },
 
     async commitDrag(d) {
@@ -4189,7 +4236,7 @@
           <div class="fr">${k.chk("crosshairMagnet")}<span>Con trỏ bắt vào nến</span></div>
           <div class="fr">${k.chk("seconds")}<span>Hiện giây trên trục thời gian</span></div>
           <div class="fp-sec">Giá</div>
-          <div class="fr">${k.chk("askLine")}<span class="grow">Đường Ask và vùng spread</span>${k.sw("askColor")}</div>`;
+          <div class="fr">${k.chk("askLine")}<span class="grow">Đường Bid / Ask (spread)</span>${k.sw("bidColor")}${k.sw("askColor")}</div>`;
       };
       this.openPanel("Cài đặt biểu đồ", [["look", "Giao diện"]], render, {
         root: st,
@@ -4403,26 +4450,37 @@
       return { bid, ask };
     },
 
-    /** The spread on the chart: a faint band from the bid to the ask, a dashed ask line and the spread in points,
-     *  so a sell's SL / a buy's TP can be set knowing they trigger on the ask. */
+    /** The spread on the chart: the bid and the ask as two lines in their own colours (the spread in points
+     *  by the ask), so a sell's SL / a buy's TP can be set knowing they trigger on the ask. */
     drawSpread(g, width) {
       const q = this.spreadQuote();
+      this.showSeriesPrice(!q);
       if (!q) return;
-      const yb = this.series.priceToCoordinate(q.bid), ya = this.series.priceToCoordinate(q.ask);
-      if (yb == null || ya == null) return;
-      const color = (this.chartStyle.askColor || "#f5a524").slice(0, 7);
+      const st = this.chartStyle;
+      const line = (price, color, text, above) => {
+        const yy = this.series.priceToCoordinate(price);
+        if (yy == null) return;
+        const y = Math.round(yy) + 0.5;
+        g.strokeStyle = color; g.lineWidth = 1;
+        g.beginPath(); g.moveTo(0, y); g.lineTo(width, y); g.stroke();
+        g.fillStyle = color;
+        g.textBaseline = above ? "bottom" : "top";
+        g.fillText(text, width - 8, above ? y - 3 : y + 3);
+      };
       g.save();
-      g.fillStyle = rgba(color, 0.1);
-      g.fillRect(0, ya, width, Math.max(1, yb - ya));
-      const y = Math.round(ya) + 0.5;
-      g.strokeStyle = rgba(color, 0.85); g.lineWidth = 1; g.setLineDash([4, 3]);
-      g.beginPath(); g.moveTo(0, y); g.lineTo(width, y); g.stroke();
-      g.setLineDash([]);
       g.font = "11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
-      g.textAlign = "right"; g.textBaseline = "bottom";
-      g.fillStyle = color;
-      g.fillText(`Ask · spread ${spreadText(q.bid, q.ask, this.digits)}`, width - 8, y - 3);
+      g.textAlign = "right";
+      line(q.bid, (st.bidColor || "#f0455a").slice(0, 7), "Bid", false);
+      line(q.ask, (st.askColor || "#2b6bf3").slice(0, 7), `Ask · spread ${spreadText(q.bid, q.ask, this.digits)}`, true);
       g.restore();
+    },
+
+    /** The candle's own last-price line and label, hidden while the bid / ask lines stand in for them. */
+    showSeriesPrice(on) {
+      if (this.seriesPriceOn === on) return;
+      this.seriesPriceOn = on;
+      // Not inside the chart's own paint: apply on the next frame.
+      requestAnimationFrame(() => this.series && this.series.applyOptions({ priceLineVisible: on, lastValueVisible: on }));
     },
 
     countdownText() {
