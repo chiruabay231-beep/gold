@@ -415,7 +415,8 @@
   /** The bot over past bars, the same rules as CandleStopBot.backtest in the app: the orders of each
    * closed bar wait during the next one (open, the extreme reached first, the other one, close),
    * fill at their stop price, SL/TP at their price, no spread; unfilled orders live one bar. */
-  function stopBotBacktest(bars, c, value) {
+  function stopBotBacktest(bars, c, value, spread = 0) {
+    const sp = Math.max(+spread || 0, 0);
     const off = Math.max(+c.offset || 0, 0), rr = +c.rr || 0, dir = c.direction || "both";
     const minR = +c.minRange || 0, maxR = +c.maxRange || 0, fixed = c.stopMode === "fixed", dist = Math.max(+c.stopDistance || 0, 0);
     const ordersAfter = (b) => {
@@ -443,16 +444,19 @@
         for (const p of path) {
           let opened = false;
           for (const o of pending.slice()) {
-            if (o.above ? p >= o.entry : p <= o.entry) {
+            // Bars are bid prices: buys fill on the ask (bid + spread), sells on the bid.
+            const q = o.side === "long" ? p + sp : p;
+            if (o.above ? q >= o.entry : q <= o.entry) {
               pending.splice(pending.indexOf(o), 1);
               positions.push(Object.assign({}, o, { openTime: b.time }));
               opened = true;
             }
           }
           for (const pos of positions.slice()) {
-            const long = pos.side === "long";
-            if (long ? p <= pos.stop : p >= pos.stop) closeAt(pos, pos.stop, "stop", b);
-            else if (pos.target != null && (long ? p >= pos.target : p <= pos.target)) closeAt(pos, pos.target, "target", b);
+            // Buys close on the bid, sells on the ask.
+            const long = pos.side === "long", q = long ? p : p + sp;
+            if (long ? q <= pos.stop : q >= pos.stop) closeAt(pos, pos.stop, "stop", b);
+            else if (pos.target != null && (long ? q >= pos.target : q <= pos.target)) closeAt(pos, pos.target, "target", b);
           }
           if (c.oco !== false && opened) pending = [];
         }
@@ -463,8 +467,127 @@
       ordersAfter(b).forEach((o) => { o.above = o.entry > b.close; pending.push(o); placed++; });
     });
     const last = bars[bars.length - 1];
-    if (last) positions.slice().forEach((pos) => closeAt(pos, last.close, "end", last));
+    if (last) positions.slice().forEach((pos) => closeAt(pos, pos.side === "long" ? last.close : last.close + sp, "end", last));
     return { trades, placed };
+  }
+
+  /* ---------------- "Cản & Hỗ trợ" bot: the same rules as SRBot on the server (bot_server.py) ---------------- */
+
+  const SR_DEFAULTS = { symbol: "", interval: "1m", direction: "both", lots: 0.01, lookback: 300, swing: 3, zoneAtr: 0.3, minTouches: 2,
+    wickRatio: 0.45, pattern: "both", slBufferAtr: 0.1, rr: 2, trail: true, trailStartR: 0.5 };
+
+  function srAtr(bars, i, n = 14) {
+    if (i < n) return null;
+    let total = 0;
+    for (let j = i - n + 1; j <= i; j++) {
+      const b = bars[j], prev = bars[j - 1];
+      total += Math.max(b.high - b.low, Math.abs(b.high - prev.close), Math.abs(b.low - prev.close));
+    }
+    return total / n;
+  }
+
+  /** Zones from the swing highs and lows confirmed before bar i: [{price, touches}]. */
+  function srLevels(bars, i, cfg, atr) {
+    const k = Math.max(1, Math.floor(cfg.swing)), start = Math.max(k, i - Math.floor(cfg.lookback));
+    const prices = [];
+    for (let j = start; j < i - k; j++) {
+      const h = bars[j].high, l = bars[j].low;
+      let hi = true, lo = true;
+      for (let m = j - k; m < j; m++) { if (!(h > bars[m].high)) hi = false; if (!(l < bars[m].low)) lo = false; }
+      for (let m = j + 1; m <= j + k; m++) { if (!(h >= bars[m].high)) hi = false; if (!(l <= bars[m].low)) lo = false; }
+      if (hi) prices.push(h);
+      if (lo) prices.push(l);
+    }
+    prices.sort((a, b) => a - b);
+    const tol = atr * cfg.zoneAtr, levels = [];
+    let group = [], sum = 0;
+    for (const price of prices) {
+      if (group.length && price - sum / group.length > tol) { levels.push({ price: sum / group.length, touches: group.length }); group = []; sum = 0; }
+      group.push(price); sum += price;
+    }
+    if (group.length) levels.push({ price: sum / group.length, touches: group.length });
+    return levels.filter((lv) => lv.touches >= Math.floor(cfg.minTouches));
+  }
+
+  /** The trade closed bar i calls for: {side, level, stop} or null. */
+  function srSignal(bars, i, cfg) {
+    const atr = srAtr(bars, i);
+    if (!atr || i < 2) return null;
+    const b = bars[i], p = bars[i - 1], rng = b.high - b.low;
+    if (!(rng > 0)) return null;
+    const bodyLo = Math.min(b.open, b.close), bodyHi = Math.max(b.open, b.close), wick = +cfg.wickRatio;
+    const bullPin = (bodyLo - b.low) / rng >= wick && (b.close - b.low) / rng >= 0.5;
+    const bearPin = (b.high - bodyHi) / rng >= wick && (b.high - b.close) / rng >= 0.5;
+    const bullEng = b.close > b.open && p.close < p.open && b.close >= p.open && b.open <= p.close;
+    const bearEng = b.close < b.open && p.close > p.open && b.close <= p.open && b.open >= p.close;
+    let bull = (cfg.pattern !== "engulf" && bullPin) || (cfg.pattern !== "pin" && bullEng);
+    let bear = (cfg.pattern !== "engulf" && bearPin) || (cfg.pattern !== "pin" && bearEng);
+    if (cfg.direction === "short") bull = false;
+    if (cfg.direction === "long") bear = false;
+    if (bull === bear) return null;
+    const tol = atr * cfg.zoneAtr, buffer = atr * cfg.slBufferAtr;
+    let best = null;
+    for (const lv of srLevels(bars, i, cfg, atr)) {
+      let dist;
+      if (bull && b.low <= lv.price + tol && b.low >= lv.price - 2 * tol && b.close > lv.price) dist = Math.abs(b.low - lv.price);
+      else if (bear && b.high >= lv.price - tol && b.high <= lv.price + 2 * tol && b.close < lv.price) dist = Math.abs(b.high - lv.price);
+      else continue;
+      if (!best || lv.touches > best.touches || (lv.touches === best.touches && -dist > -best.dist)) best = { touches: lv.touches, dist, price: lv.price };
+    }
+    if (!best) return null;
+    return bull ? { side: "long", level: best.price, stop: b.low - buffer } : { side: "short", level: best.price, stop: b.high + buffer };
+  }
+
+  /** The stop after closed bar i: behind that candle once price has moved trailStartR × risk. */
+  function srTrail(bars, i, cfg, side, entry, firstStop, stop) {
+    if (!cfg.trail) return stop;
+    const atr = srAtr(bars, i);
+    if (!atr) return stop;
+    const b = bars[i], risk = Math.abs(entry - firstStop), buffer = atr * cfg.slBufferAtr;
+    if (side === "long") {
+      if (b.close - entry < cfg.trailStartR * risk) return stop;
+      const c = b.low - buffer;
+      return c > stop && c < b.close ? c : stop;
+    }
+    if (entry - b.close < cfg.trailStartR * risk) return stop;
+    const c = b.high + buffer;
+    return c < stop && c > b.close ? c : stop;
+  }
+
+  /** One position at a time, entered at the reaction candle's close (buys at the ask), SL/TP
+   * through the next candles (open, the extreme reached first, the other one, close), the SL
+   * trailed after each close. */
+  function srBacktest(bars, cfg, value, spread = 0) {
+    const sp = Math.max(+spread || 0, 0), trades = [];
+    let pos = null, signals = 0;
+    const close = (exit, reason, b) => { trades.push(Object.assign({}, pos, { exit, reason, closeTime: b.time, profit: value(pos.side, pos.entry, exit) })); pos = null; };
+    for (let i = 0; i < bars.length; i++) {
+      const b = bars[i];
+      if (pos && i > pos.index) {
+        const path = b.close >= b.open ? [b.open, b.low, b.high, b.close] : [b.open, b.high, b.low, b.close];
+        for (const p of path) {
+          const long = pos.side === "long", q = long ? p : p + sp;
+          if (long ? q <= pos.sl : q >= pos.sl) { close(pos.sl, pos.sl !== pos.stop ? "trail" : "stop", b); break; }
+          if (pos.target != null && (long ? q >= pos.target : q <= pos.target)) { close(pos.target, "target", b); break; }
+        }
+        if (pos) pos.sl = srTrail(bars, i, cfg, pos.side, pos.entry, pos.stop, pos.sl);
+      }
+      if (!pos && i >= 30) {
+        const sig = srSignal(bars, i, cfg);
+        if (sig) {
+          signals++;
+          const long = sig.side === "long", entry = long ? b.close + sp : b.close;
+          const risk = long ? entry - sig.stop : sig.stop - entry;
+          if (risk > 0) {
+            pos = { side: sig.side, entry, stop: sig.stop, sl: sig.stop, level: sig.level, index: i, openTime: b.time,
+              target: cfg.rr > 0 ? (long ? entry + cfg.rr * risk : entry - cfg.rr * risk) : null };
+          }
+        }
+      }
+    }
+    const last = bars[bars.length - 1];
+    if (pos && last) close(pos.side === "long" ? last.close : last.close + sp, "end", last);
+    return { trades, placed: signals };
   }
 
   /* ---------------- voice alerts, as in the app: TP / SL hit and fills read out ---------------- */
@@ -1366,7 +1489,7 @@
       if (t === "copy") this.loadCopy(first);
       if (t === "members" && first) this.loadMembers();
       if (t === "bot") this.loadBot(first);
-      if (t === "autobot") { this.loadAutoBot(first); this.loadStopBot(first); }
+      if (t === "autobot") { this.loadAutoBot(first); this.loadStopBot(first); this.loadSRBot(first); }
     },
 
     /* ----- history ----- */
@@ -1870,7 +1993,100 @@
 
     /* ----- the bot (owner only): run a strategy on the server, its trades and results ----- */
 
-    /* ----- backtest of the Stop bot: how it would have traded, with its trades on the chart ----- */
+    /* ----- "Cản & Hỗ trợ" bot on the server: zones from swing highs/lows, entry on a reaction candle ----- */
+
+    async loadSRBot(first) {
+      const el = $("srBotPanel");
+      let st = null, problem = "";
+      try { st = await this.call("/srbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 3.1 (tab Máy chủ → Cập nhật) để chạy bot này; backtest ở dưới vẫn dùng được." : plain(e.message); }
+      this.srStatus = st;
+      if (first || !el.querySelector("#srForm") || !el.contains(document.activeElement)) this.renderSRBot(st, problem);
+      else this.renderSRBotLive(st);
+    },
+
+    renderSRBot(st, problem) {
+      const c = Object.assign({}, SR_DEFAULTS, (st && st.config) || {});
+      if (!c.symbol) c.symbol = this.symbol || "XAUUSDm";
+      const el = $("srBotPanel");
+      const opt = (list, v) => list.map(([k, n]) => `<option value="${k}" ${String(k) === String(v) ? "selected" : ""}>${n}</option>`).join("");
+      el.innerHTML = `<div class="panel-head"><h3>🧱 Bot Cản & Hỗ trợ (M1)</h3>${st ? `<span class="badge ${c.running ? "on" : "off"}">${c.running ? "Đang chạy" : "Đang tắt"}</span>` : ""}</div>
+        <p class="muted small">Tìm vùng <b>cản / hỗ trợ</b> từ các đỉnh đáy gần đây (đỉnh cũ cũng làm hỗ trợ và ngược lại). Khi một nến đóng <b>phản ứng tại vùng</b> — râu nến từ chối giá hoặc nến nhấn chìm — bot vào lệnh ngay (chạm hỗ trợ bật lên = MUA, chạm cản bị đẩy xuống = BÁN), SL sau cây nến đó, TP = R:R × rủi ro. Mỗi nến đóng sau đó bot <b>dời SL theo đáy/đỉnh nến</b> khi lệnh đã lời. Chạy liên tục trên máy chủ, mỗi lúc một lệnh.</p>
+        ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
+        <div id="srForm">
+          <div class="fields three">
+            <label>Mã<input id="srSymbol" value="${esc(c.symbol)}"></label>
+            <label>Khung nến<select id="srInterval">${opt(["1m", "5m", "15m", "30m", "1h"].map((t) => [t, t]), c.interval)}</select></label>
+            <label>Chiều<select id="srDirection">${opt([["both", "Cả MUA và BÁN"], ["long", "Chỉ MUA ở hỗ trợ"], ["short", "Chỉ BÁN ở cản"]], c.direction)}</select></label>
+          </div>
+          <div class="fields three">
+            <label>Lot<input id="srLots" inputmode="decimal" value="${c.lots}"></label>
+            <label>R:R (TP = R:R × rủi ro, 0 = không TP)<input id="srRR" inputmode="decimal" value="${c.rr}"></label>
+            <label>Nến phản ứng<select id="srPattern">${opt([["both", "Râu từ chối hoặc nhấn chìm"], ["pin", "Chỉ râu từ chối (pin bar)"], ["engulf", "Chỉ nến nhấn chìm"]], c.pattern)}</select></label>
+          </div>
+          <div class="fields three">
+            <label>Râu tối thiểu (% cây nến)<input id="srWick" inputmode="decimal" value="${Math.round(c.wickRatio * 100)}"></label>
+            <label>Độ rộng vùng (× ATR)<input id="srZone" inputmode="decimal" value="${c.zoneAtr}"></label>
+            <label>Số lần chạm tối thiểu<input id="srTouches" inputmode="numeric" value="${c.minTouches}"></label>
+          </div>
+          <div class="fields three">
+            <label>Số nến nhìn lại<input id="srLookback" inputmode="numeric" value="${c.lookback}"></label>
+            <label>Đỉnh/đáy: số nến mỗi bên<input id="srSwing" inputmode="numeric" value="${c.swing}"></label>
+            <label>Đệm SL (× ATR)<input id="srBuffer" inputmode="decimal" value="${c.slBufferAtr}"></label>
+          </div>
+          <label class="check"><input type="checkbox" id="srTrail" ${c.trail ? "checked" : ""}> Dời SL theo đáy (lệnh MUA) / đỉnh (lệnh BÁN) của từng nến đóng</label>
+          <div class="fields three"><label>Bắt đầu dời khi lời (× rủi ro)<input id="srTrailStart" inputmode="decimal" value="${c.trailStartR}"></label></div>
+          <div class="row-btns">
+            ${!st ? "" : c.running ? '<button class="btn btn-ghost" id="srStop">■ Tắt bot</button><button class="btn btn-ghost" id="srSave">Lưu cài đặt</button>' : '<button class="btn btn-gold" id="srStart">▶ Bật bot Cản & Hỗ trợ</button>'}
+          </div>
+        </div>
+        <div id="srLive"></div>`;
+      const send = async (button, extra, done) => {
+        const r = await act(button, () => this.call("/srbot", Object.assign(this.srSettings(), extra)), done);
+        if (r) { this.srStatus = r; this.renderSRBot(r, ""); }
+      };
+      const start = $("srStart"), stop = $("srStop"), save = $("srSave");
+      if (start) start.onclick = (e) => send(e.currentTarget, { running: true }, "Đã bật bot: bot xem từ nến đóng tiếp theo");
+      if (stop) stop.onclick = (e) => send(e.currentTarget, { running: false }, "Đã tắt bot (lệnh đang mở giữ nguyên)");
+      if (save) save.onclick = (e) => send(e.currentTarget, {}, "Đã lưu");
+      this.renderSRBotLive(st);
+    },
+
+    renderSRBotLive(st) {
+      const live = $("srLive");
+      if (!live || !st) { if (live) live.innerHTML = ""; return; }
+      const d = (sym) => this.digitsFor(sym), s = st.stats || {};
+      live.innerHTML = `<div class="stats">
+          <div class="stat"><span>Lệnh đã đóng</span><b>${s.trades || 0}</b></div>
+          <div class="stat"><span>Thắng</span><b>${s.wins || 0}${s.trades ? ` (${Math.round(s.wins / s.trades * 100)}%)` : ""}</b></div>
+          <div class="stat"><span>Lãi/lỗ</span><b class="${(s.profit || 0) >= 0 ? "pos" : "neg"}">${signed(s.profit || 0)}</b></div>
+          <div class="stat"><span>Đang mở</span><b>${(st.positions || []).length}</b></div>
+        </div>
+        ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
+        <div class="list">${(st.positions || []).map((o) => `<div class="sig"><div class="bar" style="background:${o.side === "long" ? "#2b6bf3" : "var(--down)"}"></div>
+          <div><div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${o.side === "long" ? "buy" : "sell"}">${sideName(o.side)} ${o.lots}</span><span class="muted small">@ ${fmt(o.entry, d(o.symbol))}</span></div>
+          <div class="lv">SL ${o.stop ? fmt(o.stop, d(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, d(o.symbol)) : "–"}</div></div>
+          <div class="right"><div class="move ${(o.profit || 0) >= 0 ? "pos" : "neg"}">${signed(o.profit || 0)}</div></div></div>`).join("")}</div>
+        ${(st.events || []).length ? `<h4>Hoạt động</h4><div class="list log">${st.events.slice(0, 15).map((e) => `<div class="log-row"><span class="muted small">${clock(e.time)}</span> ${esc(e.text)}</div>`).join("")}</div>` : ""}`;
+    },
+
+    /** The Cản & Hỗ trợ bot's settings as its form shows them. */
+    srSettings() {
+      const c = Object.assign({}, SR_DEFAULTS, (this.srStatus && this.srStatus.config) || {});
+      const v = (id) => ($(id) ? $(id).value : null);
+      if ($("srSymbol")) {
+        Object.assign(c, {
+          symbol: v("srSymbol").trim(), interval: v("srInterval"), direction: v("srDirection"), pattern: v("srPattern"),
+          lots: num(v("srLots")) || 0.01, rr: num(v("srRR")) ?? 2, wickRatio: (num(v("srWick")) ?? 45) / 100,
+          zoneAtr: num(v("srZone")) || 0.3, minTouches: Math.max(1, Math.round(num(v("srTouches")) || 2)),
+          lookback: Math.max(30, Math.round(num(v("srLookback")) || 300)), swing: Math.max(1, Math.round(num(v("srSwing")) || 3)),
+          slBufferAtr: num(v("srBuffer")) ?? 0.1, trail: $("srTrail").checked, trailStartR: num(v("srTrailStart")) ?? 0.5,
+        });
+      }
+      c.symbol = c.symbol || this.symbol || "XAUUSDm";
+      return c;
+    },
+
+    /* ----- backtest of the bots: how they would have traded, with their trades on the chart ----- */
 
     /** The Stop bot's settings as the form above shows them (or as the server has them). */
     stopBotSettings() {
@@ -1893,9 +2109,12 @@
     renderStopBt() {
       const el = $("stopBtPanel");
       const days = +store.get("aurum.btDays") || 7;
-      el.innerHTML = `<div class="panel-head"><h3>🧪 Backtest bot Stop theo nến</h3></div>
-        <p class="muted small">Chạy bot với đúng cài đặt ở trên trên nến Exness đã qua: mỗi nến đóng đặt Buy Stop / Sell Stop, xem bot vào lệnh ở đâu, chạm TP hay SL, lời lỗ bao nhiêu. Không tính spread và trượt giá.</p>
+      const bot = store.get("aurum.btBot") || "stop";
+      el.innerHTML = `<div class="panel-head"><h3>🧪 Backtest bot</h3></div>
+        <p class="muted small">Chạy bot đã chọn với đúng cài đặt ở ô của bot đó (phía trên) trên nến Exness đã qua: xem bot vào lệnh ở đâu, chạm TP hay SL, lời lỗ bao nhiêu. Lệnh MUA khớp ở giá Ask = giá nến + spread, đóng ở Bid; lệnh BÁN ngược lại. Chưa tính trượt giá và phí.</p>
         <div class="fields three">
+          <label>Bot<select id="btBot"><option value="stop" ${bot === "stop" ? "selected" : ""}>🎯 Stop theo nến</option><option value="sr" ${bot === "sr" ? "selected" : ""}>🧱 Cản & Hỗ trợ</option></select></label>
+          <label>Spread (giá, trống = spread hiện tại)<input id="btSpread" inputmode="decimal" placeholder="VD vàng 0.16" value="${esc(store.get("aurum.btSpread") || "")}"></label>
           <label>Thời gian<select id="btDays">${[1, 3, 7, 14, 30, 60].map((d) => `<option value="${d}" ${d === days ? "selected" : ""}>${d} ngày</option>`).join("")}</select></label>
           <label>Vốn ban đầu<input id="btBalance" inputmode="decimal" value="${esc(store.get("aurum.btBalance") || "10000")}"></label>
           <label>&nbsp;<button class="btn btn-gold" id="btRun" type="button">▶ Chạy backtest</button></label>
@@ -1906,9 +2125,14 @@
     },
 
     async runStopBt() {
-      const c = this.stopBotSettings();
+      const bot = $("btBot").value;
+      const c = bot === "sr" ? this.srSettings() : this.stopBotSettings();
       const days = +$("btDays").value, balance = num($("btBalance").value) || 10000;
-      store.set("aurum.btDays", String(days)); store.set("aurum.btBalance", String(balance));
+      store.set("aurum.btDays", String(days)); store.set("aurum.btBalance", String(balance)); store.set("aurum.btBot", bot);
+      store.set("aurum.btSpread", $("btSpread").value.trim());
+      // Spread: as typed, or the live one when the backtest is on the chart's symbol.
+      let spread = num($("btSpread").value);
+      if (spread == null) spread = c.symbol === this.symbol && this.bid != null && this.ask != null ? Math.max(0, this.ask - this.bid) : 0;
       const sec = TF_SECONDS[c.interval] || 60, from = Date.now() / 1000 - days * 86400;
       const btn = $("btRun"), info = $("btInfo");
       btn.disabled = true;
@@ -1925,9 +2149,10 @@
         }
         bars = bars.filter((b) => b.time >= from);
         if (bars.length < 3) throw new Error(`MT5 chỉ trả ${bars.length} nến ${c.symbol} ${c.interval}`);
-        const r = stopBotBacktest(bars, c, (side, entry, exit) => this.valueAt(c.symbol, c.lots, side, entry, exit));
+        const value = (side, entry, exit) => this.valueAt(c.symbol, c.lots, side, entry, exit);
+        const r = bot === "sr" ? srBacktest(bars, c, value, spread) : stopBotBacktest(bars, c, value, spread);
         this.btShow = 30;
-        this.btResult = { c, bars: bars.length, from: bars[0].time, to: bars[bars.length - 1].time + sec, balance, placed: r.placed, trades: r.trades, digits: this.digitsFor(c.symbol) };
+        this.btResult = { bot, spread, c, bars: bars.length, from: bars[0].time, to: bars[bars.length - 1].time + sec, balance, placed: r.placed, trades: r.trades, digits: this.digitsFor(c.symbol) };
         info.textContent = "";
         this.renderStopBtResult();
       } catch (e) {
@@ -1952,13 +2177,14 @@
       const W = 600, H = 120, lo = Math.min(...curve), hi = Math.max(...curve), span = hi - lo || 1;
       const pts = curve.map((v, i) => `${(i / Math.max(curve.length - 1, 1) * W).toFixed(1)},${(H - 6 - (v - lo) / span * (H - 12)).toFixed(1)}`).join(" ");
       const color = net >= 0 ? "var(--up)" : "var(--down)";
-      const reason = { target: "chạm TP", stop: "chạm SL", end: "đóng cuối test" };
-      el.innerHTML = `<p class="muted small">${esc(R.c.symbol)} ${R.c.interval} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · R:R ${R.c.rr}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>
+      const reason = { target: "chạm TP", stop: "chạm SL", trail: "chạm SL đã dời", end: "đóng cuối test" };
+      const sr = R.bot === "sr";
+      el.innerHTML = `<p class="muted small">${sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · spread ${fmt(R.spread, R.digits)} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · R:R ${R.c.rr}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>
         <div class="stats">
           ${stat("Lãi/lỗ ròng", signed(net), net >= 0 ? "pos" : "neg")}
-          ${stat("Số lệnh", `${t.length} <span class="muted small">/ ${R.placed} lệnh chờ đặt</span>`)}
+          ${stat("Số lệnh", `${t.length} <span class="muted small">/ ${R.placed} ${sr ? "tín hiệu" : "lệnh chờ đặt"}</span>`)}
           ${stat("Thắng", t.length ? `${wins.length}/${t.length} · ${Math.round(wins.length / t.length * 100)}%` : "–")}
-          ${stat("Chạm TP / SL", `${tp} / ${sl}`)}
+          ${stat("Chạm TP / SL", `${tp} / ${sl}${sr ? ` <span class="muted small">· ${t.filter((x) => x.reason === "trail").length} SL dời</span>` : ""}`)}
           ${stat("Profit factor", gl > 0 ? (gp / gl).toFixed(2) : gp > 0 ? "∞" : "–")}
           ${stat("Sụt giảm lớn nhất", dd ? "−" + money(dd) : "0", dd ? "neg" : "")}
           ${stat("Lời TB / lỗ TB", `${wins.length ? signed(gp / wins.length) : "–"} / ${losses.length ? signed(-gl / losses.length) : "–"}`)}
@@ -1968,9 +2194,9 @@
         <div class="row-btns"><button class="btn btn-ghost" id="btChart" type="button" ${t.length ? "" : "disabled"}>📈 Xem các lệnh trên biểu đồ</button></div>
         <h4>Lệnh (mới nhất trước)</h4>
         <div class="list bt-trades">${t.length ? t.slice().reverse().slice(0, this.btShow || 30).map((x) => `<div class="sig"><div class="bar" style="background:${x.profit >= 0 ? "var(--up)" : "var(--down)"}"></div>
-          <div><div class="top"><span class="side ${x.side === "long" ? "buy" : "sell"}">${x.side === "long" ? "BUY STOP" : "SELL STOP"}</span>
+          <div><div class="top"><span class="side ${x.side === "long" ? "buy" : "sell"}">${sr ? (x.side === "long" ? "BUY" : "SELL") : x.side === "long" ? "BUY STOP" : "SELL STOP"}</span>
             <span class="muted small">${fmt(x.entry, d)} → ${fmt(x.exit, d)}</span></div>
-            <div class="lv">${reason[x.reason]} · ${clock(x.openTime)} ${day(x.openTime)} · SL ${fmt(x.stop, d)} · TP ${x.target != null ? fmt(x.target, d) : "–"}</div></div>
+            <div class="lv">${reason[x.reason]}${x.level != null ? ` · vùng ${fmt(x.level, d)}` : ""} · ${clock(x.openTime)} ${day(x.openTime)} · SL ${fmt(x.stop, d)} · TP ${x.target != null ? fmt(x.target, d) : "–"}</div></div>
           <div class="right"><div class="move ${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</div></div></div>`).join("") : '<div class="empty">Bot không vào lệnh nào trong khoảng này</div>'}</div>
         ${t.length > (this.btShow || 30) ? `<button class="linkish" id="btMore" type="button">Xem thêm (${t.length - (this.btShow || 30)} lệnh nữa)</button>` : ""}`;
       $("btChart").onclick = () => this.showBtOnChart();

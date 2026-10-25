@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "3.0"
+VERSION = "3.1"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2237,6 +2237,296 @@ class StopBot:
                     "events": self.events[:40], "error": self.error, "startedAt": self.started}
 
 
+# --------------------------------------------------------------------------
+# "Cản & Hỗ trợ" bot: support / resistance zones from the recent swing highs and
+# lows (both kinds: an old resistance can hold as support), and an entry when a
+# closed candle reacts at a zone (a rejection wick or an engulfing candle), SL
+# beyond that candle, TP = rr × risk, then the SL trails each closed candle.
+# The website's backtest (web/assets/app.js, srSignal / srBacktest) uses the
+# same rules; keep the two in step.
+
+SR_MAGIC = 20264
+DEFAULT_SRBOT = {"running": False, "symbol": "", "interval": "1m", "direction": "both", "lots": 0.01,
+                 "lookback": 300, "swing": 3, "zoneAtr": 0.3, "minTouches": 2, "wickRatio": 0.45,
+                 "pattern": "both", "slBufferAtr": 0.1, "rr": 2.0, "trail": True, "trailStartR": 0.5}
+
+
+def sr_atr(bars, i, n=14):
+    """Average true range of the n bars ending at i (None before there are enough)."""
+    if i < n:
+        return None
+    total = 0.0
+    for j in range(i - n + 1, i + 1):
+        b, prev = bars[j], bars[j - 1]
+        total += max(b["high"] - b["low"], abs(b["high"] - prev["close"]), abs(b["low"] - prev["close"]))
+    return total / n
+
+
+def sr_levels(bars, i, cfg, atr):
+    """Zones from the swing highs and lows confirmed before bar i: [(price, touches)]."""
+    k = max(1, int(cfg["swing"]))
+    start = max(k, i - int(cfg["lookback"]))
+    prices = []
+    for j in range(start, i - k):
+        h, l = bars[j]["high"], bars[j]["low"]
+        left = bars[j - k:j]
+        right = bars[j + 1:j + k + 1]
+        if all(h > b["high"] for b in left) and all(h >= b["high"] for b in right):
+            prices.append(h)
+        if all(l < b["low"] for b in left) and all(l <= b["low"] for b in right):
+            prices.append(l)
+    prices.sort()
+    tol = atr * float(cfg["zoneAtr"])
+    # A plain running sum (not sum(), which compensates rounding) so the website's backtest gets
+    # exactly the same zones.
+    levels, count, total = [], 0, 0.0
+    for price in prices:
+        if count and price - total / count > tol:
+            levels.append((total / count, count))
+            count, total = 0, 0.0
+        count += 1
+        total += price
+    if count:
+        levels.append((total / count, count))
+    return [lv for lv in levels if lv[1] >= int(cfg["minTouches"])]
+
+
+def sr_signal(bars, i, cfg):
+    """The trade the closed bar i calls for: (side, level, stop) or None."""
+    atr = sr_atr(bars, i)
+    if not atr or i < 2:
+        return None
+    b, p = bars[i], bars[i - 1]
+    rng = b["high"] - b["low"]
+    if rng <= 0:
+        return None
+    body_lo, body_hi = min(b["open"], b["close"]), max(b["open"], b["close"])
+    pattern = cfg["pattern"]
+    wick = float(cfg["wickRatio"])
+    bull_pin = (body_lo - b["low"]) / rng >= wick and (b["close"] - b["low"]) / rng >= 0.5
+    bear_pin = (b["high"] - body_hi) / rng >= wick and (b["high"] - b["close"]) / rng >= 0.5
+    bull_eng = b["close"] > b["open"] and p["close"] < p["open"] and b["close"] >= p["open"] and b["open"] <= p["close"]
+    bear_eng = b["close"] < b["open"] and p["close"] > p["open"] and b["close"] <= p["open"] and b["open"] >= p["close"]
+    bull = (pattern != "engulf" and bull_pin) or (pattern != "pin" and bull_eng)
+    bear = (pattern != "engulf" and bear_pin) or (pattern != "pin" and bear_eng)
+    if cfg["direction"] == "short":
+        bull = False
+    if cfg["direction"] == "long":
+        bear = False
+    if bull == bear:
+        return None
+    tol = atr * float(cfg["zoneAtr"])
+    buffer = atr * float(cfg["slBufferAtr"])
+    best = None
+    for price, touches in sr_levels(bars, i, cfg, atr):
+        if bull and b["low"] <= price + tol and b["low"] >= price - 2 * tol and b["close"] > price:
+            key = (touches, -abs(b["low"] - price))
+        elif bear and b["high"] >= price - tol and b["high"] <= price + 2 * tol and b["close"] < price:
+            key = (touches, -abs(b["high"] - price))
+        else:
+            continue
+        if best is None or key > best[0]:
+            best = (key, price)
+    if best is None:
+        return None
+    if bull:
+        return ("long", best[1], b["low"] - buffer)
+    return ("short", best[1], b["high"] + buffer)
+
+
+def sr_trail(bars, i, cfg, side, entry, first_stop, stop):
+    """The stop after closed bar i: behind that candle once price has moved trailStartR × risk."""
+    if not cfg["trail"]:
+        return stop
+    atr = sr_atr(bars, i)
+    if not atr:
+        return stop
+    b = bars[i]
+    risk = abs(entry - first_stop)
+    buffer = atr * float(cfg["slBufferAtr"])
+    if side == "long":
+        if b["close"] - entry < float(cfg["trailStartR"]) * risk:
+            return stop
+        candidate = b["low"] - buffer
+        return candidate if candidate > stop and candidate < b["close"] else stop
+    if entry - b["close"] < float(cfg["trailStartR"]) * risk:
+        return stop
+    candidate = b["high"] + buffer
+    return candidate if candidate < stop and candidate > b["close"] else stop
+
+
+class SRBot:
+    """"Cản & Hỗ trợ" on the MT5 account, after every closed candle: trails the SL of
+    its position, and when it has none, enters at market on a reaction at a zone."""
+
+    def __init__(self, server):
+        self.server = server
+        self.lock = threading.RLock()
+        self.events = []
+        self.last_bar = None
+        self.first_stop = {}   # ticket -> SL it opened with (the risk for trailStartR)
+        self.known = set()
+        self.error = ""
+        self.started = None
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    @property
+    def cfg(self):
+        c = self.server.config.setdefault("srbot", {})
+        for k, v in DEFAULT_SRBOT.items():
+            c.setdefault(k, v)
+        return c
+
+    def event(self, text, notify=False):
+        with self.lock:
+            self.events.insert(0, {"time": now(), "text": text})
+            del self.events[80:]
+        self.server.log("🧱 Bot Cản/Hỗ trợ: " + text, notify=notify)
+
+    def settings(self, body):
+        c = self.cfg
+        for key, cast in (("symbol", str), ("interval", str), ("direction", str), ("lots", float), ("lookback", int),
+                          ("swing", int), ("zoneAtr", float), ("minTouches", int), ("wickRatio", float), ("pattern", str),
+                          ("slBufferAtr", float), ("rr", float), ("trail", bool), ("trailStartR", float)):
+            if key in body:
+                c[key] = cast(body[key])
+        if c["interval"] not in MT5_TIMEFRAMES or c["interval"] == "1w":
+            raise ValueError("Khung không hợp lệ")
+        if c["direction"] not in ("both", "long", "short") or c["pattern"] not in ("both", "pin", "engulf"):
+            raise ValueError("Cài đặt không hợp lệ")
+        c["lots"] = max(0.01, c["lots"])
+        c["lookback"] = max(30, min(c["lookback"], 2000))
+        c["swing"] = max(1, min(c["swing"], 20))
+        if "running" in body:
+            on = bool(body["running"])
+            if on and not c["symbol"]:
+                raise ValueError("Chưa chọn mã")
+            if on and not c["running"]:
+                self.last_bar, self.known, self.error, self.started = None, set(), "", now()
+                self.event(f"BẬT · {c['symbol']} {c['interval']} · {c['lots']} lot · R:R {c['rr']}", notify=True)
+            if not on and c["running"]:
+                self.event("TẮT (lệnh đang mở giữ nguyên)", notify=True)
+            c["running"] = on
+        self.server.save_config()
+        return self.status()
+
+    def _mine(self, rows):
+        return [r for r in rows or () if getattr(r, "magic", 0) == SR_MAGIC]
+
+    def _loop(self):
+        while True:
+            time.sleep(1.5)
+            if not self.cfg["running"]:
+                continue
+            try:
+                with Mt5.lock:
+                    self._tick()
+                self.error = ""
+            except Exception as e:
+                if str(e) != self.error:
+                    self.event(f"lỗi: {e}")
+                self.error = str(e)
+
+    def _tick(self):
+        c = self.cfg
+        mt5 = Mt5.connect(self.server.config["mt5"])
+        self.server.mt5_account._check_trading(mt5)
+        symbol = c["symbol"]
+        info = mt5.symbol_info(symbol)
+        if info is None or not mt5.symbol_select(symbol, True):
+            raise ValueError(f"MT5 không có mã {symbol}")
+        positions = self._mine(mt5.positions_get(symbol=symbol))
+        tickets = {int(p.ticket) for p in positions}
+        for gone in self.known - tickets:
+            self.event(f"lệnh #{gone} đã đóng")
+            self.first_stop.pop(gone, None)
+        self.known = tickets
+        timeframe = getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[c["interval"]])
+        rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, int(c["lookback"]) + 40)
+        if rates is None or len(rates) < 30:
+            return
+        bar_time = float(rates[-2]["time"])  # the last closed candle
+        if self.last_bar is None:
+            self.last_bar = bar_time  # start with the next close
+            return
+        if bar_time <= self.last_bar:
+            return
+        self.last_bar = bar_time
+        bars = [{k: float(r[k]) for k in ("open", "high", "low", "close")} for r in rates[:-1]]
+        i = len(bars) - 1
+        d = info.digits
+        # Trail the SL of the bot's position behind the candle that just closed.
+        for p in positions:
+            long = p.type == mt5.POSITION_TYPE_BUY
+            first = self.first_stop.setdefault(int(p.ticket), p.sl or 0.0)
+            if not p.sl or not first:
+                continue
+            new = sr_trail(bars, i, c, "long" if long else "short", p.price_open, first, p.sl)
+            if abs(new - p.sl) >= (getattr(info, "point", 0) or 0) and round(new, d) != round(p.sl, d):
+                _, error = mt5_send(mt5, {"action": mt5.TRADE_ACTION_SLTP, "symbol": symbol, "position": p.ticket,
+                                          "sl": round(new, d), "tp": p.tp or 0.0, "magic": SR_MAGIC})
+                if error:
+                    self.event(f"không dời được SL #{p.ticket}: {error}")
+                else:
+                    self.event(f"dời SL #{p.ticket} → {fmt(new)}")
+        if positions:
+            return
+        signal = sr_signal(bars, i, c)
+        if not signal:
+            return
+        side, level, stop = signal
+        long = side == "long"
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            return
+        price = tick.ask if long else tick.bid
+        risk = price - stop if long else stop - price
+        if risk <= 0:
+            self.event(f"bỏ tín hiệu {'MUA' if long else 'BÁN'} tại {fmt(level)}: giá đã qua SL")
+            return
+        target = price + c["rr"] * risk if long else price - c["rr"] * risk
+        volume = self.server.mt5_account._volume(mt5, info, float(c["lots"]))
+        request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": volume,
+                   "type": mt5.ORDER_TYPE_BUY if long else mt5.ORDER_TYPE_SELL, "price": price,
+                   "sl": round(stop, d), "tp": round(target, d) if c["rr"] > 0 else 0.0,
+                   "magic": SR_MAGIC, "comment": "SRBot", "type_time": mt5.ORDER_TIME_GTC,
+                   "deviation": int(self.server.config["mt5"].get("deviation", 30))}
+        result, error = mt5_send(mt5, request)
+        what = f"{'MUA' if long else 'BÁN'} {volume} @ {fmt(price)} (vùng {fmt(level)}, SL {fmt(stop)})"
+        if error:
+            self.event(f"không vào được {what}: {error}")
+            return
+        ticket = int(getattr(result, "order", 0) or 0)
+        if ticket:
+            self.first_stop[ticket] = round(stop, d)
+            self.known.add(ticket)
+        self.event(f"vào {what}", notify=True)
+
+    def status(self):
+        c = dict(self.cfg)
+        positions, stats = [], {"trades": 0, "wins": 0, "profit": 0.0}
+        try:
+            with Mt5.lock:
+                mt5 = Mt5.connect(self.server.config["mt5"])
+                symbol = c["symbol"] or None
+                for p in self._mine(mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()):
+                    positions.append({"ticket": int(p.ticket), "symbol": p.symbol, "side": "long" if p.type == mt5.POSITION_TYPE_BUY else "short",
+                                      "lots": p.volume, "entry": p.price_open, "stop": p.sl or None, "target": p.tp or None,
+                                      "profit": p.profit + getattr(p, "swap", 0)})
+                since = self.started or now() - 86400
+                for d in mt5.history_deals_get(since + Mt5.offset_seconds - 60, now() + Mt5.offset_seconds + 86400) or ():
+                    if getattr(d, "magic", 0) == SR_MAGIC and d.entry == mt5.DEAL_ENTRY_OUT:
+                        pnl = d.profit + d.commission + d.swap + (getattr(d, "fee", 0) or 0)
+                        stats["trades"] += 1
+                        stats["wins"] += 1 if pnl > 0 else 0
+                        stats["profit"] += pnl
+        except Exception as e:
+            c["statusError"] = str(e)
+        with self.lock:
+            return {"ok": True, "config": c, "orders": [], "positions": positions, "stats": stats,
+                    "events": self.events[:40], "error": self.error, "startedAt": self.started}
+
+
 class NewsFeed:
     """This week's economic calendar (Forex Factory mirror) and gold headlines (Google
     News), fetched for the website: browsers cannot read those feeds themselves (CORS).
@@ -2599,6 +2889,7 @@ class BotServer:
         self.members = Members(self)
         self.news = NewsFeed()
         self.stopbot = StopBot(self)
+        self.srbot = SRBot(self)
         self.telegram = Telegram(self)
         self.tunnel = Tunnel(self) if self.config.get("tunnel") else None
         threading.Thread(target=self._relay_loop, daemon=True).start()
@@ -3113,6 +3404,8 @@ def make_handler(server):
                     return self._send(200, server.news.get())
                 if path == "/stopbot":
                     return self._send(200, server.stopbot.status())
+                if path == "/srbot":
+                    return self._send(200, server.srbot.status())
                 if path == "/status":
                     return self._send(200, server.status())
                 if path == "/log":
@@ -3167,6 +3460,8 @@ def make_handler(server):
                     return self._send(404, {"ok": False, "error": "Không có đường dẫn này"})
                 if path == "/stopbot":
                     return self._send(200, server.stopbot.settings(body))
+                if path == "/srbot":
+                    return self._send(200, server.srbot.settings(body))
                 if path == "/members/save":
                     return self._send(200, server.members.save(body))
                 if path == "/members/code":

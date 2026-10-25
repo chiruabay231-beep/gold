@@ -53,3 +53,17 @@ Chỉ báo khi trang đang mở. Điện thoại cần chạm vào trang một l
 
 Ô "N lệnh · lot · lãi/lỗ" kéo được tới bất kỳ đâu trên trang (giữ vị trí, hiện ở mọi tab);
 bấm đúp vào ⋮⋮ để trả về góc biểu đồ.
+
+## Bot Cản & Hỗ trợ (máy chủ 3.1) và backtest bot
+
+Tab Bot có ô **🧱 Bot Cản & Hỗ trợ (M1)**: vùng cản/hỗ trợ lấy từ các đỉnh đáy gần đây (gom các
+đỉnh/đáy cách nhau dưới "độ rộng vùng × ATR", cần đủ số lần chạm). Khi một nến đóng phản ứng tại
+vùng — râu từ chối giá (pin bar) hoặc nến nhấn chìm — bot vào lệnh ngay ở giá thị trường: chạm hỗ
+trợ bật lên = MUA, chạm cản bị đẩy xuống = BÁN. SL sau cây nến đó (+ đệm × ATR), TP = R:R × rủi ro.
+Mỗi nến đóng sau đó, khi lệnh đã lời ≥ "bắt đầu dời" × rủi ro, SL được dời theo đáy (MUA) / đỉnh
+(BÁN) của nến vừa đóng. Mỗi lúc một lệnh, chạy liên tục trên máy chủ (magic 20264).
+
+Ô **🧪 Backtest bot** chọn bot (Stop theo nến hoặc Cản & Hỗ trợ), số ngày, vốn và **spread**: lệnh
+MUA khớp ở Ask = giá nến + spread và đóng ở Bid, lệnh BÁN ngược lại (trống = spread hiện tại của mã
+trên biểu đồ). Backtest dùng đúng quy tắc của bot trên máy chủ (`srSignal` trong web/assets/app.js
+và `sr_signal` trong bot_server.py cho cùng kết quả).
