@@ -237,6 +237,8 @@ final class LiveMarket {
     func stop() {
         task?.cancel()
         task = nil
+        quoteTask?.cancel()
+        quoteTask = nil
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         status = .idle
@@ -283,6 +285,8 @@ final class LiveMarket {
                     .map(\.candle)
             case .mt5:
                 guard let client = RemoteBotSettings.client() else { return [] }
+                // Second bars come from Binance trades; there is no older history to fetch.
+                if interval.isSeconds { return [] }
                 older = try await client.mt5Candles(symbol: symbol, interval: interval, count: count, before: first.time)
             }
         } catch {
@@ -318,6 +322,10 @@ final class LiveMarket {
         var failures = 0
         while !Task.isCancelled {
             status = .loading
+            quoteTask?.cancel()
+            quoteTask = nil
+            feed = nil
+            feedOffset = 0
             do {
                 switch source {
                 case .binance, .binanceFutures:
@@ -356,8 +364,11 @@ final class LiveMarket {
                     guard let client = RemoteBotSettings.client() else {
                         throw RemoteBotClient.ServerError(message: "Chưa kết nối máy chủ VPS (Giao dịch → Đăng nhập)")
                     }
-                    guard !interval.isSeconds else {
-                        throw RemoteBotClient.ServerError(message: "MT5 không có khung giây: chọn 1m trở lên")
+                    if interval.isSeconds {
+                        try await loadSecondsFromBinance(client)
+                        failures = 0
+                        try await stream()
+                        continue
                     }
                     let history = try await client.mt5Candles(symbol: symbol, interval: interval, count: 1000)
                     guard !Task.isCancelled else { return }
@@ -383,11 +394,81 @@ final class LiveMarket {
 
     private var binanceMarket: BinanceClient.Market { source == .binanceFutures ? .futures : .spot }
 
+    // MARK: - Second bars on an MT5 chart
+
+    /// MT5 has no bars under a minute: on an MT5 chart the 5s–30s bars come from Binance (gold and
+    /// silver from the futures trades, crypto from spot), moved onto the broker's price; orders and
+    /// the bid/ask still come from MT5. Nil for symbols Binance does not have (forex, indices).
+    static func binanceFeed(for mt5Symbol: String) -> (symbol: String, market: BinanceClient.Market)? {
+        let s = mt5Symbol.uppercased()
+        if s.contains("XAU") || s.contains("GOLD") { return ("XAUUSDT", .futures) }
+        if s.contains("XAG") || s.contains("SILVER") { return ("XAGUSDT", .futures) }
+        for coin in ["BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "LTC", "TRX", "DOT", "LINK", "AVAX", "TON"] where s.hasPrefix(coin) {
+            return (coin + "USDT", .spot)
+        }
+        return nil
+    }
+
+    /// The Binance market the bars come from while an MT5 chart shows second bars.
+    @ObservationIgnored private var feed: (symbol: String, market: BinanceClient.Market)?
+    /// Added to Binance prices so the bars sit on the broker's bid (gold on Binance ≠ Exness).
+    @ObservationIgnored private var feedOffset = 0.0
+    @ObservationIgnored private var quoteTask: Task<Void, Never>?
+    /// The symbol and market the WebSocket reads.
+    private var streamSymbol: String { feed?.symbol ?? symbol }
+    private var streamMarket: BinanceClient.Market { feed?.market ?? binanceMarket }
+
+    /// Second bars on an MT5 chart: Binance bars moved onto the broker's price for the chart, the
+    /// broker's bid/ask polled alongside for the order buttons. The bars then come from `stream()`.
+    private func loadSecondsFromBinance(_ client: RemoteBotClient) async throws {
+        guard let source = Self.binanceFeed(for: symbol) else {
+            throw RemoteBotClient.ServerError(message: "Khung giây chỉ có cho vàng, bạc và crypto (nến lấy từ Binance): chọn 1m trở lên")
+        }
+        let symbol = self.symbol, interval = self.interval
+        var history = try await BinanceClient.withFallback(market: source.market) { binance in
+            try await binance.fetchSecondCandles(symbol: source.symbol, seconds: interval.seconds, count: 500)
+        }
+        guard !Task.isCancelled else { throw CancellationError() }
+        // The gap between Binance and the broker's bid (MT5 bars are bid prices); a gap over 1 %
+        // means a different market, so the bars are left as they are.
+        var offset = 0.0
+        if let bars = try? await client.mt5Bars(symbol: symbol, interval: .m1, count: 1),
+           let bid = bars.bid, let ask = bars.ask, bid > 0, ask >= bid, let last = history.last?.close {
+            setQuote(bid: bid, ask: ask)
+            if abs(bid - last) < last * 0.01 { offset = bid - last }
+        }
+        guard !Task.isCancelled else { throw CancellationError() }
+        if offset != 0 {
+            history = history.map {
+                Candle(time: $0.time, open: $0.open + offset, high: $0.high + offset,
+                       low: $0.low + offset, close: $0.close + offset, volume: $0.volume)
+            }
+        }
+        feed = source
+        feedOffset = offset
+        buffer = LiveCandleBuffer(candles: history, maxCount: LiveMarket.maxBars)
+        pendingBuffer = nil
+        lastBarClosed = false
+        ticker = nil
+        reachedStart = true
+        rescan(alert: false)
+        // The broker's bid/ask every 2 s, for the order buttons, the spread and demo fills.
+        quoteTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 2_000_000_000)
+                guard let bars = try? await client.mt5Bars(symbol: symbol, interval: .m1, count: 1),
+                      let bid = bars.bid, let ask = bars.ask, bid > 0, ask >= bid else { continue }
+                guard !Task.isCancelled, let self, self.feed != nil, self.symbol == symbol else { return }
+                self.setQuote(bid: bid, ask: ask)
+            }
+        }
+    }
+
     /// Reads the WebSocket until it fails, trying each stream host in turn.
     private func stream() async throws {
         var lastError: Error = URLError(.cannotConnectToHost)
-        for host in binanceMarket.streamHosts {
-            let url = BinanceStreamEvent.url(host: host, symbol: symbol, interval: interval)
+        for host in streamMarket.streamHosts {
+            let url = BinanceStreamEvent.url(host: host, symbol: streamSymbol, interval: interval)
             let socket = URLSession.shared.webSocketTask(with: url)
             self.socket = socket
             socket.resume()
@@ -517,18 +598,20 @@ final class LiveMarket {
                 ticker = t
             }
         case .book(let bookSymbol, let bid, let ask):
-            guard bookSymbol.uppercased() == symbol else { return }
+            // On an MT5 chart the bid/ask is the broker's, not Binance's.
+            guard feed == nil, bookSymbol.uppercased() == symbol else { return }
             setQuote(bid: bid, ask: ask)
             if let last = buffer.candles.last?.close { emitPrice(last) }
         case .ticker(let t):
-            if t.symbol.uppercased() == symbol {
+            if feed == nil, t.symbol.uppercased() == symbol {
                 var t = t
                 // Seconds bars: the newest trade is fresher than the ticker.
                 if interval.isSeconds, let close = (pendingBuffer ?? buffer).candles.last?.close { t.lastPrice = close }
                 ticker = t
             }
-        case .trade(let tradeSymbol, let trade):
-            guard tradeSymbol.uppercased() == symbol, interval.isSeconds else { return }
+        case .trade(let tradeSymbol, var trade):
+            guard tradeSymbol.uppercased() == streamSymbol, interval.isSeconds else { return }
+            trade.price += feedOffset
             var working = pendingBuffer ?? buffer
             let update = working.apply(trade: trade, seconds: interval.seconds)
             emitPrice(trade.price, time: trade.time)

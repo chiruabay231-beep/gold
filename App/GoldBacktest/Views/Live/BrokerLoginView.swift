@@ -127,7 +127,8 @@ struct BrokerTradeView: View {
 
         .sheet(isPresented: $showSymbols) {
             MT5SymbolSearchView { symbol in
-                market.select(source: .mt5, symbol: symbol, interval: market.interval.isSeconds ? .m1 : nil)
+                let noSeconds = market.interval.isSeconds && LiveMarket.binanceFeed(for: symbol) == nil
+                market.select(source: .mt5, symbol: symbol, interval: noSeconds ? .m1 : nil)
                 store.selectedTab = .live
             }
         }

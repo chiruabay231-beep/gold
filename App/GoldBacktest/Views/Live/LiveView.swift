@@ -1845,9 +1845,9 @@ struct LiveView: View {
         if replay.isActive { endReplay() }
         viewport = ChartViewport()
         selectedDrawingID = nil
-        // MT5 has no second bars: fall back to 1m.
-        market.select(source: source, symbol: cleaned,
-                      interval: source == .mt5 && market.interval.isSeconds ? .m1 : nil)
+        // MT5 second bars come from Binance, which has gold, silver and crypto only: else 1m.
+        let noSeconds = source == .mt5 && market.interval.isSeconds && LiveMarket.binanceFeed(for: cleaned) == nil
+        market.select(source: source, symbol: cleaned, interval: noSeconds ? .m1 : nil)
     }
 
     private func open(oanda instrument: String) {
