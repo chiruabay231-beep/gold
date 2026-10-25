@@ -422,6 +422,13 @@
 
     get current() { return this.list.find((d) => d.id === this.selected) || null; }
 
+    /** The drawing under the mouse (labels of positions light up). */
+    hover(id) {
+      if (id === this.hoverId) return;
+      this.hoverId = id;
+      this.update();
+    }
+
     remove(id) {
       this.list = this.list.filter((d) => d.id !== id);
       if (this.selected === id) this.selected = null;
@@ -800,27 +807,31 @@
         g.fillStyle = c; g.beginPath(); g.arc(nowX, nowY, 3.5, 0, Math.PI * 2); g.fill();
         g.strokeStyle = light ? "#fff" : "#0b0f17"; g.lineWidth = 1.5; g.stroke();
       }
-      // Labels outside the box, the same way round for buys and sells.
+      // Labels outside the box, the same way round for buys and sells: short, no prices, and faint
+      // unless the position is picked or under the mouse.
       const risk = Math.abs(entry - stop), reward = Math.abs(target - entry);
       const rr = risk ? reward / risk : 0;
       const pct = (v) => (v / entry * 100).toFixed(2) + "%";
       const mid = (left + right) / 2;
       const outside = (y, up) => (up ? y - 7 : y + 26);
-      tag(`▲ Mục tiêu ${target.toFixed(dg)}  ·  +${reward.toFixed(dg)} (${pct(reward)})  ·  ${rr.toFixed(2)}R`, mid, outside(yt, yt < ye), tc, "#fff", "center");
-      tag(`▼ Dừng lỗ ${stop.toFixed(dg)}  ·  −${risk.toFixed(dg)} (${pct(risk)})  ·  1R`, mid, outside(ys, ys < ye), sc, "#fff", "center");
+      const active = d.id === this.selected || d.id === this.hoverId || d === this.pending;
+      g.globalAlpha = active ? 1 : 0.42;
+      tag(`▲ +${reward.toFixed(dg)}  (${pct(reward)})`, mid, outside(yt, yt < ye), tc, "#fff", "center");
+      tag(`▼ −${risk.toFixed(dg)}  (${pct(risk)})`, mid, outside(ys, ys < ye), sc, "#fff", "center");
       // Entry pill: the side, the price, R:R, and how it is going.
       let status = "", statusColor = null;
       if (prog) {
         const moved = long ? prog.price - entry : entry - prog.price;
         const r = risk ? moved / risk : 0;
-        if (prog.status === "target") { status = `✓ Chạm TP  +${rr.toFixed(2)}R`; statusColor = tc; }
-        else if (prog.status === "stop") { status = "✕ Chạm SL  −1R"; statusColor = sc; }
+        if (prog.status === "target") { status = `✓ TP  +${rr.toFixed(2)}R`; statusColor = tc; }
+        else if (prog.status === "stop") { status = "✕ SL  −1R"; statusColor = sc; }
         else { status = `${moved >= 0 ? "+" : "−"}${Math.abs(moved).toFixed(dg)}  ·  ${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R`; statusColor = moved >= 0 ? tc : sc; }
       }
       g.save();
+      g.globalAlpha = active ? 1 : 0.42;
       g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
       g.textBaseline = "middle";
-      const sideText = long ? "MUA" : "BÁN", body = `${entry.toFixed(dg)}  ·  R:R ${rr.toFixed(2)}`;
+      const sideText = long ? "MUA" : "BÁN", body = `R:R ${rr.toFixed(2)}`;
       const sw = g.measureText(sideText).width + 14, bwid = g.measureText(body).width + 16, stw = status ? g.measureText(status).width + 14 : 0;
       const total = sw + bwid + stw, h = 20, px = mid - total / 2, py = ye - h / 2;
       g.shadowColor = "rgba(0, 0, 0, 0.3)"; g.shadowBlur = 8; g.shadowOffsetY = 1;

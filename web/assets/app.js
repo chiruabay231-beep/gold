@@ -3233,9 +3233,11 @@
         if (this.drawings && this.drawings.pending) { this.drawings.move(x, y); return; }
         if (e.pointerType !== "mouse") return;
         const overDrawing = this.drawings && x <= paneWidth() && this.drawings.hitTest(x, y, 8);
+        if (this.drawings) this.drawings.hover(overDrawing ? overDrawing.d.id : null);
         wrap.style.cursor = this.drawings && this.drawings.tool ? "crosshair"
           : overDrawing ? "move" : x <= paneWidth() && hit(y, draggable) ? "ns-resize" : "";
       });
+      wrap.addEventListener("pointerleave", () => { if (this.drawings) this.drawings.hover(null); });
       window.addEventListener("pointermove", (e) => {
         if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down.moved = true; clearTimeout(longPress); }
         if (this.drawGesture) { const { x, y } = rel(e); this.drawings.move(x, y); return; }
