@@ -1240,6 +1240,7 @@
       const step = dir > 0 ? (v < 1 ? 0.01 : v < 10 ? 0.1 : 1) : (v <= 1 ? 0.01 : v <= 10 ? 0.1 : 1);
       input.value = clampLots(v + step * dir).toFixed(2);
       store.set(key, input.value);
+      if (this.draft) this.updatePendingLabels();
     },
 
     /** Lot choices under a lot box, up to the most allowed (200 lot, or the server's limit). */
@@ -1260,6 +1261,7 @@
         input.value = clampLots(+b.dataset.v).toFixed(2);
         store.set(key, input.value);
         this.closeMenu();
+        if (this.draft) this.updatePendingLabels();
         if (+b.dataset.v > max) toast(`Máy chủ chỉ cho tối đa ${max} lot mỗi lệnh: lệnh ${b.dataset.v} lot sẽ bị từ chối`, true);
       }));
       const raise = menu.querySelector("[data-raise]");
@@ -1297,6 +1299,23 @@
       const b = $("pPlace");
       b.textContent = `Đặt ${kind} ${this.lots().toFixed(2)}`;
       b.className = "btn btn-small pend " + (side === "long" ? "buy" : "sell");
+      this.renderDraftBar(price, side, kind);
+    },
+
+    /** The pending order being set up, confirmed right on the chart (the full form is under it). */
+    renderDraftBar(price, side, kind) {
+      const bar = $("draftBar");
+      if (!this.draft || price == null) { bar.hidden = true; return; }
+      const sl = num($("pStop").value), tp = num($("pTarget").value), lots = this.lots();
+      const money = (lv) => (lv == null ? "" : ` <span class="${(this.valueAt(this.symbol, lots, side, price, lv) || 0) >= 0 ? "pos" : "neg"}">${money0(this.valueAt(this.symbol, lots, side, price, lv))}</span>`);
+      bar.hidden = false;
+      bar.innerHTML = `<span class="dk ${side === "long" ? "buy" : "sell"}">${kind}</span>
+        <span><b>${lots.toFixed(2)}</b> @ <b>${fmt(price, this.digits)}</b></span>
+        <span class="muted">SL ${sl != null ? fmt(sl, this.digits) + money(sl) : "–"} · TP ${tp != null ? fmt(tp, this.digits) + money(tp) : "–"}</span>
+        <button type="button" class="go ${side === "long" ? "buy" : "sell"}" data-a="place">Đặt lệnh</button>
+        <button type="button" class="x" data-a="cancel" title="Huỷ">✕</button>`;
+      bar.querySelector("[data-a=place]").onclick = (e) => this.pendingOrder(e.currentTarget);
+      bar.querySelector("[data-a=cancel]").onclick = () => this.togglePending(false);
     },
 
     /** SL and TP keep their distances from the entry, on the order's side. */
@@ -1341,6 +1360,7 @@
       } else {
         this.draft = null;
         $("pPrice").value = ""; $("pStop").value = ""; $("pTarget").value = "";
+        $("draftBar").hidden = true;
       }
       this.updatePendingLabels();
       this.syncLines();
@@ -3180,7 +3200,7 @@
       wrap.addEventListener("pointerdown", (e) => {
         this.closeMenu();
         this.focusChart(1);
-        if (e.button > 0 || e.target.closest("#selBar, #posPill, #ticket, #drawBar, #favBar")) return;
+        if (e.button > 0 || e.target.closest("#selBar, #posPill, #ticket, #drawBar, #favBar, #draftBar, #btChip")) return;
         const { x, y } = rel(e);
         down = { x: e.clientX, y: e.clientY, moved: false, menu: false };
         if (x > paneWidth()) return;
