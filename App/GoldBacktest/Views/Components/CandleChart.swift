@@ -1099,7 +1099,7 @@ struct CandleChart: View {
             context.draw(textView, at: CGPoint(x: box.midX, y: box.midY), anchor: .center)
         case .longPosition, .shortPosition:
             guard let levels = d.positionLevels, points.count > 1 else { break }
-            drawPosition(d, levels: levels, points: points, s: s, selected: selected, in: &context)
+            drawPosition(d, levels: levels, points: points, s: s, selected: selected, decimals: decimals, in: &context)
         case .elliottImpulse, .elliottCorrection:
             var path = Path()
             path.addLines(points)
@@ -1234,7 +1234,7 @@ struct CandleChart: View {
     /// R:R gauge on the right edge, short labels outside the box (faint unless selected), and an
     /// entry pill with the side, R:R and how it is going.
     private func drawPosition(_ d: Drawing, levels: (entry: Double, stop: Double, target: Double),
-                              points: [CGPoint], s: Scale, selected: Bool, in context: inout GraphicsContext) {
+                              points: [CGPoint], s: Scale, selected: Bool, decimals: Int, in context: inout GraphicsContext) {
         let isLong = d.tool == .longPosition
         let progress = positionProgress(d, levels: levels)
         let left = min(points[0].x, points[1].x)
