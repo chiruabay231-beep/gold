@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "2.9"
+VERSION = "3.0"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -698,7 +698,7 @@ class Mt5Account:
                 if key in body:
                     self.cfg[key] = bool(body[key])
             if "max_lots" in body:
-                self.cfg["max_lots"] = max(0.01, min(float(body["max_lots"]), 100.0))
+                self.cfg["max_lots"] = max(0.01, min(float(body["max_lots"]), 200.0))
             self.server.save_config()
         self.server.log(f"⚙︎ MT5: đặt lệnh từ app {'BẬT' if self.cfg.get('trading_enabled') else 'TẮT'}, "
                         f"tài khoản thật {'cho phép' if self.cfg.get('allow_real_account') else 'chặn'}, "

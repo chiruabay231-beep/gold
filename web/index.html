@@ -177,9 +177,10 @@
                 <div class="qt-mid">
                   <span class="spread" id="spread" title="Spread (điểm)"></span>
                   <div class="qt-lot">
-                    <button type="button" data-step="-1">−</button>
+                    <button type="button" data-step="-1" aria-label="Giảm lot">−</button>
                     <input id="lotInput" inputmode="decimal" value="0.01" title="Khối lượng (lot)">
-                    <button type="button" data-step="1">+</button>
+                    <button type="button" class="lot-pick" id="lotPick" title="Chọn nhanh khối lượng (tối đa 200 lot)">▾</button>
+                    <button type="button" data-step="1" aria-label="Tăng lot">+</button>
                   </div>
                 </div>
                 <button class="qt buy" id="buyBtn" type="button"><b id="askText">—</b><span>MUA</span></button>
@@ -200,9 +201,10 @@
                 <div class="qt-mid">
                   <span class="spread" id="spread2" title="Spread (điểm)"></span>
                   <div class="qt-lot">
-                    <button type="button" data-step2="-1">−</button>
+                    <button type="button" data-step2="-1" aria-label="Giảm lot">−</button>
                     <input id="lotInput2" inputmode="decimal" value="0.01" title="Khối lượng (lot)">
-                    <button type="button" data-step2="1">+</button>
+                    <button type="button" class="lot-pick" id="lotPick2" title="Chọn nhanh khối lượng (tối đa 200 lot)">▾</button>
+                    <button type="button" data-step2="1" aria-label="Tăng lot">+</button>
                   </div>
                 </div>
                 <button class="qt buy" id="buyBtn2" type="button"><b id="askText2">—</b><span>MUA</span></button>

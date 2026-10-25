@@ -352,6 +352,10 @@
     close() { if (this.ws) { this.ws.onmessage = null; this.ws.close(); } this.ws = null; }
   }
 
+  /** Lots of one order: 0.01 to 200, two decimals. */
+  const MAX_LOTS = 200;
+  const clampLots = (v) => Math.min(MAX_LOTS, Math.max(0.01, Math.round((v || 0.01) * 100) / 100));
+
   /** Money on a line label: "+45.20 USD" style, short. */
   const money0 = (v) => (v == null || !isFinite(v) ? "" : (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(2));
 
@@ -1089,7 +1093,44 @@
 
     /* ----- order ticket ----- */
 
-    lots() { return Math.max(0.01, Math.round((num($("lotInput").value) || 0.01) * 100) / 100); },
+    lots() { return clampLots(num($("lotInput").value)); },
+
+    /** − / + on a lot box: 0.01 a step under 1 lot, 0.1 under 10, then 1. */
+    stepLots(input, dir, key) {
+      const v = clampLots(num(input.value));
+      const step = dir > 0 ? (v < 1 ? 0.01 : v < 10 ? 0.1 : 1) : (v <= 1 ? 0.01 : v <= 10 ? 0.1 : 1);
+      input.value = clampLots(v + step * dir).toFixed(2);
+      store.set(key, input.value);
+    },
+
+    /** Lot choices under a lot box, up to the most allowed (200 lot, or the server's limit). */
+    lotMenu(input, key) {
+      const menu = $("ctxMenu");
+      const serverMax = this.owner && this.account && this.account.maxLots ? +this.account.maxLots : null;
+      const max = Math.min(MAX_LOTS, serverMax || MAX_LOTS);
+      const list = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200];
+      const cur = clampLots(num(input.value));
+      menu.innerHTML = `<div class="lot-menu">${list.map((v) => `<button type="button" data-v="${v}" class="${cur === v ? "on" : ""} ${v > max ? "over" : ""}" ${v > max ? `title="Vượt giới hạn máy chủ ${max} lot"` : ""}>${v}</button>`).join("")}
+        <button type="button" data-v="${max}" class="max">MAX · ${max} lot</button></div>
+        ${serverMax && serverMax < MAX_LOTS ? `<p class="muted small lot-note">Máy chủ đang cho tối đa ${serverMax} lot mỗi lệnh.</p><button type="button" class="lot-raise" data-raise>Nâng giới hạn máy chủ lên ${MAX_LOTS} lot</button>` : `<p class="muted small lot-note">Tối đa ${MAX_LOTS} lot mỗi lệnh.</p>`}`;
+      menu.hidden = false;
+      const r = input.getBoundingClientRect();
+      menu.style.left = Math.max(8, Math.min(r.left - 60, window.innerWidth - menu.offsetWidth - 8)) + "px";
+      menu.style.top = Math.min(r.bottom + 6, window.innerHeight - menu.offsetHeight - 8) + "px";
+      menu.querySelectorAll("[data-v]").forEach((b) => (b.onclick = () => {
+        input.value = clampLots(+b.dataset.v).toFixed(2);
+        store.set(key, input.value);
+        this.closeMenu();
+        if (+b.dataset.v > max) toast(`Máy chủ chỉ cho tối đa ${max} lot mỗi lệnh: lệnh ${b.dataset.v} lot sẽ bị từ chối`, true);
+      }));
+      const raise = menu.querySelector("[data-raise]");
+      if (raise) raise.onclick = async () => {
+        if (!confirm(`Cho phép đặt tới ${MAX_LOTS} lot mỗi lệnh? Khối lượng lớn rủi ro rất cao.`)) return;
+        const t = this.account || {};
+        const res = await act(raise, () => this.call("/mt5/settings", { trading_enabled: !!t.tradingEnabled, allow_real_account: !!t.allowReal, max_lots: MAX_LOTS }), "Đã nâng giới hạn");
+        if (res) { this.account = Object.assign({}, this.account, { maxLots: res.maxLots }); this.closeMenu(); if (res.maxLots < MAX_LOTS) toast(`Máy chủ chỉ nhận tới ${res.maxLots} lot: cập nhật máy chủ lên bản 3.0`, true); }
+      };
+    },
 
     async marketOrder(side, button, symbol = this.symbol, lots = this.lots()) {
       if (this.replay) return this.replayOrder(side);
@@ -2286,10 +2327,8 @@
       $("buyBtn").onclick = (e) => this.marketOrder("long", e.currentTarget);
       $("lotInput").value = store.get("aurum.lots") || "0.01";
       $("lotInput").onchange = () => { $("lotInput").value = this.lots().toFixed(2); store.set("aurum.lots", $("lotInput").value); };
-      document.querySelectorAll(".lots [data-step]").forEach((b) => (b.onclick = () => {
-        $("lotInput").value = Math.max(0.01, this.lots() + 0.01 * +b.dataset.step).toFixed(2);
-        store.set("aurum.lots", $("lotInput").value);
-      }));
+      document.querySelectorAll("#ticket [data-step]").forEach((b) => (b.onclick = () => this.stepLots($("lotInput"), +b.dataset.step, "aurum.lots")));
+      $("lotPick").onclick = () => this.lotMenu($("lotInput"), "aurum.lots");
       $("pendingToggle").onclick = () => this.togglePending();
       $("pPrice").oninput = () => { this.placeDraftStops(); this.updatePendingLabels(); this.syncLines(); };
       ["pStop", "pTarget"].forEach((id) => ($(id).oninput = () => { this.readDraftDist(); this.syncLines(); }));
@@ -2299,13 +2338,11 @@
       $("layoutBtn").onclick = (e) => this.layoutMenu(e.currentTarget);
       $("chartSymbol2").onclick = () => { if (this.owner) this.pickCmp(); };
       // The second chart trades its own symbol; ⇄ swaps the two charts.
-      const lots2 = () => Math.max(0.01, Math.round((num($("lotInput2").value) || 0.01) * 100) / 100);
+      const lots2 = () => clampLots(num($("lotInput2").value));
       $("lotInput2").value = store.get("aurum.lots2") || "0.01";
       $("lotInput2").onchange = () => { $("lotInput2").value = lots2().toFixed(2); store.set("aurum.lots2", $("lotInput2").value); };
-      document.querySelectorAll("[data-step2]").forEach((b) => (b.onclick = () => {
-        $("lotInput2").value = Math.max(0.01, lots2() + 0.01 * +b.dataset.step2).toFixed(2);
-        store.set("aurum.lots2", $("lotInput2").value);
-      }));
+      document.querySelectorAll("[data-step2]").forEach((b) => (b.onclick = () => this.stepLots($("lotInput2"), +b.dataset.step2, "aurum.lots2")));
+      $("lotPick2").onclick = () => this.lotMenu($("lotInput2"), "aurum.lots2");
       $("sellBtn2").onclick = (e) => this.marketOrder("short", e.currentTarget, this.cmpName, lots2());
       $("buyBtn2").onclick = (e) => this.marketOrder("long", e.currentTarget, this.cmpName, lots2());
       $("swapBtn").onclick = () => {
@@ -2992,7 +3029,7 @@
         if (this.replay && e.key === " ") { this.replayPlay(); e.preventDefault(); }
       });
       document.addEventListener("pointerdown", (e) => {
-        if (!e.target.closest("#ctxMenu")) this.closeMenu();
+        if (!e.target.closest("#ctxMenu") && !e.target.closest(".lot-pick")) this.closeMenu();
         if (!e.target.closest("#flyout, #toolRail")) this.closeFlyout();
       });
     },

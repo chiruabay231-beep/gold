@@ -597,3 +597,38 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
   border: 1px solid var(--gold2); border-radius: 999px; padding: 4px 6px 4px 12px; font-size: 12.5px; font-variant-numeric: tabular-nums; backdrop-filter: blur(6px); }
 .bt-chip button { background: var(--chip); color: var(--text); border: 0; border-radius: 999px; height: 24px; padding: 0 9px; cursor: pointer; font: 600 12px/1 "Be Vietnam Pro", system-ui, sans-serif; }
 .bt-trades .sig .lv { font-size: 12px; }
+
+/* quick trade: SELL | lot | BUY, solid and calm */
+.quick-trade { gap: 5px; align-items: stretch; }
+.qt { min-width: 92px; padding: 5px 12px 4px; border: 0; border-radius: 10px; color: #fff; gap: 1px;
+  box-shadow: 0 6px 16px rgba(0, 0, 0, .28), inset 0 1px 0 rgba(255, 255, 255, .22); transition: filter .12s, transform .08s; }
+.qt b { font: 700 14px/1.1 "Be Vietnam Pro", system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.qt span { font: 700 9px/1 "Be Vietnam Pro", system-ui, sans-serif; letter-spacing: .16em; opacity: .85; }
+.qt.sell, .qt.sell:hover { background: linear-gradient(180deg, #ff5d70 0%, #e0364c 55%, #c92a40 100%); color: #fff; border: 0; }
+.qt.buy, .qt.buy:hover { background: linear-gradient(180deg, #5b8dff 0%, #2f69f0 55%, #2259d8 100%); color: #fff; border: 0; }
+.qt:hover { filter: brightness(1.08); }
+.qt:active { transform: scale(.97); filter: brightness(.95); }
+.qt.busy { opacity: .7; }
+.qt-mid { justify-content: center; gap: 2px; }
+.qt-mid .spread { font: 600 9.5px/1 "Be Vietnam Pro", system-ui, sans-serif; letter-spacing: .04em; }
+.qt-lot { height: 30px; padding: 0 3px; gap: 1px; border-radius: 9px; background: var(--glass); border: 1px solid var(--line2); backdrop-filter: blur(6px); }
+.qt-lot button { width: 22px; height: 22px; border-radius: 6px; color: var(--text); font: 600 15px/1 "Be Vietnam Pro", system-ui, sans-serif; display: grid; place-items: center; }
+.qt-lot button:hover { background: var(--chip); }
+.qt-lot button:active { transform: scale(.92); }
+.qt-lot .lot-pick { width: 16px; font-size: 10px; color: var(--muted); }
+.qt-lot input { width: 46px; font: 700 13px/1 ui-monospace, Menlo, monospace; }
+.qt-pend { border-radius: 9px; width: 34px; padding: 0; display: grid; place-items: center; backdrop-filter: blur(6px); }
+.lot-menu { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; min-width: 230px; }
+.ctx .lot-menu button { text-align: center; padding: 7px 4px; font: 600 13px/1 ui-monospace, Menlo, monospace; border: 1px solid var(--line); }
+.ctx .lot-menu button.on { border-color: var(--gold2); color: var(--gold); }
+.ctx .lot-menu button.max { grid-column: 1 / -1; font-family: "Be Vietnam Pro", system-ui, sans-serif; background: var(--chip); }
+.lot-note { margin: 6px 4px 2px; max-width: 230px; }
+@media (max-width: 600px) {
+  .qt { min-width: 70px; padding: 4px 7px 3px; }
+  .qt b { font-size: 12.5px; }
+  .qt-lot input { width: 40px; }
+  .qt-lot button { width: 20px; }
+}
+.ctx .lot-menu button.over { opacity: .4; }
+.ctx .lot-raise { text-align: center; margin-top: 4px; border: 1px solid var(--line); font-size: 12.5px; }
+.qt-lot button:focus:not(:focus-visible), .qt:focus:not(:focus-visible) { outline: none; }
