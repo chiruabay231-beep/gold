@@ -37,7 +37,7 @@ struct BotView: View {
                     Label("Bot Buy/Sell Stop theo nến", systemImage: "arrow.up.and.down.square")
                 }
             } footer: {
-                Text("Bot có sẵn: mỗi nến đóng đặt Buy Stop trên đỉnh và Sell Stop dưới đáy nến, có test nhanh trên biểu đồ.")
+                Text("Bot có sẵn: mỗi nến đóng đặt Buy Stop trên đỉnh và Sell Stop dưới đáy nến. Chạy trên VPS (cùng bot với tab Bot trên web, bật/tắt ở đâu cũng được) hoặc trong app; có backtest trên nến Exness.")
             }
 
             Section {

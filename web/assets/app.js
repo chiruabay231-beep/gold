@@ -406,6 +406,63 @@
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
   }
 
+  /* ---------------- backtest of the "Stop theo nến" bot ---------------- */
+
+  /** The bot over past bars, the same rules as CandleStopBot.backtest in the app: the orders of each
+   * closed bar wait during the next one (open, the extreme reached first, the other one, close),
+   * fill at their stop price, SL/TP at their price, no spread; unfilled orders live one bar. */
+  function stopBotBacktest(bars, c, value) {
+    const off = Math.max(+c.offset || 0, 0), rr = +c.rr || 0, dir = c.direction || "both";
+    const minR = +c.minRange || 0, maxR = +c.maxRange || 0, fixed = c.stopMode === "fixed", dist = Math.max(+c.stopDistance || 0, 0);
+    const ordersAfter = (b) => {
+      const range = b.high - b.low, out = [];
+      if (!(range > 0) || range < minR || (maxR > 0 && range > maxR)) return out;
+      if (dir !== "short") {
+        const entry = b.high + off, stop = fixed ? entry - dist : b.low - off;
+        if (entry > stop) out.push({ side: "long", entry, stop, target: rr > 0 ? entry + rr * (entry - stop) : null });
+      }
+      if (dir !== "long") {
+        const entry = b.low - off, stop = fixed ? entry + dist : b.high + off;
+        if (stop > entry) out.push({ side: "short", entry, stop, target: rr > 0 ? entry - rr * (stop - entry) : null });
+      }
+      return out;
+    };
+    let pending = [], placed = 0;
+    const positions = [], trades = [];
+    const closeAt = (pos, exit, reason, b) => {
+      positions.splice(positions.indexOf(pos), 1);
+      trades.push(Object.assign({}, pos, { exit, reason, closeTime: b.time, profit: value(pos.side, pos.entry, exit) }));
+    };
+    bars.forEach((b, i) => {
+      if (i > 0) {
+        const path = b.close >= b.open ? [b.open, b.low, b.high, b.close] : [b.open, b.high, b.low, b.close];
+        for (const p of path) {
+          let opened = false;
+          for (const o of pending.slice()) {
+            if (o.above ? p >= o.entry : p <= o.entry) {
+              pending.splice(pending.indexOf(o), 1);
+              positions.push(Object.assign({}, o, { openTime: b.time }));
+              opened = true;
+            }
+          }
+          for (const pos of positions.slice()) {
+            const long = pos.side === "long";
+            if (long ? p <= pos.stop : p >= pos.stop) closeAt(pos, pos.stop, "stop", b);
+            else if (pos.target != null && (long ? p >= pos.target : p <= pos.target)) closeAt(pos, pos.target, "target", b);
+          }
+          if (c.oco !== false && opened) pending = [];
+        }
+        pending = [];
+      }
+      if (c.onePosition !== false && positions.length) return;
+      // Like PaperAccount.placePending: it triggers on the side of the entry the close was not.
+      ordersAfter(b).forEach((o) => { o.above = o.entry > b.close; pending.push(o); placed++; });
+    });
+    const last = bars[bars.length - 1];
+    if (last) positions.slice().forEach((pos) => closeAt(pos, last.close, "end", last));
+    return { trades, placed };
+  }
+
   /* ---------------- voice alerts, as in the app: TP / SL hit and fills read out ---------------- */
 
   const VOICE_DEFAULTS = { enabled: true, lang: "vi-VN", voice: "", rate: 0.95, pitch: 1, volume: 1, chime: true, target: "", stop: "", entry: "", buy: "", sell: "", details: false, popup: true, notify: false };
@@ -1697,6 +1754,7 @@
         this.renderBotBadge();
         if (first || !el.querySelector("#sbForm") || !el.contains(document.activeElement)) this.renderStopBot(st);
         else this.renderStopBotLive(st);
+        if (!$("stopBtPanel").firstChild) this.renderStopBt();
       } catch (e) {
         el.innerHTML = `<h3>🎯 Bot lệnh Stop theo nến</h3><p class="muted small">${ServerTooOld(e) ? "Cập nhật máy chủ lên bản 2.8 (tab Máy chủ → Cập nhật) để dùng bot này." : esc(plain(e.message))}</p>`;
       }
@@ -1707,7 +1765,7 @@
       const el = $("stopBotPanel");
       el.innerHTML = `<div class="panel-head"><h3>🎯 Bot lệnh Stop theo nến</h3><span class="badge ${c.running ? "on" : "off"}">${c.running ? "Đang chạy" : "Đang dừng"}</span></div>
         <p class="muted small">Mỗi khi một nến đóng: đặt <b>BUY STOP</b> trên đỉnh nến và <b>SELL STOP</b> dưới đáy nến, SL ở phía bên kia cây nến, TP = R:R × rủi ro.
-          Lệnh không khớp trong nến sau thì huỷ và đặt lại; một bên khớp thì huỷ bên kia. Chạy trên máy chủ (đóng web vẫn chạy), đặt vào tài khoản MT5 đang đăng nhập — nên thử bằng tài khoản demo.</p>
+          Lệnh không khớp trong nến sau thì huỷ và đặt lại; một bên khớp thì huỷ bên kia. Chạy trên máy chủ (đóng web vẫn chạy), đặt vào tài khoản MT5 đang đăng nhập — nên thử bằng tài khoản demo. <b>Cùng một bot với app điện thoại</b> (Bot → Bot Buy/Sell Stop → Máy chủ VPS, hoặc nút ▶︎/⏸ cạnh BUY/SELL): bật/tắt, đổi cài đặt ở đâu thì chỗ kia cũng thấy.</p>
         <div id="sbForm">
           <div class="fields three">
             <label>Mã<input id="sbSymbol" value="${esc(c.symbol || this.symbol || "XAUUSDm")}"></label>
@@ -1771,6 +1829,148 @@
     },
 
     /* ----- the bot (owner only): run a strategy on the server, its trades and results ----- */
+
+    /* ----- backtest of the Stop bot: how it would have traded, with its trades on the chart ----- */
+
+    /** The Stop bot's settings as the form above shows them (or as the server has them). */
+    stopBotSettings() {
+      const c = Object.assign({}, (this.stopStatus && this.stopStatus.config) || {});
+      const v = (id) => ($(id) ? $(id).value : null);
+      if ($("sbSymbol")) {
+        Object.assign(c, {
+          symbol: v("sbSymbol").trim(), interval: v("sbInterval"), direction: v("sbDirection"),
+          lots: num(v("sbLots")) || 0.01, rr: num(v("sbRR")) ?? 2, offset: num(v("sbOffset")) || 0,
+          stopMode: v("sbStopMode"), stopDistance: num(v("sbStopDist")) || 5,
+          minRange: num(v("sbMin")) || 0, maxRange: num(v("sbMax")) || 0,
+          oco: $("sbOCO").checked, onePosition: $("sbOne").checked,
+        });
+      }
+      c.symbol = c.symbol || this.symbol || "XAUUSDm";
+      c.interval = c.interval || "1m";
+      return c;
+    },
+
+    renderStopBt() {
+      const el = $("stopBtPanel");
+      const days = +store.get("aurum.btDays") || 7;
+      el.innerHTML = `<div class="panel-head"><h3>🧪 Backtest bot Stop theo nến</h3></div>
+        <p class="muted small">Chạy bot với đúng cài đặt ở trên trên nến Exness đã qua: mỗi nến đóng đặt Buy Stop / Sell Stop, xem bot vào lệnh ở đâu, chạm TP hay SL, lời lỗ bao nhiêu. Không tính spread và trượt giá.</p>
+        <div class="fields three">
+          <label>Thời gian<select id="btDays">${[1, 3, 7, 14, 30, 60].map((d) => `<option value="${d}" ${d === days ? "selected" : ""}>${d} ngày</option>`).join("")}</select></label>
+          <label>Vốn ban đầu<input id="btBalance" inputmode="decimal" value="${esc(store.get("aurum.btBalance") || "10000")}"></label>
+          <label>&nbsp;<button class="btn btn-gold" id="btRun" type="button">▶ Chạy backtest</button></label>
+        </div>
+        <p class="muted small" id="btInfo"></p>
+        <div id="btResult"></div>`;
+      $("btRun").onclick = () => this.runStopBt();
+    },
+
+    async runStopBt() {
+      const c = this.stopBotSettings();
+      const days = +$("btDays").value, balance = num($("btBalance").value) || 10000;
+      store.set("aurum.btDays", String(days)); store.set("aurum.btBalance", String(balance));
+      const sec = TF_SECONDS[c.interval] || 60, from = Date.now() / 1000 - days * 86400;
+      const btn = $("btRun"), info = $("btInfo");
+      btn.disabled = true;
+      try {
+        // Pages of 5000 bars back to the start; the newest bar is still forming.
+        info.textContent = `Đang tải nến ${c.symbol} ${c.interval}…`;
+        const path = (before) => `/mt5/candles?symbol=${encodeURIComponent(c.symbol)}&interval=${c.interval}&count=5000${before ? `&before=${before}` : ""}`;
+        let bars = this.toBars((await this.call(path())).candles || []).slice(0, -1);
+        for (let k = 0; k < 20 && bars.length && bars[0].time > from; k++) {
+          info.textContent = `Đang tải nến ${c.symbol} ${c.interval}… ${bars.length} nến`;
+          const older = this.toBars((await this.call(path(bars[0].time))).candles || []).filter((b) => b.time < bars[0].time);
+          if (!older.length) break;
+          bars = older.concat(bars);
+        }
+        bars = bars.filter((b) => b.time >= from);
+        if (bars.length < 3) throw new Error(`MT5 chỉ trả ${bars.length} nến ${c.symbol} ${c.interval}`);
+        const r = stopBotBacktest(bars, c, (side, entry, exit) => this.valueAt(c.symbol, c.lots, side, entry, exit));
+        this.btShow = 30;
+        this.btResult = { c, bars: bars.length, from: bars[0].time, to: bars[bars.length - 1].time + sec, balance, placed: r.placed, trades: r.trades, digits: this.digitsFor(c.symbol) };
+        info.textContent = "";
+        this.renderStopBtResult();
+      } catch (e) {
+        info.textContent = "Không chạy được: " + plain(e.message);
+      } finally { btn.disabled = false; }
+    },
+
+    renderStopBtResult() {
+      const R = this.btResult, el = $("btResult");
+      if (!R) { el.innerHTML = ""; return; }
+      const t = R.trades, d = R.digits;
+      const wins = t.filter((x) => x.profit > 0), losses = t.filter((x) => x.profit < 0);
+      const net = t.reduce((a, x) => a + x.profit, 0);
+      const gp = wins.reduce((a, x) => a + x.profit, 0), gl = -losses.reduce((a, x) => a + x.profit, 0);
+      let bal = R.balance, peak = bal, dd = 0;
+      const curve = [bal];
+      t.forEach((x) => { bal += x.profit; peak = Math.max(peak, bal); dd = Math.max(dd, peak - bal); curve.push(bal); });
+      const tp = t.filter((x) => x.reason === "target").length, sl = t.filter((x) => x.reason === "stop").length;
+      const day = (s) => new Date(s * 1000).toLocaleDateString("vi-VN", { day: "2-digit", month: "2-digit" });
+      const stat = (k, v, cls = "") => `<div class="stat"><span>${k}</span><b class="${cls}">${v}</b></div>`;
+      // Balance after each trade.
+      const W = 600, H = 120, lo = Math.min(...curve), hi = Math.max(...curve), span = hi - lo || 1;
+      const pts = curve.map((v, i) => `${(i / Math.max(curve.length - 1, 1) * W).toFixed(1)},${(H - 6 - (v - lo) / span * (H - 12)).toFixed(1)}`).join(" ");
+      const color = net >= 0 ? "var(--up)" : "var(--down)";
+      const reason = { target: "chạm TP", stop: "chạm SL", end: "đóng cuối test" };
+      el.innerHTML = `<p class="muted small">${esc(R.c.symbol)} ${R.c.interval} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · R:R ${R.c.rr}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>
+        <div class="stats">
+          ${stat("Lãi/lỗ ròng", signed(net), net >= 0 ? "pos" : "neg")}
+          ${stat("Số lệnh", `${t.length} <span class="muted small">/ ${R.placed} lệnh chờ đặt</span>`)}
+          ${stat("Thắng", t.length ? `${wins.length}/${t.length} · ${Math.round(wins.length / t.length * 100)}%` : "–")}
+          ${stat("Chạm TP / SL", `${tp} / ${sl}`)}
+          ${stat("Profit factor", gl > 0 ? (gp / gl).toFixed(2) : gp > 0 ? "∞" : "–")}
+          ${stat("Sụt giảm lớn nhất", dd ? "−" + money(dd) : "0", dd ? "neg" : "")}
+          ${stat("Lời TB / lỗ TB", `${wins.length ? signed(gp / wins.length) : "–"} / ${losses.length ? signed(-gl / losses.length) : "–"}`)}
+          ${stat("Vốn cuối", money(R.balance + net), net >= 0 ? "pos" : "neg")}
+        </div>
+        ${t.length ? `<svg class="bt-eq" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>` : ""}
+        <div class="row-btns"><button class="btn btn-ghost" id="btChart" type="button" ${t.length ? "" : "disabled"}>📈 Xem các lệnh trên biểu đồ</button></div>
+        <h4>Lệnh (mới nhất trước)</h4>
+        <div class="list bt-trades">${t.length ? t.slice().reverse().slice(0, this.btShow || 30).map((x) => `<div class="sig"><div class="bar" style="background:${x.profit >= 0 ? "var(--up)" : "var(--down)"}"></div>
+          <div><div class="top"><span class="side ${x.side === "long" ? "buy" : "sell"}">${x.side === "long" ? "BUY STOP" : "SELL STOP"}</span>
+            <span class="muted small">${fmt(x.entry, d)} → ${fmt(x.exit, d)}</span></div>
+            <div class="lv">${reason[x.reason]} · ${clock(x.openTime)} ${day(x.openTime)} · SL ${fmt(x.stop, d)} · TP ${x.target != null ? fmt(x.target, d) : "–"}</div></div>
+          <div class="right"><div class="move ${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</div></div></div>`).join("") : '<div class="empty">Bot không vào lệnh nào trong khoảng này</div>'}</div>
+        ${t.length > (this.btShow || 30) ? `<button class="linkish" id="btMore" type="button">Xem thêm (${t.length - (this.btShow || 30)} lệnh nữa)</button>` : ""}`;
+      $("btChart").onclick = () => this.showBtOnChart();
+      if ($("btMore")) $("btMore").onclick = () => { this.btShow = (this.btShow || 30) + 50; this.renderStopBtResult(); };
+    },
+
+    /** Opens the chart on the backtest's symbol and timeframe with its trades marked. */
+    showBtOnChart() {
+      const R = this.btResult;
+      if (!R) return;
+      this.btView = R;
+      if (this.owner) { this.symbol = R.c.symbol; store.set("aurum.sym", this.symbol); }
+      this.interval = R.c.interval; store.set("aurum.tf", this.interval);
+      this.setTab("chart");
+      this.loadCandles();
+    },
+
+    /** ▲/▼ where the bot's backtest entered, ● where it left (TP green, SL red). */
+    applyBtMarkers() {
+      const R = this.btView, chip = $("btChip");
+      const on = !!(R && this.series && (!this.owner || this.symbol === R.c.symbol) && this.interval === R.c.interval && this.bars.length);
+      chip.hidden = !on;
+      if (!this.series) return;
+      if (!on) { if (this.btMarked) { this.series.setMarkers([]); this.btMarked = false; } return; }
+      const first = this.bars[0].time, sec = TF_SECONDS[this.interval];
+      const bar = (t) => Math.floor(t / sec) * sec;
+      const marks = [];
+      R.trades.forEach((x) => {
+        if (x.openTime < first) return;
+        const long = x.side === "long";
+        marks.push({ time: bar(x.openTime) + TZ, position: long ? "belowBar" : "aboveBar", color: long ? "#2b6bf3" : "#f0455a", shape: long ? "arrowUp" : "arrowDown", text: long ? "B" : "S" });
+        marks.push({ time: bar(x.closeTime) + TZ, position: long ? "aboveBar" : "belowBar", color: x.profit >= 0 ? "#14b88a" : "#f0455a", shape: "circle", text: (x.profit >= 0 ? "+" : "") + x.profit.toFixed(0) });
+      });
+      marks.sort((a, b) => a.time - b.time);
+      try { this.series.setMarkers(marks); this.btMarked = true; } catch { /* bars not there */ }
+      const net = R.trades.reduce((a, x) => a + x.profit, 0);
+      const hidden = R.trades.filter((x) => x.openTime < first).length;
+      chip.innerHTML = `<span>🧪 Backtest bot: ${R.trades.length} lệnh · <b class="${net >= 0 ? "pos" : "neg"}">${signed(net)}</b>${hidden ? ` <span class="muted small">(${hidden} lệnh cũ hơn: kéo sang trái)</span>` : ""}</span><button type="button" title="Ẩn">✕</button>`;
+      chip.querySelector("button").onclick = () => { this.btView = null; this.applyBtMarkers(); };
+    },
 
     async loadAutoBot(first) {
       try {
@@ -2282,6 +2482,7 @@
       this.syncLines();
       this.updateFlow();
       this.redraw();
+      this.applyBtMarkers();
       if (this.layout !== "1") this.setLayout(this.layout); else if (this.smtWanted()) this.loadCmp();
     },
 
@@ -2391,6 +2592,7 @@
       this.syncLines();
       this.updateFlow();
       this.redraw();
+      this.applyBtMarkers();
       if (this.layout !== "1") this.setLayout(this.layout); else if (this.smtWanted()) this.loadCmp();
     },
 
@@ -2424,6 +2626,7 @@
         this.series.setData(this.viewBars().map(shown));
         if (range) this.chart.timeScale().setVisibleLogicalRange({ from: range.from + older.length, to: range.to + older.length });
         this.computeICT();
+        if (this.btView) this.applyBtMarkers();
         if (this.layout !== "1" && this.cmpBars && this.cmpBars.length && this.cmpBars[0].time > this.bars[0].time) this.loadOlderCmp();
       } catch { this.noOlder = true; } finally { this.loadingOlder = false; }
     },

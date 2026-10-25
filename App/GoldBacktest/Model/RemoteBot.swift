@@ -496,19 +496,73 @@ struct MT5Symbol: Decodable, Identifiable, Hashable {
 
 /// The server's "Stop theo nến" bot (server 2.8+): started from the website or the app,
 /// it places a buy stop / sell stop around each closed candle on the MT5 account.
+/// The website and the app read and change this same bot.
 struct RemoteStopBot: Decodable {
     struct Config: Decodable {
         var running: Bool?
         var symbol: String?
         var interval: String?
+        var direction: String?
         var lots: Double?
         var rr: Double?
+        var offset: Double?
+        var stopMode: String?
+        var stopDistance: Double?
+        var minRange: Double?
+        var maxRange: Double?
+        var oco: Bool?
+        var onePosition: Bool?
+
+        /// The same settings as the app's bot uses.
+        var botConfig: CandleStopBot.Config {
+            var c = CandleStopBot.Config()
+            if let v = direction.flatMap(CandleStopBot.Direction.init(rawValue:)) { c.direction = v }
+            if let v = stopMode.flatMap(CandleStopBot.StopMode.init(rawValue:)) { c.stopMode = v }
+            if let lots { c.lots = lots }
+            if let rr { c.rr = rr }
+            if let offset { c.offset = offset }
+            if let stopDistance { c.stopDistance = stopDistance }
+            if let minRange { c.minRange = minRange }
+            if let maxRange { c.maxRange = maxRange }
+            if let oco { c.oco = oco }
+            if let onePosition { c.onePosition = onePosition }
+            return c
+        }
+    }
+    struct Stats: Decodable {
+        var trades: Int?
+        var wins: Int?
+        var profit: Double?
+    }
+    struct Order: Decodable {
+        var ticket: Int?
+    }
+    struct Event: Decodable, Identifiable {
+        var time: Double
+        var text: String
+        var id: String { "\(time)\(text)" }
     }
     var config: Config?
+    var stats: Stats?
+    var orders: [Order]?
+    var positions: [Order]?
+    var events: [Event]?
+    var error: String?
 
     var isRunning: Bool { config?.running == true }
     /// Set up once (a symbol chosen), so it can be started again from the chart.
     var isConfigured: Bool { !(config?.symbol ?? "").isEmpty }
+
+    /// The body the server takes: the app's settings, the symbol and timeframe, and on/off.
+    static func body(_ c: CandleStopBot.Config, symbol: String, interval: String, running: Bool?) -> [String: Any] {
+        var body: [String: Any] = [
+            "symbol": symbol, "interval": interval, "direction": c.direction.rawValue, "lots": c.lots, "rr": c.rr,
+            "offset": c.offset, "stopMode": c.stopMode.rawValue, "stopDistance": c.stopDistance,
+            "minRange": c.minRange, "maxRange": c.maxRange, "oco": c.oco, "onePosition": c.onePosition,
+        ]
+        if let running { body["running"] = running }
+        return body
+    }
 }
 
 extension RemoteBotClient {
@@ -516,9 +570,9 @@ extension RemoteBotClient {
         try JSONDecoder().decode(RemoteStopBot.self, from: await send("/stopbot", timeout: 15))
     }
 
-    func setStopBot(running: Bool) async throws -> RemoteStopBot {
-        let body = try JSONSerialization.data(withJSONObject: ["running": running])
-        return try JSONDecoder().decode(RemoteStopBot.self, from: await send("/stopbot", method: "POST", body: body))
+    func setStopBot(_ body: [String: Any]) async throws -> RemoteStopBot {
+        let data = try JSONSerialization.data(withJSONObject: body)
+        return try JSONDecoder().decode(RemoteStopBot.self, from: await send("/stopbot", method: "POST", body: data))
     }
 }
 
@@ -596,13 +650,26 @@ final class RemoteBot {
         stopBot = try? await client.stopBot()
     }
 
+    /// Sends settings (and on/off) to the server's Stop bot.
+    func saveStopBot(_ body: [String: Any]) async {
+        guard let client = RemoteBotSettings.client() else { return }
+        isBusy = true
+        defer { isBusy = false }
+        do {
+            stopBot = try await client.setStopBot(body)
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
     /// Turns the server's Stop bot on or off (off also cancels its pending orders).
     func setStopBot(running: Bool) async {
         guard let client = RemoteBotSettings.client() else { return }
         isBusy = true
         defer { isBusy = false }
         do {
-            stopBot = try await client.setStopBot(running: running)
+            stopBot = try await client.setStopBot(["running": running])
             error = nil
         } catch {
             self.error = error.localizedDescription
