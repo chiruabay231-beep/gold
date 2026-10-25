@@ -450,7 +450,7 @@
     const half = x0 != null && x1 != null ? Math.max(0.5, (x1 - x0) / 2) : 2;
     const xEnd = (end) => (end == null ? w : X(end) + half);
     g.save();
-    g.font = "10px Be Vietnam Pro, system-ui, sans-serif";
+    g.font = "10px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
     g.textBaseline = "bottom";
     const line = (a, b, y, color, width = 1, dash = []) => {
       if (y == null || a == null || b == null || b < 0 || a > w) return;
@@ -647,7 +647,7 @@
   function drawSMT(g, list, X, Y, w, colors = {}) {
     if (!list || !list.length) return;
     g.save();
-    g.font = "600 10px Be Vietnam Pro, system-ui, sans-serif";
+    g.font = "600 10px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
     list.forEach((d) => {
       const x1 = X(d.start), x2 = X(d.end), y1 = Y(d.p1), y2 = Y(d.p2);
       if (x1 == null || x2 == null || y1 == null || y2 == null || x2 < 0 || x1 > w) return;

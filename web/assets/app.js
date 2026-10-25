@@ -1349,6 +1349,7 @@
       if (open && this.replay) return toast("Thoát replay để đặt lệnh chờ", true);
       box.hidden = !open;
       $("pendingToggle").classList.toggle("on", open);
+      $("pendingLabel").textContent = open ? "Huỷ lệnh chờ" : "Lệnh chờ";
       if (open) {
         const tail = this.bars.slice(-30);
         const last = this.bars.length ? this.bars[this.bars.length - 1].close : null;
@@ -2475,7 +2476,7 @@
       if (!this.chart) {
         this.chart = LightweightCharts.createChart(el, {
           autoSize: true,
-          layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "Be Vietnam Pro, system-ui" },
+          layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif" },
           grid: { vertLines: { color: "#1a2233" }, horzLines: { color: "#1a2233" } },
           rightPriceScale: { borderColor: "#222c3d" },
           timeScale: { borderColor: "#222c3d", timeVisible: true, secondsVisible: false, rightOffset: 8, barSpacing: el.clientWidth < 500 ? 4 : 6 },
@@ -3065,7 +3066,7 @@
       const ts = this.chart.timeScale(), bars = this.viewBars();
       const light = document.documentElement.dataset.theme === "light";
       g.save();
-      g.font = "600 11px 'Be Vietnam Pro', system-ui, sans-serif";
+      g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
       g.textBaseline = "middle";
       list.forEach((w) => {
         const p = w.entryOf;
@@ -4384,7 +4385,7 @@
       const term = this;
       this.chart2 = LightweightCharts.createChart($("chart2"), {
         autoSize: true,
-        layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "Be Vietnam Pro, system-ui" },
+        layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif" },
         rightPriceScale: { borderColor: "#222c3d" },
         timeScale: { borderColor: "#222c3d", timeVisible: true, secondsVisible: isSecTF(this.interval), rightOffset: 8 },
         localization: { timeFormatter: (t) => this.timeLabel(t) },

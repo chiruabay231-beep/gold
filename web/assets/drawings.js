@@ -541,7 +541,7 @@
     }
 
     font(d, size) {
-      return `${d.italic ? "italic " : ""}${d.bold ? "700 " : "500 "}${size || d.fontSize || 12}px Be Vietnam Pro, system-ui, sans-serif`;
+      return `${d.italic ? "italic " : ""}${d.bold ? "700 " : "500 "}${size || d.fontSize || 12}px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif`;
     }
 
     /** Lines of `text` that fit `max` pixels when wrapping. */
@@ -591,14 +591,14 @@
       const width = this.lw(d.width);
       g.strokeStyle = color; g.fillStyle = color; g.lineWidth = width; g.setLineDash(DASH[d.style] || []);
       g.lineCap = "butt"; g.lineJoin = "round";
-      g.font = "11px Be Vietnam Pro, system-ui, sans-serif"; g.textBaseline = "bottom"; g.textAlign = "left";
+      g.font = "11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif"; g.textBaseline = "bottom"; g.textAlign = "left";
       // Points on the device pixel grid (centred on a pixel for an odd number of pixels): sharp lines.
       const dpr = this.dpr || 1, odd = Math.round(width * dpr) % 2 === 1;
       const px = (v) => (Math.round(v * dpr - (odd ? 0.5 : 0)) + (odd ? 0.5 : 0)) / dpr;
       const lineTo = (pp) => { g.beginPath(); g.moveTo(px(pp[0][0]), px(pp[0][1])); pp.slice(1).forEach((p) => g.lineTo(px(p[0]), px(p[1]))); g.stroke(); };
       // A label: rounded, a hair of shadow, the text centred in it. (x, y) = its bottom-left as before.
       const tag = (text, x, y, bg, fg = "#fff", align = "left") => {
-        g.save(); g.setLineDash([]); g.font = "600 11px Be Vietnam Pro, system-ui, sans-serif";
+        g.save(); g.setLineDash([]); g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
         const tw = g.measureText(text).width + 14, th = 19;
         const left = align === "right" ? x - tw : align === "center" ? x - tw / 2 : x, top = y - th + 1;
         g.shadowColor = "rgba(0, 0, 0, 0.28)"; g.shadowBlur = 6; g.shadowOffsetY = 1;
@@ -765,7 +765,7 @@
           g.fillRect(left, Math.min(y1, y2), right - left, Math.abs(y2 - y1));
         }
       }
-      g.font = `${f.fontSize || 11}px Be Vietnam Pro, system-ui, sans-serif`;
+      g.font = `${f.fontSize || 11}px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif`;
       levels.forEach((l) => {
         const v = price(l.v), yy = this.y(v);
         if (yy == null) return;
