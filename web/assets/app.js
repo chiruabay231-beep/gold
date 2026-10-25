@@ -142,6 +142,24 @@
       : date.toLocaleString("vi-VN", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
   };
   const fullTime = (t) => new Date(t * 1000).toLocaleString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  /** "XAUUSDm" → "XAU/USD", "US30m" → "US30": the broker's suffix dropped, currency pairs split. */
+  const symShort = (s) => {
+    const base = String(s).replace(/[a-z.#_-]+$/, "");
+    return /^[A-Z]{6}$/.test(base) ? `${base.slice(0, 3)}/${base.slice(3)}` : base || s;
+  };
+  /** A round badge for a symbol tab: gold, silver, crypto, indices and currencies by their sign. */
+  const symIcon = (s) => {
+    const u = String(s).toUpperCase();
+    const known = [[/XAU|GOLD/, "#d4a017", "Au"], [/XAG|SILVER/, "#8e99a8", "Ag"], [/^BTC/, "#f7931a", "₿"], [/^ETH/, "#627eea", "Ξ"],
+      [/^SOL/, "#9945ff", "◎"], [/^BNB/, "#f0b90b", "B"], [/^XRP/, "#3b4252", "X"], [/^DOGE/, "#c2a633", "Ð"], [/^LTC/, "#345d9d", "Ł"],
+      [/^(US30|DJ)/, "#2b6bf3", "DJ"], [/^(USTEC|NAS|US100)/, "#14b88a", "NQ"], [/^(US500|SPX)/, "#e0565b", "SP"], [/^(DE30|DE40|GER)/, "#3b4252", "DE"],
+      [/OIL|WTI|BRENT/, "#3b4252", "⛽"], [/^EUR/, "#2b6bf3", "€"], [/^GBP/, "#7b5cff", "£"], [/^USD/, "#14b88a", "$"], [/^AUD/, "#f2a93b", "A$"],
+      [/^NZD/, "#22a3a3", "N$"], [/^CAD/, "#e0565b", "C$"], [/^CHF/, "#e0565b", "₣"], [/^JPY/, "#e0565b", "¥"]];
+    const hit = known.find(([re]) => re.test(u));
+    const hue = [...u].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 360, 7);
+    const [color, text] = hit ? [hit[1], hit[2]] : [`hsl(${hue} 55% 45%)`, u.slice(0, 1)];
+    return `<i class="sym-ico" style="background:${color}">${text}</i>`;
+  };
   const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   // Members' messages never name the server.
   const plain = (s) => String(s || "").replace(/ trên VPS/g, "").replace(/ VPS/g, "").replace(/VPS/g, "hệ thống");
@@ -2703,14 +2721,63 @@
           el.querySelectorAll(".sym-row").forEach((b) => (b.onclick = () => {
             sheet.close();
             if (onPick) { onPick(b.dataset.s); return; }
-            this.symbol = b.dataset.s; store.set("aurum.sym", this.symbol);
-            this.selected = null; this.loadCandles();
+            // The open tab takes the new symbol (or the tab that already has it opens).
+            const tabs = this.symTabs(), i = tabs.indexOf(this.symbol);
+            if (!tabs.includes(b.dataset.s)) { if (i >= 0) tabs[i] = b.dataset.s; else tabs.push(b.dataset.s); this.saveSymTabs(tabs); }
+            this.switchSymbol(b.dataset.s);
           }));
         };
         q.oninput = () => { clearTimeout(timer); timer = setTimeout(search, 250); };
         search();
         setTimeout(() => q.focus(), 50);
       });
+    },
+
+    /* ----- symbol tabs: several symbols side by side, one click apart ----- */
+
+    symTabs() {
+      try { const t = JSON.parse(store.get("aurum.symTabs") || "[]"); return Array.isArray(t) ? t.filter((x) => typeof x === "string" && x) : []; } catch { return []; }
+    },
+
+    saveSymTabs(tabs) { store.set("aurum.symTabs", JSON.stringify([...new Set(tabs)].slice(0, 12))); },
+
+    switchSymbol(symbol) {
+      if (!symbol || symbol === this.symbol) { this.renderSymTabs(); return; }
+      this.symbol = symbol; store.set("aurum.sym", symbol);
+      this.selected = null;
+      if (this.draft) this.togglePending(false);
+      this.loadCandles();
+    },
+
+    renderSymTabs() {
+      const box = $("symTabs");
+      if (!box) return;
+      if (!this.owner || !this.symbol) { box.hidden = true; return; }
+      const tabs = this.symTabs();
+      if (!tabs.includes(this.symbol)) { tabs.push(this.symbol); this.saveSymTabs(tabs); }
+      box.hidden = false;
+      box.innerHTML = tabs.map((s) => `<div class="sym-tab${s === this.symbol ? " on" : ""}" data-s="${esc(s)}" role="button" tabindex="0" title="${esc(s)}">
+          ${symIcon(s)}<span>${esc(symShort(s))}</span>${tabs.length > 1 ? '<button type="button" class="x" title="Đóng">✕</button>' : ""}</div>`).join("")
+        + '<button type="button" class="sym-add" title="Thêm mã">＋</button>';
+      box.querySelectorAll(".sym-tab").forEach((t) => {
+        t.onclick = (e) => {
+          if (e.target.closest(".x")) {
+            const list = this.symTabs(), i = list.indexOf(t.dataset.s);
+            list.splice(i, 1);
+            this.saveSymTabs(list);
+            if (t.dataset.s === this.symbol) this.switchSymbol(list[Math.min(i, list.length - 1)]); else this.renderSymTabs();
+            return;
+          }
+          this.switchSymbol(t.dataset.s);
+        };
+        t.onkeydown = (e) => { if (e.key === "Enter") this.switchSymbol(t.dataset.s); };
+      });
+      box.querySelector(".sym-add").onclick = () => this.symbolSheet((s) => { this.saveSymTabs(this.symTabs().concat(s)); this.switchSymbol(s); });
+      const on = box.querySelector(".on");
+      if (on) {
+        const a = on.getBoundingClientRect(), c = box.getBoundingClientRect();
+        if (a.left < c.left || a.right > c.right) box.scrollLeft += a.left - c.left - 8;
+      }
     },
 
     async ownerSymbol() {
@@ -2738,7 +2805,6 @@
       if (data.bid != null) this.bid = data.bid;
       if (data.ask != null) this.ask = data.ask;
       const last = this.bars.length ? this.bars[this.bars.length - 1].close : null;
-      $("livePrice").textContent = fmt(this.bid != null ? this.bid : last, this.digits);
       $("bidText").textContent = fmt(this.bid != null ? this.bid : last, this.digits);
       $("askText").textContent = fmt(this.ask != null ? this.ask : last, this.digits);
       $("spread").textContent = spreadText(this.bid, this.ask, this.digits);
@@ -2793,6 +2859,7 @@
         this.digits = data.digits != null ? data.digits : 2;
         this.applySeriesFormat();
         $("chartSymbol").textContent = data.symbol || this.symbol || "XAUUSD";
+        this.renderSymTabs();
         $("chartSource").textContent = "";
         this.bars = bars;
         if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); }
@@ -2882,6 +2949,7 @@
       this.digits = market.digits;
       this.applySeriesFormat();
       $("chartSymbol").textContent = this.owner ? this.symbol : symbol;
+      this.renderSymTabs();
       this.bars = feed.bars;
       if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); }
       const label = () => {
@@ -2974,6 +3042,7 @@
       this.series.setData([]);
       this.computeICT();
       $("chartSymbol").textContent = this.symbol || "—";
+      this.renderSymTabs();
       $("chartSource").textContent = `· chưa tải được nến${why ? ": " + why : ""} — tự thử lại…`;
       this.setQuote({});
       setTimeout(() => { if (token === this.loadToken) this.loadCandles(); }, 5000);
@@ -2985,6 +3054,7 @@
       this.digits = m.digits != null ? m.digits : 2;
       this.applySeriesFormat();
       $("chartSymbol").textContent = this.owner && this.symbol ? this.symbol : "XAUUSD";
+      this.renderSymTabs();
       $("chartSource").textContent = "· MT5 chưa trả nến, đang dùng giá tạm";
       const interval = this.interval;
       const rest = m.futures ? "https://fapi.binance.com/fapi/v1/klines" : "https://api.binance.com/api/v3/klines";
