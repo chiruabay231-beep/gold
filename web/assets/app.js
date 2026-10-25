@@ -774,9 +774,8 @@
       this.draft = null;
       $("ticket").hidden = !this.owner;
       $("chartSymbol").disabled = !this.owner;
-      $("chartNote").textContent = this.owner
-        ? "Chạm đường giá vào để chọn lệnh, rồi kéo chính đường đó: lệnh MUA kéo xuống = SL, kéo lên = TP (lệnh BÁN ngược lại). ⏳ mở lệnh chờ: đường tím dưới giá = MUA, trên giá = BÁN."
-        : "Đường tím: tín hiệu đang mở (giá vào, SL, TP).";
+      // Not investment advice: the same note for everyone, under every chart.
+      $("chartNote").textContent = "Biểu đồ, chỉ báo, tín hiệu và bot chỉ để tham khảo, không phải lời khuyên đầu tư. Giao dịch vàng, ngoại hối, tiền số có đòn bẩy rủi ro cao và có thể mất toàn bộ vốn; bạn tự chịu trách nhiệm với quyết định của mình.";
       if (!this.owner) {
         try { await this.refreshMe(); } catch (e) { if (this.handleAuth(e)) return; }
       }
@@ -2226,9 +2225,15 @@
                     mediaSize.width, (term.chartStyle.up || "#14b88a").slice(0, 7), (term.chartStyle.down || "#f0455a").slice(0, 7));
                 }),
               }),
+            }, {
+              zOrder: () => "top",
+              renderer: () => ({
+                draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => term.drawPositions(context, mediaSize.width)),
+              }),
             }];
           },
-          // Time left in the current bar, under the last price on the price scale.
+          // Open positions: dotted entry line from the entry candle, a dot on it, side and money label.
+          // (a third pane view, above the candles)
           priceAxisViews() { return term.countdownView ? [term.countdownView] : []; },
         });
         this.countdownView = {
@@ -2704,7 +2709,9 @@
         this.positions.filter(onChart).forEach((p) => {
           const active = sel && sel.kind === "pos" && sel.ticket === p.ticket;
           const w = active ? 2 : 1;
-          out.push({ key: `pos:${p.ticket}:entry`, price: p.entry, color: dim(p.side === "long" ? "#2b6bf3" : "#f0455a", active), width: w, style: 0, title: `${sideName(p.side)} ${p.lots} ${signed(p.profit)}` });
+          // Entry: a dotted line from the entry candle (with a dot on it) and a label with the money in
+          // green or red, painted by the chart layer; the price line only keeps the price on the axis.
+          out.push({ key: `pos:${p.ticket}:entry`, price: p.entry, color: dim(p.side === "long" ? "#2b6bf3" : "#f0455a", active), width: w, style: 0, title: "", entryOf: p, faded: !!(sel && !active) });
           if (p.stop) out.push({ key: `pos:${p.ticket}:stop`, price: p.stop, color: dim("#f0455a", active), width: w, style: 2, title: `SL ${money0(this.pnlAt(p, p.stop))}` });
           if (p.target) out.push({ key: `pos:${p.ticket}:target`, price: p.target, color: dim("#14b88a", active), width: w, style: 2, title: `TP ${money0(this.pnlAt(p, p.target))}` });
         });
@@ -2751,6 +2758,54 @@
       return (price - entry) * (side === "long" ? 1 : -1) * lots * contract;
     },
 
+    /** Each open position: a dotted line at its entry from the candle it opened on (a dot there),
+     * and "BUY 0.1 | −5.75" at the right, the money green when in profit and red at a loss. */
+    drawPositions(g, width) {
+      const list = (this.lineCache || []).filter((w) => w.entryOf);
+      if (!list.length) return;
+      const ts = this.chart.timeScale(), bars = this.viewBars();
+      const light = document.documentElement.dataset.theme === "light";
+      g.save();
+      g.font = "600 11px 'Be Vietnam Pro', system-ui, sans-serif";
+      g.textBaseline = "middle";
+      list.forEach((w) => {
+        const p = w.entryOf;
+        const yy = this.series.priceToCoordinate(w.price);
+        if (yy == null) return;
+        const y = Math.round(yy) + 0.5;
+        let x0 = 0, dot = false;
+        if (bars.length && p.time != null && p.time >= bars[0].time) {
+          let i = bars.length - 1;
+          while (i > 0 && bars[i].time > p.time) i--;
+          const x = ts.logicalToCoordinate(i);
+          if (x != null) { x0 = Math.max(0, x); dot = x >= 0 && x <= width; }
+        }
+        g.globalAlpha = w.faded ? 0.45 : 1;
+        g.strokeStyle = w.color; g.lineWidth = Math.max(1, w.width);
+        g.setLineDash([2, 3]);
+        g.beginPath(); g.moveTo(x0, y); g.lineTo(width, y); g.stroke();
+        g.setLineDash([]);
+        if (dot) {
+          g.beginPath(); g.arc(x0, y, 4, 0, Math.PI * 2);
+          g.fillStyle = w.color; g.fill();
+          g.lineWidth = 1.5; g.strokeStyle = light ? "#ffffff" : "#151c2a"; g.stroke();
+        }
+        // Label: side and lots on the side colour, the money on green / red.
+        const left = `${sideName(p.side)} ${p.lots}`, right = signed(p.profit);
+        const lw = g.measureText(left).width + 12, rw = g.measureText(right).width + 12, h = 18;
+        const x = Math.max(4, width - lw - rw - 10), top = y - h / 2;
+        g.fillStyle = p.side === "long" ? "#2b6bf3" : "#f0455a";
+        g.beginPath(); g.roundRect(x, top, lw + rw, h, 4); g.fill();
+        g.fillStyle = (p.profit || 0) >= 0 ? "#14b88a" : "#f0455a";
+        g.beginPath(); g.roundRect(x + lw, top, rw, h, [0, 4, 4, 0]); g.fill();
+        g.fillStyle = "#ffffff";
+        g.fillText(left, x + 6, y + 0.5);
+        g.fillText(right, x + lw + 6, y + 0.5);
+        g.globalAlpha = 1;
+      });
+      g.restore();
+    },
+
     syncLines() {
       if (!this.series) return;
       const wanted = this.wantedLines();
@@ -2758,7 +2813,7 @@
       wanted.forEach((w) => {
         keys.add(w.key);
         if (this.drag && this.drag.key === w.key) return; // the finger owns it
-        const opts = { price: w.price, color: w.color, lineWidth: w.width, lineStyle: w.style, axisLabelVisible: true, title: w.title };
+        const opts = { price: w.price, color: w.color, lineWidth: w.width, lineStyle: w.style, axisLabelVisible: true, title: w.title, lineVisible: !w.entryOf };
         const line = this.lines.get(w.key);
         if (line) line.applyOptions(opts); else this.lines.set(w.key, this.series.createPriceLine(opts));
       });
@@ -2766,6 +2821,7 @@
         if (!keys.has(k) && !(this.drag && this.drag.key === k)) { this.series.removePriceLine(line); this.lines.delete(k); }
       }
       this.lineCache = wanted;
+      if (this.requestICT) this.requestICT();
       // While a trade or drawing is picked (or a pending price is set), a finger drags it, not the page.
       this.updateTouchAction();
     },
@@ -4257,7 +4313,14 @@
         $("askText2").textContent = q.ask != null ? fmt(q.ask, d2) : "—";
         $("spread2").textContent = spreadText(q.bid, q.ask, d2);
         this.syncLines2();
-        if (full) this.syncRange(this.chart, this.chart2);
+        if (full) {
+          // A new symbol: its own price range, and the first chart's time span — again once the
+          // second chart has its size (it is just being shown), or it keeps the start of its bars.
+          this.chart2.priceScale("right").applyOptions({ autoScale: true });
+          this.syncRange(this.chart, this.chart2);
+          requestAnimationFrame(() => this.syncRange(this.chart, this.chart2));
+          setTimeout(() => this.syncRange(this.chart, this.chart2), 250);
+        }
       }
       this.computeSMT();
     },
