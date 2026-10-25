@@ -4102,7 +4102,7 @@
           return head("Killzones") + tog("showBoxes", "Hiện hộp phiên")
             + cfg.sessions.map((s, i) => `<div class="fr">${chk(`sessions.${i}.on`)}${sw(`sessions.${i}.color`)}${text(`sessions.${i}.name`)}${time(`sessions.${i}.start`)}<span class="to">—</span>${time(`sessions.${i}.end`)}</div>`).join("")
             + head("Pivots") + tog("showPivots", "Hiện điểm pivot (đỉnh/đáy phiên)") + tog("pivotLabels", "Nhãn pivot") + tog("livePivots", "Hiện khi phiên đang chạy")
-            + sel("pivotUntilMitigated", "Kéo dài", [[true, "Tới khi giá phá"], [false, "Qua cả khi bị phá"]]) + tog("keepMitigated", "Giữ pivot đã bị phá") + tog("midpoints", "Đường giữa phiên (50%)")
+            + sel("pivotUntilMitigated", "Kéo dài", [[true, "Tới khi giá phá"], [false, "Qua cả khi bị phá"]]) + tog("keepMitigated", "Giữ pivot đã bị phá") + tog("periodUntilBroken", "PDH/PDL, PWH/PWL dừng tại nến cắt qua") + tog("midpoints", "Đường giữa phiên (50%)")
             + cfg.sessions.map((s, i) => `<div class="fr"><span class="grow muted">${esc(s.name)}</span>${text(`sessions.${i}.hi`, "lb")}${text(`sessions.${i}.lo`, "lb")}</div>`).join("")
             + head("Giá mở cửa") + cfg.opens.map((o, i) => `<div class="fr">${chk(`opens.${i}.on`)}${sw(`opens.${i}.color`)}${text(`opens.${i}.label`, "lb")}${time(`opens.${i}.hour`)}</div>`).join("")
             + head("Mốc thời gian (đường dọc)") + cfg.stamps.map((m, i) => `<div class="fr">${chk(`stamps.${i}.on`)}${time(`stamps.${i}.hour`)}</div>`).join("")

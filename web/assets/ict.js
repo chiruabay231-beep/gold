@@ -20,6 +20,8 @@
       ],
       showBoxes: true, boxLabels: true, boxBorder: true, boxOpacity: 12,
       showPivots: true, pivotLabels: true, livePivots: true, pivotUntilMitigated: true, keepMitigated: true,
+      // 2: levels broken by a candle stay, ending at that candle (older saves are moved onto it).
+      keepVersion: 2, periodUntilBroken: true,
       pivotStyle: "solid", mitigatedStyle: "solid", midpoints: false, pivotWidth: 1,
       opens: [
         { on: true, hour: 0, label: "DO", color: "#787b86" },
@@ -66,6 +68,10 @@
       if (Array.isArray(d[k])) {
         if (Array.isArray(saved[k])) d[k] = d[k].map((item, i) => Object.assign({}, item, saved[k][i] || {}));
       } else if (typeof saved[k] === typeof d[k]) d[k] = saved[k];
+    }
+    if (saved.keepVersion !== 2) {
+      d.keepMitigated = true; d.pivotUntilMitigated = true; d.dailyKeepTouched = true; d.periodUntilBroken = true;
+      d.keepVersion = 2;
     }
     return d;
   }
@@ -402,8 +408,11 @@
       if (!on) return;
       const r = previous(id);
       if (!r) return;
-      out.levels.push({ kind: "period", price: r.high, start: r.start, end: null, label: h, color: cfg.periodColor });
-      out.levels.push({ kind: "period", price: r.low, start: r.start, end: null, label: l, color: cfg.periodColor });
+      // A candle crossing the level ends it there (it stays on the chart to be seen).
+      [[true, r.high, h], [false, r.low, l]].forEach(([isHigh, price, name]) => {
+        const j = cfg.periodUntilBroken ? firstBreak(c, price, isHigh, r.start) : null;
+        out.levels.push({ kind: "period", price, start: r.start, end: j, label: name, color: cfg.periodColor, mitigated: j !== null });
+      });
     });
     if (cfg.dayOfWeek) markIndexes(ck, 12, firstDay).forEach((i) => out.days.push({ index: i, label: WEEKDAYS[ck.weekday[i]] }));
     out.sweeps = out.sweeps.sort((a, b) => a.index - b.index).slice(-Math.max(cfg.sweepCount, 1));
@@ -505,7 +514,7 @@
         return;
       }
       if (l.kind === "open") { line(a, b, y, alpha(l.color, 0.75), 1, DASH[cfg.openStyle]); label(l.label, b - 2, y, l.color); return; }
-      if (l.kind === "period") { line(a, b, y, l.color, 1, DASH.dashed); label(l.label, b - 2, y, l.color); return; }
+      if (l.kind === "period") { line(a, b, y, alpha(l.color, l.mitigated ? 0.7 : 1), 1, DASH.dashed); label(l.label, b - 2, y, alpha(l.color, l.mitigated ? 0.75 : 1)); return; }
       if (l.kind === "mid") { line(a, b, y, alpha(l.color, 0.6), 1, DASH.dotted); return; }
       line(a, b, y, alpha(l.color, l.mitigated ? 0.55 : 0.95), cfg.pivotWidth, DASH[l.mitigated ? cfg.mitigatedStyle : cfg.pivotStyle]);
       if (cfg.pivotLabels) label(l.label, b - 2, y, l.color);
