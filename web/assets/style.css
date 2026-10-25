@@ -720,3 +720,11 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .draw-bar.moved { transform: none; }
 .draw-bar .db-grip { cursor: grab; color: var(--muted); padding: 0 3px 0 2px; font-size: 13px; letter-spacing: -3px; user-select: none; touch-action: none; align-self: stretch; display: flex; align-items: center; }
 .draw-bar .db-grip:active { cursor: grabbing; }
+
+.fib-grid .fr { gap: 5px; }
+.fib-del { width: 20px; height: 20px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 14px; line-height: 1; }
+.fib-del:hover { background: rgba(240, 69, 90, .15); color: var(--down); }
+.fib-add-row { display: flex; align-items: center; gap: 8px; margin: 6px 0 4px; }
+.fib-add-row input.n { width: 90px; }
+.fib-add-row input.n { height: 30px; padding: 0 9px; background: var(--input); color: var(--text); border: 1px solid var(--line); border-radius: 8px; font: 500 13px/1 var(--font); }
+.fib-add-row input.sw { width: 30px; height: 30px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--input); cursor: pointer; }

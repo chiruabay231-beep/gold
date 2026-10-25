@@ -687,32 +687,7 @@
           break;
         }
         case "fibRetracement": case "fibExtension": this.paintFib(g, d, pts, w, lineTo); break;
-        case "longPosition": case "shortPosition": {
-          const entry = d.pts[0].p, stop = d.pts[1].p, target = this.target(d);
-          const ye = p0[1], ys = p1[1], yt = this.y(target);
-          const left = Math.min(p0[0], p1[0]), right = Math.max(p0[0], p1[0], p0[0] + 40);
-          g.setLineDash([]);
-          const op = (d.fill ? d.fillOpacity : 0) / 100;
-          // Zones fading towards the entry, a crisp edge at the target and the stop.
-          const zone = (y, c) => {
-            const top = Math.min(ye, y), hgt = Math.abs(y - ye);
-            const grad = g.createLinearGradient(0, y, 0, ye);
-            grad.addColorStop(0, alpha(c, Math.min(1, op * 1.6))); grad.addColorStop(1, alpha(c, op * 0.5));
-            g.fillStyle = grad; g.fillRect(left, top, right - left, hgt);
-            g.strokeStyle = alpha(c, 0.9); g.lineWidth = this.lw(1); lineTo([[left, y], [right, y]]);
-          };
-          zone(ys, d.stopColor);
-          if (yt != null) zone(yt, d.targetColor);
-          g.strokeStyle = "#9aa3b2"; g.lineWidth = width; lineTo([[left, ye], [right, ye]]);
-          const risk = Math.abs(entry - stop), reward = Math.abs(target - entry);
-          const rr = risk ? (reward / risk).toFixed(2) : "–";
-          const pct = (v) => (v / entry * 100).toFixed(2) + "%";
-          const long = d.tool === "longPosition", mid = (left + right) / 2;
-          tag(`Mục tiêu ${target.toFixed(dg)} · ${reward.toFixed(dg)} (${pct(reward)})`, mid, long ? yt - 4 : yt + 22, d.targetColor, "#fff", "center");
-          tag(`Dừng ${stop.toFixed(dg)} · ${risk.toFixed(dg)} (${pct(risk)})`, mid, long ? ys + 22 : ys - 4, d.stopColor, "#fff", "center");
-          tag(`${long ? "MUA" : "BÁN"} ${entry.toFixed(dg)}  ·  R:R ${rr}`, mid, ye + 9, "rgba(22, 28, 40, 0.92)", "#e8ecf3", "center");
-          break;
-        }
+        case "longPosition": case "shortPosition": this.paintPosition(g, d, pts, lineTo, tag, width); break;
         case "priceRange": {
           const a = d.pts[0].p, b = d.pts[1].p, diff = b - a;
           const bars = Math.round(this.timeToLogical(d.pts[1].t) - this.timeToLogical(d.pts[0].t));
@@ -736,6 +711,133 @@
     }
 
     /** Fibonacci levels with their own colours, background bands, prices and values. */
+    /** How the market went after a position's entry, up to the box's right edge: where price is
+     * (or the TP / SL it reached first) and when. Bars are taken as filled at the entry bar. */
+    positionProgress(d, target) {
+      const bars = this.host.bars ? this.host.bars() : [];
+      if (!bars.length) return null;
+      const long = d.tool === "longPosition", entry = d.pts[0].p, stop = d.pts[1].p;
+      const t0 = d.pts[0].t, tEnd = Math.max(...d.pts.map((p) => p.t));
+      let i = bars.length - 1;
+      while (i > 0 && bars[i - 1].time >= t0) i--;
+      if (bars[i].time < t0) return null;
+      let price = null, end = null;
+      for (; i < bars.length && bars[i].time <= tEnd; i++) {
+        const b = bars[i];
+        const hitStop = long ? b.low <= stop : b.high >= stop;
+        const hitTarget = long ? b.high >= target : b.low <= target;
+        if (hitStop || hitTarget) {
+          // Both inside one bar: the level nearer its open came first.
+          const first = hitStop && hitTarget ? (Math.abs(b.open - stop) <= Math.abs(b.open - target) ? "stop" : "target") : hitStop ? "stop" : "target";
+          return { start: t0, end: b.time, price: first === "stop" ? stop : target, status: first };
+        }
+        price = b.close; end = b.time;
+      }
+      return price == null ? null : { start: t0, end, price, status: "run", entry };
+    }
+
+    /** Long / short position: one design mirrored for both. A rounded box, the target and stop zones
+     * deepening towards their edges, the stretch price has already travelled lit up, a "now" dot,
+     * a thin R:R gauge on the right edge, and labels outside the box. */
+    paintPosition(g, d, pts, lineTo, tag, width) {
+      const dg = this.host.digits();
+      const long = d.tool === "longPosition";
+      const entry = d.pts[0].p, stop = d.pts[1].p, target = this.target(d);
+      const [p0, p1] = pts, ye = p0[1], ys = p1[1], yt = this.y(target);
+      if (yt == null) return;
+      const left = Math.min(p0[0], p1[0]), right = Math.max(p0[0], p1[0], p0[0] + 40), bw = right - left;
+      const top = Math.min(yt, ys), bottom = Math.max(yt, ys);
+      const tc = d.targetColor, sc = d.stopColor, side = long ? "#2962ff" : "#f23645";
+      const op = d.fill ? d.fillOpacity / 100 : 0;
+      const light = document.documentElement.dataset.theme === "light";
+      g.setLineDash([]);
+      g.save();
+      g.beginPath(); g.roundRect(left, top, bw, bottom - top, 7); g.clip();
+      // Zones: faint at the entry, deeper at the target / stop edge.
+      const zone = (y, c) => {
+        const grad = g.createLinearGradient(0, ye, 0, y);
+        grad.addColorStop(0, alpha(c, op * 0.35)); grad.addColorStop(1, alpha(c, Math.min(0.9, op * 1.7)));
+        g.fillStyle = grad; g.fillRect(left, Math.min(ye, y), bw, Math.abs(y - ye));
+      };
+      zone(yt, tc); zone(ys, sc);
+      // The way price has gone since the entry: lit up between the entry and where price is now.
+      const prog = this.positionProgress(d, target);
+      let nowX = null, nowY = null;
+      if (prog) {
+        const x0 = Math.max(left, this.x(prog.start) ?? left), x1 = Math.min(right, (this.x(prog.end) ?? right) + 3);
+        nowY = this.y(prog.price);
+        if (nowY != null && x1 > x0) {
+          const good = long ? prog.price >= entry : prog.price <= entry;
+          const c = good ? tc : sc;
+          const grad = g.createLinearGradient(x0, 0, x1, 0);
+          grad.addColorStop(0, alpha(c, 0.16)); grad.addColorStop(1, alpha(c, 0.5));
+          g.fillStyle = grad; g.fillRect(x0, Math.min(ye, nowY), x1 - x0, Math.abs(nowY - ye));
+          g.strokeStyle = alpha(c, 0.95); g.lineWidth = this.lw(1); lineTo([[x0, nowY], [x1, nowY]]);
+          nowX = x1;
+        }
+      }
+      g.restore();
+      // Frame and the target / stop edges.
+      g.strokeStyle = light ? "rgba(0, 0, 0, 0.10)" : "rgba(255, 255, 255, 0.10)"; g.lineWidth = 1;
+      g.beginPath(); g.roundRect(left + 0.5, top + 0.5, bw - 1, bottom - top - 1, 7); g.stroke();
+      g.lineWidth = this.lw(1);
+      g.strokeStyle = tc; lineTo([[left + 6, yt], [right - 6, yt]]);
+      g.strokeStyle = sc; lineTo([[left + 6, ys], [right - 6, ys]]);
+      // Entry: the side's colour, ends rounded off with dots.
+      g.strokeStyle = side; g.lineWidth = Math.max(width, this.lw(1.5)); lineTo([[left, ye], [right, ye]]);
+      g.fillStyle = side;
+      [left, right].forEach((x) => { g.beginPath(); g.arc(x, ye, 2.5, 0, Math.PI * 2); g.fill(); });
+      // R:R gauge on the right edge: reward above / below, risk on the other side, joined at the entry.
+      const gx = right - 6;
+      g.lineCap = "round"; g.lineWidth = 3;
+      g.strokeStyle = alpha(tc, 0.95); g.beginPath(); g.moveTo(gx, ye); g.lineTo(gx, yt + (yt < ye ? 4 : -4)); g.stroke();
+      g.strokeStyle = alpha(sc, 0.95); g.beginPath(); g.moveTo(gx, ye); g.lineTo(gx, ys + (ys < ye ? 4 : -4)); g.stroke();
+      g.lineCap = "butt";
+      // Now: a dot with a halo where price is (or where it hit TP / SL).
+      if (nowX != null && nowY != null) {
+        const c = prog.status === "stop" ? sc : prog.status === "target" ? tc : (long ? prog.price >= entry : prog.price <= entry) ? tc : sc;
+        g.fillStyle = alpha(c, 0.25); g.beginPath(); g.arc(nowX, nowY, 7, 0, Math.PI * 2); g.fill();
+        g.fillStyle = c; g.beginPath(); g.arc(nowX, nowY, 3.5, 0, Math.PI * 2); g.fill();
+        g.strokeStyle = light ? "#fff" : "#0b0f17"; g.lineWidth = 1.5; g.stroke();
+      }
+      // Labels outside the box, the same way round for buys and sells.
+      const risk = Math.abs(entry - stop), reward = Math.abs(target - entry);
+      const rr = risk ? reward / risk : 0;
+      const pct = (v) => (v / entry * 100).toFixed(2) + "%";
+      const mid = (left + right) / 2;
+      const outside = (y, up) => (up ? y - 7 : y + 26);
+      tag(`▲ Mục tiêu ${target.toFixed(dg)}  ·  +${reward.toFixed(dg)} (${pct(reward)})  ·  ${rr.toFixed(2)}R`, mid, outside(yt, yt < ye), tc, "#fff", "center");
+      tag(`▼ Dừng lỗ ${stop.toFixed(dg)}  ·  −${risk.toFixed(dg)} (${pct(risk)})  ·  1R`, mid, outside(ys, ys < ye), sc, "#fff", "center");
+      // Entry pill: the side, the price, R:R, and how it is going.
+      let status = "", statusColor = null;
+      if (prog) {
+        const moved = long ? prog.price - entry : entry - prog.price;
+        const r = risk ? moved / risk : 0;
+        if (prog.status === "target") { status = `✓ Chạm TP  +${rr.toFixed(2)}R`; statusColor = tc; }
+        else if (prog.status === "stop") { status = "✕ Chạm SL  −1R"; statusColor = sc; }
+        else { status = `${moved >= 0 ? "+" : "−"}${Math.abs(moved).toFixed(dg)}  ·  ${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R`; statusColor = moved >= 0 ? tc : sc; }
+      }
+      g.save();
+      g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+      g.textBaseline = "middle";
+      const sideText = long ? "MUA" : "BÁN", body = `${entry.toFixed(dg)}  ·  R:R ${rr.toFixed(2)}`;
+      const sw = g.measureText(sideText).width + 14, bwid = g.measureText(body).width + 16, stw = status ? g.measureText(status).width + 14 : 0;
+      const total = sw + bwid + stw, h = 20, px = mid - total / 2, py = ye - h / 2;
+      g.shadowColor = "rgba(0, 0, 0, 0.3)"; g.shadowBlur = 8; g.shadowOffsetY = 1;
+      g.fillStyle = light ? "rgba(255, 255, 255, 0.96)" : "rgba(18, 23, 34, 0.94)";
+      g.beginPath(); g.roundRect(px, py, total, h, 10); g.fill();
+      g.shadowColor = "transparent";
+      g.strokeStyle = alpha(side, 0.55); g.lineWidth = 1; g.stroke();
+      g.fillStyle = side; g.beginPath(); g.roundRect(px + 2, py + 2, sw - 4, h - 4, 8); g.fill();
+      g.fillStyle = "#fff"; g.fillText(sideText, px + 7, py + h / 2 + 0.5);
+      g.fillStyle = light ? "#1d2330" : "#e8ecf3"; g.fillText(body, px + sw + 8, py + h / 2 + 0.5);
+      if (status) {
+        g.fillStyle = alpha(statusColor, 0.18); g.beginPath(); g.roundRect(px + sw + bwid, py + 2, stw - 2, h - 4, 8); g.fill();
+        g.fillStyle = statusColor; g.fillText(status, px + sw + bwid + 7, py + h / 2 + 0.5);
+      }
+      g.restore();
+    }
+
     paintFib(g, d, pts, w, lineTo) {
       const dg = this.host.digits();
       const f = d.fib || this.defaults(d.tool).fib;

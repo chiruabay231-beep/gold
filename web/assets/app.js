@@ -3972,7 +3972,8 @@
             + fillRow("Tô nền") + `<p class="fp-note">Kéo chấm tròn để chỉnh giá vào, dừng lỗ và mục tiêu (R:R tự tính). Vị thế không bị kéo ngược chiều.</p>`;
         } else if (fib) {
           const f = d.fib;
-          html += lineRow("Đường") + `<div class="fp-sec">Các mức</div><div class="fib-grid">${f.levels.map((l, i) => `<div class="fr">${k.chk(`fib.levels.${i}.on`)}<input class="n" data-p="fib.levels.${i}.v" data-t="num" inputmode="decimal" value="${l.v}">${k.sw(`fib.levels.${i}.color`)}</div>`).join("")}</div>
+          html += lineRow("Đường") + `<div class="fp-sec">Các mức</div><div class="fib-grid">${f.levels.map((l, i) => `<div class="fr">${k.chk(`fib.levels.${i}.on`)}<input class="n" data-p="fib.levels.${i}.v" data-t="num" inputmode="decimal" value="${l.v}">${k.sw(`fib.levels.${i}.color`)}<button type="button" class="fib-del" data-fibdel="${i}" title="Xoá mức">×</button></div>`).join("")}</div>
+            <div class="fib-add-row"><input class="n" id="fibNew" inputmode="decimal" placeholder="VD 1.272"><input type="color" id="fibNewColor" class="sw" value="#2962ff"><button type="button" class="btn btn-ghost btn-small" data-fibadd>+ Thêm mức</button></div>
             <div class="fr">${k.chk("fib.oneColorOn")}<span class="grow">Sử dụng một màu</span>${k.sw("fib.oneColor")}</div>
             <div class="fr">${k.chk("fib.bg")}<span class="grow">Hình nền</span><input type="range" min="0" max="50" data-p="fib.bgOpacity" data-t="num" value="${f.bgOpacity}" class="op"></div>
             <div class="fr">${k.chk("fib.reverse")}<span>Đảo ngược</span></div>
@@ -4010,7 +4011,21 @@
           if (action === "saveAs") this.saveTemplateDialog(dr, d, redraw);
           if (action.startsWith("tpl:")) { dr.applyTemplate(d, action.slice(4)); redraw(); this.renderDrawBar(); }
         },
-        afterDraw: (panel) => { const t = panel.querySelector(".fp-text"); if (t && isNew) setTimeout(() => t.focus(), 30); },
+        afterDraw: (panel) => {
+          const t = panel.querySelector(".fp-text"); if (t && isNew) setTimeout(() => t.focus(), 30);
+          // Fibonacci: own levels added and any level removed.
+          const saveFib = () => { dr.changed(d); dr.remember(d); if (this.panelDraw) this.panelDraw(); };
+          panel.querySelectorAll("[data-fibdel]").forEach((b) => (b.onclick = () => { d.fib.levels.splice(+b.dataset.fibdel, 1); saveFib(); }));
+          const add = panel.querySelector("[data-fibadd]");
+          if (add) add.onclick = () => {
+            const v = num(panel.querySelector("#fibNew").value);
+            if (v == null) { toast("Nhập mức, ví dụ 1.272 hoặc -0.5", true); return; }
+            if (d.fib.levels.some((l) => l.v === v)) { toast("Đã có mức " + v, true); return; }
+            d.fib.levels.push({ v, on: true, color: panel.querySelector("#fibNewColor").value });
+            d.fib.levels.sort((a, b) => b.v - a.v);
+            saveFib();
+          };
+        },
       });
     },
 
