@@ -159,6 +159,9 @@ struct ChartPriceLine {
     var markerIndex: Int?
     /// Shows a ✕ button at the right end of the line (close / cancel).
     var closable = false
+    /// An open position's entry, drawn like the website: a dotted line from the fill bar (a dot
+    /// there) and a "BUY 0.10 | +8.00" pill at the right, the money green in profit, red at a loss.
+    var entryStyle = false
 }
 
 /// A vertical line at a bar (timestamps).
@@ -834,6 +837,12 @@ struct CandleChart: View {
             // With an order selected the others step back.
             let alpha: Double = active ? 1 : (activeLineGroup == nil ? 0.6 : 0.25)
             let color = line.color.opacity(alpha)
+            if line.entryStyle {
+                drawEntryLine(line, y: y, active: active, alpha: alpha, range: range, s: s, layout: layout, in: &context)
+                axisLabels.append(AxisLabel(price: line.price, text: Self.format(line.price, decimals), tag: "",
+                                            color: theme.background, textColor: line.color, border: line.color))
+                continue
+            }
             var path = Path()
             path.move(to: CGPoint(x: 0, y: y))
             path.addLine(to: CGPoint(x: layout.axisX, y: y))
@@ -1090,29 +1099,7 @@ struct CandleChart: View {
             context.draw(textView, at: CGPoint(x: box.midX, y: box.midY), anchor: .center)
         case .longPosition, .shortPosition:
             guard let levels = d.positionLevels, points.count > 1 else { break }
-            let left = min(p0.x, points[1].x)
-            let right = max(max(p0.x, points[1].x), left + s.barWidth * 20)
-            let entryY = s.y(levels.entry), stopY = s.y(levels.stop), targetY = s.y(levels.target)
-            let profit = CGRect(x: left, y: min(entryY, targetY), width: right - left, height: abs(targetY - entryY))
-            let loss = CGRect(x: left, y: min(entryY, stopY), width: right - left, height: abs(stopY - entryY))
-            context.fill(Path(profit), with: .color(theme.up.opacity(0.22)))
-            context.fill(Path(loss), with: .color(theme.down.opacity(0.22)))
-            var entryLine = Path()
-            entryLine.move(to: CGPoint(x: left, y: entryY))
-            entryLine.addLine(to: CGPoint(x: right, y: entryY))
-            context.stroke(entryLine, with: .color(theme.primaryText.opacity(0.7)), lineWidth: selected ? 2 : 1)
-            let risk = abs(levels.entry - levels.stop)
-            let reward = abs(levels.target - levels.entry)
-            let targetText = "TP \(Self.format(levels.target, decimals)) (+\(Self.format(reward, decimals))) · RR \(String(format: "%.1f", d.riskReward))"
-            let stopText = "SL \(Self.format(levels.stop, decimals)) (−\(Self.format(risk, decimals)))"
-            label(targetText, at: CGPoint(x: left + 4, y: targetY + (targetY < entryY ? 8 : -8)), color: theme.up)
-            if let lots = positionSizing?.lots(entry: levels.entry, stop: levels.stop) {
-                label("Lot \(String(format: lots < 1 ? "%.2f" : "%.1f", lots))", at: CGPoint(x: left + 4, y: entryY - 8),
-                      color: theme.primaryText)
-            }
-            label(stopText, at: CGPoint(x: left + 4, y: stopY + (stopY < entryY ? 8 : -8)), color: theme.down)
-            label("Vào \(Self.format(levels.entry, decimals))", at: CGPoint(x: right - 4, y: entryY - 8), anchor: .trailing,
-                  color: theme.primaryText)
+            drawPosition(d, levels: levels, points: points, s: s, selected: selected, in: &context)
         case .elliottImpulse, .elliottCorrection:
             var path = Path()
             path.addLines(points)
@@ -1205,6 +1192,244 @@ struct CandleChart: View {
                 context.fill(Path(ellipseIn: handle), with: .color(theme.background))
                 context.stroke(Path(ellipseIn: handle), with: .color(color), lineWidth: 2)
             }
+        }
+    }
+
+    // MARK: - Positions (the website's design)
+
+    private enum PositionOutcome { case running, target, stop }
+
+    /// How price went after a position drawing's entry: where it is now, or the TP / SL it reached
+    /// first (both in one bar: the one nearer its open).
+    private func positionProgress(_ d: Drawing, levels: (entry: Double, stop: Double, target: Double))
+        -> (start: Date, end: Date, price: Double, status: PositionOutcome)? {
+        guard let startTime = d.points.first?.time, !candles.isEmpty else { return nil }
+        let isLong = d.tool == .longPosition
+        var lo = 0, hi = candles.count
+        while lo < hi {
+            let mid = (lo + hi) / 2
+            if candles[mid].time < startTime { lo = mid + 1 } else { hi = mid }
+        }
+        guard lo < candles.count else { return nil }
+        var price: Double?
+        var end = startTime
+        // On to the newest bar while neither is hit: the box grows with the candles.
+        for i in lo..<candles.count {
+            let c = candles[i]
+            let hitStop = isLong ? c.low <= levels.stop : c.high >= levels.stop
+            let hitTarget = isLong ? c.high >= levels.target : c.low <= levels.target
+            if hitStop || hitTarget {
+                let stopFirst = hitStop && hitTarget ? abs(c.open - levels.stop) <= abs(c.open - levels.target) : hitStop
+                return (startTime, c.time, stopFirst ? levels.stop : levels.target, stopFirst ? .stop : .target)
+            }
+            price = c.close
+            end = c.time
+        }
+        guard let price else { return nil }
+        return (startTime, end, price, .running)
+    }
+
+    /// Long / short position, mirrored for buys and sells: a rounded box whose target and stop zones
+    /// deepen towards their edges, the stretch price has travelled lit up with a "now" dot, a thin
+    /// R:R gauge on the right edge, short labels outside the box (faint unless selected), and an
+    /// entry pill with the side, R:R and how it is going.
+    private func drawPosition(_ d: Drawing, levels: (entry: Double, stop: Double, target: Double),
+                              points: [CGPoint], s: Scale, selected: Bool, in context: inout GraphicsContext) {
+        let isLong = d.tool == .longPosition
+        let progress = positionProgress(d, levels: levels)
+        let left = min(points[0].x, points[1].x)
+        // Until TP or SL is hit the box stretches with the new candles (and ends at the hit bar).
+        let reach = progress.map { s.x(index(for: $0.end)) + s.barWidth / 2 } ?? left
+        let right = max(max(points[0].x, points[1].x), left + s.barWidth * 20, reach)
+        let entryY = s.y(levels.entry), stopY = s.y(levels.stop), targetY = s.y(levels.target)
+        let up = theme.up, down = theme.down
+        let side = isLong ? Color(red: 0.16, green: 0.38, blue: 1) : theme.down
+        let box = CGRect(x: left, y: min(targetY, stopY), width: right - left, height: abs(stopY - targetY))
+        let shape = Path(roundedRect: box, cornerRadius: 7)
+
+        var inside = context
+        inside.clip(to: shape)
+        for (edge, color) in [(targetY, up), (stopY, down)] {
+            let rect = CGRect(x: left, y: min(entryY, edge), width: right - left, height: abs(edge - entryY))
+            inside.fill(Path(rect), with: .linearGradient(Gradient(colors: [color.opacity(0.06), color.opacity(0.30)]),
+                                                          startPoint: CGPoint(x: 0, y: entryY), endPoint: CGPoint(x: 0, y: edge)))
+        }
+        var now: CGPoint?
+        var nowColor = up
+        if let progress {
+            let x0 = max(left, s.x(index(for: progress.start)))
+            let x1 = min(right, s.x(index(for: progress.end)) + s.barWidth / 2)
+            let y = s.y(progress.price)
+            let good = isLong ? progress.price >= levels.entry : progress.price <= levels.entry
+            switch progress.status {
+            case .stop: nowColor = down
+            case .target: nowColor = up
+            case .running: nowColor = good ? up : down
+            }
+            if x1 > x0 {
+                let lit = CGRect(x: x0, y: min(entryY, y), width: x1 - x0, height: abs(y - entryY))
+                inside.fill(Path(lit), with: .linearGradient(Gradient(colors: [nowColor.opacity(0.14), nowColor.opacity(0.45)]),
+                                                             startPoint: CGPoint(x: x0, y: 0), endPoint: CGPoint(x: x1, y: 0)))
+                var line = Path()
+                line.move(to: CGPoint(x: x0, y: y))
+                line.addLine(to: CGPoint(x: x1, y: y))
+                inside.stroke(line, with: .color(nowColor), lineWidth: 1)
+                now = CGPoint(x: x1, y: y)
+            }
+        }
+        context.stroke(Path(roundedRect: box.insetBy(dx: 0.5, dy: 0.5), cornerRadius: 7),
+                       with: .color(theme.primaryText.opacity(0.10)), lineWidth: 1)
+        func hline(_ y: CGFloat, _ color: Color, _ width: CGFloat, inset: CGFloat) {
+            var path = Path()
+            path.move(to: CGPoint(x: left + inset, y: y))
+            path.addLine(to: CGPoint(x: right - inset, y: y))
+            context.stroke(path, with: .color(color), lineWidth: width)
+        }
+        hline(targetY, up, 1, inset: 6)
+        hline(stopY, down, 1, inset: 6)
+        hline(entryY, side, selected ? 2 : 1.5, inset: 0)
+        for x in [left, right] {
+            context.fill(Path(ellipseIn: CGRect(x: x - 2.5, y: entryY - 2.5, width: 5, height: 5)), with: .color(side))
+        }
+        // R:R gauge on the right edge: reward one way, risk the other, joined at the entry.
+        let gx = right - 6
+        for (edge, color) in [(targetY, up), (stopY, down)] {
+            var gauge = Path()
+            gauge.move(to: CGPoint(x: gx, y: entryY))
+            gauge.addLine(to: CGPoint(x: gx, y: edge + (edge < entryY ? 4 : -4)))
+            context.stroke(gauge, with: .color(color), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+        }
+        if let now {
+            context.fill(Path(ellipseIn: CGRect(x: now.x - 7, y: now.y - 7, width: 14, height: 14)), with: .color(nowColor.opacity(0.25)))
+            let dot = CGRect(x: now.x - 3.5, y: now.y - 3.5, width: 7, height: 7)
+            context.fill(Path(ellipseIn: dot), with: .color(nowColor))
+            context.stroke(Path(ellipseIn: dot), with: .color(theme.background), lineWidth: 1.5)
+        }
+
+        // Labels: short, no prices, faint unless the drawing is selected.
+        var labels = context
+        labels.opacity = selected ? 1 : 0.42
+        let risk = abs(levels.entry - levels.stop), reward = abs(levels.target - levels.entry)
+        let rr = risk > 0 ? reward / risk : 0
+        func pct(_ v: Double) -> String { String(format: "%.2f%%", levels.entry != 0 ? v / levels.entry * 100 : 0) }
+        let mid = (left + right) / 2
+        pill("▲ +\(Self.format(reward, decimals))  (\(pct(reward)))",
+             center: CGPoint(x: mid, y: targetY + (targetY < entryY ? -16 : 16)), color: up, in: &labels)
+        pill("▼ −\(Self.format(risk, decimals))  (\(pct(risk)))",
+             center: CGPoint(x: mid, y: stopY + (stopY < entryY ? -16 : 16)), color: down, in: &labels)
+        var status = ""
+        var statusColor = up
+        if let progress {
+            let moved = isLong ? progress.price - levels.entry : levels.entry - progress.price
+            let r = risk > 0 ? moved / risk : 0
+            switch progress.status {
+            case .target: status = "✓ TP  +\(String(format: "%.2f", rr))R"; statusColor = up
+            case .stop: status = "✕ SL  −1R"; statusColor = down
+            case .running:
+                status = "\(moved >= 0 ? "+" : "−")\(Self.format(abs(moved), decimals))  ·  \(r >= 0 ? "+" : "−")\(String(format: "%.2f", abs(r)))R"
+                statusColor = moved >= 0 ? up : down
+            }
+        }
+        var body = "R:R \(String(format: "%.2f", rr))"
+        if let lots = positionSizing?.lots(entry: levels.entry, stop: levels.stop) {
+            body += " · \(String(format: lots < 1 ? "%.2f" : "%.1f", lots)) lot"
+        }
+        entryPill(side: isLong ? "MUA" : "BÁN", sideColor: side, body: body, status: status, statusColor: statusColor,
+                  center: CGPoint(x: mid, y: entryY), in: &labels)
+    }
+
+    /// A rounded label with a soft shadow, centred on `center`.
+    private func pill(_ text: String, center: CGPoint, color: Color, in context: inout GraphicsContext) {
+        let label = context.resolve(Text(text).font(.system(size: 10.5, weight: .semibold)).foregroundColor(.white))
+        let size = label.measure(in: CGSize(width: 400, height: 30))
+        let rect = CGRect(x: center.x - size.width / 2 - 7, y: center.y - 9.5, width: size.width + 14, height: 19)
+        var shadow = context
+        shadow.addFilter(.shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 1))
+        shadow.fill(Path(roundedRect: rect, cornerRadius: 5), with: .color(color))
+        context.draw(label, at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
+    }
+
+    /// "MUA | R:R 2.40 | +5.30 · +2.12R": the side on its colour, then R:R, then the state.
+    private func entryPill(side: String, sideColor: Color, body: String, status: String, statusColor: Color,
+                           center: CGPoint, in context: inout GraphicsContext) {
+        let font = Font.system(size: 10.5, weight: .semibold)
+        let fit = CGSize(width: 400, height: 30)
+        let sideText = context.resolve(Text(side).font(font).foregroundColor(.white))
+        let bodyText = context.resolve(Text(body).font(font).foregroundColor(theme.primaryText))
+        let statusText = context.resolve(Text(status).font(font).foregroundColor(statusColor))
+        let sideWidth = sideText.measure(in: fit).width + 14
+        let bodyWidth = bodyText.measure(in: fit).width + 16
+        let statusWidth = status.isEmpty ? 0 : statusText.measure(in: fit).width + 14
+        let height: CGFloat = 20
+        let rect = CGRect(x: center.x - (sideWidth + bodyWidth + statusWidth) / 2, y: center.y - height / 2,
+                          width: sideWidth + bodyWidth + statusWidth, height: height)
+        var shadow = context
+        shadow.addFilter(.shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 1))
+        shadow.fill(Path(roundedRect: rect, cornerRadius: 10), with: .color(theme.background.opacity(0.95)))
+        context.stroke(Path(roundedRect: rect, cornerRadius: 10), with: .color(sideColor.opacity(0.55)), lineWidth: 1)
+        let chip = CGRect(x: rect.minX + 2, y: rect.minY + 2, width: sideWidth - 4, height: height - 4)
+        context.fill(Path(roundedRect: chip, cornerRadius: 8), with: .color(sideColor))
+        context.draw(sideText, at: CGPoint(x: chip.midX, y: chip.midY), anchor: .center)
+        context.draw(bodyText, at: CGPoint(x: rect.minX + sideWidth + bodyWidth / 2, y: rect.midY), anchor: .center)
+        if !status.isEmpty {
+            let state = CGRect(x: rect.minX + sideWidth + bodyWidth, y: rect.minY + 2, width: statusWidth - 2, height: height - 4)
+            context.fill(Path(roundedRect: state, cornerRadius: 8), with: .color(statusColor.opacity(0.18)))
+            context.draw(statusText, at: CGPoint(x: state.midX, y: state.midY), anchor: .center)
+        }
+    }
+
+    /// An open position's entry like the website: dotted from the fill bar (a dot there) to the right,
+    /// and a pill with the side and lots on the line's colour and the money on green / red.
+    private func drawEntryLine(_ line: ChartPriceLine, y: CGFloat, active: Bool, alpha: Double, range: Range<Int>,
+                               s: Scale, layout: Layout, in context: inout GraphicsContext) {
+        var x0: CGFloat = 0
+        var dot = false
+        if let index = line.markerIndex {
+            let x = s.x(index)
+            x0 = max(0, min(x, layout.axisX))
+            dot = range.contains(index)
+        }
+        let color = line.color.opacity(alpha)
+        var path = Path()
+        path.move(to: CGPoint(x: x0, y: y))
+        path.addLine(to: CGPoint(x: layout.axisX, y: y))
+        context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: active ? 1.5 : 1.2, dash: [2, 3]))
+        if dot {
+            let circle = CGRect(x: x0 - 4.5, y: y - 4.5, width: 9, height: 9)
+            context.fill(Path(ellipseIn: circle), with: .color(color))
+            context.stroke(Path(ellipseIn: circle), with: .color(theme.background.opacity(alpha)), lineWidth: 1.5)
+        }
+        var pillContext = context
+        pillContext.opacity = alpha
+        let font = Font.system(size: 11, weight: .semibold).monospacedDigit()
+        let fit = CGSize(width: 300, height: 30)
+        let left = pillContext.resolve(Text(line.label).font(font).foregroundColor(.white))
+        let money = pillContext.resolve(Text(line.value).font(font).foregroundColor(.white))
+        let leftWidth = left.measure(in: fit).width + 12
+        let moneyWidth = line.value.isEmpty ? 0 : money.measure(in: fit).width + 12
+        let height: CGFloat = 19
+        let right = layout.axisX - (line.closable && active ? 40 : 6)
+        let rect = CGRect(x: max(x0 + 8, right - leftWidth - moneyWidth), y: y - height / 2, width: leftWidth + moneyWidth, height: height)
+        var shadow = pillContext
+        shadow.addFilter(.shadow(color: .black.opacity(0.28), radius: 3, x: 0, y: 1))
+        shadow.fill(Path(roundedRect: rect, cornerRadius: 5), with: .color(line.color))
+        if !line.value.isEmpty {
+            let moneyRect = CGRect(x: rect.minX + leftWidth, y: rect.minY, width: moneyWidth, height: height)
+            pillContext.fill(Path(roundedRect: moneyRect, cornerRadii: RectangleCornerRadii(topLeading: 0, bottomLeading: 0, bottomTrailing: 5, topTrailing: 5)),
+                             with: .color(line.valueColor ?? line.color))
+            pillContext.draw(money, at: CGPoint(x: moneyRect.midX, y: moneyRect.midY), anchor: .center)
+        }
+        pillContext.draw(left, at: CGPoint(x: rect.minX + leftWidth / 2, y: rect.midY), anchor: .center)
+        if line.closable && active {
+            let button = closeButtonRect(y: y, layout: layout)
+            context.fill(Path(ellipseIn: button), with: .color(line.color))
+            var cross = Path()
+            let inset: CGFloat = 6
+            cross.move(to: CGPoint(x: button.minX + inset, y: button.minY + inset))
+            cross.addLine(to: CGPoint(x: button.maxX - inset, y: button.maxY - inset))
+            cross.move(to: CGPoint(x: button.maxX - inset, y: button.minY + inset))
+            cross.addLine(to: CGPoint(x: button.minX + inset, y: button.maxY - inset))
+            context.stroke(cross, with: .color(.white), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
         }
     }
 

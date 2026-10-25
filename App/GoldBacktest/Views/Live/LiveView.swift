@@ -1288,8 +1288,8 @@ struct LiveView: View {
             lines.append(ChartPriceLine(id: id + "|entry", price: p.entryPrice, color: p.side == .long ? blue : red,
                                         label: "\(p.side == .long ? "BUY" : "SELL") \(QuickTradePanel.lotText(p.lots))",
                                         dash: [6, 4], handleFraction: 0.42,
-                                        value: String(format: "%+.2f USD", profit), valueColor: profit >= 0 ? green : red,
-                                        markerIndex: openIndex(p.openTime), closable: true))
+                                        value: String(format: "%+.2f", profit), valueColor: profit >= 0 ? green : red,
+                                        markerIndex: openIndex(p.openTime), closable: true, entryStyle: true))
             if let stop = p.stop {
                 let price = value(id + "|sl", stop)
                 lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red, label: "SL", dash: [4, 4], handleFraction: 0.42,
@@ -1395,9 +1395,9 @@ struct LiveView: View {
             lines.append(ChartPriceLine(id: id + "|entry", price: p.entry, color: side == .long ? blue : red,
                                         label: "\(side == .long ? "BUY" : "SELL") \(QuickTradePanel.lotText(p.lots))\(tag)",
                                         dash: [6, 4], handleFraction: 0.42,
-                                        value: String(format: "%+.2f %@", profit, mt5.state?.currency ?? "USD"),
+                                        value: String(format: "%+.2f", profit),
                                         valueColor: profit >= 0 ? green : red,
-                                        markerIndex: openIndex(Date(timeIntervalSince1970: p.time)), closable: true))
+                                        markerIndex: openIndex(Date(timeIntervalSince1970: p.time)), closable: true, entryStyle: true))
             if let stop = p.stop {
                 let price = value(id + "|sl", stop)
                 lines.append(ChartPriceLine(id: id + "|sl", price: price, color: red, label: "SL", dash: [4, 4], handleFraction: 0.42,

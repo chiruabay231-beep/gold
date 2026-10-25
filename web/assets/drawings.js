@@ -724,12 +724,13 @@
       const bars = this.host.bars ? this.host.bars() : [];
       if (!bars.length) return null;
       const long = d.tool === "longPosition", entry = d.pts[0].p, stop = d.pts[1].p;
-      const t0 = d.pts[0].t, tEnd = Math.max(...d.pts.map((p) => p.t));
+      const t0 = d.pts[0].t;
       let i = bars.length - 1;
       while (i > 0 && bars[i - 1].time >= t0) i--;
       if (bars[i].time < t0) return null;
       let price = null, end = null;
-      for (; i < bars.length && bars[i].time <= tEnd; i++) {
+      // On to the newest bar while neither is hit: the box grows with the candles.
+      for (; i < bars.length; i++) {
         const b = bars[i];
         const hitStop = long ? b.low <= stop : b.high >= stop;
         const hitTarget = long ? b.high >= target : b.low <= target;
@@ -752,7 +753,10 @@
       const entry = d.pts[0].p, stop = d.pts[1].p, target = this.target(d);
       const [p0, p1] = pts, ye = p0[1], ys = p1[1], yt = this.y(target);
       if (yt == null) return;
-      const left = Math.min(p0[0], p1[0]), right = Math.max(p0[0], p1[0], p0[0] + 40), bw = right - left;
+      const prog = this.positionProgress(d, target);
+      // Until TP or SL is hit the box stretches with the new candles (and ends at the hit bar).
+      const reach = prog ? this.x(prog.end) : null;
+      const left = Math.min(p0[0], p1[0]), right = Math.max(p0[0], p1[0], p0[0] + 40, reach != null ? reach + 4 : -Infinity), bw = right - left;
       const top = Math.min(yt, ys), bottom = Math.max(yt, ys);
       const tc = d.targetColor, sc = d.stopColor, side = long ? "#2962ff" : "#f23645";
       const op = d.fill ? d.fillOpacity / 100 : 0;
@@ -768,7 +772,6 @@
       };
       zone(yt, tc); zone(ys, sc);
       // The way price has gone since the entry: lit up between the entry and where price is now.
-      const prog = this.positionProgress(d, target);
       let nowX = null, nowY = null;
       if (prog) {
         const x0 = Math.max(left, this.x(prog.start) ?? left), x1 = Math.min(right, (this.x(prog.end) ?? right) + 3);
