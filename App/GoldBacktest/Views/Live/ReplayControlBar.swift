@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import BacktestKit
 
 /// Controls of bar replay: exit, choose start, play/pause, one bar forward,
