@@ -715,3 +715,8 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
   .draft-bar { flex-wrap: wrap; justify-content: center; white-space: normal; row-gap: 6px; width: calc(100% - 16px); overflow: visible; bottom: 34px; }
   .draft-bar .go { flex: 1 1 auto; }
 }
+
+/* the drawing bar can be dragged by its grip */
+.draw-bar.moved { transform: none; }
+.draw-bar .db-grip { cursor: grab; color: var(--muted); padding: 0 3px 0 2px; font-size: 13px; letter-spacing: -3px; user-select: none; touch-action: none; align-self: stretch; display: flex; align-items: center; }
+.draw-bar .db-grip:active { cursor: grabbing; }

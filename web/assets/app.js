@@ -2763,7 +2763,7 @@
         this.digits = data.digits != null ? data.digits : 2;
         this.applySeriesFormat();
         $("chartSymbol").textContent = data.symbol || this.symbol || "XAUUSD";
-        $("chartSource").textContent = "· giá Exness";
+        $("chartSource").textContent = "";
         this.bars = bars;
         if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); }
         if (replayTime != null) {
@@ -2855,8 +2855,8 @@
       this.bars = feed.bars;
       if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); }
       const label = () => {
-        const d = feed.offset;
-        $("chartSource").textContent = `· nến ${this.interval} Binance ${market.name}` + (d ? ` (căn theo giá Exness ${d > 0 ? "+" : "−"}${Math.abs(d).toFixed(market.digits)})` : "");
+        // Where second bars come from is not shown (only problems are).
+        $("chartSource").textContent = "";
       };
       label();
       this.showFresh(this.bars);
@@ -2955,7 +2955,7 @@
       this.digits = m.digits != null ? m.digits : 2;
       this.applySeriesFormat();
       $("chartSymbol").textContent = this.owner && this.symbol ? this.symbol : "XAUUSD";
-      $("chartSource").textContent = `· giá Binance ${m.name} (tạm, MT5 chưa trả nến)`;
+      $("chartSource").textContent = "· MT5 chưa trả nến, đang dùng giá tạm";
       const interval = this.interval;
       const rest = m.futures ? "https://fapi.binance.com/fapi/v1/klines" : "https://api.binance.com/api/v3/klines";
       try {
@@ -3494,13 +3494,13 @@
       const D = window.AurumDrawings;
       if (d.tool) {
         bar.hidden = false;
-        bar.innerHTML = `<span><b>${esc(D.tools[d.tool].name)}</b> · ${this.hint(d.tool)}</span><button type="button" data-a="cancel">Huỷ</button>`;
+        bar.innerHTML = `<span class="db-grip" title="Kéo để di chuyển · bấm đúp để về giữa">⋮⋮</span><span><b>${esc(D.tools[d.tool].name)}</b> · ${this.hint(d.tool)}</span><button type="button" data-a="cancel">Huỷ</button>`;
       } else if (d.current) {
         const cur = d.current;
         const pos = cur.tool === "longPosition" || cur.tool === "shortPosition";
         bar.hidden = false;
         // Tool · colour ▾ · width ▾ · style ▾ | templates · settings · lock | delete · close
-        bar.innerHTML = `<span class="db-tool" title="${esc(D.tools[cur.tool].name)}">${TOOL_ICON[cur.tool] || ""}</span><span class="db-sep"></span>
+        bar.innerHTML = `<span class="db-grip" title="Kéo để di chuyển · bấm đúp để về giữa">⋮⋮</span><span class="db-tool" title="${esc(D.tools[cur.tool].name)}">${TOOL_ICON[cur.tool] || ""}</span><span class="db-sep"></span>
           <button type="button" data-p="color" class="db-pick" title="Màu"><span class="db-dot" style="background:${esc(cur.color)}"></span>${BAR_ICON.chev}</button>
           <button type="button" data-p="width" class="db-pick" title="Độ dày">${linePreview(cur.width, "solid")}<span class="db-px">${cur.width}</span>${BAR_ICON.chev}</button>
           <button type="button" data-p="style" class="db-pick" title="Kiểu nét">${linePreview(1.5, cur.style)}${BAR_ICON.chev}</button>
@@ -3514,6 +3514,7 @@
           <button type="button" data-a="x" class="muted" title="Bỏ chọn">${BAR_ICON.close}</button>`;
       } else { bar.hidden = true; return; }
       bar.querySelectorAll("[data-p]").forEach((b) => (b.onclick = () => this.drawPickMenu(b, b.dataset.p)));
+      this.placeDrawBar();
       bar.querySelectorAll("[data-a]").forEach((b) => {
         const a = b.dataset.a;
         b.onclick = () => {
@@ -3526,6 +3527,35 @@
           this.renderDrawBar();
         };
       });
+    },
+
+    /** The drawing bar where it was dragged to (kept), or centred at the top of the chart. */
+    placeDrawBar() {
+      const bar = $("drawBar"), wrap = bar.parentElement;
+      let pos = null;
+      try { pos = JSON.parse(store.get("aurum.drawBarPos") || "null"); } catch { pos = null; }
+      if (!pos || !wrap || wrap.id !== "chartWrap") { bar.classList.remove("moved"); bar.style.left = bar.style.top = ""; }
+      else {
+        bar.classList.add("moved");
+        bar.style.left = Math.max(0, Math.min(wrap.clientWidth - bar.offsetWidth, pos.x)) + "px";
+        bar.style.top = Math.max(0, Math.min(wrap.clientHeight - bar.offsetHeight, pos.y)) + "px";
+      }
+      const grip = bar.querySelector(".db-grip");
+      if (!grip) return;
+      grip.onpointerdown = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const w = bar.parentElement.getBoundingClientRect(), r = bar.getBoundingClientRect();
+        const dx = e.clientX - r.left, dy = e.clientY - r.top;
+        bar.classList.add("moved");
+        const move = (ev) => {
+          const x = Math.max(0, Math.min(w.width - r.width, ev.clientX - w.left - dx)), y = Math.max(0, Math.min(w.height - r.height, ev.clientY - w.top - dy));
+          bar.style.left = x + "px"; bar.style.top = y + "px";
+          if (bar.parentElement.id === "chartWrap") store.set("aurum.drawBarPos", JSON.stringify({ x, y }));
+        };
+        const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
+        window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+      };
+      grip.ondblclick = () => { store.set("aurum.drawBarPos", null); this.placeDrawBar(); };
     },
 
     /** The colour / width / style choices under a button of the drawing bar. */
