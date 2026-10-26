@@ -1589,8 +1589,35 @@
         const h = await this.call(`/mt5/history?from=${Math.floor(from)}&to=${Math.ceil(to)}`);
         this.histData = { list: (h.positions || []).sort((a, b) => b.closeTime - a.closeTime), summary: h.summary || {} };
         this.renderHistory();
+        this.loadLotTotals();
       } catch (e) {
         $("histList").innerHTML = `<div class="empty">${esc(plain(e.message))}</div>`;
+      }
+    },
+
+    /** Lots traded today, yesterday and over the whole account, whatever range the list shows. */
+    async loadLotTotals() {
+      const box = $("histLots");
+      const show = (t) => {
+        const cell = (k, v, n) => `<div class="ls"><span>${k}</span><b>${v == null ? "…" : v.toFixed(2)} <small>lot</small></b><em>${n == null ? "" : n + " lệnh"}</em></div>`;
+        box.innerHTML = cell("Hôm nay", t && t.today.lots, t && t.today.n) + cell("Hôm qua", t && t.yesterday.lots, t && t.yesterday.n) + cell("Tất cả", t && t.all.lots, t && t.all.n);
+      };
+      // Read again at most once a minute (the whole account's history can be long).
+      if (this.lotTotals && Date.now() - this.lotTotals.at < 60000) return show(this.lotTotals);
+      show(this.lotTotals || null);
+      try {
+        const h = await this.call(`/mt5/history?from=1262304000&to=${Math.ceil(Date.now() / 1000 + 60)}`);
+        const [today] = this.rangeTimes("today"), [yStart, yEnd] = this.rangeTimes("yesterday");
+        const sum = (list) => ({ lots: list.reduce((a, p) => a + (p.lots || 0), 0), n: list.length });
+        const all = h.positions || [];
+        this.lotTotals = {
+          at: Date.now(), all: sum(all),
+          today: sum(all.filter((p) => p.closeTime >= today)),
+          yesterday: sum(all.filter((p) => p.closeTime >= yStart && p.closeTime < yEnd)),
+        };
+        show(this.lotTotals);
+      } catch {
+        if (!this.lotTotals) box.innerHTML = "";
       }
     },
 

@@ -748,3 +748,14 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
   .chart-title { flex-wrap: wrap; row-gap: 6px; }
   .sym-tabs { order: 5; flex: 1 1 100%; margin-left: 0; }
 }
+
+/* history: lots today / yesterday / all */
+.lot-sum { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0 0 10px; }
+.lot-sum:empty { display: none; }
+.lot-sum .ls { background: var(--bg2); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.lot-sum .ls span { color: var(--muted); font-size: 12px; }
+.lot-sum .ls b { font: 700 18px/1.1 var(--font); font-variant-numeric: tabular-nums; color: var(--text); }
+.lot-sum .ls b small { font-size: 11px; color: var(--muted); font-weight: 600; }
+.lot-sum .ls em { font-style: normal; color: var(--muted); font-size: 11px; }
+.lot-sum .ls:last-child { border-color: rgba(242, 193, 78, .45); }
+.lot-sum .ls:last-child b { color: var(--gold); }
