@@ -230,7 +230,7 @@
     ["daily", "Đỉnh đáy từng ngày"],
     ["fvg", "FVG & Volume Imbalance"],
     ["mss", "MSS (đổi cấu trúc)"],
-    ["dm", "DM (nến mạnh không râu)"],
+    ["dm", "DM (nến không râu trên / dưới)"],
     ["flow", "Dòng tiền cá mập"],
     ["smt", "SMT (khi mở 2 biểu đồ: so đỉnh/đáy với mã thứ 2)"],
   ];
@@ -4341,7 +4341,8 @@
             + head("Cấu trúc") + tog("mss", "MSS (đổi cấu trúc)") + tog("bos", "BOS (phá cấu trúc cùng xu hướng)") + numf("swing", "Swing: số nến mỗi bên") + numf("structureCount", "Giữ số lần phá gần nhất")
             + head("Thanh khoản") + tog("sweeps", "Quét thanh khoản") + numf("sweepCount", "Giữ số lần quét gần nhất")
             + head("DM (nến mạnh không râu)") + `<label class="fr"><input type="checkbox" data-dm ${showInd.dm ? "checked" : ""}><span>Hiện DM</span></label>`
-            + numf("dmBody", "Thân nến ≥ × ATR(14)", 0.1) + numf("dmWick", "Râu mỗi bên tối đa (% cả cây)") + numf("dmCount", "Số cây gần nhất")
+            + numf("dmBody", "Nến khoẻ: thân ≥ × ATR(14) (0 = mọi cây)", 0.1) + numf("dmWick", "Coi là không râu khi râu ≤ % cả cây (0 = không râu)", 0.5)
+            + numf("dmCount", "Số đường DM gần nhất") + tog("dmUntilBroken", "Dừng đường ở nến cắt qua (tắt = kéo tới nến hiện tại)")
             + head("SMT") + `<label class="fr"><input type="checkbox" data-smt ${showInd.smt ? "checked" : ""}><span>Hiện SMT khi mở 2 biểu đồ (nút ▥)</span></label>`
             + (this.owner ? `<div class="fr"><span class="grow">Mã so sánh</span>${text("smtSymbol", "lb")}<span class="muted small">trống = tự động (${esc(this.cmpSymbol())})</span></div>` : "")
             + tog("smtInverse", "Mã so sánh chạy ngược chiều (DXY)") + numf("smtSwing", "Swing: số nến mỗi bên") + numf("smtLookback", "Hai đỉnh/đáy cách tối đa (nến)") + numf("smtCount", "Giữ SMT gần nhất")
@@ -4357,7 +4358,8 @@
             + head("FVG & VI") + color("fvgBull", "FVG tăng") + color("fvgBear", "FVG giảm") + color("fvgZone", "Nền FVG trùng khung") + color("fvgZoneMid", "Đường giữa FVG trùng khung") + color("viColor", "VI")
             + head("SMT") + color("smtBull", "SMT tăng") + color("smtBear", "SMT giảm")
             + head("Khác") + color("mssBull", "MSS tăng") + color("mssBear", "MSS giảm") + color("sweepColor", "Quét thanh khoản") + color("macroColor", "Macros")
-            + head("DM") + color("dmBull", "DM tăng") + color("dmBear", "DM giảm");
+            + head("DM") + color("dmLineColor", "Màu đường") + color("dmTextColor", "Màu chữ") + sel("dmStyle", "Nét", styles)
+            + sel("dmWidth", "Độ dày", [[1, "1px"], [2, "2px"], [3, "3px"]]);
         }
         return head("Chung") + sel("timeZone", "Múi giờ", [["America/New_York", "New York (ICT)"], ["UTC", "UTC"], ["Asia/Ho_Chi_Minh", "Hà Nội (UTC+7)"], ["Europe/London", "London"]])
           + sel("tfLimit", "Killzones trên khung ≤", tfOpts.slice(0, 6)) + numf("maxDays", "Số ngày hiển thị")

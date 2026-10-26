@@ -56,7 +56,7 @@
       mss: true, bos: false, swing: 5, structureCount: 20, mssBull: "#089981", mssBear: "#f23645",
       sweeps: true, sweepCount: 20, sweepColor: "#fa9900",
       // DM: strong candles with (almost) no wicks — body ≥ dmBody × ATR(14), each wick ≤ dmWick % of the candle.
-      dmBody: 1.2, dmWick: 8, dmCount: 60, dmBull: "#089981", dmBear: "#f23645",
+      dmBody: 1, dmWick: 0, dmCount: 10, dmUntilBroken: false, dmLineColor: "#787b86", dmTextColor: "#f23645", dmStyle: "solid", dmWidth: 1, dmVersion: 2,
       dailyLabelAlign: "center",
       lineScale: 1,
       // SMT against a related market (silver for gold): empty symbol = automatic.
@@ -77,6 +77,11 @@
     if (saved.keepVersion !== 2) {
       d.keepMitigated = true; d.pivotUntilMitigated = true; d.dailyKeepTouched = true; d.periodUntilBroken = true;
       d.keepVersion = 2;
+    }
+    if (saved.dmVersion !== 2) {
+      // DM became lines from candles bare on one side: the first version's size settings do not carry over.
+      const fresh = defaults();
+      ["dmBody", "dmWick", "dmCount", "dmVersion"].forEach((k) => { d[k] = fresh[k]; });
     }
     return d;
   }
@@ -428,7 +433,9 @@
   }
 
   // High and low of each of the last finished days, until a candle reaches them.
-  /** DM: the newest strong candles without wicks (marubozu-like), body ≥ dmBody × ATR(14). */
+  /** DM: strong candles with no wick on one side (body ≥ dmBody × ATR(14); 0 takes any size). Each gives a level
+   *  at its bare end — the high with no upper wick, the low with no lower wick — carried right to the newest
+   *  candle (or to the first candle crossing it), to compare price with. */
   function strongCandles(c, cfg) {
     const out = [], n = c.length, len = 14;
     let atr = 0;
@@ -437,13 +444,17 @@
       atr = i <= len ? atr + (tr - atr) / i : atr + (tr - atr) / len;
       if (i < len) continue;
       const b = c[i], range = b.high - b.low, body = Math.abs(b.close - b.open);
-      if (range <= 0 || body < (cfg.dmBody || 1.2) * atr) continue;
+      if (range <= 0 || body <= 0 || body < (cfg.dmBody || 0) * atr) continue;
+      // "No wick": within dmWick % of the candle (0 = none at all, with a hair for rounding).
+      const most = Math.max((cfg.dmWick || 0) / 100 * range, range * 1e-6);
       const top = b.high - Math.max(b.open, b.close), bottom = Math.min(b.open, b.close) - b.low;
-      const most = (cfg.dmWick == null ? 8 : cfg.dmWick) / 100 * range;
-      if (top > most || bottom > most) continue;
-      out.push({ index: i, bull: b.close > b.open, high: b.high, low: b.low });
+      for (const [bare, isHigh, price] of [[top <= most, true, b.high], [bottom <= most, false, b.low]]) {
+        if (!bare) continue;
+        const end = cfg.dmUntilBroken ? firstBreak(c, price, isHigh, i + 1) : null;
+        out.push({ index: i, price, high: isHigh, end });
+      }
     }
-    return out.slice(-Math.max(cfg.dmCount || 60, 1));
+    return out.slice(-Math.max(cfg.dmCount || 10, 1));
   }
 
   function dailyLevels(c, ck, cfg) {
@@ -594,17 +605,18 @@
       g.restore();
     });
 
-    // DM: a small "DM" over a strong bullish candle, under a bearish one, and a thin frame round it.
+    // DM: a line from the candle's bare end to the right, "DM" in the middle of the part on screen.
     (o.dms || []).forEach((d) => {
-      const x = X(d.index), yh = Y(d.high), yl = Y(d.low);
-      if (x == null || yh == null || yl == null || x < -half || x > w + half) return;
-      const color = (d.bull ? cfg.dmBull : cfg.dmBear).slice(0, 7);
-      g.setLineDash([]); g.strokeStyle = alpha(color, 0.85); g.lineWidth = 1;
-      g.strokeRect(Math.round(x - half) + 0.5, Math.round(yh) - 1.5, Math.max(2, Math.round(2 * half) - 1), Math.round(yl - yh) + 3);
+      const a = X(d.index), y = Y(d.price);
+      if (a == null || y == null) return;
+      const b = xEnd(d.end);
+      if (b < 0 || a > w) return;
+      line(a - half, b, y, (cfg.dmLineColor || "#131722").slice(0, 7), cfg.dmWidth || 1, DASH[cfg.dmStyle] || []);
       g.save();
-      g.font = "700 9px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
-      g.fillStyle = color; g.textAlign = "center"; g.textBaseline = d.bull ? "bottom" : "top";
-      g.fillText("DM", x, d.bull ? yh - 4 : yl + 4);
+      g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+      g.fillStyle = (cfg.dmTextColor || "#f23645").slice(0, 7); g.textAlign = "center";
+      g.textBaseline = d.high ? "bottom" : "top";
+      g.fillText("DM", (Math.max(a, 0) + Math.min(b, w)) / 2, d.high ? Math.round(y) - 2 : Math.round(y) + 3);
       g.restore();
     });
 
