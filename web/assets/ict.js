@@ -55,6 +55,9 @@
       vi: true, viCount: 20, viHideTouched: false, viColor: "#fa9900",
       mss: true, bos: false, swing: 5, structureCount: 20, mssBull: "#089981", mssBear: "#f23645",
       sweeps: true, sweepCount: 20, sweepColor: "#fa9900",
+      // DM: strong candles with (almost) no wicks — body ≥ dmBody × ATR(14), each wick ≤ dmWick % of the candle.
+      dmBody: 1.2, dmWick: 8, dmCount: 60, dmBull: "#089981", dmBear: "#f23645",
+      dailyLabelAlign: "center",
       lineScale: 1,
       // SMT against a related market (silver for gold): empty symbol = automatic.
       smtSymbol: "", smtInverse: false, smtSwing: 3, smtLookback: 60, smtCount: 10, smtBull: "#089981", smtBear: "#f23645",
@@ -310,6 +313,7 @@
       if (cfg.vi) out.vis = volumeImbalances(c, cfg);
     }
     if (show.mss && (cfg.mss || cfg.bos)) out.breaks = structureBreaks(c, cfg);
+    if (show.dm) out.dms = strongCandles(c, cfg);
     const ck = clock(c, cfg.timeZone);
     if (show.daily && cfg.daily && sec < 86400) out.levels.push(...dailyLevels(c, ck, cfg));
     if (!show.killzones) return out;
@@ -344,7 +348,7 @@
           const price = isHigh ? high : low;
           const j = firstBreak(c, price, isHigh, b + 1);
           if (cfg.sweeps && j !== null && (isHigh ? c[j].close < price : c[j].close > price)) {
-            out.sweeps.push({ bull: !isHigh, price, index: j, label: isHigh ? s.hi : s.lo });
+            out.sweeps.push({ bull: !isHigh, price, index: j, from: isHigh ? hiI : loI, label: isHigh ? s.hi : s.lo });
           }
           if (!cfg.showPivots || (j !== null && !cfg.keepMitigated)) continue;
           let end = cfg.pivotUntilMitigated ? j : null;
@@ -401,9 +405,9 @@
     };
     const pd = previous(ck.day);
     if (cfg.sweeps && pd) {
-      [[true, pd.high, "PDH"], [false, pd.low, "PDL"]].forEach(([isHigh, price, label]) => {
+      [[true, pd.high, "PDH", pd.hiI], [false, pd.low, "PDL", pd.loI]].forEach(([isHigh, price, label, from]) => {
         const j = firstBreak(c, price, isHigh, pd.start);
-        if (j !== null && (isHigh ? c[j].close < price : c[j].close > price)) out.sweeps.push({ bull: !isHigh, price, index: j, label });
+        if (j !== null && (isHigh ? c[j].close < price : c[j].close > price)) out.sweeps.push({ bull: !isHigh, price, index: j, from, label });
       });
     }
     [[cfg.prevDay, ck.day, "PDH", "PDL"], [cfg.prevWeek, ck.week, "PWH", "PWL"], [cfg.prevMonth, ck.month, "PMH", "PML"]].forEach(([on, id, h, l]) => {
@@ -424,6 +428,24 @@
   }
 
   // High and low of each of the last finished days, until a candle reaches them.
+  /** DM: the newest strong candles without wicks (marubozu-like), body ≥ dmBody × ATR(14). */
+  function strongCandles(c, cfg) {
+    const out = [], n = c.length, len = 14;
+    let atr = 0;
+    for (let i = 1; i < n; i++) {
+      const tr = Math.max(c[i].high - c[i].low, Math.abs(c[i].high - c[i - 1].close), Math.abs(c[i].low - c[i - 1].close));
+      atr = i <= len ? atr + (tr - atr) / i : atr + (tr - atr) / len;
+      if (i < len) continue;
+      const b = c[i], range = b.high - b.low, body = Math.abs(b.close - b.open);
+      if (range <= 0 || body < (cfg.dmBody || 1.2) * atr) continue;
+      const top = b.high - Math.max(b.open, b.close), bottom = Math.min(b.open, b.close) - b.low;
+      const most = (cfg.dmWick == null ? 8 : cfg.dmWick) / 100 * range;
+      if (top > most || bottom > most) continue;
+      out.push({ index: i, bull: b.close > b.open, high: b.high, low: b.low });
+    }
+    return out.slice(-Math.max(cfg.dmCount || 60, 1));
+  }
+
   function dailyLevels(c, ck, cfg) {
     const n = c.length, today = ck.day[n - 1], ranges = [];
     let end = n - 1;
@@ -474,8 +496,7 @@
       g.fillText(text, Math.min(Math.max(x, 2), w - 2), y - 2);
     };
     // A level's name at its line's left end, middle or right end (the visible part of it).
-    const levelLabel = (text, a, b, y, color) => {
-      const align = cfg.levelLabelAlign || "right";
+    const levelLabel = (text, a, b, y, color, align = cfg.levelLabelAlign || "right") => {
       // At the left end the name goes under the line: above it sits the session box's own name.
       if (align === "left") label(text, Math.max(a, 0) + 2, y == null ? y : y + 12, color, "left");
       else if (align === "center") label(text, (Math.max(a, 0) + Math.min(b, w)) / 2, y, color, "center");
@@ -520,7 +541,7 @@
       if (a == null) return;
       if (l.kind === "daily") {
         line(a, b, y, alpha(l.color, l.mitigated ? 0.6 : 0.85), 1, l.mitigated ? DASH.dotted : DASH[cfg.dailyStyle]);
-        levelLabel(l.label, a, b, y, alpha(l.color, 0.8));
+        levelLabel(l.label, a, b, y, alpha(l.color, 0.8), cfg.dailyLabelAlign || "center");
         return;
       }
       if (l.kind === "open") { line(a, b, y, alpha(l.color, 0.75), 1, DASH[cfg.openStyle]); levelLabel(l.label, a, b, y, l.color); return; }
@@ -558,12 +579,33 @@
       g.textBaseline = "bottom";
     });
 
+    // A sweep: a faint line from the swept high/low to the candle that took it, an X in the middle.
     o.sweeps.forEach((sw) => {
-      const x = X(sw.index), y = Y(sw.price);
-      if (x == null || y == null || x < 0 || x > w) return;
-      g.fillStyle = cfg.sweepColor; g.textAlign = "center"; g.textBaseline = sw.bull ? "top" : "bottom";
-      g.fillText("✕ " + sw.label, x, sw.bull ? y + 3 : y - 3);
-      g.textBaseline = "bottom";
+      const x = X(sw.index), y = Y(sw.price), xf = sw.from != null ? X(sw.from) : null;
+      if (x == null || y == null) return;
+      const a = xf != null ? Math.min(xf, x) : x - 30, b = x;
+      if (b < 0 || a > w) return;
+      line(a, b, y, alpha(cfg.sweepColor.slice(0, 7), 0.55), 1, DASH.dotted);
+      const mx = (Math.max(a, 0) + Math.min(b, w)) / 2; // the middle of the part on screen
+      g.save();
+      g.font = "700 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+      g.fillStyle = cfg.sweepColor; g.textAlign = "center"; g.textBaseline = "middle";
+      g.fillText("X", mx, Math.round(y) + 0.5);
+      g.restore();
+    });
+
+    // DM: a small "DM" over a strong bullish candle, under a bearish one, and a thin frame round it.
+    (o.dms || []).forEach((d) => {
+      const x = X(d.index), yh = Y(d.high), yl = Y(d.low);
+      if (x == null || yh == null || yl == null || x < -half || x > w + half) return;
+      const color = (d.bull ? cfg.dmBull : cfg.dmBear).slice(0, 7);
+      g.setLineDash([]); g.strokeStyle = alpha(color, 0.85); g.lineWidth = 1;
+      g.strokeRect(Math.round(x - half) + 0.5, Math.round(yh) - 1.5, Math.max(2, Math.round(2 * half) - 1), Math.round(yl - yh) + 3);
+      g.save();
+      g.font = "700 9px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+      g.fillStyle = color; g.textAlign = "center"; g.textBaseline = d.bull ? "bottom" : "top";
+      g.fillText("DM", x, d.bull ? yh - 4 : yl + 4);
+      g.restore();
     });
 
     o.days.forEach((d) => {

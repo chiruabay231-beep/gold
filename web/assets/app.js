@@ -230,13 +230,15 @@
     ["daily", "Đỉnh đáy từng ngày"],
     ["fvg", "FVG & Volume Imbalance"],
     ["mss", "MSS (đổi cấu trúc)"],
+    ["dm", "DM (nến mạnh không râu)"],
     ["flow", "Dòng tiền cá mập"],
     ["smt", "SMT (khi mở 2 biểu đồ: so đỉnh/đáy với mã thứ 2)"],
   ];
   const showInd = (() => {
     let saved = {};
     try { saved = JSON.parse(store.get("aurum.ind") || "{}"); } catch { /* default */ }
-    return Object.fromEntries(IND.map(([k]) => [k, saved[k] !== false]));
+    // DM starts off; the others on.
+    return Object.fromEntries(IND.map(([k]) => [k, k === "dm" ? saved[k] === true : saved[k] !== false]));
   })();
 
   const TFS = ["5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "4h", "1d"];
@@ -4338,6 +4340,8 @@
             + tog("vi", "Hiện VI (Volume Imbalance)") + numf("viCount", "Giữ VI gần nhất") + tog("viHideTouched", "Ẩn VI đã bị chạm")
             + head("Cấu trúc") + tog("mss", "MSS (đổi cấu trúc)") + tog("bos", "BOS (phá cấu trúc cùng xu hướng)") + numf("swing", "Swing: số nến mỗi bên") + numf("structureCount", "Giữ số lần phá gần nhất")
             + head("Thanh khoản") + tog("sweeps", "Quét thanh khoản") + numf("sweepCount", "Giữ số lần quét gần nhất")
+            + head("DM (nến mạnh không râu)") + `<label class="fr"><input type="checkbox" data-dm ${showInd.dm ? "checked" : ""}><span>Hiện DM</span></label>`
+            + numf("dmBody", "Thân nến ≥ × ATR(14)", 0.1) + numf("dmWick", "Râu mỗi bên tối đa (% cả cây)") + numf("dmCount", "Số cây gần nhất")
             + head("SMT") + `<label class="fr"><input type="checkbox" data-smt ${showInd.smt ? "checked" : ""}><span>Hiện SMT khi mở 2 biểu đồ (nút ▥)</span></label>`
             + (this.owner ? `<div class="fr"><span class="grow">Mã so sánh</span>${text("smtSymbol", "lb")}<span class="muted small">trống = tự động (${esc(this.cmpSymbol())})</span></div>` : "")
             + tog("smtInverse", "Mã so sánh chạy ngược chiều (DXY)") + numf("smtSwing", "Swing: số nến mỗi bên") + numf("smtLookback", "Hai đỉnh/đáy cách tối đa (nến)") + numf("smtCount", "Giữ SMT gần nhất")
@@ -4349,10 +4353,11 @@
             + head("Đường") + sel("lineScale", "Độ dày chung", [[0.5, "0.5px"], [0.75, "Mảnh"], [1, "Vừa"], [1.5, "Dày"], [2, "Rất dày"]]) + numf("pivotWidth", "Độ dày pivot", 0.5)
             + sel("pivotStyle", "Nét pivot", styles) + sel("mitigatedStyle", "Nét pivot đã bị phá", styles) + sel("openStyle", "Nét giá mở cửa", styles)
             + color("stampColor", "Màu mốc thời gian") + sel("stampStyle", "Nét mốc thời gian", styles)
-            + head("Đỉnh / đáy ngày") + color("dayHighColor", "Màu đỉnh ngày") + color("dayLowColor", "Màu đáy ngày") + sel("dailyStyle", "Nét", styles) + color("periodColor", "Màu PDH/PWH/PMH")
+            + head("Đỉnh / đáy ngày") + color("dayHighColor", "Màu đỉnh ngày") + color("dayLowColor", "Màu đáy ngày") + sel("dailyStyle", "Nét", styles) + sel("dailyLabelAlign", "Vị trí chữ đỉnh/đáy thứ", [["left", "Trái"], ["center", "Giữa"], ["right", "Phải"]]) + color("periodColor", "Màu PDH/PWH/PMH")
             + head("FVG & VI") + color("fvgBull", "FVG tăng") + color("fvgBear", "FVG giảm") + color("fvgZone", "Nền FVG trùng khung") + color("fvgZoneMid", "Đường giữa FVG trùng khung") + color("viColor", "VI")
             + head("SMT") + color("smtBull", "SMT tăng") + color("smtBear", "SMT giảm")
-            + head("Khác") + color("mssBull", "MSS tăng") + color("mssBear", "MSS giảm") + color("sweepColor", "Quét thanh khoản") + color("macroColor", "Macros");
+            + head("Khác") + color("mssBull", "MSS tăng") + color("mssBear", "MSS giảm") + color("sweepColor", "Quét thanh khoản") + color("macroColor", "Macros")
+            + head("DM") + color("dmBull", "DM tăng") + color("dmBear", "DM giảm");
         }
         return head("Chung") + sel("timeZone", "Múi giờ", [["America/New_York", "New York (ICT)"], ["UTC", "UTC"], ["Asia/Ho_Chi_Minh", "Hà Nội (UTC+7)"], ["Europe/London", "London"]])
           + sel("tfLimit", "Killzones trên khung ≤", tfOpts.slice(0, 6)) + numf("maxDays", "Số ngày hiển thị")
@@ -4367,6 +4372,8 @@
         afterDraw: (panel) => {
           const box = panel.querySelector("[data-smt]");
           if (box) box.onchange = () => { showInd.smt = box.checked; store.set("aurum.ind", JSON.stringify(showInd)); this.loadCmp(); };
+          const dm = panel.querySelector("[data-dm]");
+          if (dm) dm.onchange = () => { showInd.dm = dm.checked; store.set("aurum.ind", JSON.stringify(showInd)); this.computeICT(); this.redraw(); };
         },
         onReset: () => {
           if (!confirm("Đặt lại mọi cài đặt chỉ báo về mặc định?")) return;
