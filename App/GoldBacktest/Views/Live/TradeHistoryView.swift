@@ -147,6 +147,27 @@ struct TradeHistoryView: View {
     @State private var loading = false
     /// A closed position tapped: its details with the SL/TP it had.
     @State private var selected: TradeHistory.Position?
+    /// Lots traded today, yesterday and over the whole account, whatever period is shown.
+    @State private var lotTotals: LotTotals?
+
+    struct LotTotals {
+        struct Part { var lots = 0.0; var count = 0 }
+        var today = Part(), yesterday = Part(), all = Part()
+        var at = Date()
+
+        init(closeTimes: [(time: Double, lots: Double)]) {
+            let calendar = Calendar.current
+            let today = calendar.startOfDay(for: Date()).timeIntervalSince1970
+            let yesterday = today - 86400
+            for item in closeTimes {
+                all.lots += item.lots; all.count += 1
+                if item.time >= today { self.today.lots += item.lots; self.today.count += 1 }
+                else if item.time >= yesterday { self.yesterday.lots += item.lots; self.yesterday.count += 1 }
+            }
+        }
+    }
+    /// The whole account's history is long: read again at most once a minute (shared by every list).
+    @MainActor private static var cachedTotals: LotTotals?
 
     private var page: Page { Page(rawValue: pageName) ?? .positions }
     private var period: Period { Period(rawValue: periodName) ?? .week }
@@ -205,6 +226,9 @@ struct TradeHistoryView: View {
     private var content: some View {
         if let error {
             Text(error).font(.footnote).foregroundColor(.orange)
+        }
+        if page == .positions, let lotTotals {
+            lotStrip(lotTotals)
         }
         if let history {
             rows(history)
@@ -365,10 +389,49 @@ struct TradeHistoryView: View {
         }
     }
 
+    /// "Hôm nay 0.10 lot · Hôm qua 0.23 lot · Tất cả 12.40 lot", with the number of positions under each.
+    private func lotStrip(_ t: LotTotals) -> some View {
+        HStack(spacing: 8) {
+            lotCell("Hôm nay", t.today, highlight: false)
+            lotCell("Hôm qua", t.yesterday, highlight: false)
+            lotCell("Tất cả", t.all, highlight: true)
+        }
+        .listRowInsets(EdgeInsets(top: 8, leading: 12, bottom: 8, trailing: 12))
+        .listRowSeparator(.hidden)
+    }
+
+    private func lotCell(_ title: String, _ part: LotTotals.Part, highlight: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.caption).foregroundColor(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                Text(Self.lotsText(part.lots))
+                    .font(.system(size: 17, weight: .bold).monospacedDigit())
+                    .foregroundColor(highlight ? Color(red: 0.8, green: 0.6, blue: 0.15) : .primary)
+                    .lineLimit(1).minimumScaleFactor(0.6)
+                Text("lot").font(.caption2.weight(.semibold)).foregroundColor(.secondary)
+            }
+            Text("\(part.count) lệnh").font(.caption2).foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+        .overlay {
+            if highlight {
+                RoundedRectangle(cornerRadius: 12).stroke(Color(red: 0.8, green: 0.6, blue: 0.15).opacity(0.5), lineWidth: 1)
+            }
+        }
+    }
+
     @ViewBuilder
     private func summary(_ h: TradeHistory) -> some View {
         let s = h.summary
         Section {
+            HStack {
+                Text("Khối lượng").foregroundColor(.secondary)
+                Spacer()
+                Text("\(Self.lotsText(h.positions.reduce(0) { $0 + $1.lots })) lot · \(h.positions.count) lệnh")
+                    .font(.body.monospacedDigit())
+            }
             summaryRow("Lợi nhuận", s.profit)
             if source == .mt5 {
                 summaryRow("Nạp tiền", s.deposit)
@@ -395,6 +458,7 @@ struct TradeHistoryView: View {
         switch source {
         case .demo:
             history = .demo(trader.account, from: from, to: to)
+            lotTotals = LotTotals(closeTimes: trader.account.history.map { ($0.closeTime.timeIntervalSince1970, $0.lots) })
         case .mt5:
             guard let client = RemoteBotSettings.client() else {
                 error = "Chưa kết nối máy chủ VPS"
@@ -405,6 +469,7 @@ struct TradeHistoryView: View {
             do {
                 history = try await client.mt5History(from: from, to: to)
                 error = nil
+                await loadLotTotals(client)
             } catch {
                 self.error = ServerUpdate.isOutdated(error)
                     ? "Máy chủ VPS chưa có lịch sử theo ngày: vào Bot trên VPS → Cập nhật máy chủ VPS."
@@ -413,7 +478,31 @@ struct TradeHistoryView: View {
         }
     }
 
+    private func loadLotTotals(_ client: RemoteBotClient) async {
+        if let cached = Self.cachedTotals, Date().timeIntervalSince(cached.at) < 60, reloadKey == lastTotalsKey {
+            lotTotals = cached
+            return
+        }
+        lotTotals = Self.cachedTotals
+        let start = Date(timeIntervalSince1970: 1_262_304_000) // 2010: the whole account
+        guard let all = try? await client.mt5History(from: start, to: Date().addingTimeInterval(60)) else { return }
+        let totals = LotTotals(closeTimes: all.positions.map { ($0.closeTime, $0.lots) })
+        Self.cachedTotals = totals
+        lastTotalsKey = reloadKey
+        lotTotals = totals
+    }
+
+    /// The reload key the cached totals were read for: a position closing reads them again.
+    @MainActor private static var totalsKey = -1
+    private var lastTotalsKey: Int {
+        get { Self.totalsKey }
+        nonmutating set { Self.totalsKey = newValue }
+    }
+
     // MARK: - Formatting
+
+    /// Lots with two decimals, like MT5 ("0.15", "12.40").
+    static func lotsText(_ value: Double) -> String { String(format: "%.2f", value) }
 
     static func name(_ symbol: String) -> String { symbol.isEmpty ? "—" : symbol }
     static func price(_ value: Double) -> String { CandleChart.format(value, CandleChart.decimals(for: value)) }

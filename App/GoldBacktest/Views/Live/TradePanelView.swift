@@ -59,6 +59,8 @@ struct AccountSummary: View {
 /// "Lệnh có trạng thái" with "Đóng tất cả" at the right (asks once first).
 struct PositionsHeader: View {
     let count: Int
+    /// Total lots of the open positions, shown beside the title.
+    var lots: Double = 0
     var onCloseAll: () -> Void
 
     @State private var confirm = false
@@ -66,6 +68,14 @@ struct PositionsHeader: View {
     var body: some View {
         HStack {
             Text("Lệnh có trạng thái")
+            if count > 0 {
+                Text("\(count) · \(TradeHistoryView.lotsText(lots)) lot")
+                    .font(.footnote.weight(.semibold).monospacedDigit())
+                    .textCase(nil)
+                    .foregroundColor(.primary)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Color(.tertiarySystemFill), in: Capsule())
+            }
             Spacer()
             if count > 0 {
                 Button { confirm = true } label: {
@@ -156,7 +166,7 @@ struct TradePanelView: View {
                         }
                 }
             } header: {
-                PositionsHeader(count: account.positions.count) {
+                PositionsHeader(count: account.positions.count, lots: account.positions.reduce(0) { $0 + $1.lots }) {
                     for p in trader.account.positions { trader.close(p) }
                 }
             }
