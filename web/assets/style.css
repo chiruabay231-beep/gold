@@ -759,3 +759,17 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .lot-sum .ls em { font-style: normal; color: var(--muted); font-size: 11px; }
 .lot-sum .ls:last-child { border-color: rgba(242, 193, 78, .45); }
 .lot-sum .ls:last-child b { color: var(--gold); }
+
+/* pending order bar: SL / TP typed in place */
+.draft-bar .dfield { display: inline-flex; align-items: center; gap: 5px; height: 30px; padding: 0 4px 0 8px; border-radius: 9px; background: var(--chip); font: 600 12px/1 var(--font); font-variant-numeric: tabular-nums; }
+.draft-bar .dfield em { font-style: normal; font-weight: 800; font-size: 10.5px; letter-spacing: .04em; }
+.draft-bar .dfield.stop em { color: var(--down); }
+.draft-bar .dfield.target em { color: var(--up); }
+.draft-bar .dfield input { width: auto; min-width: 54px; max-width: 86px; border: 0; background: transparent; color: var(--text); font: inherit; padding: 0; outline: none; border-bottom: 1px dashed var(--line2); }
+.draft-bar .dfield input:focus { border-bottom-color: var(--gold); }
+.draft-bar .dfield button { border: 0; background: transparent; color: var(--muted); width: 20px; height: 20px; border-radius: 6px; cursor: pointer; font-size: 10px; padding: 0; }
+.draft-bar .dfield button:hover { background: var(--down); color: #fff; }
+.draft-bar .dadd { height: 30px; padding: 0 10px; border-radius: 9px; border: 1px dashed var(--line2); background: transparent; font: 700 12px/1 var(--font); cursor: pointer; }
+.draft-bar .dadd.stop { color: var(--down); }
+.draft-bar .dadd.target { color: var(--up); }
+.draft-bar .dadd:hover { border-style: solid; background: var(--hover); }

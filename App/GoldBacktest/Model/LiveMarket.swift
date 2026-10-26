@@ -509,6 +509,7 @@ final class LiveMarket {
 
     /// OANDA has no public candle stream, so the last bars are re-read every second.
     private func poll(_ client: OandaClient) async throws {
+        var catchUp = CatchUp(seconds: interval.seconds)
         var newestComplete = closedCandles.last?.time
         var errors = 0
         var polls = 0
@@ -516,8 +517,11 @@ final class LiveMarket {
         while !Task.isCancelled {
             try await Task.sleep(nanoseconds: 1_000_000_000)
             let latest: [OandaCandle]
+            // Too far behind for one poll: reload (the run loop reads the history again).
+            let count = try catchUp.count()
             do {
-                latest = try await client.fetchCandles(instrument: symbol, interval: interval, count: 3)
+                latest = try await client.fetchCandles(instrument: symbol, interval: interval, count: count)
+                catchUp.done()
                 errors = 0
                 status = .live
             } catch {
@@ -548,17 +552,38 @@ final class LiveMarket {
         throw CancellationError()
     }
 
+    /// How many of the newest bars a poll reads: 3 normally, every bar since the last poll after the app
+    /// slept in the background (else the chart has a hole), and a reload when that is more than a poll holds.
+    private struct CatchUp {
+        let seconds: Double
+        var last = Date()
+
+        struct TooFarBehind: Error {}
+
+        func count() throws -> Int {
+            let behind = Date().timeIntervalSince(last) / max(seconds, 1)
+            if behind > 700 { throw TooFarBehind() }
+            return max(3, Int(behind.rounded(.up)) + 3)
+        }
+
+        mutating func done() { last = Date() }
+    }
+
     /// MT5 through the VPS: the last bars are re-read every second, like OANDA.
     private func pollMT5(_ client: RemoteBotClient) async throws {
+        var catchUp = CatchUp(seconds: interval.seconds)
         var newestClosed = closedCandles.last?.time
         var errors = 0
         status = .live
         while !Task.isCancelled {
             try await Task.sleep(nanoseconds: 1_000_000_000)
             let latest: [Candle]
+            // Too far behind for one poll: reload (the run loop reads the history again).
+            let count = try catchUp.count()
             do {
-                let bars = try await client.mt5Bars(symbol: symbol, interval: interval, count: 3)
+                let bars = try await client.mt5Bars(symbol: symbol, interval: interval, count: count)
                 latest = bars.candles
+                catchUp.done()
                 // MT5 bars are bid prices; the server also sends the live bid/ask.
                 if let bid = bars.bid, let ask = bars.ask, bid > 0, ask >= bid { setQuote(bid: bid, ask: ask) }
                 errors = 0

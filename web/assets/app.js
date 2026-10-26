@@ -964,6 +964,22 @@
         this.timers.push(setInterval(badge, 15000));
       }
       this.timers.push(setInterval(() => this.updateFlow(), 1000));
+      if (!this.visibilityBound) {
+        // Back from another tab or a locked phone: catch up at once instead of on the next timer.
+        this.visibilityBound = true;
+        let hiddenAt = 0;
+        document.addEventListener("visibilitychange", () => {
+          if (document.hidden) { hiddenAt = Date.now(); return; }
+          if (!this.chart || this.replay || !hiddenAt) return;
+          const away = (Date.now() - hiddenAt) / 1000;
+          hiddenAt = 0;
+          if (away < 3) return;
+          // Second bars come from a live stream that may have dropped while away: reload them.
+          if (isSecTF(this.interval) || this.source === "binance") { if (away > 15) this.loadCandles(); return; }
+          if (this.pollTimer && this.source === "exness") this.pollBars(this.loadToken);
+          if (this.cmpBars && this.cmpBars.length && this.layout !== "1") this.loadCmp();
+        });
+      }
     },
 
     stop(all = true) {
@@ -1325,18 +1341,45 @@
       this.renderDraftBar(price, side, kind);
     },
 
-    /** The pending order being set up, confirmed right on the chart (the full form is under it). */
+    /** The pending order being set up, confirmed right on the chart (the full form is under it).
+     *  SL and TP are typed right here, removed with their ✕ or added back with + SL / + TP. */
     renderDraftBar(price, side, kind) {
       const bar = $("draftBar");
       if (!this.draft || price == null) { bar.hidden = true; return; }
+      // Typing in a field: keep it (a redraw would drop the caret); the money updates on Enter / leaving it.
+      if (bar.contains(document.activeElement) && document.activeElement.tagName === "INPUT") return;
       const sl = num($("pStop").value), tp = num($("pTarget").value), lots = this.lots();
-      const money = (lv) => (lv == null ? "" : ` <span class="${(this.valueAt(this.symbol, lots, side, price, lv) || 0) >= 0 ? "pos" : "neg"}">${money0(this.valueAt(this.symbol, lots, side, price, lv))}</span>`);
+      const money = (lv) => { const v = this.valueAt(this.symbol, lots, side, price, lv); return `<span class="${(v || 0) >= 0 ? "pos" : "neg"}">${money0(v)}</span>`; };
+      const field = (f, name, lv) => lv == null
+        ? `<button type="button" class="dadd ${f}" data-add="${f}">+ ${name}</button>`
+        : `<span class="dfield ${f}"><em>${name}</em><input data-f="${f}" inputmode="decimal" value="${fmt(lv, this.digits)}" size="${fmt(lv, this.digits).length}">${money(lv)}<button type="button" data-del="${f}" title="Bỏ ${name}">✕</button></span>`;
       bar.hidden = false;
       bar.innerHTML = `<span class="dk ${side === "long" ? "buy" : "sell"}">${kind}</span>
         <span><b>${lots.toFixed(2)}</b> @ <b>${fmt(price, this.digits)}</b></span>
-        <span class="muted">SL ${sl != null ? fmt(sl, this.digits) + money(sl) : "–"} · TP ${tp != null ? fmt(tp, this.digits) + money(tp) : "–"}</span>
+        ${field("stop", "SL", sl)}${field("target", "TP", tp)}
         <button type="button" class="go ${side === "long" ? "buy" : "sell"}" data-a="place">Đặt lệnh</button>
         <button type="button" class="x" data-a="cancel" title="Huỷ">✕</button>`;
+      const input = (f) => $(f === "stop" ? "pStop" : "pTarget");
+      const apply = () => { this.readDraftDist(); this.updatePendingLabels(); this.syncLines(); };
+      bar.querySelectorAll("input[data-f]").forEach((i) => {
+        i.onkeydown = (e) => { if (e.key === "Enter") i.blur(); if (e.key === "Escape") { i.value = input(i.dataset.f).value; i.blur(); } };
+        i.onchange = () => {
+          const v = num(i.value), long = side === "long", isStop = i.dataset.f === "stop";
+          // SL under a buy's entry and above a sell's; TP the other way.
+          if (v == null || (isStop === long ? v >= price : v <= price)) { toast(`${isStop ? "SL" : "TP"} của lệnh ${long ? "MUA" : "BÁN"} phải ${isStop === long ? "thấp" : "cao"} hơn giá vào ${fmt(price, this.digits)}`, true); i.value = input(i.dataset.f).value; return; }
+          input(i.dataset.f).value = fmt(v, this.digits);
+          setTimeout(apply);
+        };
+      });
+      bar.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => { input(b.dataset.del).value = ""; apply(); }));
+      bar.querySelectorAll("[data-add]").forEach((b) => (b.onclick = () => {
+        // Back at the last distance used, else three average candles away (TP twice that).
+        const tail = this.bars.slice(-30), long = side === "long", isStop = b.dataset.add === "stop";
+        const r = tail.length ? tail.reduce((a, x) => a + x.high - x.low, 0) / tail.length : price * 0.0005;
+        const dist = (isStop ? this.draftDist && this.draftDist.risk : this.draftDist && this.draftDist.reward) || r * (isStop ? 3 : 6);
+        input(b.dataset.add).value = fmt(price + (isStop === long ? -1 : 1) * dist, this.digits);
+        apply();
+      }));
       bar.querySelector("[data-a=place]").onclick = (e) => this.pendingOrder(e.currentTarget);
       bar.querySelector("[data-a=cancel]").onclick = () => this.togglePending(false);
     },
@@ -2886,6 +2929,7 @@
         this.source = "exness";
         if (data.symbol) this.symbol = this.owner ? this.symbol : data.symbol;
         this.digits = data.digits != null ? data.digits : 2;
+        if (data.contractSize) (this.contracts = this.contracts || {})[data.symbol || this.symbol] = data.contractSize;
         this.applySeriesFormat();
         $("chartSymbol").textContent = data.symbol || this.symbol || "XAUUSD";
         this.renderSymTabs();
@@ -2903,6 +2947,7 @@
           this.computeICT();
         }
         this.setQuote(data);
+        this.lastPollAt = Date.now();
         this.pollTimer = setInterval(() => this.pollBars(token), 2000);
       } catch (e) {
         if (token !== this.loadToken) return;
@@ -2920,9 +2965,16 @@
     // The newest bars every 2 seconds (MT5 has no public stream).
     async pollBars(token) {
       if (this.polling) return;
+      // A hidden tab or a sleeping phone polls late: fetch every bar since the last poll (else the chart
+      // has a hole), or reload when that is more than a fetch holds.
+      const sec = TF_SECONDS[this.interval] || 60, nowMs = Date.now();
+      const late = this.lastPollAt ? (nowMs - this.lastPollAt) / 1000 : 0;
+      if (late / sec > 700) { this.lastPollAt = null; this.loadCandles(); return; }
+      const count = Math.max(3, Math.ceil(late / sec) + 3);
       this.polling = true;
       try {
-        const data = await this.call(this.exnessPath(3));
+        const data = await this.call(this.exnessPath(count));
+        this.lastPollAt = nowMs;
         if (token !== this.loadToken) return;
         const fresh = this.toBars(data.candles || []);
         let added = false;
@@ -3184,9 +3236,20 @@
     /** Money for `lots` from `entry` to `price` with the usual contract sizes (gold 100, silver 5000, crypto/indices 1, FX 100000). */
     valueAt(symbol, lots, side, entry, price) {
       if (price == null || entry == null) return null;
+      return (price - entry) * (side === "long" ? 1 : -1) * lots * this.contractOf(symbol);
+    },
+
+    /** Units per lot: the broker's own (sent with the bars by server 3.2+), else the usual sizes. */
+    contractOf(symbol) {
+      const known = (this.contracts || {})[symbol];
+      if (known) return known;
       const s = String(symbol || "").toUpperCase();
-      const contract = /XAU|GOLD/.test(s) ? 100 : /XAG|SILVER/.test(s) ? 5000 : /BTC|ETH|SOL|XRP|LTC|US30|USTEC|NAS|SPX|US500|DE30|DE40|JP225|UK100|HK50/.test(s) ? 1 : 100000;
-      return (price - entry) * (side === "long" ? 1 : -1) * lots * contract;
+      if (/XAU|GOLD/.test(s)) return 100;
+      if (/XAG|SILVER/.test(s)) return 5000;
+      if (/OIL|XTI|XBR|WTI|BRENT/.test(s)) return 1000;
+      if (/XNG|NGAS|NATGAS/.test(s)) return 10000;
+      if (/BTC|ETH|SOL|XRP|LTC|BNB|DOGE|ADA|US30|USTEC|NAS|SPX|US500|DE30|DE40|JP225|UK100|HK50|STOXX|FR40|AUS200/.test(s)) return 1;
+      return 100000;
     },
 
     /** Where a trade line starts: the candle at `time` (with a dot there when on screen), else the left edge. */
@@ -3839,13 +3902,7 @@
       this.redraw();
     },
 
-    contractSize() {
-      const s = this.symbolKey().toUpperCase();
-      if (/XAU|GOLD/.test(s)) return 100;
-      if (/XAG|SILVER/.test(s)) return 5000;
-      if (/BTC|ETH|US30|USTEC|NAS|SPX|US500|DE30|DE40|JP225|UK100/.test(s)) return 1;
-      return 100000;
-    },
+    contractSize() { return this.contractOf(this.symbolKey()); },
 
     replayOrder(side) {
       const r = this.replay;
@@ -4265,6 +4322,9 @@
           return head("Killzones") + tog("showBoxes", "Hiện hộp phiên")
             + cfg.sessions.map((s, i) => `<div class="fr">${chk(`sessions.${i}.on`)}${sw(`sessions.${i}.color`)}${text(`sessions.${i}.name`)}${time(`sessions.${i}.start`)}<span class="to">—</span>${time(`sessions.${i}.end`)}</div>`).join("")
             + head("Pivots") + tog("showPivots", "Hiện điểm pivot (đỉnh/đáy phiên)") + tog("pivotLabels", "Nhãn pivot") + tog("livePivots", "Hiện khi phiên đang chạy")
+            + sel("pivotColorMode", "Màu đỉnh / đáy phiên", [["session", "Theo màu phiên"], ["custom", "Màu riêng (bên dưới)"]])
+            + color("pivotHighColor", "Màu đỉnh") + color("pivotLowColor", "Màu đáy")
+            + sel("levelLabelAlign", "Vị trí chữ trên đường", [["left", "Trái"], ["center", "Giữa"], ["right", "Phải"]])
             + sel("pivotUntilMitigated", "Kéo dài", [[true, "Tới khi giá phá"], [false, "Qua cả khi bị phá"]]) + tog("keepMitigated", "Giữ pivot đã bị phá") + tog("periodUntilBroken", "PDH/PDL, PWH/PWL dừng tại nến cắt qua") + tog("midpoints", "Đường giữa phiên (50%)")
             + cfg.sessions.map((s, i) => `<div class="fr"><span class="grow muted">${esc(s.name)}</span>${text(`sessions.${i}.hi`, "lb")}${text(`sessions.${i}.lo`, "lb")}</div>`).join("")
             + head("Giá mở cửa") + cfg.opens.map((o, i) => `<div class="fr">${chk(`opens.${i}.on`)}${sw(`opens.${i}.color`)}${text(`opens.${i}.label`, "lb")}${time(`opens.${i}.hour`)}</div>`).join("")

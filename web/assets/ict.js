@@ -23,6 +23,8 @@
       // 2: levels broken by a candle stay, ending at that candle (older saves are moved onto it).
       keepVersion: 2, periodUntilBroken: true,
       pivotStyle: "solid", mitigatedStyle: "solid", midpoints: false, pivotWidth: 1,
+      // Session highs/lows in the session's colour or their own; where the level names sit on their lines.
+      pivotColorMode: "session", pivotHighColor: "#089981", pivotLowColor: "#f23645", levelLabelAlign: "right",
       opens: [
         { on: true, hour: 0, label: "DO", color: "#787b86" },
         { on: false, hour: 8.5, label: "08:30", color: "#787b86" },
@@ -332,8 +334,8 @@
         if (b >= n - 1) {
           // Still open: the running high/low.
           if (cfg.showPivots && cfg.livePivots) {
-            out.levels.push({ kind: "pivot", price: high, start: hiI, end: null, label: s.hi, color: s.color });
-            out.levels.push({ kind: "pivot", price: low, start: loI, end: null, label: s.lo, color: s.color });
+            out.levels.push({ kind: "pivot", price: high, start: hiI, end: null, label: s.hi, color: s.color, high: true });
+            out.levels.push({ kind: "pivot", price: low, start: loI, end: null, label: s.lo, color: s.color, high: false });
           }
           if (cfg.midpoints && cfg.livePivots) out.levels.push({ kind: "mid", price: mid, start: a, end: b, label: "", color: s.color });
           continue;
@@ -348,7 +350,7 @@
           let end = cfg.pivotUntilMitigated ? j : null;
           const cut = cutAfter(b);
           if (cut !== undefined && (end === null || cut < end)) end = cut;
-          out.levels.push({ kind: "pivot", price, start: isHigh ? hiI : loI, end, label: isHigh ? s.hi : s.lo, color: s.color, mitigated: j !== null });
+          out.levels.push({ kind: "pivot", price, start: isHigh ? hiI : loI, end, label: isHigh ? s.hi : s.lo, color: s.color, mitigated: j !== null, high: isHigh });
         }
         if (cfg.midpoints) out.levels.push({ kind: "mid", price: mid, start: a, end: b, label: "", color: s.color });
       }
@@ -471,6 +473,14 @@
       g.fillStyle = color; g.textAlign = align;
       g.fillText(text, Math.min(Math.max(x, 2), w - 2), y - 2);
     };
+    // A level's name at its line's left end, middle or right end (the visible part of it).
+    const levelLabel = (text, a, b, y, color) => {
+      const align = cfg.levelLabelAlign || "right";
+      // At the left end the name goes under the line: above it sits the session box's own name.
+      if (align === "left") label(text, Math.max(a, 0) + 2, y == null ? y : y + 12, color, "left");
+      else if (align === "center") label(text, (Math.max(a, 0) + Math.min(b, w)) / 2, y, color, "center");
+      else label(text, b - 2, y, color);
+    };
     const alpha = (hex, a) => hex + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
 
     if (o.hidden) { g.fillStyle = "#8b95a7"; g.textAlign = "left"; g.textBaseline = "top"; g.fillText(`Killzones chỉ hiện ở khung ≤ ${cfg.tfLimit >= 60 ? cfg.tfLimit / 60 + "h" : cfg.tfLimit + "m"}`, 8, 8); g.textBaseline = "bottom"; }
@@ -510,14 +520,15 @@
       if (a == null) return;
       if (l.kind === "daily") {
         line(a, b, y, alpha(l.color, l.mitigated ? 0.6 : 0.85), 1, l.mitigated ? DASH.dotted : DASH[cfg.dailyStyle]);
-        label(l.label, b - 2, y, alpha(l.color, 0.8));
+        levelLabel(l.label, a, b, y, alpha(l.color, 0.8));
         return;
       }
-      if (l.kind === "open") { line(a, b, y, alpha(l.color, 0.75), 1, DASH[cfg.openStyle]); label(l.label, b - 2, y, l.color); return; }
-      if (l.kind === "period") { line(a, b, y, alpha(l.color, l.mitigated ? 0.7 : 1), 1, DASH.dashed); label(l.label, b - 2, y, alpha(l.color, l.mitigated ? 0.75 : 1)); return; }
+      if (l.kind === "open") { line(a, b, y, alpha(l.color, 0.75), 1, DASH[cfg.openStyle]); levelLabel(l.label, a, b, y, l.color); return; }
+      if (l.kind === "period") { line(a, b, y, alpha(l.color, l.mitigated ? 0.7 : 1), 1, DASH.dashed); levelLabel(l.label, a, b, y, alpha(l.color, l.mitigated ? 0.75 : 1)); return; }
       if (l.kind === "mid") { line(a, b, y, alpha(l.color, 0.6), 1, DASH.dotted); return; }
-      line(a, b, y, alpha(l.color, l.mitigated ? 0.55 : 0.95), cfg.pivotWidth, DASH[l.mitigated ? cfg.mitigatedStyle : cfg.pivotStyle]);
-      if (cfg.pivotLabels) label(l.label, b - 2, y, l.color);
+      const pc = (cfg.pivotColorMode === "custom" ? (l.high ? cfg.pivotHighColor : cfg.pivotLowColor) : l.color || "#787b86").slice(0, 7);
+      line(a, b, y, alpha(pc, l.mitigated ? 0.55 : 0.95), cfg.pivotWidth, DASH[l.mitigated ? cfg.mitigatedStyle : cfg.pivotStyle]);
+      if (cfg.pivotLabels) levelLabel(l.label, a, b, y, pc);
     });
 
     o.fvgs.forEach((f) => {

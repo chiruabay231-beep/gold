@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "3.1"
+VERSION = "3.2"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -101,6 +101,15 @@ def fmt(price):
 
 def money(value):
     return f"{value:+.2f}$"
+
+
+def on_tick(info, price):
+    """A price on the symbol's tick grid (oil, indices… move in steps bigger than a digit), else MT5 refuses it."""
+    price = float(price)
+    step = getattr(info, "trade_tick_size", 0) or 0
+    if step > 0:
+        price = round(price / step) * step
+    return round(price, info.digits)
 
 
 def contract_size(symbol):
@@ -778,16 +787,16 @@ class Mt5Account:
                 request.update(action=mt5.TRADE_ACTION_DEAL, type=mt5.ORDER_TYPE_BUY if buy else mt5.ORDER_TYPE_SELL,
                                price=tick.ask if buy else tick.bid)
             else:
-                price = round(float(body["price"]), info.digits)
+                price = on_tick(info, body["price"])
                 below = price < (tick.ask if buy else tick.bid)
                 # Buy below / sell above the market = limit, otherwise stop.
                 order_type = (mt5.ORDER_TYPE_BUY_LIMIT if below else mt5.ORDER_TYPE_BUY_STOP) if buy else \
                     (mt5.ORDER_TYPE_SELL_STOP if below else mt5.ORDER_TYPE_SELL_LIMIT)
                 request.update(action=mt5.TRADE_ACTION_PENDING, type=order_type, price=price)
             if body.get("stop"):
-                request["sl"] = round(float(body["stop"]), info.digits)
+                request["sl"] = on_tick(info, body["stop"])
             if body.get("target"):
-                request["tp"] = round(float(body["target"]), info.digits)
+                request["tp"] = on_tick(info, body["target"])
             result, error = mt5_send(mt5, request)
             if error:
                 raise ValueError(error)
@@ -830,8 +839,8 @@ class Mt5Account:
                             float(body["stop"]) if body.get("stop") else None,
                             float(body["target"]) if body.get("target") else None)
                 request = {"action": mt5.TRADE_ACTION_SLTP, "symbol": r.symbol, "position": r.ticket,
-                           "sl": round(float(body["stop"]), info.digits) if body.get("stop") else 0.0,
-                           "tp": round(float(body["target"]), info.digits) if body.get("target") else 0.0}
+                           "sl": on_tick(info, body["stop"]) if body.get("stop") else 0.0,
+                           "tp": on_tick(info, body["target"]) if body.get("target") else 0.0}
             else:
                 orders = mt5.orders_get(ticket=ticket) or ()
                 if not orders:
@@ -840,9 +849,9 @@ class Mt5Account:
                 info = mt5.symbol_info(o.symbol)
                 price = float(body.get("price") or o.price_open)
                 request = {"action": mt5.TRADE_ACTION_MODIFY, "symbol": o.symbol, "order": o.ticket,
-                           "price": round(price, info.digits), "type_time": mt5.ORDER_TIME_GTC,
-                           "sl": round(float(body["stop"]), info.digits) if body.get("stop") else 0.0,
-                           "tp": round(float(body["target"]), info.digits) if body.get("target") else 0.0}
+                           "price": on_tick(info, price), "type_time": mt5.ORDER_TIME_GTC,
+                           "sl": on_tick(info, body["stop"]) if body.get("stop") else 0.0,
+                           "tp": on_tick(info, body["target"]) if body.get("target") else 0.0}
             _, error = mt5_send(mt5, request)
             if error:
                 raise ValueError(error)
@@ -991,6 +1000,8 @@ class Mt5Account:
                     "lastComplete": bool(before),
                     "bid": tick.bid if tick else None, "ask": tick.ask if tick else None,
                     "digits": info.digits if info else None,
+                    # Units per lot (gold 100, oil 1000 at Exness…): the web works out SL/TP money with it.
+                    "contractSize": info.trade_contract_size if info else None,
                     "description": info.description if info else ""}
 
 
