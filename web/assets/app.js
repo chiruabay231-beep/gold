@@ -2608,7 +2608,8 @@
         });
         this.chartStyle = loadChartStyle();
         this.applyChartStyle();
-        this.layout = ["1", "h", "v"].includes(store.get("aurum.layout")) ? store.get("aurum.layout") : "1";
+        // Two charts sit side by side only (the stacked layout is gone: "v" opens side by side).
+        this.layout = ["h", "v"].includes(store.get("aurum.layout")) ? "h" : "1";
         $("tfButtons").innerHTML = TFS.map((i) => `<button type="button" data-tf="${i}"${i === "30s" ? ' class="sec-end" title="Nến giây lấy từ Binance"' : isSecTF(i) ? ' title="Nến giây lấy từ Binance"' : ""}>${i}</button>`).join("");
         $("tfButtons").querySelectorAll("button").forEach((b) => (b.onclick = () => {
           this.interval = b.dataset.tf; store.set("aurum.tf", this.interval); this.loadCandles();
@@ -2623,9 +2624,10 @@
 
     /** Crosshair time: with seconds on the second charts. */
     timeLabel(t) {
-      const o = { timeZone: "UTC", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" };
-      if (isSecTF(this.interval)) o.second = "2-digit";
-      return new Date(t * 1000).toLocaleString("vi-VN", o);
+      // "13:46 25-10" by hand: toLocaleString builds a formatter per call, too slow for two charts' axes.
+      const d = new Date(t * 1000), p = (n) => (n < 10 ? "0" : "") + n;
+      const sec = isSecTF(this.interval) ? ":" + p(d.getUTCSeconds()) : "";
+      return `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}${sec} ${p(d.getUTCDate())}-${p(d.getUTCMonth() + 1)}`;
     },
 
     applySeriesFormat() {
@@ -4558,11 +4560,11 @@
       return h ? `${h}:${two(m)}:${two(sec)}` : `${two(m)}:${two(sec)}`;
     },
 
-    /* ----- layout: one chart, or two side by side / stacked with SMT ----- */
+    /* ----- layout: one chart, or two side by side with SMT ----- */
 
     layoutMenu(button) {
       const r = button.getBoundingClientRect();
-      const items = [["1", "▭ 1 biểu đồ"], ["h", "◫ 2 biểu đồ ngang"], ["v", "⊟ 2 biểu đồ dọc"]].map(([k, n]) => [k, (this.layout === k ? "✓ " : "　") + n]);
+      const items = [["1", "▭ 1 biểu đồ"], ["h", "◫ 2 biểu đồ ngang"]].map(([k, n]) => [k, (this.layout === k ? "✓ " : "　") + n]);
       items.push(["smt", (showInd.smt ? "✓ " : "　") + "SMT (so đỉnh/đáy với mã thứ 2)"]);
       if (this.owner) items.push(["cmp", `　Mã so sánh: ${this.cmpSymbol()}…`]);
       const menu = $("ctxMenu");
@@ -4580,9 +4582,10 @@
     },
 
     setLayout(mode) {
+      if (mode !== "1") mode = "h";
       this.layout = mode;
       store.set("aurum.layout", mode);
-      $("charts").className = "charts" + (mode === "h" ? " row" : mode === "v" ? " col" : "");
+      $("charts").className = "charts" + (mode === "h" ? " row" : "");
       $("chartWrap2").hidden = mode === "1";
       $("layoutBtn").classList.toggle("on", mode !== "1");
       if (mode === "1") { this.focusChart(1); this.loadCmp(); return; }
@@ -4619,13 +4622,18 @@
         paneViews() {
           return [{ zOrder: () => "top", renderer: () => ({ draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
             if (!term.smt || !term.cmpView) return;
-            const index = new Map(term.cmpView.map((b, i) => [b.time, i]));
-            const list = term.smt.map((d) => {
-              const i1 = index.get(d.t1), i2 = index.get(d.t2);
-              if (i1 == null || i2 == null) return null;
-              const a = term.cmpView[i1], b = term.cmpView[i2];
-              return { bull: d.bull, start: i1, end: i2, p1: d.bull ? a.low : a.high, p2: d.bull ? b.low : b.high };
-            }).filter(Boolean);
+            // Mapped onto the second chart's bars once per SMT result, not every frame.
+            const c = term.smt2Cache;
+            if (!c || c.smt !== term.smt || c.view !== term.cmpView) {
+              const index = new Map(term.cmpView.map((b, i) => [b.time, i]));
+              term.smt2Cache = { smt: term.smt, view: term.cmpView, list: term.smt.map((d) => {
+                const i1 = index.get(d.t1), i2 = index.get(d.t2);
+                if (i1 == null || i2 == null) return null;
+                const a = term.cmpView[i1], b = term.cmpView[i2];
+                return { bull: d.bull, start: i1, end: i2, p1: d.bull ? a.low : a.high, p2: d.bull ? b.low : b.high };
+              }).filter(Boolean) };
+            }
+            const list = term.smt2Cache.list;
             const ts = term.chart2.timeScale();
             window.ICT.drawSMT(context, list, (i) => ts.logicalToCoordinate(i), (v) => term.series2.priceToCoordinate(v), mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
           }) }) }];
@@ -4873,7 +4881,12 @@
           setTimeout(() => this.syncRange(this.chart, this.chart2), 250);
         }
       }
-      this.computeSMT();
+      // SMT again when either market gets a bar (or every 2 s for the live ones), not on every trade.
+      const key = `${this.viewBars().length}:${view.length}`;
+      if (full || changed || key !== this.smtKey || !this.smtTime || Date.now() - this.smtTime > 2000) {
+        this.smtKey = key; this.smtTime = Date.now();
+        this.computeSMT();
+      } else if (this.request2) this.request2();
     },
 
     computeSMT() {
