@@ -52,7 +52,8 @@
       fvg: true, fvgFrom: 1, fvgTo: 1440, fvgStrong: true, fvgDisplacement: 1.5, fvgConfluence: true,
       fvgMid: true, fvgHideFilled: false, gapKeep: 15, fvgMinSize: 0, fvgCount: 40,
       fvgBull: "#089981", fvgBear: "#f23645", fvgZone: "#8c8f99", fvgZoneMid: "#9c27b0",
-      vi: true, viCount: 20, viHideTouched: false, viColor: "#fa9900",
+      // viKeep: a VI a candle touches or trades through stays, ending at that candle.
+      vi: true, viCount: 20, viHideTouched: false, viKeep: true, viVersion: 2, viColor: "#fa9900",
       mss: true, bos: false, swing: 5, structureCount: 20, mssBull: "#089981", mssBear: "#f23645",
       sweeps: true, sweepCount: 20, sweepColor: "#fa9900",
       // DM: strong candles with (almost) no wicks — body ≥ dmBody × ATR(14), each wick ≤ dmWick % of the candle.
@@ -77,6 +78,10 @@
     if (saved.keepVersion !== 2) {
       d.keepMitigated = true; d.pivotUntilMitigated = true; d.dailyKeepTouched = true; d.periodUntilBroken = true;
       d.keepVersion = 2;
+    }
+    if (saved.viVersion !== 2) {
+      // Touched VIs now stay (ending at the touching candle) instead of going.
+      d.viKeep = true; d.viHideTouched = false; d.viVersion = 2;
     }
     if (saved.dmVersion !== 2) {
       // DM became lines from candles bare on one side: the first version's size settings do not carry over.
@@ -269,7 +274,7 @@
       if (!raw) continue;
       const g = followed(raw, i - 1, i, c);
       if (g.touched && cfg.viHideTouched) continue;
-      if (stillShown(g, c, cfg.gapKeep)) out.push(g);
+      if (cfg.viKeep || stillShown(g, c, cfg.gapKeep)) out.push(g);
     }
     return out.reverse();
   }
