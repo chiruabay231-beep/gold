@@ -108,6 +108,9 @@ public enum KillzonePivots {
         /// A daily high/low price has reached stops at that candle and is drawn
         /// dotted; off, it is no longer drawn.
         public var dailyLevelsKeepTouched = true
+        /// Days of the daily highs/lows as Exness counts them (its server runs on UTC, a day from 00:00 UTC),
+        /// like the D1 candles there; off, days in the indicator's time zone.
+        public var dailyLevelsExnessDay = true
         public var showPreviousWeek = false
         public var showPreviousMonth = false
         public var showDayOfWeek = false
@@ -214,6 +217,7 @@ public enum KillzonePivots {
             showDailyLevels = try c.decodeIfPresent(Bool.self, forKey: .showDailyLevels) ?? d.showDailyLevels
             dailyLevelDays = try c.decodeIfPresent(Int.self, forKey: .dailyLevelDays) ?? d.dailyLevelDays
             dailyLevelsKeepTouched = try c.decodeIfPresent(Bool.self, forKey: .dailyLevelsKeepTouched) ?? d.dailyLevelsKeepTouched
+            dailyLevelsExnessDay = try c.decodeIfPresent(Bool.self, forKey: .dailyLevelsExnessDay) ?? d.dailyLevelsExnessDay
             showPreviousWeek = try c.decodeIfPresent(Bool.self, forKey: .showPreviousWeek) ?? d.showPreviousWeek
             showPreviousMonth = try c.decodeIfPresent(Bool.self, forKey: .showPreviousMonth) ?? d.showPreviousMonth
             showDayOfWeek = try c.decodeIfPresent(Bool.self, forKey: .showDayOfWeek) ?? d.showDayOfWeek
@@ -554,11 +558,12 @@ public enum KillzonePivots {
         return output
     }
 
-    /// The high and low of each of the last `dailyLevelDays` finished days (days in
-    /// the indicator's time zone), from the bar that made them to the right edge;
-    /// once a later candle reaches one it ends at that candle (mitigated).
+    /// The high and low of each of the last `dailyLevelDays` finished days (Exness days, from
+    /// 00:00 UTC, or days in the indicator's time zone), from the bar that made them to the right
+    /// edge; once a later candle reaches one it ends at that candle (mitigated).
     static func dailyLevels(_ c: [Candle], config: Config) -> [Level] {
-        let zone = TimeZone(identifier: config.timeZoneID) ?? TimeZone(identifier: "America/New_York")!
+        let zone = config.dailyLevelsExnessDay ? TimeZone(identifier: "UTC")!
+            : TimeZone(identifier: config.timeZoneID) ?? TimeZone(identifier: "America/New_York")!
         let days = ICT.NewYorkClock(time: c.map(\.time), zone: zone).day
         guard let today = days.last else { return [] }
         var calendar = Calendar(identifier: .gregorian)

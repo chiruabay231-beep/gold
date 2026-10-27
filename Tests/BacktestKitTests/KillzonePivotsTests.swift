@@ -264,6 +264,7 @@ final class KillzonePivotsTests: XCTestCase {
         var config = KillzonePivots.Config()
         config.showFVG = false
         config.showMSS = false
+        config.dailyLevelsExnessDay = false // New York days
         let levels = KillzonePivots.compute(candles: data, barInterval: 900, config: config).levels.filter {
             if case .dayHigh = $0.kind { return true }
             if case .dayLow = $0.kind { return true }
@@ -290,6 +291,22 @@ final class KillzonePivotsTests: XCTestCase {
         XCTAssertFalse(KillzonePivots.compute(candles: data, barInterval: 900, config: config).levels.contains {
             if case .dayHigh = $0.kind { return true } else { return false }
         })
+    }
+
+    func testDailyHighsAndLowsOnExnessDays() {
+        // Bars from Monday 00:00 New York = 04:00 UTC. Bar 90 is Monday 22:30 in New York but
+        // Tuesday 02:30 UTC: Exness (UTC) counts it in Tuesday.
+        let data = candles { c in c[90].high = 106 }
+        var config = KillzonePivots.Config()
+        config.showFVG = false
+        config.showMSS = false
+        let highs = { (cfg: KillzonePivots.Config) in
+            KillzonePivots.compute(candles: data, barInterval: 900, config: cfg).levels.filter { if case .dayHigh = $0.kind { return true } else { return false } }
+        }
+        XCTAssertTrue(config.dailyLevelsExnessDay)
+        XCTAssertTrue(highs(config).contains { $0.kind == .dayHigh(weekday: 3) && $0.price == 106 && $0.start == 90 })
+        config.dailyLevelsExnessDay = false
+        XCTAssertTrue(highs(config).contains { $0.kind == .dayHigh(weekday: 2) && $0.price == 106 && $0.start == 90 })
     }
 
     func testFairValueGapConfluenceWithHigherTimeframe() {

@@ -196,41 +196,46 @@ struct FavoriteToolsBar: View {
 
     @AppStorage(DrawingFavorites.key) private var favoritesText = DrawingFavorites.defaultText
 
+    static let barKey = "favoriteTools"
+
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 2) {
-                // Thước ngắm: the crosshair only shows while this is on.
-                Button { crosshair.toggle() } label: {
-                    Image(systemName: "plus.viewfinder")
-                        .font(.system(size: 15))
-                        .frame(width: 34, height: 32)
-                        .foregroundColor(crosshair ? .white : theme.primaryText)
-                        .background(crosshair ? theme.accent : .clear, in: .rect(cornerRadius: 7))
-                }
-                .accessibilityLabel("Thước ngắm")
-                Divider().frame(height: 20)
-                ForEach(DrawingFavorites.decode(favoritesText)) { tool in
-                    Button { activeTool = activeTool == tool ? nil : tool } label: {
-                        Image(systemName: tool.systemImage)
+        HStack(spacing: 0) {
+            BarGrip(key: Self.barKey, theme: theme)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    // Thước ngắm: the crosshair only shows while this is on.
+                    Button { crosshair.toggle() } label: {
+                        Image(systemName: "plus.viewfinder")
                             .font(.system(size: 15))
                             .frame(width: 34, height: 32)
-                            .foregroundColor(activeTool == tool ? .white : theme.primaryText)
-                            .background(activeTool == tool ? theme.accent : .clear, in: .rect(cornerRadius: 7))
+                            .foregroundColor(crosshair ? .white : theme.primaryText)
+                            .background(crosshair ? theme.accent : .clear, in: .rect(cornerRadius: 7))
                     }
-                    .accessibilityLabel(tool.title)
+                    .accessibilityLabel("Thước ngắm")
+                    Divider().frame(height: 20)
+                    ForEach(DrawingFavorites.decode(favoritesText)) { tool in
+                        Button { activeTool = activeTool == tool ? nil : tool } label: {
+                            Image(systemName: tool.systemImage)
+                                .font(.system(size: 15))
+                                .frame(width: 34, height: 32)
+                                .foregroundColor(activeTool == tool ? .white : theme.primaryText)
+                                .background(activeTool == tool ? theme.accent : .clear, in: .rect(cornerRadius: 7))
+                        }
+                        .accessibilityLabel(tool.title)
+                    }
+                    Button(action: onMore) {
+                        Image(systemName: "square.grid.2x2")
+                            .font(.system(size: 14))
+                            .frame(width: 32, height: 32)
+                            .foregroundColor(theme.text)
+                    }
+                    .accessibilityLabel("Tất cả công cụ vẽ")
                 }
-                Button(action: onMore) {
-                    Image(systemName: "square.grid.2x2")
-                        .font(.system(size: 14))
-                        .frame(width: 32, height: 32)
-                        .foregroundColor(theme.text)
-                }
-                .accessibilityLabel("Tất cả công cụ vẽ")
+                .padding(.trailing, 4)
             }
-            .padding(.horizontal, 4)
+            .frame(maxWidth: 300)
+            .fixedSize(horizontal: true, vertical: false)
         }
-        .frame(maxWidth: 300)
-        .fixedSize(horizontal: true, vertical: false)
         .background(theme.background.opacity(0.95), in: .rect(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.grid, lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 6, y: 2)

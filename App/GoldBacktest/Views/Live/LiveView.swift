@@ -954,6 +954,7 @@ struct LiveView: View {
             // Bản vẽ → Hiển thị mục yêu thích trên Biểu đồ.
             if favoritesOnChart, !showDrawingBar {
                 FavoriteToolsBar(activeTool: $activeTool, crosshair: $crosshairMode, theme: theme) { showDrawingTools = true }
+                    .movableBar(FavoriteToolsBar.barKey)
                     .padding(.leading, 6 + axisInset)
                     .padding(.top, 40)
             }
@@ -1005,6 +1006,7 @@ struct LiveView: View {
                                           selectedDrawingID = nil
                                       },
                                       onPlaceOrder: { demoOrderDrawing = drawing })
+                    .movableBar(DrawingActionsBar.barKey)
                 }
             }
             .padding(.top, 8)

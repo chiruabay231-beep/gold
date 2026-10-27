@@ -438,6 +438,10 @@ struct KillzonePivotsSettingsView: View {
             Toggle("Đỉnh / đáy từng ngày", isOn: $settings.config.showDailyLevels)
             if settings.config.showDailyLevels {
                 Stepper("\(settings.config.dailyLevelDays) ngày gần nhất", value: $settings.config.dailyLevelDays, in: 1...20)
+                Picker("Tính ngày theo", selection: $settings.config.dailyLevelsExnessDay) {
+                    Text("Exness (00:00 UTC)").tag(true)
+                    Text("Múi giờ chỉ báo").tag(false)
+                }
                 Toggle("Giá chạm: dừng lại, nét chấm ……", isOn: $settings.config.dailyLevelsKeepTouched)
                 colorRow("Màu đỉnh ngày", color: $settings.dayHighColor)
                 colorRow("Màu đáy ngày", color: $settings.dayLowColor)

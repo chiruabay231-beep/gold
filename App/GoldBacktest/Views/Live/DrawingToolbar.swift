@@ -105,86 +105,91 @@ struct DrawingActionsBar: View {
     @State private var showColors = false
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 4) {
-                Button { showColors = true } label: {
-                    item {
-                        Image(systemName: "paintbrush.pointed.fill")
-                            .foregroundColor(theme.primaryText)
-                            .overlay(alignment: .bottom) {
-                                Rectangle().fill(drawing.color).frame(height: 3).offset(y: 6)
-                            }
-                    }
-                }
-                .popover(isPresented: $showColors) {
-                    ColorPalettePicker(color: drawing.color) { color in
-                        var d = drawing
-                        d.customColor = RGBAColor(color)
-                        onChange(d)
-                    }
-                    .presentationCompactAdaptation(.popover)
-                }
-                if drawing.tool.isLine {
-                    Menu {
-                        ForEach([0.5, 1.0, 1.5, 2.0, 3.0, 4.0], id: \.self) { width in
-                            Button {
-                                var d = drawing
-                                d.lineWidth = width
-                                onChange(d)
-                            } label: {
-                                Label(String(format: "%gpx", width), systemImage: drawing.lineWidth == width ? "checkmark" : "line.horizontal.3")
-                            }
+        HStack(spacing: 0) {
+            // Moves the bar (where it was left is kept; a double tap puts it back).
+            BarGrip(key: Self.barKey, theme: theme)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 4) {
+                    templatesMenu
+                    Button { showColors = true } label: {
+                        item {
+                            Image(systemName: "paintbrush.pointed.fill")
+                                .foregroundColor(theme.primaryText)
+                                .overlay(alignment: .bottom) {
+                                    Rectangle().fill(drawing.color).frame(height: 3).offset(y: 6)
+                                }
                         }
-                    } label: {
-                        item { Text(String(format: "%gpx", drawing.lineWidth)).font(.system(size: 13, weight: .semibold).monospacedDigit()) }
                     }
-                    Menu {
-                        ForEach(LineStyle.allCases, id: \.self) { style in
-                            Button {
-                                var d = drawing
-                                d.lineStyle = style
-                                onChange(d)
-                            } label: {
-                                Label(style.title, systemImage: drawing.lineStyle == style ? "checkmark" : "minus")
-                            }
+                    .popover(isPresented: $showColors) {
+                        ColorPalettePicker(color: drawing.color) { color in
+                            var d = drawing
+                            d.customColor = RGBAColor(color)
+                            onChange(d)
                         }
-                    } label: {
-                        item { LineStylePreview(style: drawing.lineStyle, color: theme.primaryText) }
+                        .presentationCompactAdaptation(.popover)
                     }
-                }
-                if drawing.positionLevels != nil {
+                    if drawing.tool.isLine {
+                        Menu {
+                            ForEach([0.5, 1.0, 1.5, 2.0, 3.0, 4.0], id: \.self) { width in
+                                Button {
+                                    var d = drawing
+                                    d.lineWidth = width
+                                    onChange(d)
+                                } label: {
+                                    Label(String(format: "%gpx", width), systemImage: drawing.lineWidth == width ? "checkmark" : "line.horizontal.3")
+                                }
+                            }
+                        } label: {
+                            item { Text(String(format: "%gpx", drawing.lineWidth)).font(.system(size: 13, weight: .semibold).monospacedDigit()) }
+                        }
+                        Menu {
+                            ForEach(LineStyle.allCases, id: \.self) { style in
+                                Button {
+                                    var d = drawing
+                                    d.lineStyle = style
+                                    onChange(d)
+                                } label: {
+                                    Label(style.title, systemImage: drawing.lineStyle == style ? "checkmark" : "minus")
+                                }
+                            }
+                        } label: {
+                            item { LineStylePreview(style: drawing.lineStyle, color: theme.primaryText) }
+                        }
+                    }
+                    if drawing.positionLevels != nil {
+                        Button {
+                            var d = drawing
+                            d.riskReward = max(0.5, d.riskReward - 0.5)
+                            onChange(d)
+                        } label: { item { Image(systemName: "minus") } }
+                        Text("RR \(String(format: "%.1f", drawing.riskReward))")
+                            .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                        Button {
+                            var d = drawing
+                            d.riskReward = min(50, d.riskReward + 0.5)
+                            onChange(d)
+                        } label: { item { Image(systemName: "plus") } }
+                    }
+                    if drawing.positionLevels != nil, let onPlaceOrder {
+                        Button(action: onPlaceOrder) {
+                            item { Image(systemName: "paperplane.fill").foregroundColor(theme.accent) }
+                        }
+                        .accessibilityLabel("Vào lệnh demo")
+                    }
+                    Button(action: onEditText) { item { Image(systemName: "textformat") } }
                     Button {
                         var d = drawing
-                        d.riskReward = max(0.5, d.riskReward - 0.5)
+                        d.locked.toggle()
                         onChange(d)
-                    } label: { item { Image(systemName: "minus") } }
-                    Text("RR \(String(format: "%.1f", drawing.riskReward))")
-                        .font(.system(size: 13, weight: .semibold).monospacedDigit())
-                    Button {
-                        var d = drawing
-                        d.riskReward = min(50, d.riskReward + 0.5)
-                        onChange(d)
-                    } label: { item { Image(systemName: "plus") } }
-                }
-                if drawing.positionLevels != nil, let onPlaceOrder {
-                    Button(action: onPlaceOrder) {
-                        item { Image(systemName: "paperplane.fill").foregroundColor(theme.accent) }
+                    } label: { item { Image(systemName: drawing.locked ? "lock.fill" : "lock.open") } }
+                    Button(action: onClone) { item { Image(systemName: "plus.square.on.square") } }
+                    Button(action: onSettings) { item { Image(systemName: "gearshape") } }
+                    Button(role: .destructive, action: onDelete) {
+                        item { Image(systemName: "trash").foregroundColor(theme.down) }
                     }
-                    .accessibilityLabel("Vào lệnh demo")
                 }
-                Button(action: onEditText) { item { Image(systemName: "textformat") } }
-                Button {
-                    var d = drawing
-                    d.locked.toggle()
-                    onChange(d)
-                } label: { item { Image(systemName: drawing.locked ? "lock.fill" : "lock.open") } }
-                Button(action: onClone) { item { Image(systemName: "plus.square.on.square") } }
-                Button(action: onSettings) { item { Image(systemName: "gearshape") } }
-                Button(role: .destructive, action: onDelete) {
-                    item { Image(systemName: "trash").foregroundColor(theme.down) }
-                }
+                .padding(.trailing, 8)
             }
-            .padding(.horizontal, 8)
         }
         .font(.system(size: 15, weight: .medium))
         .foregroundColor(theme.primaryText)
@@ -195,9 +200,92 @@ struct DrawingActionsBar: View {
         .padding(.horizontal, 8)
     }
 
+    static let barKey = "drawingActions"
+
+    /// The styles saved for this tool (Cài đặt → Mẫu), one tap away; the settings manage them.
+    private var templatesMenu: some View {
+        let templates = DrawingStyles.templates(for: drawing.tool)
+        return Menu {
+            if templates.isEmpty {
+                Text("Chưa có mẫu cho \(drawing.tool.title)")
+            }
+            ForEach(templates) { template in
+                Button {
+                    var d = drawing
+                    d.style = template.style
+                    onChange(d)
+                } label: {
+                    Label("\(template.name) · \(String(format: "%gpx", template.style.lineWidth))",
+                          systemImage: drawing.style == template.style ? "checkmark" : "circle.fill")
+                }
+            }
+            Divider()
+            Button(action: onSettings) { Label(templates.isEmpty ? "Lưu mẫu…" : "Quản lý mẫu…", systemImage: "gearshape") }
+        } label: {
+            item {
+                Image(systemName: templates.isEmpty ? "square.stack" : "square.stack.fill")
+                    .foregroundColor(templates.isEmpty ? theme.primaryText : theme.accent)
+            }
+        }
+        .accessibilityLabel("Mẫu đã lưu")
+    }
+
     private func item<Content: View>(@ViewBuilder _ content: () -> Content) -> some View {
         content().frame(minWidth: 34, minHeight: 34)
     }
+}
+
+/// The grip of a bar on the chart: dragging it moves the bar, which stays where it was left
+/// (per bar, kept across launches); a double tap puts it back in its place.
+struct BarGrip: View {
+    let theme: ChartTheme
+    @AppStorage private var x: Double
+    @AppStorage private var y: Double
+    @State private var start: CGPoint?
+
+    init(key: String, theme: ChartTheme) {
+        self.theme = theme
+        _x = AppStorage(wrappedValue: 0, "bar.\(key).x")
+        _y = AppStorage(wrappedValue: 0, "bar.\(key).y")
+    }
+
+    var body: some View {
+        Image(systemName: "circle.grid.2x1.fill")
+            .rotationEffect(.degrees(90))
+            .font(.system(size: 9))
+            .foregroundColor(theme.text.opacity(0.7))
+            .frame(width: 18, height: 34)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                    .onChanged { value in
+                        let from = start ?? CGPoint(x: x, y: y)
+                        start = from
+                        x = from.x + value.translation.width
+                        y = from.y + value.translation.height
+                    }
+                    .onEnded { _ in start = nil }
+            )
+            .onTapGesture(count: 2) { x = 0; y = 0 }
+            .accessibilityLabel("Kéo để di chuyển thanh")
+    }
+}
+
+extension View {
+    /// Offsets a bar by where its `BarGrip` (same key) left it.
+    func movableBar(_ key: String) -> some View { modifier(MovableBarOffset(key: key)) }
+}
+
+private struct MovableBarOffset: ViewModifier {
+    @AppStorage private var x: Double
+    @AppStorage private var y: Double
+
+    init(key: String) {
+        _x = AppStorage(wrappedValue: 0, "bar.\(key).x")
+        _y = AppStorage(wrappedValue: 0, "bar.\(key).y")
+    }
+
+    func body(content: Content) -> some View { content.offset(x: x, y: y) }
 }
 
 /// A short line drawn in a line style, for the style menu.
