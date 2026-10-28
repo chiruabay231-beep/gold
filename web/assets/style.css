@@ -799,3 +799,7 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .move-confirm .yes:disabled { opacity: .45; cursor: not-allowed; }
 .sel-bar .sl { color: var(--down); }
 .sel-bar .tp { color: var(--up); }
+
+/* the favourite tools float over the page (chart tab only) */
+.fav-bar.floating { position: fixed; z-index: 40; transform: none; }
+.fav-bar.dragging { opacity: .92; box-shadow: 0 16px 36px rgba(0, 0, 0, .4); }

@@ -923,6 +923,7 @@
       $("tabs").innerHTML = list.map(([k, name]) => `<button type="button" data-tab="${k}" class="${k === this.tab ? "on" : ""}">${name}</button>`).join("");
       $("tabs").querySelectorAll("button").forEach((b) => (b.onclick = () => this.setTab(b.dataset.tab)));
       document.querySelectorAll("#dashView .tab").forEach((el) => { el.hidden = el.dataset.tab !== this.tab; });
+      this.renderFavBar();
     },
 
     setTab(tab) {
@@ -1061,8 +1062,6 @@
         ? `#${t.login} · ${esc(t.server || "")} <span class="acct ${t.mode === "real" ? "real" : ""}" title="${t.mode === "real" ? "Tài khoản thật" : "Tài khoản demo"}">✦</span>`
         : "MT5 chưa đăng nhập";
       const floating = this.positions.reduce((a, p) => a + p.profit, 0);
-      $("headEquity").innerHTML = t.equity != null
-        ? `<span class="muted small">Vốn</span> <b>${money(t.equity)}</b> <span class="${floating >= 0 ? "pos" : "neg"}">${signed(floating)}</span>` : "";
       if (!sym && !this.symbol) await this.ownerSymbol();
       this.renderPill(floating);
       this.renderSelBar();
@@ -4597,26 +4596,49 @@
       const bar = $("favBar");
       if (!bar || !this.drawings) return;
       const fav = this.favorites().filter((t) => window.AurumDrawings.tools[t]);
-      bar.hidden = !fav.length;
-      if (!fav.length) return;
+      // Floats over the whole page (it can sit outside the chart), shown on the chart tab only.
+      bar.hidden = !fav.length || this.tab !== "chart";
+      if (bar.hidden) return;
+      if (bar.parentElement !== document.body) document.body.appendChild(bar);
+      bar.classList.add("floating");
       const d = this.drawings;
       bar.innerHTML = `<span class="grip" title="Kéo để di chuyển">⋮⋮</span>` + fav.map((t) => `<button type="button" data-t="${t}" class="${d.tool === t ? "on" : ""}" title="${esc(window.AurumDrawings.tools[t].name)}">${TOOL_ICON[t] || ""}</button>`).join("");
       bar.querySelectorAll("button").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); d.setTool(d.tool === b.dataset.t ? null : b.dataset.t); }));
+      // Where it was left, as a share of the window (kept on resize); at first over the top of the chart.
       let pos = null;
-      try { pos = JSON.parse(store.get("aurum.favPos") || "null"); } catch { /* default */ }
-      if (pos) { bar.style.left = pos.x + "px"; bar.style.top = pos.y + "px"; }
+      try { pos = JSON.parse(store.get("aurum.favPos2") || "null"); } catch { /* default */ }
+      const place = () => {
+        const w = bar.offsetWidth || 300, h = bar.offsetHeight || 40;
+        let x, y;
+        if (pos) { x = pos.x * window.innerWidth; y = pos.y * window.innerHeight; } else {
+          const c = $("chartWrap").getBoundingClientRect();
+          x = c.left + (c.width - w) / 2; y = c.top + 52;
+        }
+        bar.style.left = Math.max(4, Math.min(window.innerWidth - w - 4, x)) + "px";
+        bar.style.top = Math.max(4, Math.min(window.innerHeight - h - 4, y)) + "px";
+      };
+      place();
+      if (!this.favResizeBound) { this.favResizeBound = true; window.addEventListener("resize", () => this.renderFavBar()); }
       bar.querySelector(".grip").onpointerdown = (e) => {
         e.preventDefault(); e.stopPropagation();
-        const wrap = $("chartWrap").getBoundingClientRect(), r = bar.getBoundingClientRect();
-        const dx = e.clientX - r.left, dy = e.clientY - r.top;
+        const r = bar.getBoundingClientRect(), dx = e.clientX - r.left, dy = e.clientY - r.top;
+        bar.classList.add("dragging");
         const move = (ev) => {
-          const x = Math.max(0, Math.min(wrap.width - r.width, ev.clientX - wrap.left - dx)), y = Math.max(0, Math.min(wrap.height - r.height, ev.clientY - wrap.top - dy));
-          bar.style.left = x + "px"; bar.style.top = y + "px";
-          store.set("aurum.favPos", JSON.stringify({ x, y }));
+          ev.preventDefault();
+          bar.style.left = Math.max(4, Math.min(window.innerWidth - r.width - 4, ev.clientX - dx)) + "px";
+          bar.style.top = Math.max(4, Math.min(window.innerHeight - r.height - 4, ev.clientY - dy)) + "px";
         };
-        const up = () => { window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); };
-        window.addEventListener("pointermove", move); window.addEventListener("pointerup", up);
+        const up = () => {
+          window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", up); window.removeEventListener("pointercancel", up);
+          bar.classList.remove("dragging");
+          const b = bar.getBoundingClientRect();
+          pos = { x: b.left / window.innerWidth, y: b.top / window.innerHeight };
+          store.set("aurum.favPos2", JSON.stringify(pos));
+        };
+        window.addEventListener("pointermove", move); window.addEventListener("pointerup", up); window.addEventListener("pointercancel", up);
       };
+      // A double tap on the grip puts it back over the chart.
+      bar.querySelector(".grip").ondblclick = () => { store.set("aurum.favPos2", null); this.renderFavBar(); };
     },
 
     /* ----- standard indicators (EMA, Bollinger, RSI, MACD…) ----- */
