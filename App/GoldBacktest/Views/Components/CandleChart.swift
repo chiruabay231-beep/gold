@@ -238,6 +238,8 @@ struct CandleChart: View {
     var onPriceLineDrag: ((String, Double, Bool) -> Void)?
     /// The ✕ of a closable price line was tapped.
     var onPriceLineClose: ((String) -> Void)?
+    /// A line drag was dropped without moving it (a tap, a shaky press or a pinch): put it back.
+    var onPriceLineCancel: ((String) -> Void)?
     /// When set, a tap chooses a bar (bar replay start) instead of the usual tap actions.
     var onPickBar: ((Int) -> Void)?
     /// The bar chosen as the replay start: a line after it and the later bars dimmed.
@@ -286,7 +288,8 @@ struct CandleChart: View {
     var linkedCrosshair: Binding<Date?>? = nil
     @Binding var viewport: ChartViewport
 
-    private enum DragMode { case pan, axis, crosshair, moveDrawing, moveHandle, create, priceLine }
+    /// `ignored`: the rest of a gesture whose line drag was cancelled (a pinch) does nothing.
+    private enum DragMode { case pan, axis, crosshair, moveDrawing, moveHandle, create, priceLine, ignored }
 
     @State private var dragMode: DragMode?
     @State private var panStartOffset: Double = 0
@@ -305,6 +308,11 @@ struct CandleChart: View {
     @State private var handleIndex: Int?
     /// Price line being dragged and its latest price.
     @State private var draggedLine: (id: String, price: Double)?
+    /// A trade line moves only once the finger has gone 10 pt from where it was pressed, so a tap or a
+    /// shaky press never moves an SL / TP; a pinch cancels the drag.
+    @State private var lineArmed = false
+    @State private var lineStartY: CGFloat = 0
+    @State private var lineStartPrice = 0.0
     /// Order whose lines are shown fully (tapped recently); others are faint.
     @State private var activeLineGroup: String?
     /// Where a long press without moving was released: shows the reset menu there.
@@ -2141,6 +2149,9 @@ struct CandleChart: View {
                     } else if drawingTool == nil, let line = hitPriceLine(at: startLocation, layout: layout) {
                         dragMode = .priceLine
                         draggedLine = (line.id, line.price)
+                        lineArmed = false
+                        lineStartY = scale(layout: layout).y(line.price)
+                        lineStartPrice = line.price
                         activeLineGroup = Self.lineGroup(line.id)
                         crosshair = nil
                     } else if drawingTool != nil {
@@ -2184,6 +2195,19 @@ struct CandleChart: View {
                     movingPreview = moved
                 case .priceLine:
                     guard let line = draggedLine else { return }
+                    // Two fingers: a zoom, not a drag.
+                    if zoomStartCount != nil { cancelLineDrag(); return }
+                    let moved = abs(location.y - lineStartY)
+                    if !lineArmed {
+                        guard moved >= 10 else { return }
+                        lineArmed = true
+                    }
+                    // Pulling an SL / TP out of a position's entry starts 14 pt away from it, never on the entry.
+                    if line.id.hasSuffix("|entry"), line.id.hasPrefix("pos|") || line.id.hasPrefix("mpos|"), moved < 14 {
+                        draggedLine = (line.id, lineStartPrice)
+                        onPriceLineCancel?(line.id)
+                        return
+                    }
                     let price = scale(layout: layout).price(atY: location.y)
                     draggedLine = (line.id, price)
                     onPriceLineDrag?(line.id, price, false)
@@ -2233,7 +2257,7 @@ struct CandleChart: View {
                         let shift = Double(value.translation.height) * pricePerPoint
                         viewport.manualPriceRange = (range.lowerBound + shift)...(range.upperBound + shift)
                     }
-                case nil:
+                case .ignored, nil:
                     break
                 }
             }
@@ -2243,8 +2267,14 @@ struct CandleChart: View {
                 }
                 let releasedLine = draggedLine
                 if dragMode == .priceLine, let line = draggedLine {
-                    onPriceLineDrag?(line.id, line.price, true)
+                    // Only a real move counts (back where it started, or never past 10 pt: nothing changes).
+                    if lineArmed, line.price != lineStartPrice {
+                        onPriceLineDrag?(line.id, line.price, true)
+                    } else {
+                        onPriceLineCancel?(line.id)
+                    }
                 }
+                lineArmed = false
                 draggedLine = nil
                 // Keep the order highlighted for 2 s after letting go.
                 if let releasedLine { activateLines(of: releasedLine.id) }
@@ -2267,6 +2297,14 @@ struct CandleChart: View {
             }
     }
 
+    /// Drops the trade line under the finger where it was (the drag goes on as nothing).
+    private func cancelLineDrag() {
+        if let line = draggedLine { onPriceLineCancel?(line.id) }
+        draggedLine = nil
+        lineArmed = false
+        dragMode = .ignored
+    }
+
     private func currentPriceRange(layout: Layout) -> ClosedRange<Double> {
         let s = scale(layout: layout)
         return s.low...s.high
@@ -2275,6 +2313,7 @@ struct CandleChart: View {
     private var zoomGesture: some Gesture {
         MagnifyGesture()
             .onChanged { value in
+                if dragMode == .priceLine { cancelLineDrag() }
                 if zoomStartCount == nil { zoomStartCount = viewport.visibleCount }
                 let count = (zoomStartCount ?? 80) / Double(max(value.magnification, 0.1))
                 viewport.visibleCount = min(max(count, 15), Double(max(candles.count + 10, 30)), 600)

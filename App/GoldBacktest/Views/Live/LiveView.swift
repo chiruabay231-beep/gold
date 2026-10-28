@@ -75,6 +75,15 @@ struct LiveView: View {
     static let ticketFull = PresentationDetent.fraction(0.56)
     /// Prices of trade lines while they are being dragged.
     @State private var lineOverrides: [String: Double] = [:]
+    /// A dragged MT5 SL / TP / pending price waiting for Xác nhận (real money): its line stays at the new
+    /// price until then; Huỷ puts it back.
+    @State private var pendingMove: PendingMove?
+
+    struct PendingMove {
+        var lineID: String
+        var message: String
+        var send: () async -> Void
+    }
     @AppStorage("trade.lots") private var defaultLots = 0.01
     @AppStorage(VoiceSettings.backgroundKey) private var runInBackground = false
     @AppStorage(VoiceSettings.keepAwakeKey) private var keepAwake = false
@@ -183,6 +192,22 @@ struct LiveView: View {
             // Orders on an MT5 chart go to the broker account: keep its positions fresh.
             guard market.source == .mt5 else { return }
             await mt5.watch()
+        }
+        .alert("Dời lệnh MT5?", isPresented: Binding(get: { pendingMove != nil }, set: { if !$0, let m = pendingMove { lineOverrides[m.lineID] = nil; pendingMove = nil } })) {
+            Button("Huỷ", role: .cancel) {
+                if let m = pendingMove { lineOverrides[m.lineID] = nil }
+                pendingMove = nil
+            }
+            Button("Xác nhận") {
+                guard let m = pendingMove else { return }
+                pendingMove = nil
+                Task {
+                    await m.send()
+                    lineOverrides[m.lineID] = nil
+                }
+            }
+        } message: {
+            Text(pendingMove?.message ?? "")
         }
         .alert("Lệnh MT5", isPresented: Binding(get: { mt5.lastError != nil }, set: { if !$0 { mt5.lastError = nil } })) {
             Button("OK", role: .cancel) {}
@@ -905,6 +930,7 @@ struct LiveView: View {
                         priceLines: tradeLines,
                         onPriceLineDrag: { id, price, ended in tradeLineDragged(id: id, price: price, ended: ended) },
                         onPriceLineClose: { id in tradeLineClosed(id: id) },
+                        onPriceLineCancel: { id in if pendingMove?.lineID != id { lineOverrides[id] = nil } },
                         onPickBar: replay.isPicking ? { index in
                             UISelectionFeedbackGenerator().selectionChanged()
                             replay.choose(index: index)
@@ -1447,13 +1473,19 @@ struct LiveView: View {
         if kind == "mpos", let p = mt5.positions(market.symbol).first(where: { $0.ticket == ticket }) {
             let lossSide = (price - currentPrice) * p.paperSide.sign < 0
             var stop = p.stop, target = p.target
+            let setsStop: Bool
             switch field {
-            case "sl": guard lossSide else { return rejected() }; stop = price
-            case "tp": guard !lossSide else { return rejected() }; target = price
-            case "entry": if lossSide { stop = price } else { target = price }
+            case "sl": guard lossSide else { return rejected() }; stop = price; setsStop = true
+            case "tp": guard !lossSide else { return rejected() }; target = price; setsStop = false
+            case "entry": if lossSide { stop = price } else { target = price }; setsStop = lossSide
             default: return
             }
-            sendMT5 { await mt5.modify(ticket, stop: stop, target: target) }
+            let old = setsStop ? p.stop : p.target
+            confirmMove(lineID: "mpos|\(ticket)|\(field)", price: price,
+                        message: "\(setsStop ? "SL" : "TP") \(Self.displayName(p.symbol)) #\(ticket): \(old.map(priceText) ?? "–") → \(priceText(price))"
+                            + " (\(money(side: p.paperSide, lots: p.lots, entry: p.entry, price: price)))") {
+                await mt5.modify(ticket, stop: stop, target: target)
+            }
         } else if kind == "mord", let o = mt5.orders(market.symbol).first(where: { $0.ticket == ticket }) {
             var entry = o.entry, stop = o.stop, target = o.target
             switch field {
@@ -1470,8 +1502,24 @@ struct LiveView: View {
                 target = price
             default: return
             }
-            sendMT5 { await mt5.modify(ticket, entry: entry, stop: stop, target: target) }
+            let name = field == "sl" ? "SL" : field == "tp" ? "TP" : "Giá chờ"
+            let old: Double? = field == "sl" ? o.stop : field == "tp" ? o.target : Optional(o.entry)
+            confirmMove(lineID: "mord|\(ticket)|\(field)", price: price,
+                        message: "\(name) \(Self.displayName(o.symbol)) #\(ticket): \(old.map(priceText) ?? "–") → \(priceText(price))") {
+                await mt5.modify(ticket, entry: entry, stop: stop, target: target)
+            }
         }
+    }
+
+    /// Holds the line at its new price and asks before anything goes to MT5.
+    private func confirmMove(lineID: String, price: Double, message: String, send: @escaping () async -> Void) {
+        lineOverrides[lineID] = price
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        pendingMove = PendingMove(lineID: lineID, message: message, send: send)
+    }
+
+    private func priceText(_ price: Double) -> String {
+        CandleChart.format(price, priceDecimals ?? CandleChart.decimals(for: price))
     }
 
     /// Applies a dragged trade line: moves SL/TP, pending entries or the limit draft.
