@@ -784,3 +784,18 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .move-confirm .no { background: var(--chip); color: var(--text); }
 .move-confirm .yes { background: linear-gradient(180deg, #f2c14e, #c88a16); color: #1a1205; }
 @media (max-width: 600px) { .move-confirm { white-space: normal; flex-wrap: wrap; justify-content: flex-end; } .move-confirm > span { flex: 1 1 100%; } }
+
+.move-confirm .mc-t { font-weight: 600; }
+.move-confirm .mc-step { display: inline-flex; align-items: center; gap: 2px; background: var(--chip); border-radius: 9px; padding: 2px; }
+.move-confirm .mc-step button { width: 30px; height: 28px; padding: 0; background: transparent; color: var(--text); font-size: 16px; border-radius: 7px; }
+.move-confirm .mc-step button:hover { background: var(--hover); }
+.move-confirm .mc-step b { min-width: 64px; text-align: center; font-variant-numeric: tabular-nums; }
+.move-confirm .mc-picks { display: inline-flex; align-items: center; gap: 3px; }
+.move-confirm .mc-picks button { height: 26px; padding: 0 8px; background: transparent; border: 1px solid var(--line2); color: var(--text2); font-weight: 600; }
+.move-confirm .mc-picks button.on { border-color: var(--gold); color: var(--gold); }
+.move-confirm .mc-picks em { font-style: normal; color: var(--muted); font-size: 11px; }
+.move-confirm .mc-v { font-variant-numeric: tabular-nums; }
+.move-confirm .mc-warn { color: var(--down); font-size: 11.5px; white-space: normal; }
+.move-confirm .yes:disabled { opacity: .45; cursor: not-allowed; }
+.sel-bar .sl { color: var(--down); }
+.sel-bar .tp { color: var(--up); }

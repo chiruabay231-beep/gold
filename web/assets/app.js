@@ -3226,13 +3226,13 @@
           if (s.target) out.push({ key: `sig:${s.id}:target`, price: s.target, color: "#9b6bff", width: 1, style: 1, title: "TP" });
         });
       }
-      // A move waiting for Xác nhận shows its line at the new level (a pulled-out SL / TP included).
+      // A level waiting for Xác nhận shows its line there (a new SL / TP included).
       const m = this.pendingMove;
       if (m && !this.replay) {
         const w = out.find((l) => l.key === m.key);
         const label = `${m.field === "stop" ? "SL" : m.field === "target" ? "TP" : "Giá"} ${fmt(m.price, this.digits)} ?`;
         if (w) Object.assign(w, { price: m.price, title: w.entryOf ? w.title : label, width: 2 });
-        else if (m.kind === "pos") out.push({ key: m.key, price: m.price, color: m.field === "stop" ? "#f0455a" : "#14b88a", width: 2, style: 2, title: label, from: m.x.time, drawn: true });
+        else out.push({ key: m.key, price: m.price, color: m.field === "stop" ? "#f0455a" : "#14b88a", width: 2, style: 2, title: label, from: m.x.time, drawn: true });
       }
       return out;
     },
@@ -3279,12 +3279,6 @@
     tradeLines() {
       const d = this.drag;
       const list = (this.lineCache || []).filter((w) => w.drawn).map((w) => (d && d.key === w.key ? Object.assign({}, w, { price: d.price, title: this.dragTitle(d), width: 2 }) : w));
-      if (d && d.pull && d.key !== d.base && !list.some((w) => w.key === d.key)) {
-        // Pulling a new SL / TP out of a position's entry.
-        const p = this.positions.find((x) => x.ticket === +d.key.split(":")[1]);
-        const stop = d.key.endsWith(":stop");
-        if (p) list.push({ key: d.key, price: d.price, color: stop ? "#f0455a" : "#14b88a", width: 2, style: 2, title: this.dragTitle(d), from: p.time, drawn: true });
-      }
       return list;
     },
 
@@ -3369,7 +3363,7 @@
       const pos = this.selected.kind === "pos";
       bar.hidden = false;
       bar.innerHTML = `<span>${sideName(x.side)}${pos ? "" : " " + x.kind.toUpperCase()} ${x.lots} · #${x.ticket}${pos ? ` · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b>` : ""}</span>
-        ${!x.stop ? '<button type="button" data-a="stop">+SL</button>' : ""}${!x.target ? '<button type="button" data-a="target">+TP</button>' : ""}
+        <button type="button" data-a="stop" class="sl">${x.stop ? "SL ✎" : "+SL"}</button><button type="button" data-a="target" class="tp">${x.target ? "TP ✎" : "+TP"}</button>
         <button type="button" data-a="edit">Sửa</button>
         <button type="button" data-a="close" class="danger">${pos ? "Đóng" : "Huỷ"}</button>
         <button type="button" data-a="x" class="muted">✕</button>`;
@@ -3384,20 +3378,16 @@
         await act(button, () => this.call(pos ? "/mt5/close" : "/mt5/cancel", { ticket: x.ticket }), pos ? "Đã đóng lệnh" : "Đã huỷ lệnh chờ");
         this.selected = null; this.refresh(); return;
       }
-      // A new SL/TP a few average bars away, then dragged where it belongs.
-      const tail = this.bars.slice(-30);
-      const range = tail.length ? tail.reduce((s, b) => s + b.high - b.low, 0) / tail.length : x.entry * 0.001;
-      const dist = Math.max(range * 4, x.entry * 0.0005);
-      const long = x.side === "long";
-      // From the price the trade would close at now (a losing buy is below its entry), so MT5 accepts it.
-      const now = pos ? x.price : x.entry;
-      const ref = a === "stop" ? (long ? Math.min(now, x.entry) : Math.max(now, x.entry)) : (long ? Math.max(now, x.entry) : Math.min(now, x.entry));
-      const dir = (long ? 1 : -1) * (a === "target" ? 1 : -1);
-      const level = +(ref + dir * dist).toFixed(this.digitsFor(x.symbol));
-      const body = { ticket: x.ticket, stop: a === "stop" ? level : x.stop, target: a === "target" ? level : x.target };
-      if (!pos) body.price = x.entry;
-      await act(button, () => this.call("/mt5/modify", body), `Đã thêm ${a === "stop" ? "SL" : "TP"} — kéo để chỉnh`);
-      this.refresh();
+      // SL / TP in pips from the entry (the last distance used, else 15 pip SL and 2R TP), checked in
+      // the bar on the chart and sent only on Xác nhận.
+      const pip = this.pipOf(x.symbol), long = x.side === "long", sign = (long ? 1 : -1) * (a === "target" ? 1 : -1);
+      let level = x[a];
+      if (!level) {
+        const slPips = +(store.get("aurum.slPips") || 15);
+        const risk = x.stop ? Math.abs(x.entry - x.stop) : slPips * pip;
+        level = x.entry + sign * (a === "stop" ? slPips * pip : risk * 2);
+      }
+      this.editLevel(pos ? "pos" : "ord", x, a, level);
     },
 
     /* ----- touch & drag on the chart ----- */
@@ -3425,8 +3415,9 @@
         if (!s) return false;
         const [kind, ticket, field] = key.split(":");
         if (kind !== s.kind || +ticket !== s.ticket) return false;
-        // A position's entry line is not moved: pulling it down/up sets its SL or TP (by side).
-        return field !== "entry" || kind === "ord" || kind === "pos";
+        // A position's entry line never moves (a press on it only picks the trade): SL / TP are set
+        // from the bar (+SL / +TP, in pips) or by dragging their own lines.
+        return field !== "entry" || kind === "ord";
       };
       // While dragging, the price scale holds still so the line stays under the finger.
       const lock = (on) => {
@@ -3464,7 +3455,7 @@
         const w = hit(y, draggable, x);
         if (!w) return;
         // Not moved until the finger has gone 8 px up or down: a tap or a shaky press changes nothing.
-        this.drag = { key: w.key, price: w.price, start: w.price, base: w.key, pull: /^pos:\d+:entry$/.test(w.key), pid: e.pointerId, y0: e.clientY, armed: false };
+        this.drag = { key: w.key, price: w.price, start: w.price, pid: e.pointerId, y0: e.clientY, armed: false };
         lock(true);
         e.stopPropagation();
       }, true);
@@ -3490,7 +3481,6 @@
         const price = this.series.coordinateToPrice(rel(e).y);
         if (price == null) return;
         let p = +price.toFixed(this.digits);
-        if (this.drag.pull) { this.pullTo(p); return; }
         if (this.drag.key.startsWith("draft:")) p = this.writeDraft(this.drag.key, p);
         this.drag.price = p;
         const line = this.lines.get(this.drag.key);
@@ -3510,20 +3500,13 @@
         }
         if (d) {
           this.drag = null; lock(false);
-          const untouched = !d.armed || (d.key === d.base ? Math.abs(d.price - d.start) === 0 : d.start != null && Math.abs(d.price - d.start) === 0);
-          if (!d.armed && !d.pull) {
+          if (!d.armed) {
             // Never dragged: a tap, nothing moves.
             this.syncLines();
             if (tap && e.target && wrap.contains(e.target)) { const { x, y } = rel(e); this.tapChart(y, x); }
             return;
           }
-          if (d.pull && d.key === d.base) {
-            // Only a tap on the entry line: pick the next trade at that price.
-            this.syncLines();
-            if (tap && e.target && wrap.contains(e.target)) { const { x, y } = rel(e); this.tapChart(y, x); }
-            return;
-          }
-          if (untouched) this.syncLines(); else this.commitDrag(d);
+          if (d.price === d.start) this.syncLines(); else this.commitDrag(d);
           return;
         }
         if (tap && e.target && wrap.contains(e.target)) { const { x, y } = rel(e); this.tapChart(y, x); }
@@ -3584,45 +3567,33 @@
       return price;
     },
 
-    /** Pulling a position's entry line: below it (a buy) sets the SL, above it the TP; a sell the other way. */
-    pullTo(price) {
-      const d = this.drag;
-      const ticket = +d.base.split(":")[1];
-      const p = this.positions.find((x) => x.ticket === ticket);
-      if (!p) return;
-      // Within 12 px of the entry nothing is pulled out yet (an SL / TP on the entry would lose it).
-      const ey = this.series.priceToCoordinate(p.entry), py = this.series.priceToCoordinate(price);
-      if (ey != null && py != null && Math.abs(py - ey) < 12) {
-        if (d.key !== d.base) { d.key = d.base; this.syncLines(); }
-        return;
-      }
-      const long = p.side === "long";
-      const field = (long ? price < p.entry : price > p.entry) ? "stop" : "target";
-      const key = `pos:${ticket}:${field}`;
-      if (d.key !== key) { d.key = key; d.start = p[field] || null; this.syncLines(); }
-      d.price = price;
-      const opts = { price, color: field === "stop" ? "#f0455a" : "#14b88a", lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: "", lineVisible: false };
-      const line = this.lines.get(key);
-      if (line) line.applyOptions(opts); else this.lines.set(key, this.series.createPriceLine(opts));
-      if (this.requestICT) this.requestICT();
-    },
-
     async commitDrag(d) {
       const [kind, ticket, field] = d.key.split(":");
       if (kind === "draft") { this.syncLines(); return; }
       const list = kind === "pos" ? this.positions : this.orders;
       const x = list.find((y) => y.ticket === +ticket);
       if (!x) return this.syncLines();
-      const body = { ticket: x.ticket, stop: x.stop, target: x.target };
-      if (kind === "ord") body.price = x.entry;
-      body[field === "entry" ? "price" : field] = d.price;
-      const wrong = kind === "pos" ? this.stopsProblem(x, body.stop, body.target) : null;
-      if (wrong) { toast(wrong, true); this.syncLines(); return; }
       // Nothing goes to MT5 before a tap on Xác nhận: the line waits at its new place (real money).
-      this.askMove({ key: d.key, kind, x, field, price: d.price, from: field === "entry" ? x.entry : x[field], body });
+      this.editLevel(kind, x, field, d.price);
     },
 
-    /** The bar asking to confirm a moved SL / TP / pending price; the line shows the new level meanwhile. */
+    /** Price step a trader calls a pip: gold 0.1, silver / oil / JPY pairs 0.01, crypto and indices 1, FX 0.0001. */
+    pipOf(symbol) {
+      const s = String(symbol || "").toUpperCase();
+      if (/XAU|GOLD/.test(s)) return 0.1;
+      if (/XAG|SILVER|OIL|XTI|XBR|WTI|BRENT|JPY/.test(s)) return 0.01;
+      if (/BTC|ETH|SOL|BNB|LTC|US30|USTEC|NAS|SPX|US500|DE30|DE40|JP225|UK100|HK50/.test(s)) return 1;
+      return 0.0001;
+    },
+
+    /** Opens the SL / TP / pending-price editor for a trade at `price` (the line shows it meanwhile). */
+    editLevel(kind, x, field, price) {
+      this.askMove({ key: `${kind}:${x.ticket}:${field}`, kind, x, field, price: +price.toFixed(this.digitsFor(x.symbol)), from: field === "entry" ? x.entry : x[field] });
+    },
+
+    /** The bar to set an SL / TP / pending price before it goes to MT5: the distance in pips with − / + (1 pip)
+     *  and quick picks (SL 10 / 15 / 20 pip, TP 1R / 2R / 3R), the price and money, then Huỷ / Xác nhận.
+     *  The line shows the level meanwhile. */
     askMove(m) {
       this.pendingMove = m;
       this.syncLines();
@@ -3632,19 +3603,47 @@
         bar.id = "moveConfirm"; bar.className = "move-confirm";
         $("chartWrap").appendChild(bar);
       }
-      const name = m.field === "stop" ? "SL" : m.field === "target" ? "TP" : "giá chờ";
-      const p = m.kind === "pos" ? m.x : null;
-      const money = p && m.field !== "entry" ? this.pnlAt(p, m.price) : null;
+      const x = m.x, d = this.digitsFor(x.symbol), pip = this.pipOf(x.symbol), long = x.side === "long";
+      const name = m.field === "stop" ? "SL" : m.field === "target" ? "TP" : "Giá chờ";
+      // The order MT5 gets: this level, the others as they are.
+      m.body = { ticket: x.ticket, stop: x.stop, target: x.target };
+      if (m.kind === "ord") m.body.price = x.entry;
+      m.body[m.field === "entry" ? "price" : m.field] = m.price;
+      const level = m.field !== "entry";
+      const sign = (long ? 1 : -1) * (m.field === "target" ? 1 : -1);
+      const pips = level ? (m.price - x.entry) * sign / pip : null;
+      const money = level ? (m.kind === "pos" ? this.pnlAt(x, m.price) : this.valueAt(x.symbol, x.lots, x.side, x.entry, m.price)) : null;
+      const wrongSide = level && pips <= 0 ? `${name} phải ở phía ${m.field === "stop" ? "lỗ" : "lời"} của giá vào` : null;
+      const problem = wrongSide || (m.kind === "pos" ? this.stopsProblem(x, m.body.stop, m.body.target) : null);
+      const risk = x.stop && m.field === "target" ? Math.abs(x.entry - x.stop) : 0;
+      const picks = m.field === "stop" ? [10, 15, 20].map((p) => `<button type="button" data-p="${p}" class="${Math.abs(pips - p) < 0.05 ? "on" : ""}">${p}</button>`).join("")
+        : m.field === "target" && risk ? [1, 2, 3].map((r) => `<button type="button" data-r="${r}" class="${Math.abs(pips * pip - r * risk) < pip / 2 ? "on" : ""}">${r}R</button>`).join("")
+        : m.field === "target" ? [20, 30, 40].map((p) => `<button type="button" data-p="${p}">${p}</button>`).join("") : "";
       bar.hidden = false;
-      bar.innerHTML = `<span>Dời <b>${name}</b> ${esc(m.x.symbol)} #${m.x.ticket}: ${m.from ? fmt(m.from, this.digits) : "–"} → <b>${fmt(m.price, this.digits)}</b>
-          ${money != null ? `<span class="${money >= 0 ? "pos" : "neg"}">${signed(money)}</span>` : ""}</span>
-        <button type="button" class="no" data-a="no">Huỷ</button><button type="button" class="yes" data-a="yes">Xác nhận</button>`;
+      bar.innerHTML = `<span class="mc-t"><b class="${m.field === "stop" ? "neg" : m.field === "target" ? "pos" : ""}">${name}</b> ${esc(x.symbol)} #${x.ticket}</span>
+        <span class="mc-step"><button type="button" data-n="-1" title="Gần giá vào 1 pip">−</button>
+          <b>${level ? `${pips.toFixed(1)} pip` : fmt(m.price, d)}</b><button type="button" data-n="1" title="Xa thêm 1 pip">+</button></span>
+        ${picks ? `<span class="mc-picks">${picks}${m.field === "stop" ? "<em>pip</em>" : ""}</span>` : ""}
+        <span class="mc-v">${level ? `${fmt(m.price, d)} ` : ""}${money != null ? `<span class="${money >= 0 ? "pos" : "neg"}">${signed(money)}</span>` : ""}${m.from ? ` <span class="muted">(cũ ${fmt(m.from, d)})</span>` : ""}</span>
+        ${problem ? `<span class="mc-warn">${esc(problem)}</span>` : ""}
+        <button type="button" class="no" data-a="no">Huỷ</button><button type="button" class="yes" data-a="yes" ${problem ? "disabled" : ""}>Xác nhận</button>`;
+      const set = (price) => this.askMove(Object.assign(m, { price: +price.toFixed(d) }));
+      bar.querySelectorAll("[data-n]").forEach((b) => (b.onclick = () => {
+        // − brings an SL / TP 1 pip nearer the entry, + 1 pip further; a pending price just moves 1 pip down / up.
+        const step = +b.dataset.n * pip;
+        set(level ? m.price + sign * step : m.price + step);
+      }));
+      bar.querySelectorAll("[data-p]").forEach((b) => (b.onclick = () => {
+        if (m.field === "stop") store.set("aurum.slPips", b.dataset.p);
+        set(x.entry + sign * +b.dataset.p * pip);
+      }));
+      bar.querySelectorAll("[data-r]").forEach((b) => (b.onclick = () => set(x.entry + sign * +b.dataset.r * risk)));
       bar.querySelector("[data-a=no]").onclick = () => this.closeMove();
       bar.querySelector("[data-a=yes]").onclick = async (e) => {
         const btn = e.currentTarget;
         btn.disabled = true;
-        const ok = await act(btn, () => this.call("/mt5/modify", m.body), `Đã dời ${name} → ${fmt(m.price, this.digits)}`);
-        if (ok) { if (m.field === "entry") m.x.entry = m.price; else m.x[m.field] = m.price; }
+        const ok = await act(btn, () => this.call("/mt5/modify", m.body), `Đã đặt ${name} → ${fmt(m.price, d)}`);
+        if (ok) { if (m.field === "entry") x.entry = m.price; else x[m.field] = m.price; }
         this.closeMove();
         this.refresh();
       };
