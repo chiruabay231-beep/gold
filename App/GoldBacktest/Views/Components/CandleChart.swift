@@ -686,9 +686,6 @@ struct CandleChart: View {
                 edge.addLine(to: CGPoint(x: rect.maxX, y: y))
                 plotContext.stroke(edge, with: .color(zone.color.opacity(0.6)), style: StrokeStyle(lineWidth: 0.8, dash: [4, 3]))
             }
-            // The name at the left of the band: the right side belongs to the trade and level labels.
-            plotContext.draw(Text(zone.label).font(.system(size: 9.5, weight: .semibold)).foregroundColor(zone.color),
-                             at: CGPoint(x: rect.minX + 4, y: rect.midY), anchor: .leading)
         }
 
         // Timestamps, segments (pivots, opens) and notes, behind the candles.
@@ -753,6 +750,7 @@ struct CandleChart: View {
         if !axisOnly {
             drawCandles(in: &plotContext, range: range, s: s)
             drawBubbles(in: &plotContext, range: range, s: s)
+            drawZoneLabels(in: &plotContext, s: s, right: layout.axisX)
         }
 
         // Overlays.
@@ -1648,6 +1646,26 @@ struct CandleChart: View {
         context.draw(Text("POC \(Self.format(pocPrice, decimals))").font(.system(size: 9, weight: .semibold))
                         .foregroundColor(DrawingPalette.colors[1]),
                      at: CGPoint(x: right - 2, y: pocY - 7), anchor: .trailing)
+    }
+
+    /// The shark zones' names at the right on a small backing, over the candles so nothing hides them.
+    private func drawZoneLabels(in context: inout GraphicsContext, s: Scale, right: CGFloat) {
+        // Trade labels sit at the right: a name at their height moves left of them.
+        let tradeYs = priceLines.map { s.y($0.price) }
+        var placed: [CGFloat] = []
+        for zone in zones where s.x(zone.start) < right {
+            let label = context.resolve(Text(zone.label).font(.system(size: 9.5, weight: .semibold)).foregroundColor(zone.color))
+            let size = label.measure(in: CGSize(width: 400, height: 40))
+            var midY = (s.y(zone.top) + s.y(zone.bottom)) / 2
+            // Clear of the other zones' names.
+            while placed.contains(where: { abs($0 - midY) < size.height + 5 }) { midY += size.height + 5 }
+            placed.append(midY)
+            let end = tradeYs.contains { abs($0 - midY) < size.height + 5 } ? right - 170 : right
+            let chip = CGRect(x: end - size.width - 12, y: midY - size.height / 2 - 2, width: size.width + 8, height: size.height + 4)
+            context.fill(Path(roundedRect: chip, cornerRadius: 4), with: .color(theme.background.opacity(0.9)))
+            context.stroke(Path(roundedRect: chip, cornerRadius: 4), with: .color(zone.color.opacity(0.7)), lineWidth: 0.8)
+            context.draw(label, at: CGPoint(x: chip.maxX - 4, y: chip.midY), anchor: .trailing)
+        }
     }
 
     private func drawBubbles(in context: inout GraphicsContext, range: Range<Int>, s: Scale) {

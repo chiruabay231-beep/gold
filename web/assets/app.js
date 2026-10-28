@@ -2612,8 +2612,7 @@
                   const X = (i) => ts.logicalToCoordinate(i), Y = (v) => term.series.priceToCoordinate(v);
                   if (term.ict) window.ICT.draw(context, term.ict, term.ictCfg, X, Y, mediaSize.width, mediaSize.height);
                   if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
-                  if (term.sharkZones) window.ICT.drawZones(context, term.sharkZones, X, Y, mediaSize.width,
-                    (term.chartStyle.up || "#14b88a").slice(0, 7), (term.chartStyle.down || "#f0455a").slice(0, 7), term.digits);
+                  term.drawSharkZones(context, mediaSize.width, false);
                   term.drawSpread(context, mediaSize.width);
                 }),
               }),
@@ -2622,6 +2621,7 @@
               zOrder: () => "top",
               renderer: () => ({
                 draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+                  term.drawSharkZones(context, mediaSize.width, true);
                   if (!term.sharks) return;
                   const ts = term.chart.timeScale();
                   window.ICT.drawSharks(context, term.sharks, term.viewBars(), (i) => ts.logicalToCoordinate(i), (v) => term.series.priceToCoordinate(v),
@@ -5070,6 +5070,17 @@
       }[f.situation];
       box.hidden = false;
       box.innerHTML = `<div>🦈 Dòng tiền <b class="${verdict[1]}">${verdict[0]} ${pct}</b>${f.shark ? ` <span class="${f.shark.buying ? "pos" : "neg"}">· cá mập ${f.shark.buying ? "MUA" : "BÁN"} ×${f.shark.ratio.toFixed(1)}</span>` : ""}</div><div class="${advice[1]}">${advice[0]}</div>${this.zonesLine(f)}`;
+    },
+
+    /** Shark supply / demand: the bands under the candles, their names over them (`labels`). */
+    drawSharkZones(g, width, labels) {
+      if (!this.sharkZones) return;
+      const ts = this.chart.timeScale();
+      // Heights of the trade labels at the right, for the names to keep clear of.
+      const avoid = labels ? this.tradeLines().map((w) => this.series.priceToCoordinate(w.price)).filter((y) => y != null) : [];
+      window.ICT.drawZones(g, this.sharkZones, (i) => ts.logicalToCoordinate(i), (v) => this.series.priceToCoordinate(v), width,
+        (this.chartStyle.up || "#14b88a").slice(0, 7), (this.chartStyle.down || "#f0455a").slice(0, 7), this.digits,
+        document.documentElement.dataset.theme === "light" ? "rgba(255,255,255,.9)" : "rgba(21,28,42,.88)", labels, avoid);
     },
 
     /** The strongest demand under the price and supply above it: where to look for an entry. */

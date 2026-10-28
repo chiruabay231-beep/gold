@@ -17,11 +17,11 @@ public enum SharkFlow {
         public var sharkMultiple = 2.5
         /// Supply / demand: bars read, price rows and zones kept on each side.
         public var zoneLookback = 300
-        public var zoneRows = 60
+        public var zoneRows = 120
         public var zoneCount = 2
 
         public init(flowLength: Int = 20, volumeLength: Int = 20, sharkMultiple: Double = 2.5,
-                    zoneLookback: Int = 300, zoneRows: Int = 60, zoneCount: Int = 2) {
+                    zoneLookback: Int = 300, zoneRows: Int = 120, zoneCount: Int = 2) {
             self.flowLength = flowLength
             self.volumeLength = volumeLength
             self.sharkMultiple = sharkMultiple
@@ -161,8 +161,8 @@ public enum SharkFlow {
 
     /// Volume at price over the last `zoneLookback` bars, split into buying and selling by where each bar
     /// closed (shark bars count `ratio` times). Rows under the price where buying beat selling the most are
-    /// demand, rows above it where selling won are supply; neighbouring rows at least half as strong join
-    /// the zone.
+    /// demand, rows above it where selling won are supply; neighbouring rows at least 80 % as strong join,
+    /// three rows at most.
     public static func zones(_ c: [Candle], pressure: [Double], weight: [Double], sharks: [Shark], config: Config) -> [Zone] {
         let n = c.count, rows = max(config.zoneRows, 4)
         let from = max(0, n - max(config.zoneLookback, 10))
@@ -198,11 +198,21 @@ public enum SharkFlow {
             var used = Set<Int>(), found: [Zone] = []
             while found.count < max(config.zoneCount, 1) {
                 guard let best = indices.filter({ !used.contains($0) && score[$0] > 0 }).max(by: { score[$0] < score[$1] }) else { break }
+                // Tight: the strongest row and its strongest neighbours at 80 % of it or more, three rows at most.
+                let ok = { (k: Int, part: Double) in
+                    k >= 0 && k < rows && indices.contains(k) && !used.contains(k) && score[k] >= score[best] * part
+                }
                 var a = best, b = best
-                while a - 1 >= 0, indices.contains(a - 1), !used.contains(a - 1), score[a - 1] >= score[best] * 0.5 { a -= 1 }
-                while b + 1 < rows, indices.contains(b + 1), !used.contains(b + 1), score[b + 1] >= score[best] * 0.5 { b += 1 }
-                // The rows next to a zone are left out too, so two zones never touch.
-                for k in max(0, a - 1)...min(rows - 1, b + 1) { used.insert(k) }
+                while b - a < 2 {
+                    let left = ok(a - 1, 0.8) ? score[a - 1] : -1, right = ok(b + 1, 0.8) ? score[b + 1] : -1
+                    if left < 0, right < 0 { break }
+                    if left >= right { a -= 1 } else { b += 1 }
+                }
+                // The whole area around it (rows half as strong) is used up, so the next zone is somewhere else.
+                var ua = a, ub = b
+                while ok(ua - 1, 0.5) { ua -= 1 }
+                while ok(ub + 1, 0.5) { ub += 1 }
+                for k in max(0, ua - 1)...min(rows - 1, ub + 1) { used.insert(k) }
                 let bottom = lo + Double(a) * step, top = lo + Double(b + 1) * step
                 let start = (from..<n).first { c[$0].low <= top && c[$0].high >= bottom } ?? from
                 found.append(Zone(demand: demand, top: top, bottom: bottom, strength: score[a...b].reduce(0, +) / sideTotal,

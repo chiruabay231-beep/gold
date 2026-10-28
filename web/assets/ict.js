@@ -681,9 +681,9 @@
    * Supply / demand of the shark flow (the app's SharkFlow.zones): volume at price over the last `lookback`
    * bars, split into buying and selling by where each bar closed (shark bars count `ratio` times). Rows under
    * the price where buying beat selling the most are demand (big players wait to buy there), rows above it
-   * where selling won are supply; neighbouring rows at least half as strong join the zone.
+   * where selling won are supply; neighbouring rows at least 80 % as strong join, three rows at most.
    */
-  function sharkZones(c, pressure, weight, sharks, lookback = 300, rows = 60, count = 2) {
+  function sharkZones(c, pressure, weight, sharks, lookback = 300, rows = 120, count = 2) {
     const n = c.length, from = Math.max(0, n - lookback);
     if (n - from < 10) return [];
     let lo = Infinity, hi = -Infinity;
@@ -720,10 +720,19 @@
         let best = null;
         idx.forEach((k) => { if (!used.has(k) && score[k] > 0 && (best === null || score[k] > score[best])) best = k; });
         if (best === null) break;
+        // Tight: the strongest row and its strongest neighbours at 80 % of it or more, three rows at most.
+        const ok = (k, part) => k >= 0 && k < rows && inSide.has(k) && !used.has(k) && score[k] >= score[best] * part;
         let a = best, b = best;
-        while (a - 1 >= 0 && inSide.has(a - 1) && !used.has(a - 1) && score[a - 1] >= score[best] * 0.5) a--;
-        while (b + 1 < rows && inSide.has(b + 1) && !used.has(b + 1) && score[b + 1] >= score[best] * 0.5) b++;
-        for (let k = Math.max(0, a - 1); k <= Math.min(rows - 1, b + 1); k++) used.add(k);
+        while (b - a < 2) {
+          const left = ok(a - 1, 0.8) ? score[a - 1] : -1, right = ok(b + 1, 0.8) ? score[b + 1] : -1;
+          if (left < 0 && right < 0) break;
+          if (left >= right) a--; else b++;
+        }
+        // The whole area around it (rows half as strong) is used up, so the next zone is somewhere else.
+        let ua = a, ub = b;
+        while (ok(ua - 1, 0.5)) ua--;
+        while (ok(ub + 1, 0.5)) ub++;
+        for (let k = Math.max(0, ua - 1); k <= Math.min(rows - 1, ub + 1); k++) used.add(k);
         const bottom = lo + a * step, top = lo + (b + 1) * step;
         let start = from;
         for (let i = from; i < n; i++) if (c[i].low <= top && c[i].high >= bottom) { start = i; break; }
@@ -799,26 +808,42 @@
   }
 
   /** Shark bubbles like the app: a big buyer under its candle, a big seller above it. */
-  /** Shark supply / demand: a band from the zone's first bar to the right, "CẦU 4012.50 – 4015.00 · 12%". */
-  function drawZones(g, zones, X, Y, w, up, down, digits) {
+  /** Shark supply / demand: a band from the zone's first bar to the right (`labels` false, under the candles),
+   *  or its "CẦU 4012.50 – 4015.00 · 12%" at the right (`labels` true, over them). */
+  function drawZones(g, zones, X, Y, w, up, down, digits, bg = "rgba(21,28,42,.88)", labels = false, avoid = []) {
     if (!zones || !zones.length) return;
+    const placed = [];
     const x0 = X(0), x1 = X(1), half = x0 != null && x1 != null ? Math.max(0.5, (x1 - x0) / 2) : 2;
     g.save();
     g.font = "600 10px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
-    g.textAlign = "left"; g.textBaseline = "middle";
+    g.textAlign = "right"; g.textBaseline = "middle";
     zones.forEach((z) => {
       const a = X(z.start), yt = Y(z.top), yb = Y(z.bottom);
       if (a == null || yt == null || yb == null) return;
       const left = Math.max(0, a - half);
       if (left >= w) return;
       const color = z.demand ? up : down;
+      if (labels) {
+        // At the right on a small backing, so candles and lines under it never hide it.
+        const text = `${z.demand ? "CẦU" : "CUNG"} ${z.bottom.toFixed(digits)} – ${z.top.toFixed(digits)} · ${Math.round(z.strength * 100)}%`;
+        const tw = g.measureText(text).width;
+        let ym = (yt + yb) / 2;
+        // Clear of the other zones' names, and left of a trade label at the same height.
+        while (placed.some((p) => Math.abs(p - ym) < 17)) ym += 17;
+        placed.push(ym);
+        const right = avoid.some((y) => Math.abs(y - ym) < 17) ? w - 210 : w - 4;
+        g.fillStyle = bg;
+        g.beginPath(); g.roundRect(right - tw - 10, ym - 8, tw + 10, 16, 4); g.fill();
+        g.strokeStyle = color; g.globalAlpha = 0.7; g.lineWidth = 1; g.stroke(); g.globalAlpha = 1;
+        g.fillStyle = color;
+        g.fillText(text, right - 5, ym + 0.5);
+        return;
+      }
       g.globalAlpha = 0.13; g.fillStyle = color;
       g.fillRect(left, yt, w - left, Math.max(2, yb - yt));
       g.globalAlpha = 0.6; g.strokeStyle = color; g.lineWidth = 0.8; g.setLineDash([4, 3]);
       [yt, yb].forEach((y) => { g.beginPath(); g.moveTo(left, Math.round(y) + 0.5); g.lineTo(w, Math.round(y) + 0.5); g.stroke(); });
-      g.setLineDash([]); g.globalAlpha = 1; g.fillStyle = color;
-      // The name at the left of the band: the right side belongs to the trade and level labels.
-      g.fillText(`${z.demand ? "CẦU" : "CUNG"} ${z.bottom.toFixed(digits)} – ${z.top.toFixed(digits)} · ${Math.round(z.strength * 100)}%`, left + 6, (yt + yb) / 2);
+      g.setLineDash([]); g.globalAlpha = 1;
     });
     g.restore();
   }

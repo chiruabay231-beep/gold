@@ -30,16 +30,17 @@ final class SharkFlowTests: XCTestCase {
         // Demand first (strongest first), then supply; the same numbers as the web's sharkZones.
         let demand = zones.filter(\.demand), supply = zones.filter { !$0.demand }
         XCTAssertEqual(demand.count, 2)
+        // Tight bands at the strongest prices (three rows of 16/120 at most).
         XCTAssertEqual(demand[0].bottom, 95, accuracy: 1e-9)
-        XCTAssertEqual(demand[0].top, 96.0667, accuracy: 1e-3)
+        XCTAssertEqual(demand[0].top, 95.4, accuracy: 1e-6)
         XCTAssertEqual(demand[0].start, 40)
-        XCTAssertEqual(demand[0].strength, 0.8359, accuracy: 1e-3)          // of all the buying surplus under the price
-        XCTAssertEqual(demand[0].strength + demand[1].strength, 1, accuracy: 1e-9)
-        XCTAssertEqual(demand[1].bottom, 99, accuracy: 1e-9)
-        XCTAssertEqual(supply.first?.bottom ?? 0, 109.9333, accuracy: 1e-3)
-        XCTAssertEqual(supply.first?.top ?? 0, 111, accuracy: 1e-9)
-        XCTAssertEqual(supply.first?.start, 81)
-        XCTAssertEqual(supply.first?.strength ?? 0, 1, accuracy: 1e-9)
+        XCTAssertEqual(demand[0].strength, 0.3344, accuracy: 1e-3)          // of all the buying surplus under the price
+        XCTAssertEqual(demand[1].bottom, 99, accuracy: 1e-9)                 // the next zone is elsewhere, not beside it
+        XCTAssertEqual(supply.count, 1)
+        XCTAssertEqual(supply[0].bottom, 110.0667, accuracy: 1e-3)
+        XCTAssertEqual(supply[0].top, 110.4667, accuracy: 1e-3)
+        XCTAssertEqual(supply[0].start, 81)
+        XCTAssertEqual(supply[0].strength, 0.4, accuracy: 1e-3)
         XCTAssertTrue(zones.allSatisfy { $0.demand ? $0.top < 105 : $0.bottom > 105 })
     }
 
