@@ -232,6 +232,7 @@
     ["mss", "MSS (đổi cấu trúc)"],
     ["dm", "DM (nến không râu trên / dưới)"],
     ["flow", "Dòng tiền cá mập"],
+    ["zones", "Vùng cung / cầu cá mập (chờ mua / chờ bán, ghi giá)"],
     ["smt", "SMT (khi mở 2 biểu đồ: so đỉnh/đáy với mã thứ 2)"],
   ];
   const showInd = (() => {
@@ -2611,6 +2612,8 @@
                   const X = (i) => ts.logicalToCoordinate(i), Y = (v) => term.series.priceToCoordinate(v);
                   if (term.ict) window.ICT.draw(context, term.ict, term.ictCfg, X, Y, mediaSize.width, mediaSize.height);
                   if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
+                  if (term.sharkZones) window.ICT.drawZones(context, term.sharkZones, X, Y, mediaSize.width,
+                    (term.chartStyle.up || "#14b88a").slice(0, 7), (term.chartStyle.down || "#f0455a").slice(0, 7), term.digits);
                   term.drawSpread(context, mediaSize.width);
                 }),
               }),
@@ -2750,7 +2753,7 @@
       const allowed = this.owner || this.features.killzones !== false;
       const flowAllowed = this.owner || this.features.sharkflow !== false;
       sheet.open(`<h3>Chỉ báo</h3>
-        <div class="toggles">${IND.filter(([k]) => (k === "flow" ? flowAllowed : allowed)).map(([k, n]) => `<label class="toggle"><span>${n}</span>
+        <div class="toggles">${IND.filter(([k]) => (k === "flow" || k === "zones" ? flowAllowed : allowed)).map(([k, n]) => `<label class="toggle"><span>${n}</span>
           <span class="switch"><input type="checkbox" data-k="${k}" ${showInd[k] ? "checked" : ""}><span></span></span></label>`).join("")}</div>
         ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button>' : ""}
         <h4>Chỉ báo kỹ thuật</h4>
@@ -4597,8 +4600,9 @@
       const bars = this.viewBars();
       // Shark bubbles with the money flow (same switch as its two lines).
       const flowAllowed = this.owner || this.features.sharkflow !== false;
-      const flow = flowAllowed && showInd.flow && window.ICT && bars.length ? window.ICT.sharkFlow(bars) : null;
-      this.sharks = flow ? flow.sharks : null;
+      const flow = flowAllowed && (showInd.flow || showInd.zones) && window.ICT && bars.length ? window.ICT.sharkFlow(bars) : null;
+      this.sharks = flow && showInd.flow ? flow.sharks : null;
+      this.sharkZones = flow && showInd.zones ? flow.zones : null;
       if (!allowed || !bars.length || !window.ICT || !this.ictCfg) { this.ict = null; this.redraw(); return; }
       try {
         this.ict = window.ICT.compute(bars, TF_SECONDS[this.interval], this.ictCfg, showInd);
@@ -5065,7 +5069,15 @@
         flat: ["Giá đi ngang → chờ dòng tiền chọn hướng", "muted"],
       }[f.situation];
       box.hidden = false;
-      box.innerHTML = `<div>🦈 Dòng tiền <b class="${verdict[1]}">${verdict[0]} ${pct}</b>${f.shark ? ` <span class="${f.shark.buying ? "pos" : "neg"}">· cá mập ${f.shark.buying ? "MUA" : "BÁN"} ×${f.shark.ratio.toFixed(1)}</span>` : ""}</div><div class="${advice[1]}">${advice[0]}</div>`;
+      box.innerHTML = `<div>🦈 Dòng tiền <b class="${verdict[1]}">${verdict[0]} ${pct}</b>${f.shark ? ` <span class="${f.shark.buying ? "pos" : "neg"}">· cá mập ${f.shark.buying ? "MUA" : "BÁN"} ×${f.shark.ratio.toFixed(1)}</span>` : ""}</div><div class="${advice[1]}">${advice[0]}</div>${this.zonesLine(f)}`;
+    },
+
+    /** The strongest demand under the price and supply above it: where to look for an entry. */
+    zonesLine(f) {
+      if (!showInd.zones || !f.zones || !f.zones.length) return "";
+      const buy = f.zones.find((z) => z.demand), sell = f.zones.find((z) => !z.demand), d = this.digits;
+      const txt = (z) => `<b>${fmt(z.bottom, d)}–${fmt(z.top, d)}</b> <span class="muted">(${Math.round(z.strength * 100)}%)</span>`;
+      return `<div class="small">${buy ? `<span class="pos">🟢 Chờ MUA</span> ${txt(buy)}` : ""}${buy && sell ? " · " : ""}${sell ? `<span class="neg">🔴 Chờ BÁN</span> ${txt(sell)}` : ""}</div>`;
     },
   };
 

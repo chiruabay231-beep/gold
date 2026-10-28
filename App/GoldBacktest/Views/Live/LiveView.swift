@@ -108,6 +108,7 @@ struct LiveView: View {
     @State private var frameCache = LiveFrameCache()
     @AppStorage(LiveIndicators.sharkKey) private var sharkSetting = false
     @AppStorage(LiveIndicators.sharkMultipleKey) private var sharkMultiple = 2.5
+    @AppStorage(LiveIndicators.sharkZonesKey) private var sharkZonesOn = true
     @State private var showKillzoneSettings = false
     @State private var showOandaSettings = false
     /// OANDA instrument to open once a token has been saved.
@@ -626,7 +627,8 @@ struct LiveView: View {
                 if let flash = releasedNews(at: context.date) {
                     newsFlash(flash, now: context.date)
                 } else if legendExpanded, let flow = sharkFlow, chartCandles.count > 2 {
-                    SharkFlowSummary(output: flow, total: chartCandles.count, theme: theme)
+                    SharkFlowSummary(output: flow, total: chartCandles.count, theme: theme, showZones: sharkZonesOn,
+                                     decimals: priceDecimals ?? CandleChart.decimals(for: chartCandles.last?.close ?? 1))
                 }
             }
             timeframeRow
@@ -898,6 +900,7 @@ struct LiveView: View {
                         notes: layer.notes,
                         timeEvents: replay.isActive ? [] : newsTimeEvents,
                         bubbles: sharkBubbles,
+                        zones: sharkZones,
                         askPrice: liveQuote.ask > liveQuote.bid ? liveQuote.ask : nil,
                         priceLines: tradeLines,
                         onPriceLineDrag: { id, price, ended in tradeLineDragged(id: id, price: price, ended: ended) },
@@ -1571,6 +1574,17 @@ struct LiveView: View {
     private var sharkFlow: SharkFlow.Output? {
         guard showSharkFlow else { return nil }
         return frameCache.sharkFlow(chartCandles, multiple: sharkMultiple)
+    }
+
+    /// "CẦU 4012.50 – 4015.00 · 12%" under the price, "CUNG …" above it.
+    private var sharkZones: [ChartZone] {
+        guard sharkZonesOn, let flow = sharkFlow else { return [] }
+        let decimals = priceDecimals ?? CandleChart.decimals(for: chartCandles.last?.close ?? 1)
+        return flow.zones.map { z in
+            ChartZone(start: z.start, top: z.top, bottom: z.bottom,
+                      label: "\(z.demand ? "CẦU" : "CUNG") \(CandleChart.format(z.bottom, decimals)) – \(CandleChart.format(z.top, decimals)) · \(Int((z.strength * 100).rounded()))%",
+                      color: z.demand ? theme.up : theme.down)
+        }
     }
 
     private var sharkBubbles: [ChartBubble] {

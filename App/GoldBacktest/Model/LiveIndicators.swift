@@ -7,6 +7,8 @@ enum LiveIndicators {
     static let storageKey = "live.customIndicators"
     static let sharkKey = "live.sharkFlow"
     static let sharkMultipleKey = "live.sharkMultiple"
+    /// Supply / demand zones of the shark flow (where big players wait to buy or sell).
+    static let sharkZonesKey = "live.sharkZones"
 
     static func ids(_ stored: String) -> Set<UUID> {
         Set(stored.split(separator: ",").compactMap { UUID(uuidString: String($0)) })

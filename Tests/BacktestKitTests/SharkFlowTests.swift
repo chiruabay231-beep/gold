@@ -20,6 +20,29 @@ final class SharkFlowTests: XCTestCase {
         XCTAssertEqual(out.sharks.first?.ratio ?? 0, 6, accuracy: 1e-9)
     }
 
+    func testSupplyAndDemandZones() {
+        var candles = (0..<40).map { bar($0, 100, 101, 99, 100.5, 10) }
+        candles += (40..<45).map { bar($0, 95.2, 96, 95, 95.9, 60) }        // heavy buying at 95–96
+        candles += (45..<81).map { bar($0, 105, 106, 104, 105, 10) }
+        candles += (81..<86).map { bar($0, 110.8, 111, 110, 110.1, 60) }    // heavy selling at 110–111
+        candles += (86..<101).map { bar($0, 105, 106, 104, 105, 10) }
+        let zones = SharkFlow.compute(candles: candles).zones
+        // Demand first (strongest first), then supply; the same numbers as the web's sharkZones.
+        let demand = zones.filter(\.demand), supply = zones.filter { !$0.demand }
+        XCTAssertEqual(demand.count, 2)
+        XCTAssertEqual(demand[0].bottom, 95, accuracy: 1e-9)
+        XCTAssertEqual(demand[0].top, 96.0667, accuracy: 1e-3)
+        XCTAssertEqual(demand[0].start, 40)
+        XCTAssertEqual(demand[0].strength, 0.8359, accuracy: 1e-3)          // of all the buying surplus under the price
+        XCTAssertEqual(demand[0].strength + demand[1].strength, 1, accuracy: 1e-9)
+        XCTAssertEqual(demand[1].bottom, 99, accuracy: 1e-9)
+        XCTAssertEqual(supply.first?.bottom ?? 0, 109.9333, accuracy: 1e-3)
+        XCTAssertEqual(supply.first?.top ?? 0, 111, accuracy: 1e-9)
+        XCTAssertEqual(supply.first?.start, 81)
+        XCTAssertEqual(supply.first?.strength ?? 0, 1, accuracy: 1e-9)
+        XCTAssertTrue(zones.allSatisfy { $0.demand ? $0.top < 105 : $0.bottom > 105 })
+    }
+
     func testPriceAgainstMoney() {
         // Price creeps up while every bar closes near its low: a weak rise.
         let up = (0..<40).map { i -> Candle in

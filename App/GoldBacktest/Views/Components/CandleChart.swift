@@ -182,6 +182,16 @@ struct ChartBubble {
     var ratio: Double
 }
 
+/// A supply / demand zone of the shark flow: a band from its first bar to the price axis,
+/// its prices and strength written at the right.
+struct ChartZone {
+    var start: Int
+    var top: Double
+    var bottom: Double
+    var label: String
+    var color: Color
+}
+
 /// A moment marked on the time axis (economic news), possibly after the last bar.
 struct ChartTimeEvent {
     var time: Date
@@ -219,6 +229,8 @@ struct CandleChart: View {
     var timeEvents: [ChartTimeEvent] = []
     /// Shark bubbles: a big buyer under the bar, a big seller above it.
     var bubbles: [ChartBubble] = []
+    /// Shark supply / demand zones, behind the candles.
+    var zones: [ChartZone] = []
     /// Ask price, drawn as a second dotted line above the bid (the spread).
     var askPrice: Double?
     var priceLines: [ChartPriceLine] = []
@@ -661,6 +673,22 @@ struct CandleChart: View {
                 plotContext.draw(Text(box.label).font(.system(size: 9)).foregroundColor(box.color),
                                  at: CGPoint(x: rect.minX + 2, y: rect.minY - 7), anchor: .leading)
             }
+        }
+
+        for zone in zones where !axisOnly {
+            let left = max(0, s.x(zone.start) - s.barWidth / 2), right = layout.axisX
+            guard left < right else { continue }
+            let rect = CGRect(x: left, y: s.y(zone.top), width: right - left, height: max(2, s.y(zone.bottom) - s.y(zone.top)))
+            plotContext.fill(Path(rect), with: .color(zone.color.opacity(0.13)))
+            for y in [rect.minY, rect.maxY] {
+                var edge = Path()
+                edge.move(to: CGPoint(x: rect.minX, y: y))
+                edge.addLine(to: CGPoint(x: rect.maxX, y: y))
+                plotContext.stroke(edge, with: .color(zone.color.opacity(0.6)), style: StrokeStyle(lineWidth: 0.8, dash: [4, 3]))
+            }
+            // The name at the left of the band: the right side belongs to the trade and level labels.
+            plotContext.draw(Text(zone.label).font(.system(size: 9.5, weight: .semibold)).foregroundColor(zone.color),
+                             at: CGPoint(x: rect.minX + 4, y: rect.midY), anchor: .leading)
         }
 
         // Timestamps, segments (pivots, opens) and notes, behind the candles.

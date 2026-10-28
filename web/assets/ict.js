@@ -674,7 +674,66 @@
       }
       sum += weight[i];
     }
-    return { flow, situation, shark, sharks };
+    return { flow, situation, shark, sharks, zones: sharkZones(c, pressure, weight, sharks) };
+  }
+
+  /**
+   * Supply / demand of the shark flow (the app's SharkFlow.zones): volume at price over the last `lookback`
+   * bars, split into buying and selling by where each bar closed (shark bars count `ratio` times). Rows under
+   * the price where buying beat selling the most are demand (big players wait to buy there), rows above it
+   * where selling won are supply; neighbouring rows at least half as strong join the zone.
+   */
+  function sharkZones(c, pressure, weight, sharks, lookback = 300, rows = 60, count = 2) {
+    const n = c.length, from = Math.max(0, n - lookback);
+    if (n - from < 10) return [];
+    let lo = Infinity, hi = -Infinity;
+    for (let i = from; i < n; i++) { lo = Math.min(lo, c[i].low); hi = Math.max(hi, c[i].high); }
+    if (!(hi > lo)) return [];
+    const step = (hi - lo) / rows, buy = new Array(rows).fill(0), sell = new Array(rows).fill(0);
+    const boost = new Map();
+    sharks.forEach((s) => boost.set(s.index, Math.max(boost.get(s.index) || 0, s.ratio)));
+    const row = (p) => Math.min(rows - 1, Math.max(0, Math.floor((p - lo) / step)));
+    for (let i = from; i < n; i++) {
+      const w = weight[i] * (boost.get(i) || 1);
+      if (!(w > 0)) continue;
+      const buying = (1 + pressure[i]) / 2, a = row(c[i].low), b = row(c[i].high);
+      const span = Math.max(c[i].high - c[i].low, step * 1e-9);
+      for (let k = a; k <= b; k++) {
+        const overlap = a === b ? 1 : Math.max(0, Math.min(c[i].high, lo + (k + 1) * step) - Math.max(c[i].low, lo + k * step)) / span;
+        buy[k] += w * overlap * buying;
+        sell[k] += w * overlap * (1 - buying);
+      }
+    }
+    let total = 0;
+    for (let k = 0; k < rows; k++) total += buy[k] + sell[k];
+    if (!(total > 0)) return [];
+    const at = row(c[n - 1].close), below = at - 1, above = at + 1;
+    const pick = (demand) => {
+      const idx = [];
+      if (demand) for (let k = 0; k <= below; k++) idx.push(k); else for (let k = Math.min(above, rows); k < rows; k++) idx.push(k);
+      const inSide = new Set(idx), score = new Array(rows).fill(0);
+      idx.forEach((k) => { score[k] = Math.max(0, demand ? buy[k] - sell[k] : sell[k] - buy[k]); });
+      // Strength: the zone's share of all this side's surplus (of the buyers under the price, the sellers above).
+      const sideTotal = idx.reduce((a, k) => a + score[k], 0);
+      const used = new Set(), found = [];
+      while (found.length < Math.max(count, 1)) {
+        let best = null;
+        idx.forEach((k) => { if (!used.has(k) && score[k] > 0 && (best === null || score[k] > score[best])) best = k; });
+        if (best === null) break;
+        let a = best, b = best;
+        while (a - 1 >= 0 && inSide.has(a - 1) && !used.has(a - 1) && score[a - 1] >= score[best] * 0.5) a--;
+        while (b + 1 < rows && inSide.has(b + 1) && !used.has(b + 1) && score[b + 1] >= score[best] * 0.5) b++;
+        for (let k = Math.max(0, a - 1); k <= Math.min(rows - 1, b + 1); k++) used.add(k);
+        const bottom = lo + a * step, top = lo + (b + 1) * step;
+        let start = from;
+        for (let i = from; i < n; i++) if (c[i].low <= top && c[i].high >= bottom) { start = i; break; }
+        let sum = 0;
+        for (let k = a; k <= b; k++) sum += score[k];
+        found.push({ demand, top, bottom, strength: sum / sideTotal, start, peak: lo + (best + 0.5) * step });
+      }
+      return found;
+    };
+    return pick(true).concat(pick(false));
   }
 
   /* ---------- SMT divergence against a related market ---------- */
@@ -740,6 +799,30 @@
   }
 
   /** Shark bubbles like the app: a big buyer under its candle, a big seller above it. */
+  /** Shark supply / demand: a band from the zone's first bar to the right, "CẦU 4012.50 – 4015.00 · 12%". */
+  function drawZones(g, zones, X, Y, w, up, down, digits) {
+    if (!zones || !zones.length) return;
+    const x0 = X(0), x1 = X(1), half = x0 != null && x1 != null ? Math.max(0.5, (x1 - x0) / 2) : 2;
+    g.save();
+    g.font = "600 10px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+    g.textAlign = "left"; g.textBaseline = "middle";
+    zones.forEach((z) => {
+      const a = X(z.start), yt = Y(z.top), yb = Y(z.bottom);
+      if (a == null || yt == null || yb == null) return;
+      const left = Math.max(0, a - half);
+      if (left >= w) return;
+      const color = z.demand ? up : down;
+      g.globalAlpha = 0.13; g.fillStyle = color;
+      g.fillRect(left, yt, w - left, Math.max(2, yb - yt));
+      g.globalAlpha = 0.6; g.strokeStyle = color; g.lineWidth = 0.8; g.setLineDash([4, 3]);
+      [yt, yb].forEach((y) => { g.beginPath(); g.moveTo(left, Math.round(y) + 0.5); g.lineTo(w, Math.round(y) + 0.5); g.stroke(); });
+      g.setLineDash([]); g.globalAlpha = 1; g.fillStyle = color;
+      // The name at the left of the band: the right side belongs to the trade and level labels.
+      g.fillText(`${z.demand ? "CẦU" : "CUNG"} ${z.bottom.toFixed(digits)} – ${z.top.toFixed(digits)} · ${Math.round(z.strength * 100)}%`, left + 6, (yt + yb) / 2);
+    });
+    g.restore();
+  }
+
   function drawSharks(g, list, bars, X, Y, w, up, down) {
     if (!list || !list.length) return;
     g.save();
@@ -760,5 +843,5 @@
     g.restore();
   }
 
-  window.ICT = { drawSharks, defaults, merge, compute, draw, sharkFlow, smt, drawSMT };
+  window.ICT = { drawSharks, drawZones, defaults, merge, compute, draw, sharkFlow, smt, drawSMT };
 })();

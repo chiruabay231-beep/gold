@@ -18,6 +18,7 @@ struct LiveIndicatorSheet: View {
     @AppStorage("live.showEMA200") private var showEMA200 = true
     @AppStorage(LiveIndicators.sharkKey) private var showSharkFlow = false
     @AppStorage(LiveIndicators.sharkMultipleKey) private var sharkMultiple = 2.5
+    @AppStorage(LiveIndicators.sharkZonesKey) private var sharkZones = true
     @AppStorage("live.volume") private var showVolume = true
     @AppStorage("live.highLow") private var showHighLow = true
 
@@ -60,11 +61,12 @@ struct LiveIndicatorSheet: View {
                                 Text("3 × trung bình").tag(3.0)
                                 Text("4 × trung bình").tag(4.0)
                             }
+                            Toggle("Vùng cung / cầu cá mập (ghi giá)", isOn: $sharkZones)
                         }
                     } header: {
                         Text("Dòng tiền")
                     } footer: {
-                        Text("Hai dòng chữ trên biểu đồ: dòng tiền đang vào hay ra, và ý nghĩa — giá tăng + tiền vào = tăng khoẻ; ⚠️ giá tăng nhưng tiền ra = tăng yếu, dễ đảo chiều; giá giảm + tiền ra = giảm khoẻ; ⚠️ giá giảm nhưng tiền vào = có người gom, dễ bật lên. Bong bóng 🦈 trên nến = khối lượng lớn bất thường: xanh dưới nến là cá mập MUA, đỏ trên nến là cá mập BÁN. Sàn forex/CFD (Exness) không có khối lượng thật nên đây là ước lượng.")
+                        Text("Hai dòng chữ trên biểu đồ: dòng tiền đang vào hay ra, và ý nghĩa — giá tăng + tiền vào = tăng khoẻ; ⚠️ giá tăng nhưng tiền ra = tăng yếu, dễ đảo chiều; giá giảm + tiền ra = giảm khoẻ; ⚠️ giá giảm nhưng tiền vào = có người gom, dễ bật lên. Bong bóng 🦈 trên nến = khối lượng lớn bất thường: xanh dưới nến là cá mập MUA, đỏ trên nến là cá mập BÁN. Vùng CẦU (xanh, dưới giá) = nơi cá mập đã mua nhiều nhất, hay chờ mua lại khi giá về; vùng CUNG (đỏ, trên giá) = nơi đã bán nhiều nhất, hay chờ bán; % là độ mạnh. Sàn forex/CFD (Exness) không có khối lượng thật và không lộ lệnh chờ, nên đây là ước lượng từ khối lượng tick.")
                     }
                 }
                 Section("Khác") {

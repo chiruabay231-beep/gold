@@ -15,12 +15,36 @@ public enum SharkFlow {
         public var flowLength = 20
         public var volumeLength = 20
         public var sharkMultiple = 2.5
+        /// Supply / demand: bars read, price rows and zones kept on each side.
+        public var zoneLookback = 300
+        public var zoneRows = 60
+        public var zoneCount = 2
 
-        public init(flowLength: Int = 20, volumeLength: Int = 20, sharkMultiple: Double = 2.5) {
+        public init(flowLength: Int = 20, volumeLength: Int = 20, sharkMultiple: Double = 2.5,
+                    zoneLookback: Int = 300, zoneRows: Int = 60, zoneCount: Int = 2) {
             self.flowLength = flowLength
             self.volumeLength = volumeLength
             self.sharkMultiple = sharkMultiple
+            self.zoneLookback = zoneLookback
+            self.zoneRows = zoneRows
+            self.zoneCount = zoneCount
         }
+    }
+
+    /// Where the big players bought (demand, under the price: they wait to buy there again)
+    /// or sold (supply, above it: they wait to sell), read from volume at each price.
+    public struct Zone: Hashable, Sendable {
+        /// true = demand (buyers), under the current price.
+        public var demand: Bool
+        public var top: Double
+        public var bottom: Double
+        /// The zone's share of its side's surplus: of all the buying beyond selling under the price
+        /// (demand) or selling beyond buying above it (supply), 0…1.
+        public var strength: Double
+        /// First bar that traded in the zone (where the box starts).
+        public var start: Int
+        /// The zone's busiest price row (its middle).
+        public var peak: Double
     }
 
     public struct Shark: Hashable, Sendable {
@@ -59,6 +83,8 @@ public enum SharkFlow {
         /// Per bar (nil before enough bars).
         public var situations: [Situation?] = []
         public var divergences: [Divergence] = []
+        /// Strongest demand zones under the price, then supply zones above it (strongest first).
+        public var zones: [Zone] = []
 
         public init() {}
 
@@ -129,6 +155,61 @@ public enum SharkFlow {
             }
             sum += weight[i]
         }
+        out.zones = zones(c, pressure: out.pressure, weight: weight, sharks: out.sharks, config: config)
         return out
+    }
+
+    /// Volume at price over the last `zoneLookback` bars, split into buying and selling by where each bar
+    /// closed (shark bars count `ratio` times). Rows under the price where buying beat selling the most are
+    /// demand, rows above it where selling won are supply; neighbouring rows at least half as strong join
+    /// the zone.
+    public static func zones(_ c: [Candle], pressure: [Double], weight: [Double], sharks: [Shark], config: Config) -> [Zone] {
+        let n = c.count, rows = max(config.zoneRows, 4)
+        let from = max(0, n - max(config.zoneLookback, 10))
+        guard n - from >= 10 else { return [] }
+        let window = c[from..<n]
+        guard let lo = window.map(\.low).min(), let hi = window.map(\.high).max(), hi > lo else { return [] }
+        let step = (hi - lo) / Double(rows)
+        var buy = [Double](repeating: 0, count: rows), sell = buy
+        let boost = Dictionary(sharks.map { ($0.index, $0.ratio) }, uniquingKeysWith: max)
+        let row = { (price: Double) in min(rows - 1, max(0, Int((price - lo) / step))) }
+        for i in from..<n {
+            let w = weight[i] * (boost[i] ?? 1)
+            guard w > 0 else { continue }
+            let buying = (1 + pressure[i]) / 2
+            let a = row(c[i].low), b = row(c[i].high)
+            let span = max(c[i].high - c[i].low, step * 1e-9)
+            for k in a...b {
+                // The bar's volume spread over the rows it covers, by how much of it each holds.
+                let overlap = a == b ? 1 : max(0, min(c[i].high, lo + Double(k + 1) * step) - max(c[i].low, lo + Double(k) * step)) / span
+                buy[k] += w * overlap * buying
+                sell[k] += w * overlap * (1 - buying)
+            }
+        }
+        let total = zip(buy, sell).reduce(0) { $0 + $1.0 + $1.1 }
+        guard total > 0, let price = c.last?.close else { return [] }
+        let below = row(price) - 1, above = row(price) + 1
+        func pick(_ demand: Bool) -> [Zone] {
+            let indices = demand ? Array(0...max(below, 0)).filter { $0 <= below } : Array(min(above, rows)..<rows)
+            var score = [Double](repeating: 0, count: rows)
+            for k in indices { score[k] = max(0, demand ? buy[k] - sell[k] : sell[k] - buy[k]) }
+            // Strength: the zone's share of all this side's surplus (of the buyers under the price, the sellers above).
+            let sideTotal = indices.reduce(0) { $0 + score[$1] }
+            var used = Set<Int>(), found: [Zone] = []
+            while found.count < max(config.zoneCount, 1) {
+                guard let best = indices.filter({ !used.contains($0) && score[$0] > 0 }).max(by: { score[$0] < score[$1] }) else { break }
+                var a = best, b = best
+                while a - 1 >= 0, indices.contains(a - 1), !used.contains(a - 1), score[a - 1] >= score[best] * 0.5 { a -= 1 }
+                while b + 1 < rows, indices.contains(b + 1), !used.contains(b + 1), score[b + 1] >= score[best] * 0.5 { b += 1 }
+                // The rows next to a zone are left out too, so two zones never touch.
+                for k in max(0, a - 1)...min(rows - 1, b + 1) { used.insert(k) }
+                let bottom = lo + Double(a) * step, top = lo + Double(b + 1) * step
+                let start = (from..<n).first { c[$0].low <= top && c[$0].high >= bottom } ?? from
+                found.append(Zone(demand: demand, top: top, bottom: bottom, strength: score[a...b].reduce(0, +) / sideTotal,
+                                  start: start, peak: lo + (Double(best) + 0.5) * step))
+            }
+            return found
+        }
+        return pick(true) + pick(false)
     }
 }
