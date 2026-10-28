@@ -1324,10 +1324,16 @@ struct LiveView: View {
         for p in trader.account.positions where p.symbol == key && !tradesMT5 {
             let id = "pos|\(p.id.uuidString)"
             let profit = trader.profit(p) ?? 0
-            // The entry never moves: SL / TP are set from the bar (in pips) or by dragging their lines.
+            if let dragged = lineOverrides[id + "|entry"] {
+                // Dragging away from the entry sets a new SL or TP.
+                let isProfit = (dragged - p.entryPrice) * p.side.sign > 0
+                lines.append(ChartPriceLine(id: id + "|entry", price: dragged, color: isProfit ? green : red,
+                                            label: "\(isProfit ? "TP" : "SL") \(money(side: p.side, lots: p.lots, entry: p.entryPrice, price: dragged))",
+                                            dash: [5, 3]))
+            }
             lines.append(ChartPriceLine(id: id + "|entry", price: p.entryPrice, color: p.side == .long ? blue : red,
                                         label: "\(p.side == .long ? "BUY" : "SELL") \(QuickTradePanel.lotText(p.lots))",
-                                        dash: [6, 4], draggable: false, handleFraction: 0.42,
+                                        dash: [6, 4], handleFraction: 0.42,
                                         value: String(format: "%+.2f", profit), valueColor: profit >= 0 ? green : red,
                                         markerIndex: openIndex(p.openTime), closable: true, entryStyle: true))
             if let stop = p.stop ?? levelPreview(id + "|sl") {
@@ -1423,11 +1429,18 @@ struct LiveView: View {
         for p in mt5.positions(market.symbol) {
             let id = "mpos|\(p.ticket)"
             let side = p.paperSide
+            if let dragged = lineOverrides[id + "|entry"] {
+                // Dragging away from the entry: the SL or TP it will set, live under the finger.
+                let isProfit = (dragged - p.entry) * side.sign > 0
+                lines.append(ChartPriceLine(id: id + "|entry", price: dragged, color: isProfit ? green : red,
+                                            label: "\(isProfit ? "TP" : "SL") \(money(side: side, lots: p.lots, entry: p.entry, price: dragged))",
+                                            dash: [5, 3]))
+            }
             // Money moves with every tick, not only when the VPS reports (every 2 s).
             let profit = p.liveProfit(bid: liveQuote.bid, ask: liveQuote.ask)
             lines.append(ChartPriceLine(id: id + "|entry", price: p.entry, color: side == .long ? blue : red,
                                         label: "\(side == .long ? "BUY" : "SELL") \(QuickTradePanel.lotText(p.lots))\(tag)",
-                                        dash: [6, 4], draggable: false, handleFraction: 0.42,
+                                        dash: [6, 4], handleFraction: 0.42,
                                         value: String(format: "%+.2f", profit),
                                         valueColor: profit >= 0 ? green : red,
                                         markerIndex: openIndex(Date(timeIntervalSince1970: p.time)), closable: true, entryStyle: true))
@@ -1472,11 +1485,22 @@ struct LiveView: View {
     /// A dragged MT5 line: new SL/TP for a position, new entry/SL/TP for a pending order.
     private func mt5LineDragged(kind: String, ticket: Int, field: String, price: Double) {
         let rejected = { UINotificationFeedbackGenerator().notificationOccurred(.error) }
-        if kind == "mpos", mt5.positions(market.symbol).contains(where: { $0.ticket == ticket }) {
-            guard field == "sl" || field == "tp" else { return rejected() }
-            // A dragged SL / TP waits in the bar (pips, money, checks) for Xác nhận.
-            selectedTradeGroup = "mpos|\(ticket)"
-            levelEdit = TradeLevelBar.Edit(field: field, price: price)
+        if kind == "mpos", let p = mt5.positions(market.symbol).first(where: { $0.ticket == ticket }) {
+            let lossSide = (price - currentPrice) * p.paperSide.sign < 0
+            var stop = p.stop, target = p.target
+            let setsStop: Bool
+            switch field {
+            case "sl": guard lossSide else { return rejected() }; stop = price; setsStop = true
+            case "tp": guard !lossSide else { return rejected() }; target = price; setsStop = false
+            case "entry": if lossSide { stop = price } else { target = price }; setsStop = lossSide
+            default: return
+            }
+            let old = setsStop ? p.stop : p.target
+            confirmMove(lineID: "mpos|\(ticket)|\(field)", price: price,
+                        message: "\(setsStop ? "SL" : "TP") \(Self.displayName(p.symbol)) #\(ticket): \(old.map(priceText) ?? "–") → \(priceText(price))"
+                            + " (\(money(side: p.paperSide, lots: p.lots, entry: p.entry, price: price)))") {
+                await mt5.modify(ticket, stop: stop, target: target)
+            }
         } else if kind == "mord", let o = mt5.orders(market.symbol).first(where: { $0.ticket == ticket }) {
             var entry = o.entry, stop = o.stop, target = o.target
             switch field {
@@ -1492,11 +1516,6 @@ struct LiveView: View {
                 guard (price - o.entry) * o.paperSide.sign > 0 else { return rejected() }
                 target = price
             default: return
-            }
-            if field == "sl" || field == "tp" {
-                selectedTradeGroup = "mord|\(ticket)"
-                levelEdit = TradeLevelBar.Edit(field: field, price: price)
-                return
             }
             let name = field == "sl" ? "SL" : field == "tp" ? "TP" : "Giá chờ"
             let old: Double? = field == "sl" ? o.stop : field == "tp" ? o.target : Optional(o.entry)
