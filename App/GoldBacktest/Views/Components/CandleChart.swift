@@ -240,6 +240,8 @@ struct CandleChart: View {
     var onPriceLineClose: ((String) -> Void)?
     /// A line drag was dropped without moving it (a tap, a shaky press or a pinch): put it back.
     var onPriceLineCancel: ((String) -> Void)?
+    /// The order picked with a tap on its lines ("mpos|123", "pos|<id>"…), nil when let go.
+    var onActiveLineGroup: ((String?) -> Void)?
     /// When set, a tap chooses a bar (bar replay start) instead of the usual tap actions.
     var onPickBar: ((Int) -> Void)?
     /// The bar chosen as the replay start: a line after it and the later bars dimmed.
@@ -326,6 +328,11 @@ struct CandleChart: View {
     private var headerHeight: CGFloat { showHeader && !headerInside ? 34 : (headerInside ? 0 : 4) }
 
     var body: some View {
+        chartBody
+            .onChange(of: activeLineGroup) { _, group in onActiveLineGroup?(group) }
+    }
+
+    private var chartBody: some View {
         GeometryReader { geometry in
             let layout = Layout(size: geometry.size, axisWidth: axisWidth, timeAxisHeight: timeAxisHeight,
                                 headerHeight: headerHeight, showVolume: showVolume)
