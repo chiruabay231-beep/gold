@@ -3226,6 +3226,14 @@
           if (s.target) out.push({ key: `sig:${s.id}:target`, price: s.target, color: "#9b6bff", width: 1, style: 1, title: "TP" });
         });
       }
+      // A move waiting for Xác nhận shows its line at the new level (a pulled-out SL / TP included).
+      const m = this.pendingMove;
+      if (m && !this.replay) {
+        const w = out.find((l) => l.key === m.key);
+        const label = `${m.field === "stop" ? "SL" : m.field === "target" ? "TP" : "Giá"} ${fmt(m.price, this.digits)} ?`;
+        if (w) Object.assign(w, { price: m.price, title: w.entryOf ? w.title : label, width: 2 });
+        else if (m.kind === "pos") out.push({ key: m.key, price: m.price, color: m.field === "stop" ? "#f0455a" : "#14b88a", width: 2, style: 2, title: label, from: m.x.time, drawn: true });
+      }
       return out;
     },
 
@@ -3427,7 +3435,12 @@
         if (on) { this.scaleWasAuto = ps.options().autoScale; ps.applyOptions({ autoScale: false }); } else if (this.scaleWasAuto) ps.applyOptions({ autoScale: true });
       };
       let down = null, longPress = null;
+      // Fingers on the chart: a second one (pinch to zoom) cancels a line drag, so a zoom never moves SL/TP.
+      const fingers = new Set();
+      const cancelDrag = () => { if (this.drag) { this.drag = null; lock(false); this.syncLines(); } };
       wrap.addEventListener("pointerdown", (e) => {
+        fingers.add(e.pointerId);
+        if (fingers.size > 1) { cancelDrag(); clearTimeout(longPress); return; }
         this.closeMenu();
         this.focusChart(1);
         if (e.button > 0 || e.target.closest("#selBar, #posPill, #ticket, #drawBar, #favBar, #draftBar, #btChip")) return;
@@ -3450,7 +3463,8 @@
         }
         const w = hit(y, draggable, x);
         if (!w) return;
-        this.drag = { key: w.key, price: w.price, start: w.price, base: w.key, pull: /^pos:\d+:entry$/.test(w.key) };
+        // Not moved until the finger has gone 8 px up or down: a tap or a shaky press changes nothing.
+        this.drag = { key: w.key, price: w.price, start: w.price, base: w.key, pull: /^pos:\d+:entry$/.test(w.key), pid: e.pointerId, y0: e.clientY, armed: false };
         lock(true);
         e.stopPropagation();
       }, true);
@@ -3470,7 +3484,9 @@
       window.addEventListener("pointermove", (e) => {
         if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down.moved = true; clearTimeout(longPress); }
         if (this.drawGesture) { const { x, y } = rel(e); this.drawings.move(x, y); return; }
-        if (!this.drag) return;
+        if (!this.drag || e.pointerId !== this.drag.pid) return;
+        if (fingers.size > 1) { cancelDrag(); return; }
+        if (!this.drag.armed) { if (Math.abs(e.clientY - this.drag.y0) < 8) return; this.drag.armed = true; }
         const price = this.series.coordinateToPrice(rel(e).y);
         if (price == null) return;
         let p = +price.toFixed(this.digits);
@@ -3482,7 +3498,9 @@
         if (this.requestICT) this.requestICT();
       });
       window.addEventListener("pointerup", (e) => {
+        fingers.delete(e.pointerId);
         clearTimeout(longPress);
+        if (this.drag && e.pointerId !== this.drag.pid) return;
         const d = this.drag, tap = down && !down.moved && !down.menu;
         down = null;
         if (this.drawGesture) {
@@ -3492,7 +3510,13 @@
         }
         if (d) {
           this.drag = null; lock(false);
-          const untouched = d.key === d.base ? Math.abs(d.price - d.start) === 0 : d.start != null && Math.abs(d.price - d.start) === 0;
+          const untouched = !d.armed || (d.key === d.base ? Math.abs(d.price - d.start) === 0 : d.start != null && Math.abs(d.price - d.start) === 0);
+          if (!d.armed && !d.pull) {
+            // Never dragged: a tap, nothing moves.
+            this.syncLines();
+            if (tap && e.target && wrap.contains(e.target)) { const { x, y } = rel(e); this.tapChart(y, x); }
+            return;
+          }
           if (d.pull && d.key === d.base) {
             // Only a tap on the entry line: pick the next trade at that price.
             this.syncLines();
@@ -3504,9 +3528,10 @@
         }
         if (tap && e.target && wrap.contains(e.target)) { const { x, y } = rel(e); this.tapChart(y, x); }
       });
-      window.addEventListener("pointercancel", () => {
+      window.addEventListener("pointercancel", (e) => {
+        fingers.delete(e.pointerId);
         clearTimeout(longPress);
-        if (this.drag) { this.drag = null; lock(false); this.syncLines(); }
+        cancelDrag();
         if (this.drawGesture) { this.drawGesture = false; lock(false); this.drawings.up(); }
         down = null;
       });
@@ -3565,6 +3590,12 @@
       const ticket = +d.base.split(":")[1];
       const p = this.positions.find((x) => x.ticket === ticket);
       if (!p) return;
+      // Within 12 px of the entry nothing is pulled out yet (an SL / TP on the entry would lose it).
+      const ey = this.series.priceToCoordinate(p.entry), py = this.series.priceToCoordinate(price);
+      if (ey != null && py != null && Math.abs(py - ey) < 12) {
+        if (d.key !== d.base) { d.key = d.base; this.syncLines(); }
+        return;
+      }
       const long = p.side === "long";
       const field = (long ? price < p.entry : price > p.entry) ? "stop" : "target";
       const key = `pos:${ticket}:${field}`;
@@ -3587,11 +3618,43 @@
       body[field === "entry" ? "price" : field] = d.price;
       const wrong = kind === "pos" ? this.stopsProblem(x, body.stop, body.target) : null;
       if (wrong) { toast(wrong, true); this.syncLines(); return; }
-      // Show the new level at once; the next refresh confirms it.
-      if (field === "entry") x.entry = d.price; else x[field] = d.price;
+      // Nothing goes to MT5 before a tap on Xác nhận: the line waits at its new place (real money).
+      this.askMove({ key: d.key, kind, x, field, price: d.price, from: field === "entry" ? x.entry : x[field], body });
+    },
+
+    /** The bar asking to confirm a moved SL / TP / pending price; the line shows the new level meanwhile. */
+    askMove(m) {
+      this.pendingMove = m;
       this.syncLines();
-      await act(null, () => this.call("/mt5/modify", body), `Đã dời ${field === "stop" ? "SL" : field === "target" ? "TP" : "giá"} → ${fmt(d.price, this.digits)}`);
-      this.refresh();
+      let bar = $("moveConfirm");
+      if (!bar) {
+        bar = document.createElement("div");
+        bar.id = "moveConfirm"; bar.className = "move-confirm";
+        $("chartWrap").appendChild(bar);
+      }
+      const name = m.field === "stop" ? "SL" : m.field === "target" ? "TP" : "giá chờ";
+      const p = m.kind === "pos" ? m.x : null;
+      const money = p && m.field !== "entry" ? this.pnlAt(p, m.price) : null;
+      bar.hidden = false;
+      bar.innerHTML = `<span>Dời <b>${name}</b> ${esc(m.x.symbol)} #${m.x.ticket}: ${m.from ? fmt(m.from, this.digits) : "–"} → <b>${fmt(m.price, this.digits)}</b>
+          ${money != null ? `<span class="${money >= 0 ? "pos" : "neg"}">${signed(money)}</span>` : ""}</span>
+        <button type="button" class="no" data-a="no">Huỷ</button><button type="button" class="yes" data-a="yes">Xác nhận</button>`;
+      bar.querySelector("[data-a=no]").onclick = () => this.closeMove();
+      bar.querySelector("[data-a=yes]").onclick = async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        const ok = await act(btn, () => this.call("/mt5/modify", m.body), `Đã dời ${name} → ${fmt(m.price, this.digits)}`);
+        if (ok) { if (m.field === "entry") m.x.entry = m.price; else m.x[m.field] = m.price; }
+        this.closeMove();
+        this.refresh();
+      };
+    },
+
+    closeMove() {
+      this.pendingMove = null;
+      const bar = $("moveConfirm");
+      if (bar) bar.hidden = true;
+      this.syncLines();
     },
 
     /** Why MT5 would refuse these SL/TP for an open position (null when fine). */

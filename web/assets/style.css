@@ -773,3 +773,14 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .draft-bar .dadd.stop { color: var(--down); }
 .draft-bar .dadd.target { color: var(--up); }
 .draft-bar .dadd:hover { border-style: solid; background: var(--hover); }
+
+/* a moved SL / TP / pending price waits for Xác nhận */
+.move-confirm { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); z-index: 6; display: flex; align-items: center; gap: 8px; white-space: nowrap;
+  padding: 7px 8px 7px 12px; border-radius: 12px; background: var(--glass); border: 1px solid var(--gold2); box-shadow: 0 8px 24px rgba(0,0,0,.35);
+  font: 600 12.5px/1.2 var(--font); color: var(--text); max-width: calc(100% - 16px); }
+.move-confirm[hidden] { display: none; }
+.move-confirm > span { overflow: hidden; text-overflow: ellipsis; }
+.move-confirm button { border: 0; height: 30px; padding: 0 12px; border-radius: 9px; cursor: pointer; font: 700 12.5px/1 var(--font); }
+.move-confirm .no { background: var(--chip); color: var(--text); }
+.move-confirm .yes { background: linear-gradient(180deg, #f2c14e, #c88a16); color: #1a1205; }
+@media (max-width: 600px) { .move-confirm { white-space: normal; flex-wrap: wrap; justify-content: flex-end; } .move-confirm > span { flex: 1 1 100%; } }
