@@ -264,16 +264,39 @@
       this.oldestId = null; this.oldestMs = null; this.lastId = 0; this.noOlder = false;
     }
 
-    /** One finished piece (a trade, or one 1-second candle) into its bar; true when it opened a new bar. */
-    add(t, o, h, l, c, v, list) {
+    /** One finished piece (a trade, or one 1-second candle) into its bar; true when it opened a new bar.
+     *  `atAsk`: a futures trade a buyer took at the ask. Prices bounce between bid and ask trade by trade,
+     *  which made the bars all wicks: like the broker's bid bars, only trades at the bid set the prices
+     *  (the others add their volume). Windows without a trade get a flat bar at the last close, so the
+     *  bars run on without holes. */
+    add(t, o, h, l, c, v, list, atAsk = false) {
       const bars = list || this.bars, d = this.offset;
-      const time = Math.floor(t / this.sec) * this.sec, last = bars[bars.length - 1];
+      const time = Math.floor(t / this.sec) * this.sec;
+      let last = bars[bars.length - 1];
       if (last && time < last.time) return false;
       if (last && last.time === time) {
-        last.high = Math.max(last.high, h + d); last.low = Math.min(last.low, l + d); last.close = c + d; last.volume += v;
+        if (!atAsk) {
+          // The first trade at the bid opens a bar an ask trade began.
+          if (last.askOnly) { last.open = last.high = last.low = o + d; last.askOnly = false; }
+          last.high = Math.max(last.high, h + d); last.low = Math.min(last.low, l + d); last.close = c + d;
+        }
+        last.volume += v;
         return false;
       }
-      bars.push({ time, open: o + d, high: h + d, low: l + d, close: c + d, volume: v });
+      if (last) {
+        // Quiet seconds: flat bars at the last close (a long pause, over 300 bars, is left as a gap).
+        const missing = (time - last.time) / this.sec - 1;
+        if (missing > 0 && missing <= 300) {
+          for (let k = 1; k <= missing; k++) bars.push({ time: last.time + k * this.sec, open: last.close, high: last.close, low: last.close, close: last.close, volume: 0 });
+          last = bars[bars.length - 1];
+        }
+      }
+      if (atAsk && last) {
+        // Opened by a trade at the ask: the bar starts flat at the last bid until a bid trade comes.
+        bars.push({ time, open: last.close, high: last.close, low: last.close, close: last.close, volume: v, askOnly: true });
+      } else {
+        bars.push({ time, open: o + d, high: h + d, low: l + d, close: c + d, volume: v });
+      }
       return true;
     }
 
@@ -292,7 +315,8 @@
         const rows = (await (await fetch(url)).json()).filter((r) => this.oldestId == null || r.a < this.oldestId);
         if (rows.length) this.oldestId = rows[0].a;
         if (!older && rows.length) this.lastId = rows[rows.length - 1].a;
-        return rows.map((r) => [r.T / 1000, +r.p, +r.p, +r.p, +r.p, +r.q]);
+        // r.m: the buyer was the maker, so the trade went off at the bid.
+        return rows.map((r) => [r.T / 1000, +r.p, +r.p, +r.p, +r.p, +r.q, null, r.m === false]);
       }
       let url = `https://api.binance.com/api/v3/klines?symbol=${m.name}&interval=1s&limit=1000`;
       if (older) url += `&endTime=${this.oldestMs - 1}`;
@@ -330,7 +354,7 @@
         const got = await this.page(true);
         if (!got.length) { this.noOlder = true; return 0; }
         const list = [];
-        got.forEach((x) => this.add(...x, list));
+        got.forEach((x) => this.add(x[0], x[1], x[2], x[3], x[4], x[5], list, !!x[7]));
         const first = this.bars[0], tail = list[list.length - 1];
         if (tail && tail.time === first.time) {
           // The bar cut in two by the page edge.
@@ -354,7 +378,7 @@
         if (m.futures) {
           if (x.a == null || x.a <= this.lastId) return;
           this.lastId = x.a;
-          onBar(this.add(x.T / 1000, +x.p, +x.p, +x.p, +x.p, +x.q));
+          onBar(this.add(x.T / 1000, +x.p, +x.p, +x.p, +x.p, +x.q, null, x.m === false));
         } else if (x.k) {
           const k = x.k;
           onBar(this.addOpenSecond(k.t / 1000, +k.o, +k.h, +k.l, +k.c, +k.v));

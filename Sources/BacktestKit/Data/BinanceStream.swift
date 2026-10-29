@@ -39,11 +39,15 @@ public struct TradeTick: Equatable, Sendable {
     public var time: Date
     public var price: Double
     public var quantity: Double
+    /// A futures trade a buyer took at the ask (Binance's "m" false). Prices bounce between bid and ask
+    /// trade by trade; seconds bars take their prices from the trades at the bid, like the broker's bid bars.
+    public var atAsk: Bool
 
-    public init(time: Date, price: Double, quantity: Double) {
+    public init(time: Date, price: Double, quantity: Double, atAsk: Bool = false) {
         self.time = time
         self.price = price
         self.quantity = quantity
+        self.atAsk = atAsk
     }
 }
 
@@ -118,7 +122,7 @@ public enum BinanceStreamEvent: Equatable, Sendable {
             guard let price = number(object, "p"), let time = number(object, "T") else { return nil }
             return .trade(symbol: object["s"] as? String ?? "",
                           TradeTick(time: Date(timeIntervalSince1970: time / 1000), price: price,
-                                    quantity: number(object, "q") ?? 0))
+                                    quantity: number(object, "q") ?? 0, atAsk: (object["m"] as? Bool) == false))
         case "24hrTicker":
             guard let last = number(object, "c"), let change = number(object, "P"),
                   let high = number(object, "h"), let low = number(object, "l")
@@ -141,6 +145,8 @@ public enum BinanceStreamEvent: Equatable, Sendable {
 public struct LiveCandleBuffer: Sendable {
     public private(set) var candles: [Candle]
     public var maxCount: Int
+    /// The last bar was opened by a trade at the ask: flat at the last bid until a bid trade comes.
+    private var lastAskOnly = false
 
     public enum Update: Equatable {
         /// The forming bar changed.
@@ -169,16 +175,37 @@ public struct LiveCandleBuffer: Sendable {
 
     /// Adds a trade to the bar of `seconds` it falls in, starting a new bar when needed.
     @discardableResult
+    /// A trade into its bar. Only trades at the bid set prices (those at the ask add their volume), and
+    /// windows without a trade get a flat bar at the last close (up to 300), so the bars run on without holes.
     public mutating func apply(trade: TradeTick, seconds: TimeInterval) -> Update {
         let start = CandleAggregator.bucket(trade.time, seconds: seconds)
         if var last = candles.last, last.time == start {
-            last.high = max(last.high, trade.price)
-            last.low = min(last.low, trade.price)
-            last.close = trade.price
+            if !trade.atAsk {
+                // The first trade at the bid opens a bar an ask trade began.
+                if lastAskOnly { last.open = trade.price; last.high = trade.price; last.low = trade.price; lastAskOnly = false }
+                last.high = max(last.high, trade.price)
+                last.low = min(last.low, trade.price)
+                last.close = trade.price
+            }
             last.volume += trade.quantity
             candles[candles.count - 1] = last
             return .updatedLast
         }
+        if let last = candles.last, start > last.time {
+            let missing = Int((start.timeIntervalSince(last.time) / seconds).rounded()) - 1
+            if missing > 0, missing <= 300 {
+                for k in 1...missing {
+                    _ = apply(Candle(time: last.time.addingTimeInterval(Double(k) * seconds), open: last.close,
+                                     high: last.close, low: last.close, close: last.close, volume: 0))
+                }
+            }
+        }
+        if trade.atAsk, let last = candles.last, start > last.time {
+            lastAskOnly = true
+            return apply(Candle(time: start, open: last.close, high: last.close, low: last.close,
+                                close: last.close, volume: trade.quantity))
+        }
+        lastAskOnly = false
         return apply(Candle(time: start, open: trade.price, high: trade.price, low: trade.price,
                             close: trade.price, volume: trade.quantity))
     }

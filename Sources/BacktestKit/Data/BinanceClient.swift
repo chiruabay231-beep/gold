@@ -169,7 +169,7 @@ public struct BinanceClient {
                   let time = (row["T"] as? NSNumber)?.doubleValue
             else { throw ClientError.malformed }
             return (id, TradeTick(time: Date(timeIntervalSince1970: time / 1000), price: price,
-                                  quantity: Double(row["q"] as? String ?? "") ?? 0))
+                                  quantity: Double(row["q"] as? String ?? "") ?? 0, atAsk: (row["m"] as? Bool) == false))
         }
     }
 

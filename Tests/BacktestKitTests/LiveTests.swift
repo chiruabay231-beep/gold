@@ -107,6 +107,21 @@ final class LiveTests: XCTestCase {
         XCTAssertEqual(buffer.apply(trade: TradeTick(time: Date(timeIntervalSince1970: t0 + 10), price: 14, quantity: 1), seconds: 5), .appended)
         XCTAssertEqual(buffer.candles.last?.open, 14)
 
+        // Trades at the ask add volume but leave the prices to the bid; quiet windows get flat bars.
+        var bid = LiveCandleBuffer(candles: [])
+        bid.apply(trade: TradeTick(time: Date(timeIntervalSince1970: t0), price: 100, quantity: 1), seconds: 5)
+        bid.apply(trade: TradeTick(time: Date(timeIntervalSince1970: t0 + 1), price: 100.2, quantity: 2, atAsk: true), seconds: 5)
+        XCTAssertEqual([bid.candles[0].high, bid.candles[0].close, bid.candles[0].volume], [100, 100, 3])
+        // Next trade 15 s later, at the ask: two flat bars between, and a bar flat at the bid until a bid trade.
+        bid.apply(trade: TradeTick(time: Date(timeIntervalSince1970: t0 + 15), price: 100.4, quantity: 1, atAsk: true), seconds: 5)
+        XCTAssertEqual(bid.candles.count, 4)
+        XCTAssertEqual([bid.candles[1].open, bid.candles[2].close, bid.candles[3].open, bid.candles[3].high], [100, 100, 100, 100])
+        bid.apply(trade: TradeTick(time: Date(timeIntervalSince1970: t0 + 16), price: 100.3, quantity: 1), seconds: 5)
+        XCTAssertEqual([bid.candles[3].open, bid.candles[3].high, bid.candles[3].low, bid.candles[3].close], [100.3, 100.3, 100.3, 100.3])
+        XCTAssertEqual(BinanceStreamEvent.parse(Data(#"{"e":"aggTrade","s":"XAUUSDT","p":"4000.5","q":"1","T":1700000000000,"m":false}"#.utf8)).map {
+            if case .trade(_, let t) = $0 { return t.atAsk } else { return false }
+        }, true)
+
         let oneSecond: [Candle] = (0..<30).map { (i: Int) -> Candle in
             let v = Double(i)
             return Candle(time: Date(timeIntervalSince1970: t0 + v), open: v, high: v + 1, low: v - 1, close: v + 0.5, volume: 1)
