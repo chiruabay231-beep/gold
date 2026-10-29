@@ -17,8 +17,8 @@ struct LiveView: View {
     @AppStorage("news.vietnamese") private var newsVietnamese = false
     /// Split view: this chart and the correlated market (gold / silver), with SMT on both.
     @AppStorage("live.compare") private var compareMode = false
-    /// Two charts side by side (chia dọc) instead of stacked (chia ngang).
-    @AppStorage("live.splitColumns") private var splitColumns = false
+    /// Two charts side by side (chia dọc): taken out, the two charts are always stacked (chia ngang).
+    private let splitColumns = false
     @State private var comparisonCache = KillzonePivotsCache()
     @State private var comparisonPriceRange: ClosedRange<Double>?
     @Environment(\.scenePhase) private var scenePhase
@@ -1889,7 +1889,7 @@ struct LiveView: View {
     }
 
     /// Bố cục: one chart, or two (this market and the correlated one, SMT on both)
-    /// stacked (chia ngang) or side by side (chia dọc).
+    /// stacked (chia ngang).
     private var layoutButton: some View {
         Menu {
             Button { compareMode = false; viewport.rightOffset = 0 } label: {
@@ -1897,20 +1897,12 @@ struct LiveView: View {
             }
             Button {
                 compareMode = true
-                splitColumns = false
                 viewport.rightOffset = 0
             } label: {
-                Label("Chia ngang 2 (trên / dưới)", systemImage: compareMode && !splitColumns ? "checkmark" : "rectangle.split.1x2")
-            }
-            Button {
-                compareMode = true
-                splitColumns = true
-                viewport.rightOffset = 0
-            } label: {
-                Label("Chia dọc 2 (trái / phải)", systemImage: compareMode && splitColumns ? "checkmark" : "rectangle.split.2x1")
+                Label("Chia ngang 2 (trên / dưới)", systemImage: compareMode ? "checkmark" : "rectangle.split.1x2")
             }
         } label: {
-            Image(systemName: !compareMode ? "rectangle" : (splitColumns ? "rectangle.split.2x1.fill" : "rectangle.split.1x2.fill"))
+            Image(systemName: compareMode ? "rectangle.split.1x2.fill" : "rectangle")
                 .font(.system(size: 15))
                 .foregroundColor(compareMode ? .white : theme.primaryText)
                 .frame(width: 31, height: 28)

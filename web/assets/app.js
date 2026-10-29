@@ -2714,8 +2714,7 @@
         });
         this.chartStyle = loadChartStyle();
         this.applyChartStyle();
-        // Two charts sit side by side only (the stacked layout is gone: "v" opens side by side).
-        this.layout = ["h", "v"].includes(store.get("aurum.layout")) ? "h" : "1";
+        this.layout = ["1", "h", "v"].includes(store.get("aurum.layout")) ? store.get("aurum.layout") : "1";
         $("tfButtons").innerHTML = TFS.map((i) => `<button type="button" data-tf="${i}"${i === "30s" ? ' class="sec-end" title="Nến giây lấy từ Binance"' : isSecTF(i) ? ' title="Nến giây lấy từ Binance"' : ""}>${i}</button>`).join("");
         $("tfButtons").querySelectorAll("button").forEach((b) => (b.onclick = () => {
           this.interval = b.dataset.tf; store.set("aurum.tf", this.interval); this.loadCandles();
@@ -4886,11 +4885,11 @@
       return h ? `${h}:${two(m)}:${two(sec)}` : `${two(m)}:${two(sec)}`;
     },
 
-    /* ----- layout: one chart, or two side by side with SMT ----- */
+    /* ----- layout: one chart, or two side by side / stacked with SMT ----- */
 
     layoutMenu(button) {
       const r = button.getBoundingClientRect();
-      const items = [["1", "▭ 1 biểu đồ"], ["h", "◫ 2 biểu đồ ngang"]].map(([k, n]) => [k, (this.layout === k ? "✓ " : "　") + n]);
+      const items = [["1", "▭ 1 biểu đồ"], ["h", "◫ 2 biểu đồ ngang"], ["v", "⊟ 2 biểu đồ dọc (trên – dưới)"]].map(([k, n]) => [k, (this.layout === k ? "✓ " : "　") + n]);
       items.push(["smt", (showInd.smt ? "✓ " : "　") + "SMT (so đỉnh/đáy với mã thứ 2)"]);
       if (this.owner) items.push(["cmp", `　Mã so sánh: ${this.cmpSymbol()}…`]);
       const menu = $("ctxMenu");
@@ -4908,10 +4907,10 @@
     },
 
     setLayout(mode) {
-      if (mode !== "1") mode = "h";
+      if (!["1", "h", "v"].includes(mode)) mode = "h";
       this.layout = mode;
       store.set("aurum.layout", mode);
-      $("charts").className = "charts" + (mode === "h" ? " row" : "");
+      $("charts").className = "charts" + (mode === "h" ? " row" : mode === "v" ? " col" : "");
       $("chartWrap2").hidden = mode === "1";
       $("layoutBtn").classList.toggle("on", mode !== "1");
       if (mode === "1") { this.focusChart(1); this.loadCmp(); return; }

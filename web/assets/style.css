@@ -477,6 +477,8 @@ details.set .toggle:first-child { border-top: 1px solid var(--line); }
 .chart-sub .equity { margin-left: auto; padding: 2px 4px 4px; white-space: nowrap; }
 .charts { display: flex; gap: 6px; flex: 1 1 auto; min-width: 0; }
 .charts.row { flex-direction: row; }
+.charts.col { flex-direction: column; }
+.charts.col .chart-wrap { height: max(260px, calc((100vh - 260px) / 2)); }
 .chart-wrap.second[hidden] { display: none; }
 #chart2 { position: absolute; inset: 0; }
 .c2-head { position: absolute; top: 6px; left: 8px; z-index: 3; display: flex; align-items: baseline; gap: 8px; background: var(--glass); border-radius: 8px; padding: 3px 8px; font-size: 13px; }
@@ -506,7 +508,7 @@ details.set .toggle:first-child { border-top: 1px solid var(--line); }
   .qt { min-width: 64px; padding: 2px 6px; }
   .qt b { font-size: 12px; }
   .charts.row { flex-direction: column; }
-  .charts.row .chart-wrap { height: 44vh; min-height: 240px; }
+  .charts.row .chart-wrap, .charts.col .chart-wrap { height: 44vh; min-height: 240px; }
 }
 body:not(.in-member) .nav-logout { display: none; }
 
