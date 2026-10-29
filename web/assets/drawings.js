@@ -273,6 +273,9 @@
       this.pending = null;
       this.tool = d && this.keepTool ? d.tool : null;
       if (!d) return;
+      // Drawn with two taps as well as with a drag.
+      this.flatten(d, d.pts.length - 1, this.raw);
+      this.raw = null;
       if (isPos(d.tool)) { if (d.pts.length < 3) d.pts.push({ t: d.pts[1].t, p: this.target(d) }); this.fixPosition(d, 1); }
       this.list.push(d);
       (this.peers || []).forEach((p) => { if (!p.pending) { p.tool = this.tool; p.update(); } });
@@ -320,10 +323,12 @@
           if (spec.n === 1) { this.finish(); return true; }
           this.pending.pts.push(Object.assign({}, pt));
           this.gesture = { kind: "create", x, y, moved: false };
+          this.raw = [[x, y], [x, y]];
         } else {
           // Next click of a multi-point tool.
           const pts = this.pending.pts;
           pts[pts.length - 1] = pt;
+          if (this.raw) this.raw[1] = [x, y];
           const last = pts[pts.length - 2];
           const closing = this.tool === "path" && last && Math.hypot(this.x(last.t) - x, this.y(last.p) - y) < 10;
           if (closing || pts.length >= spec.n) { if (closing) pts.pop(); this.finish(); return true; }
@@ -355,11 +360,14 @@
         if (this.pending && this.pending.pts.length) {
           const pt = this.point(x, y, this.host.magnet());
           if (pt) { this.pending.pts[this.pending.pts.length - 1] = pt; this.constrain(this.pending, this.pending.pts.length - 1); this.update(); }
+          if (this.raw) this.raw[1] = [x, y];
         }
         return false;
       }
+      g.lastX = x; g.lastY = y;
       if (Math.hypot(x - g.x, y - g.y) > 4) g.moved = true;
       if (g.kind === "create") {
+        if (this.raw) this.raw[1] = [x, y];
         const pt = this.point(x, y, this.host.magnet());
         if (!pt) return true;
         const d = this.pending;
@@ -382,14 +390,19 @@
       if ((d.tool === "horizontalLine" || d.tool === "horizontalRay") && d.pts.length) d.pts[0].p = +d.pts[0].p.toFixed(this.host.digits());
     }
 
-    /** A trend line let go almost level (a few pixels of slope over a long run) becomes exactly level:
-     * measuring between two candles. Steeper lines are left as drawn. `moved` is the point dragged. */
-    flatten(d, moved) {
+    /** A trend line let go almost level (6° or less on screen, so a sideways drag that wandered a little)
+     * becomes exactly level: measuring between two candles. A line drawn along a trend, steeper than that,
+     * is left as drawn. `moved` is the point dragged (the other end keeps its price). */
+    flatten(d, moved, raw) {
       if (!d || !FLAT_TOOLS.includes(d.tool) || d.pts.length < 2) return;
       const [a, b] = d.pts, xa = this.x(a.t), xb = this.x(b.t), ya = this.y(a.p), yb = this.y(b.p);
       if ([xa, xb, ya, yb].some((v) => v == null)) return;
-      const dx = Math.abs(xb - xa), dy = Math.abs(yb - ya);
-      if (dy > 0 && dy <= 8 && dx >= 20 && dx >= dy * 6) {
+      if (ya === yb) return;
+      // Judged by where the finger went (`raw`: the fixed end and the finger), not the points the magnet
+      // pulled onto candle highs and lows, which tilt a sideways drag.
+      const [p0, p1] = raw || [[xa, ya], [xb, yb]];
+      const dx = Math.abs(p1[0] - p0[0]), dy = Math.max(Math.abs(p1[1] - p0[1]), 0.0001);
+      if (dy > 0 && dx >= 20 && dy <= dx * Math.tan(6 * Math.PI / 180)) {
         if (moved === 0) a.p = b.p; else b.p = a.p;
       }
     }
@@ -398,8 +411,11 @@
       const g = this.gesture;
       this.gesture = null;
       if (!g) return false;
-      if (g.kind === "create" && g.moved) this.flatten(this.pending, 1);
-      if (g.kind === "handle" && g.moved) this.flatten(g.d, g.handle);
+      if (g.kind === "handle" && g.moved && g.d.pts.length === 2 && g.lastX != null) {
+        // The other end stays put; the finger is where this one went.
+        const o = g.d.pts[1 - g.handle];
+        this.flatten(g.d, g.handle, [[this.x(o.t), this.y(o.p)], [g.lastX, g.lastY]]);
+      }
       if (g.kind === "create") {
         const spec = TOOLS[this.pending.tool];
         // Dragged out a two-point tool (or a brush stroke): done. A tap waits for the next tap.

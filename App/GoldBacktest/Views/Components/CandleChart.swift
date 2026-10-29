@@ -300,6 +300,8 @@ struct CandleChart: View {
     @State private var crosshair: CGPoint?
     @State private var pressEndedAt = Date.distantPast
     @State private var pendingPoints: [ChartPoint] = []
+    /// Where the finger tapped each pending point (before the magnet moved it), to judge a near-level line.
+    @State private var tapLocations: [CGPoint] = []
     @State private var movingOriginal: Drawing?
     @State private var movingPreview: Drawing?
     /// Drawing being dragged out with the active tool.
@@ -611,6 +613,19 @@ struct CandleChart: View {
     }
 
     /// A touch on screen in the chart's own coordinates (plot from x = 0, axis after it).
+    /// A trend line let go almost level (6° or less on screen, judged by where the finger went, not the points
+    /// the magnet pulled onto candle highs and lows) becomes exactly level, to measure between two candles;
+    /// one drawn along a trend, steeper than that, is left as drawn. `moved` is the end the finger placed.
+    private func flattened(_ d: Drawing, moved: Int, from a: CGPoint, to b: CGPoint) -> Drawing {
+        guard [.trendLine, .trendRay, .arrow].contains(d.tool), d.points.count == 2,
+              d.points[0].price != d.points[1].price else { return d }
+        let dx = abs(b.x - a.x), dy = abs(b.y - a.y)
+        guard dx >= 20, dy <= dx * tan(6 * .pi / 180) else { return d }
+        var out = d
+        out.points[moved].price = d.points[1 - moved].price
+        return out
+    }
+
     private func chartLocation(_ point: CGPoint, layout: Layout) -> CGPoint {
         guard axisLeading else { return point }
         return CGPoint(x: point.x < axisWidth ? layout.axisX + point.x : point.x - axisWidth, y: point.y)
@@ -2119,10 +2134,14 @@ struct CandleChart: View {
                 }
             }
             // Tapping works too: one tap per point.
+            if pendingPoints.isEmpty { tapLocations = [] }
             pendingPoints.append(chartPoint(at: location, layout: layout))
+            tapLocations.append(location)
             if pendingPoints.count >= tool.pointsNeeded {
-                let drawing = makeDrawing(tool, points: pendingPoints)
+                var drawing = makeDrawing(tool, points: pendingPoints)
+                if tapLocations.count == 2 { drawing = flattened(drawing, moved: 1, from: tapLocations[0], to: tapLocations[1]) }
                 pendingPoints = []
+                tapLocations = []
                 onDrawingCreated?(drawing)
             }
             return
@@ -2268,8 +2287,16 @@ struct CandleChart: View {
                     break
                 }
             }
-            .onEnded { _ in
-                if dragMode == .moveDrawing || dragMode == .moveHandle, let moved = movingPreview {
+            .onEnded { value in
+                let finger = plotLocation(value.location)
+                if dragMode == .moveDrawing, let moved = movingPreview {
+                    onDrawingChanged?(moved)
+                }
+                if dragMode == .moveHandle, var moved = movingPreview {
+                    // The other end stays put; the finger is where this one went.
+                    if let handle = handleIndex, moved.points.count == 2, handle < 2 {
+                        moved = flattened(moved, moved: handle, from: screenPoint(moved.points[1 - handle], layout: layout), to: finger)
+                    }
                     onDrawingChanged?(moved)
                 }
                 let releasedLine = draggedLine
@@ -2290,6 +2317,11 @@ struct CandleChart: View {
                         // Not all points yet: keep them and wait for the next one.
                         pendingPoints = created.points
                     } else {
+                        var created = created
+                        if created.points.count == 2 {
+                            let start = pendingPoints.first.map { screenPoint($0, layout: layout) } ?? chartLocation(value.startLocation, layout: layout)
+                            created = flattened(created, moved: 1, from: start, to: finger)
+                        }
                         pendingPoints = []
                         onDrawingCreated?(created)
                     }
