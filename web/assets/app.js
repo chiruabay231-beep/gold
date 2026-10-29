@@ -399,6 +399,19 @@
     return bars[i].time + (l - i) * (bars[i + 1].time - bars[i].time);
   }
 
+  /** A hole in the bars while the market trades: a gap over 2 h (and 3 bars) without a weekend day in it.
+   *  MT5 can hand a symbol just opened its old cached bars before the missing stretch is downloaded. */
+  function barsHole(bars, sec) {
+    for (let i = Math.max(1, bars.length - 1500); i < bars.length; i++) {
+      const a = bars[i - 1].time, b = bars[i].time;
+      if (b - a <= Math.max(sec * 3, 7200)) continue;
+      let weekend = false;
+      for (let t = a; t <= b && !weekend; t += 3 * 3600) { const d = new Date(t * 1000).getUTCDay(); weekend = d === 0 || d === 6; }
+      if (!weekend) return { after: a, before: b };
+    }
+    return null;
+  }
+
   /** The spread in points, as MT5 shows it. */
   const spreadText = (bid, ask, digits) => (bid != null && ask != null ? String(Math.round((ask - bid) * Math.pow(10, digits))) : "");
 
@@ -2925,6 +2938,8 @@
             data = await this.call(this.exnessPath(800));
             bars = this.toBars(data.candles || []);
             failure = bars.length < 5 ? new Error("MT5 chưa có nến cho mã này") : null;
+            // A stretch missing in the middle: MT5 is still fetching it; ask again shortly.
+            if (!failure && this.owner && attempt < 3 && barsHole(bars, TF_SECONDS[this.interval] || 60)) failure = new Error("MT5 đang tải nến");
           } catch (e) { failure = e; if (e instanceof Unreachable) break; }
           if (token !== this.loadToken) return;
           if (!failure) break;
@@ -2977,10 +2992,20 @@
       const count = Math.max(3, Math.ceil(late / sec) + 3);
       this.polling = true;
       try {
-        const data = await this.call(this.exnessPath(count));
+        let data = await this.call(this.exnessPath(count));
         this.lastPollAt = nowMs;
         if (token !== this.loadToken) return;
-        const fresh = this.toBars(data.candles || []);
+        let fresh = this.toBars(data.candles || []);
+        // The newest bars do not follow on from the chart's last one (stale history at the start):
+        // fetch every bar in between once, or reload when that is too many.
+        const tail = this.bars[this.bars.length - 1];
+        if (tail && fresh.length && fresh[0].time > tail.time + sec * 1.5) {
+          const need = Math.ceil((fresh[fresh.length - 1].time - tail.time) / sec) + 3;
+          if (need > 1000) { this.polling = false; this.loadCandles(); return; }
+          data = await this.call(this.exnessPath(need));
+          if (token !== this.loadToken) return;
+          fresh = this.toBars(data.candles || []);
+        }
         let added = false;
         fresh.forEach((b) => {
           const last = this.bars[this.bars.length - 1];

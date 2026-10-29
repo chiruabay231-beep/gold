@@ -370,7 +370,15 @@ final class LiveMarket {
                         try await stream()
                         continue
                     }
-                    let history = try await client.mt5Candles(symbol: symbol, interval: interval, count: 1000)
+                    var history = try await client.mt5Candles(symbol: symbol, interval: interval, count: 1000)
+                    // A stretch missing in the middle: MT5 hands a symbol just opened its old cached bars
+                    // while it fetches the rest; ask again shortly (up to 3 times).
+                    var tries = 0
+                    while tries < 3, Self.hole(in: history, seconds: interval.seconds) {
+                        tries += 1
+                        try await Task.sleep(nanoseconds: 1_200_000_000)
+                        history = try await client.mt5Candles(symbol: symbol, interval: interval, count: 1000)
+                    }
                     guard !Task.isCancelled else { return }
                     buffer = LiveCandleBuffer(candles: history, maxCount: LiveMarket.maxBars)
                     lastBarClosed = false
@@ -552,6 +560,25 @@ final class LiveMarket {
         throw CancellationError()
     }
 
+    /// A hole in the bars while the market trades: a gap over 2 h (and 3 bars) with no weekend day in it.
+    static func hole(in bars: [Candle], seconds: Double) -> Bool {
+        guard bars.count > 1 else { return false }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        for i in max(1, bars.count - 1500)..<bars.count {
+            let a = bars[i - 1].time, b = bars[i].time
+            guard b.timeIntervalSince(a) > max(seconds * 3, 7200) else { continue }
+            var t = a, weekend = false
+            while t <= b, !weekend {
+                let day = calendar.component(.weekday, from: t)   // 1 = Sunday, 7 = Saturday
+                weekend = day == 1 || day == 7
+                t = t.addingTimeInterval(3 * 3600)
+            }
+            if !weekend { return true }
+        }
+        return false
+    }
+
     /// How many of the newest bars a poll reads: 3 normally, every bar since the last poll after the app
     /// slept in the background (else the chart has a hole), and a reload when that is more than a poll holds.
     private struct CatchUp {
@@ -595,12 +622,22 @@ final class LiveMarket {
                 continue
             }
             guard !Task.isCancelled else { throw CancellationError() }
-            for bar in latest { buffer.apply(bar) }
+            var newest = latest
+            // The newest bars do not follow on from the chart's last one (stale history at the start):
+            // fetch every bar in between once, or reload when that is too many.
+            if let tail = buffer.candles.last?.time, let first = latest.first?.time,
+               first.timeIntervalSince(tail) > interval.seconds * 1.5, let end = latest.last?.time {
+                let need = Int((end.timeIntervalSince(tail) / interval.seconds).rounded(.up)) + 3
+                guard need <= 1000 else { throw CatchUp.TooFarBehind() }
+                if let filled = try? await client.mt5Bars(symbol: symbol, interval: interval, count: need).candles { newest = filled }
+                guard !Task.isCancelled else { throw CancellationError() }
+            }
+            for bar in newest { buffer.apply(bar) }
             lastBarClosed = false
-            if let close = latest.last?.close { emitPrice(close) }
+            if let close = newest.last?.close { emitPrice(close) }
             // Every bar before the newest has closed.
-            if latest.count >= 2, latest[latest.count - 2].time != newestClosed {
-                newestClosed = latest[latest.count - 2].time
+            if newest.count >= 2, newest[newest.count - 2].time != newestClosed {
+                newestClosed = newest[newest.count - 2].time
                 rescan(alert: true)
             }
         }
