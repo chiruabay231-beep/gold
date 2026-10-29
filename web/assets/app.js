@@ -729,6 +729,19 @@
       return 380;
     },
 
+    /** Three short high beeps, whatever the chime setting (price alerts). */
+    alarm() {
+      const ctx = this.ctx;
+      if (!ctx) return;
+      if (ctx.state === "suspended") ctx.resume();
+      for (let i = 0; i < 3; i++) {
+        const o = ctx.createOscillator(), g = ctx.createGain(), t = ctx.currentTime + i * 0.22;
+        o.type = "square"; o.frequency.value = 1175;
+        g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.18, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.15);
+        o.connect(g).connect(ctx.destination); o.start(t); o.stop(t + 0.18);
+      }
+    },
+
     speak(text, force, good) {
       if ((!force && !this.cfg.enabled) || !text || !window.speechSynthesis) return;
       const say = () => {
@@ -1859,7 +1872,7 @@
         this.newsTime = Date.now();
         if (this.tab === "news") this.renderNews();
         // The release times on the chart and the next one's countdown.
-        this.renderNewsChip();
+        this.renderNewsStrip();
         if (this.requestICT) this.requestICT();
       } catch (e) {
         if (this.tab === "news") $("newsList").innerHTML = `<div class="empty">${esc(plain(ServerTooOld(e) ? "Cập nhật máy chủ lên bản mới để xem tin tức" : e.message))}</div>`;
@@ -2699,6 +2712,7 @@
                   term.drawSharkZones(context, mediaSize.width, false);
                   term.drawSpread(context, mediaSize.width);
                   term.drawNews(context, mediaSize.width, mediaSize.height);
+                  term.drawAlerts(context, mediaSize.width);
                 }),
               }),
             }, {
@@ -2970,6 +2984,7 @@
       $("askText").textContent = fmt(this.ask != null ? this.ask : last, this.digits);
       $("spread").textContent = spreadText(this.bid, this.ask, this.digits);
       if (this.draft) this.updatePendingLabels();
+      this.checkAlerts(this.bid != null ? this.bid : last);
       // The money follows this quote at once (pill, picked trade, chart labels), not the next account read.
       if (this.owner && this.positions.length && !this.replay) {
         this.pillMoney();
@@ -3158,6 +3173,7 @@
         if (this.bars.length - drawn > 1) this.series.setData(this.bars.map(shown));
         else if (last) this.series.update(shown(last));
         drawn = this.bars.length;
+        if (last) this.checkAlerts(last.close);
         if (!this.quoteLive) this.setQuote({});
         else if (this.owner && this.positions.length && performance.now() - (this.pillAt || 0) > 250) {
           // The money with the bar, a few times a second.
@@ -3923,6 +3939,11 @@
       if (this.replay) items.push(["exitReplay", "✕ Thoát replay"]);
       if (p != null) items.push(["hline", `— Vẽ đường ngang tại ${fmt(p, this.digits)}`]);
       if (p != null && this.owner && !this.replay) items.push(["pending", `⏳ Lệnh chờ tại ${fmt(p, this.digits)}`]);
+      if (p != null && !this.replay) items.push(["alert", `🔔 Cảnh báo khi giá chạm ${fmt(p, this.digits)}`]);
+      const zone = this.drawings && this.drawings.current ? this.zoneOf(this.drawings.current) : null;
+      if (zone && !this.replay) items.push(["alertZone", `🔔 Cảnh báo khi giá vào vùng ${fmt(zone.bottom, this.digits)} – ${fmt(zone.top, this.digits)}`]);
+      const myAlerts = this.symbolAlerts();
+      if (myAlerts.length) items.push(["alertsClear", `🔕 Xoá cảnh báo giá (${myAlerts.length})`]);
       items.push(["tools", "✎ Công cụ vẽ…"]);
       if (this.drawings && this.drawings.list.length) items.push(["clear", `🗑 Xoá tất cả bản vẽ (${this.drawings.list.length})`]);
       if (this.drawings && this.drawings.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"]);
@@ -3940,6 +3961,9 @@
         if (k === "replay") this.startReplayAt(idx);
         if (k === "exitReplay") this.exitReplay();
         if (k === "hline") { const dr = this.drawings; dr.setTool("horizontalLine"); dr.pending = null; const d = dr.newDrawing("horizontalLine"); d.pts = [{ t: this.viewBars()[idx || 0].time, p }]; dr.pending = d; dr.finish(); }
+        if (k === "alert") this.addAlert({ kind: "price", price: p });
+        if (k === "alertZone") this.addAlert({ kind: "zone", drawingId: this.drawings.current.id, top: zone.top, bottom: zone.bottom });
+        if (k === "alertsClear") { this.saveAlerts(this.alerts.filter((a) => a.sym !== this.symbolKey())); toast("Đã xoá cảnh báo giá"); }
         if (k === "pending") { this.togglePending(true); $("pPrice").value = fmt(p, this.digits); this.updatePendingLabels(); this.syncLines(); }
         if (k === "tools") this.drawSheet();
         if (k === "clear" && confirm("Xoá tất cả bản vẽ trên mã này?")) this.drawings.clear();
@@ -3948,6 +3972,101 @@
         if (k === "drawSettings") this.drawingSettings(this.drawings.current);
         if (k === "chartStyle") this.chartStyleSheet();
       }));
+    },
+
+    /* ----- price alerts: a beep, the voice and a note when price reaches a level or enters a zone ----- */
+
+    get alerts() {
+      if (!this._alerts) { try { this._alerts = JSON.parse(store.get("aurum.alerts") || "[]"); } catch { this._alerts = []; } }
+      return this._alerts;
+    },
+
+    saveAlerts(list) {
+      this._alerts = list;
+      store.set("aurum.alerts", JSON.stringify(list));
+      if (this.requestICT) this.requestICT();
+    },
+
+    symbolAlerts() { return this.alerts.filter((a) => a.sym === this.symbolKey()); },
+
+    /** The prices a drawing covers (a rectangle, a channel, a level…): the zone an alert watches. */
+    zoneOf(d) {
+      const prices = (d.pts || []).map((x) => x.p).filter((v) => v != null);
+      if (!prices.length) return null;
+      const top = Math.max(...prices), bottom = Math.min(...prices);
+      return { top, bottom };
+    },
+
+    addAlert(a) {
+      Voice.unlock();
+      const alert = Object.assign({ id: Math.random().toString(36).slice(2, 8), sym: this.symbolKey(), at: Date.now() }, a);
+      this.saveAlerts(this.alerts.concat(alert));
+      const d = this.digits;
+      toast(a.kind === "zone" ? `🔔 Sẽ kêu khi giá vào vùng ${fmt(a.bottom, d)} – ${fmt(a.top, d)}` : `🔔 Sẽ kêu khi giá chạm ${fmt(a.price, d)}`);
+    },
+
+    /** Each new price against the alerts of this symbol: a level is reached when the price crosses or touches
+     *  it, a zone when the price comes inside it. Each alert rings once, then goes. */
+    checkAlerts(price) {
+      if (price == null || this.replay || !this.alerts.length) return;
+      const sym = this.symbolKey(), d = this.digits, fired = [];
+      this.alerts.forEach((a) => {
+        if (a.sym !== sym) return;
+        let zone = a.kind === "zone" ? { top: a.top, bottom: a.bottom } : null;
+        if (zone && a.drawingId && this.drawings) {
+          // The zone follows its drawing when it is moved or reshaped.
+          const dr = this.drawings.list.find((x) => x.id === a.drawingId);
+          if (dr) { zone = this.zoneOf(dr) || zone; a.top = zone.top; a.bottom = zone.bottom; }
+        }
+        const prev = a.last;
+        a.last = price;
+        if (prev == null) {
+          // Already there when set: a zone rings at once, a level waits for the price to come to it.
+          if (zone && price >= zone.bottom && price <= zone.top) fired.push(a);
+          return;
+        }
+        if (zone) { if (price >= zone.bottom && price <= zone.top && !(prev >= zone.bottom && prev <= zone.top)) fired.push(a); }
+        else if ((prev - a.price) * (price - a.price) <= 0 && prev !== price) fired.push(a);
+      });
+      if (!fired.length) return;
+      fired.forEach((a) => {
+        const what = a.kind === "zone" ? `vào vùng ${fmt(a.bottom, d)} – ${fmt(a.top, d)}` : `chạm ${fmt(a.price, d)}`;
+        Voice.alarm();
+        setTimeout(() => Voice.speak(`${Voice.spokenSymbol(sym)} ${a.kind === "zone" ? "vào vùng cảnh báo" : "chạm giá cảnh báo"} ${Voice.spokenPrice(price)}`, true), 700);
+        toast(`🔔 ${sym}: giá ${what} (${fmt(price, d)})`);
+        if (document.hidden && window.Notification && Notification.permission === "granted") {
+          try { new Notification(`🔔 ${sym}`, { body: `Giá ${what} (${fmt(price, d)})`, icon: "favicon.svg" }); } catch { /* not allowed */ }
+        }
+      });
+      this.saveAlerts(this.alerts.filter((a) => !fired.includes(a)));
+    },
+
+    /** Alert levels as yellow dashed lines with a bell, zones with a bell at their right. */
+    drawAlerts(g, width) {
+      const list = this.symbolAlerts();
+      if (!list.length || this.replay) return;
+      g.save();
+      g.font = "600 10.5px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+      g.textBaseline = "middle"; g.textAlign = "right";
+      list.forEach((a) => {
+        const color = "#f2c14e";
+        if (a.kind === "zone") {
+          const yt = this.series.priceToCoordinate(a.top), yb = this.series.priceToCoordinate(a.bottom);
+          if (yt == null || yb == null) return;
+          g.strokeStyle = rgba(color, 0.8); g.lineWidth = 2;
+          g.beginPath(); g.moveTo(width - 3, yt); g.lineTo(width - 3, yb); g.stroke();
+          g.fillStyle = color; g.fillText("🔔 vùng", width - 8, Math.min(yt, yb) + 8);
+          return;
+        }
+        const yy = this.series.priceToCoordinate(a.price);
+        if (yy == null) return;
+        const y = Math.round(yy) + 0.5;
+        g.strokeStyle = rgba(color, 0.75); g.lineWidth = 1; g.setLineDash([6, 4]);
+        g.beginPath(); g.moveTo(0, y); g.lineTo(width, y); g.stroke();
+        g.setLineDash([]);
+        g.fillStyle = color; g.fillText(`🔔 ${fmt(a.price, this.digits)}`, width - 8, y - 8);
+      });
+      g.restore();
     },
 
     closeMenu() { const m = $("ctxMenu"); if (m && !m.hidden) { m.hidden = true; m.classList.remove("db-menu"); } },
@@ -4965,20 +5084,53 @@
       g.restore();
     },
 
-    /** The next red USD news over the chart, counting down; a tap opens the News tab. */
-    renderNewsChip() {
-      const chip = $("newsChip");
-      if (!chip) return;
+    /** What a figure means for gold: before the release the forecast against the previous one, after it the
+     *  actual against the forecast. A stronger US figure is good for the dollar, so bad for gold (for
+     *  unemployment and jobless claims a lower figure is the stronger one). */
+    newsVerdict(e) {
+      const num = (v) => {
+        const m = String(v || "").replace(",", ".").match(/-?\d+(\.\d+)?/);
+        if (!m) return null;
+        let x = +m[0];
+        if (/k\b/i.test(v)) x *= 1e3; else if (/m\b/i.test(v)) x *= 1e6; else if (/b\b/i.test(v)) x *= 1e9;
+        return x;
+      };
+      const out = !!String(e.actual || "").trim();
+      const a = num(out ? e.actual : e.forecast), b = num(out ? e.forecast : e.previous);
+      if (a == null || b == null) return null;
+      if (a === b) return { text: out ? "đúng dự báo" : "như kỳ trước", cls: "muted" };
+      const lowerBetter = /unemployment|claims|jobless/i.test(e.title);
+      const usd = lowerBetter ? a < b : a > b;
+      return { text: usd ? "tốt USD → xấu cho vàng" : "xấu USD → tốt cho vàng", cls: usd ? "neg" : "pos", out };
+    },
+
+    /** Under the timeframes: the day's red and yellow (orange) USD news, or the next day that has some, each
+     *  with its time, a countdown and what the forecast (then the result) means for gold. A tap opens News. */
+    renderNewsStrip() {
+      const box = $("newsStrip");
+      if (!box) return;
       const nowS = Date.now() / 1000;
-      const next = showInd.news && this.news ? this.goldEvents(3).find((e) => e.time > nowS) : null;
-      chip.hidden = !next || this.replay;
-      if (chip.hidden) return;
-      const left = Math.round(next.time - nowS), h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), s = left % 60;
-      const count = h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
-      chip.className = "news-chip" + (left < 15 * 60 ? " soon" : "");
-      chip.innerHTML = `<span class="dot"></span>${esc(next.title.length > 28 ? next.title.slice(0, 27) + "…" : next.title)} <b>${clock(next.time)}</b> <span class="muted">còn ${count}</span>`;
-      chip.title = `${next.title} · Dự báo ${next.forecast || "–"} · Trước ${next.previous || "–"}`;
-      chip.onclick = () => this.setTab("news");
+      const all = showInd.news && this.news && !this.replay ? this.goldEvents(2) : [];
+      const dayOf = (t) => new Date(t * 1000).toDateString();
+      // Today's (from 2 h ago), else the next day with news.
+      let list = all.filter((e) => dayOf(e.time) === dayOf(nowS) && e.time > nowS - 7200);
+      if (!list.some((e) => e.time > nowS)) {
+        const next = all.find((e) => e.time > nowS);
+        if (next) list = list.concat(all.filter((e) => dayOf(e.time) === dayOf(next.time) && e.time > nowS));
+      }
+      box.hidden = !list.length;
+      if (!list.length) return;
+      const two = (n) => String(n).padStart(2, "0");
+      const left = (sec) => { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = Math.floor(sec % 60); return h ? `${h}:${two(m)}:${two(x)}` : `${m}:${two(x)}`; };
+      box.innerHTML = list.map((e) => {
+        const red = e.impact === "High", v = this.newsVerdict(e), soon = e.time > nowS && e.time - nowS < 900;
+        const when = e.time > nowS ? `còn <b>${left(e.time - nowS)}</b>` : `đã ra ${Math.max(0, Math.round((nowS - e.time) / 60))} phút`;
+        const figs = `DB ${esc(e.forecast || "–")} · Trước ${esc(e.previous || "–")}${e.actual ? ` · TT <b>${esc(e.actual)}</b>` : ""}`;
+        return `<button type="button" class="ns ${red ? "red" : "yellow"}${soon ? " soon" : ""}${e.time <= nowS ? " past" : ""}" title="${esc(e.title)} · ${esc(figs.replace(/<[^>]+>/g, ""))}">
+          <span class="dot"></span><span class="tm">${clock(e.time)}</span><span class="nm">${esc(e.title.length > 26 ? e.title.slice(0, 25) + "…" : e.title)}</span>
+          <span class="cd">${when}</span><span class="fg">${figs}</span>${v ? `<span class="vd ${v.cls}">${v.out ? "" : "Dự báo: "}${v.text}</span>` : ""}</button>`;
+      }).join("");
+      box.querySelectorAll(".ns").forEach((b) => (b.onclick = () => this.setTab("news")));
     },
 
     /** The candle's own last-price line and label, hidden while the bid / ask lines stand in for them. */
@@ -5381,7 +5533,7 @@
     /* ----- money flow / news flash above the chart ----- */
 
     updateFlow() {
-      this.renderNewsChip();
+      this.renderNewsStrip();
       const box = $("flowBox");
       const nowS = Date.now() / 1000;
       // A red USD release in the last minute takes the place of the money flow.
