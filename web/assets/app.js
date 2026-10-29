@@ -231,6 +231,7 @@
     ["fvg", "FVG & Volume Imbalance"],
     ["mss", "MSS (đổi cấu trúc)"],
     ["dm", "DM (nến không râu trên / dưới)"],
+    ["news", "Tin tức trên biểu đồ (tin USD đỏ / cam, giờ ra tin)"],
     ["flow", "Dòng tiền cá mập"],
     ["zones", "Vùng cung / cầu cá mập (chờ mua / chờ bán, ghi giá)"],
     ["smt", "SMT (khi mở 2 biểu đồ: so đỉnh/đáy với mã thứ 2)"],
@@ -1857,6 +1858,9 @@
         this.news = await this.call(this.owner ? "/news" : "/member/news");
         this.newsTime = Date.now();
         if (this.tab === "news") this.renderNews();
+        // The release times on the chart and the next one's countdown.
+        this.renderNewsChip();
+        if (this.requestICT) this.requestICT();
       } catch (e) {
         if (this.tab === "news") $("newsList").innerHTML = `<div class="empty">${esc(plain(ServerTooOld(e) ? "Cập nhật máy chủ lên bản mới để xem tin tức" : e.message))}</div>`;
       }
@@ -2694,6 +2698,7 @@
                   if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
                   term.drawSharkZones(context, mediaSize.width, false);
                   term.drawSpread(context, mediaSize.width);
+                  term.drawNews(context, mediaSize.width, mediaSize.height);
                 }),
               }),
             }, {
@@ -4921,6 +4926,61 @@
       g.restore();
     },
 
+    /** Red and orange USD news on the chart: a dashed line at the release time (ahead of the last bar for
+     *  the ones to come) with a flag at the bottom: the time and a short name. */
+    drawNews(g, width, height) {
+      if (!showInd.news || !this.news || this.replay) return;
+      const bars = this.viewBars(), sec = TF_SECONDS[this.interval] || 60;
+      if (!bars.length) return;
+      const ts = this.chart.timeScale(), from = bars[0].time, nowS = Date.now() / 1000;
+      g.save();
+      g.font = "600 10px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+      g.textBaseline = "middle";
+      const placed = [];
+      this.goldEvents(2).forEach((e) => {
+        if (e.time < from || e.time > nowS + 3 * 86400) return;
+        // Between two bars (the chart only places whole bar numbers), ahead of the last for news to come.
+        const l = timeToIndex(bars, e.time, sec), i = Math.floor(l);
+        const x0 = ts.logicalToCoordinate(i), x1 = ts.logicalToCoordinate(i + 1);
+        if (x0 == null || x1 == null) return;
+        const x = x0 + (l - i) * (x1 - x0);
+        if (x < 0 || x > width) return;
+        const color = e.impact === "High" ? "#f0455a" : "#f5a524", xx = Math.round(x) + 0.5;
+        g.strokeStyle = rgba(color, e.time > nowS ? 0.75 : 0.45); g.lineWidth = 1; g.setLineDash([3, 3]);
+        g.beginPath(); g.moveTo(xx, 0); g.lineTo(xx, height); g.stroke();
+        g.setLineDash([]);
+        // The flag: "19:30 Non-Farm Empl…", stacked up when two sit close.
+        const name = e.title.length > 20 ? e.title.slice(0, 19) + "…" : e.title;
+        const text = `${clock(e.time)} ${name}`, tw = g.measureText(text).width + 16;
+        let y = height - 14;
+        while (placed.some((p) => Math.abs(p.x - x) < p.w && Math.abs(p.y - y) < 18)) y -= 18;
+        placed.push({ x, y, w: tw });
+        const left = Math.min(Math.max(2, x - 6), width - tw - 2);
+        g.fillStyle = rgba(color, 0.92);
+        g.beginPath(); g.roundRect(left, y - 8, tw, 16, 4); g.fill();
+        g.fillStyle = "#ffffff";
+        g.beginPath(); g.arc(left + 7, y, 2.5, 0, Math.PI * 2); g.fill();
+        g.fillText(text, left + 12, y + 0.5);
+      });
+      g.restore();
+    },
+
+    /** The next red USD news over the chart, counting down; a tap opens the News tab. */
+    renderNewsChip() {
+      const chip = $("newsChip");
+      if (!chip) return;
+      const nowS = Date.now() / 1000;
+      const next = showInd.news && this.news ? this.goldEvents(3).find((e) => e.time > nowS) : null;
+      chip.hidden = !next || this.replay;
+      if (chip.hidden) return;
+      const left = Math.round(next.time - nowS), h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), s = left % 60;
+      const count = h ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}` : `${m}:${String(s).padStart(2, "0")}`;
+      chip.className = "news-chip" + (left < 15 * 60 ? " soon" : "");
+      chip.innerHTML = `<span class="dot"></span>${esc(next.title.length > 28 ? next.title.slice(0, 27) + "…" : next.title)} <b>${clock(next.time)}</b> <span class="muted">còn ${count}</span>`;
+      chip.title = `${next.title} · Dự báo ${next.forecast || "–"} · Trước ${next.previous || "–"}`;
+      chip.onclick = () => this.setTab("news");
+    },
+
     /** The candle's own last-price line and label, hidden while the bid / ask lines stand in for them. */
     showSeriesPrice(on) {
       if (this.seriesPriceOn === on) return;
@@ -5321,6 +5381,7 @@
     /* ----- money flow / news flash above the chart ----- */
 
     updateFlow() {
+      this.renderNewsChip();
       const box = $("flowBox");
       const nowS = Date.now() / 1000;
       // A red USD release in the last minute takes the place of the money flow.

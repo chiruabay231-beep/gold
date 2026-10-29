@@ -805,3 +805,14 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 /* the favourite tools float over the page (chart tab only) */
 .fav-bar.floating { position: fixed; z-index: 40; transform: none; }
 .fav-bar.dragging { opacity: .92; box-shadow: 0 16px 36px rgba(0, 0, 0, .4); }
+
+/* the next red news over the chart */
+.news-chip { display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px; border-radius: 999px; border: 1px solid rgba(240, 69, 90, .45);
+  background: rgba(240, 69, 90, .08); color: var(--text2); font: 600 12px/1 var(--font); cursor: pointer; white-space: nowrap; flex: none; }
+.news-chip[hidden] { display: none; }
+.news-chip .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--down); }
+.news-chip b { color: var(--text); font-variant-numeric: tabular-nums; }
+.news-chip .muted { font-variant-numeric: tabular-nums; }
+.news-chip.soon { border-color: var(--down); background: rgba(240, 69, 90, .18); }
+.news-chip.soon .dot { animation: newsPulse 1s ease-in-out infinite; }
+@keyframes newsPulse { 50% { opacity: .25; } }
