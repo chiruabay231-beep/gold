@@ -3888,6 +3888,9 @@
     /** A tap picks a trade by its entry line (the next one when several share a price). */
     tapChart(y, x) {
       if (x > this.chart.timeScale().width()) return;
+      // A news dot: that news, its figures and how gold moved.
+      const dot = (this.newsDots || []).find((d) => Math.hypot(d.x - x, d.y - y) < 12);
+      if (dot) { this.newsSheet(dot.e); return; }
       if (this.replayPicking) {
         const i = this.indexAt(x);
         if (i != null) this.startReplayAt(i);
@@ -5056,6 +5059,7 @@
       g.font = "600 10px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
       g.textBaseline = "middle";
       const placed = [];
+      this.newsDots = [];
       this.goldEvents(2).forEach((e) => {
         if (e.time < from || e.time > nowS + 3 * 86400) return;
         // Between two bars (the chart only places whole bar numbers), ahead of the last for news to come.
@@ -5065,6 +5069,14 @@
         const x = x0 + (l - i) * (x1 - x0);
         if (x < 0 || x > width) return;
         const color = e.impact === "High" ? "#f0455a" : "#f5a524", xx = Math.round(x) + 0.5;
+        if (e.time < nowS - 900) {
+          // Over: a small round dot at the release time (a tap shows the news), no line across the chart.
+          const y = height - 10;
+          g.beginPath(); g.arc(xx, y, 5, 0, Math.PI * 2); g.fillStyle = color; g.fill();
+          g.lineWidth = 1.5; g.strokeStyle = document.documentElement.dataset.theme === "light" ? "#ffffff" : "#151c2a"; g.stroke();
+          this.newsDots.push({ x: xx, y, e });
+          return;
+        }
         g.strokeStyle = rgba(color, e.time > nowS ? 0.75 : 0.45); g.lineWidth = 1; g.setLineDash([3, 3]);
         g.beginPath(); g.moveTo(xx, 0); g.lineTo(xx, height); g.stroke();
         g.setLineDash([]);
@@ -5082,6 +5094,19 @@
         g.fillText(text, left + 12, y + 0.5);
       });
       g.restore();
+    },
+
+    /** One past news from its dot on the chart: the time, the figures, what they meant and gold's move. */
+    newsSheet(e) {
+      const v = this.newsVerdict(e), r = this.reaction(e);
+      const row = (k, val) => `<div class="kv"><span>${k}</span><b>${val}</b></div>`;
+      sheet.open(`<h3><span class="dot ${e.impact === "High" ? "high" : "med"}"></span> ${esc(e.title)}</h3>
+        <p class="muted small">USD · ${e.impact === "High" ? "Tin đỏ" : "Tin cam"} · ${fullTime(e.time)}</p>
+        <div class="kvs">
+          ${row("Thực tế", esc(e.actual || "–"))}${row("Dự báo", esc(e.forecast || "–"))}${row("Kỳ trước", esc(e.previous || "–"))}
+          ${v ? row("Ý nghĩa", `<span class="${v.cls}">${esc(v.text)}</span>`) : ""}
+          ${r ? row("Vàng sau tin (15 phút)", `<span class="${r.move >= 0 ? "pos" : "neg"}">${signed(r.move)}</span>`) : ""}
+        </div>`);
     },
 
     /** What a figure means for gold: before the release the forecast against the previous one, after it the
@@ -5104,7 +5129,7 @@
       return { text: usd ? "tốt USD → xấu cho vàng" : "xấu USD → tốt cho vàng", cls: usd ? "neg" : "pos", out };
     },
 
-    /** At the top right of the chart, one short row per news of the day (red and yellow USD news, or the
+    /** Under the timeframes at the right, one short row per news of the day (red and yellow USD news, or the
      *  next day that has some): time, a short name, its own countdown (or how long ago), and ▲ / ▼ for gold
      *  by the forecast (then the result). The figures are in the tooltip; a tap opens News. */
     renderNewsStrip() {
@@ -5113,8 +5138,8 @@
       const nowS = Date.now() / 1000;
       const all = showInd.news && this.news && !this.replay ? this.goldEvents(2) : [];
       const dayOf = (t) => new Date(t * 1000).toDateString();
-      // Today's (from 1 h ago), else the next day with news; 5 rows at most.
-      let list = all.filter((e) => dayOf(e.time) === dayOf(nowS) && e.time > nowS - 3600);
+      // Today's still to come (or out less than 15 minutes ago), else the next day with news; 5 rows at most.
+      let list = all.filter((e) => dayOf(e.time) === dayOf(nowS) && e.time > nowS - 900);
       if (!list.some((e) => e.time > nowS)) {
         const next = all.find((e) => e.time > nowS);
         if (next) list = list.concat(all.filter((e) => dayOf(e.time) === dayOf(next.time) && e.time > nowS));
@@ -5122,8 +5147,6 @@
       list = list.slice(0, 5);
       box.hidden = !list.length;
       if (!list.length) return;
-      // Clear of the price axis.
-      box.style.right = ((this.chart && this.chart.priceScale("right").width()) || 70) + 6 + "px";
       const two = (n) => String(n).padStart(2, "0");
       const left = (sec) => { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = Math.floor(sec % 60); return h ? `${h}:${two(m)}:${two(x)}` : `${m}:${two(x)}`; };
       const day = (t) => (dayOf(t) === dayOf(nowS) ? "" : new Date(t * 1000).toLocaleDateString("vi-VN", { weekday: "short" }) + " ");

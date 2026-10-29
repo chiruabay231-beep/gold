@@ -806,8 +806,8 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .fav-bar.floating { position: fixed; z-index: 40; transform: none; }
 .fav-bar.dragging { opacity: .92; box-shadow: 0 16px 36px rgba(0, 0, 0, .4); }
 
-/* the day's news at the top right of the chart, one row each */
-.news-strip { position: absolute; top: 8px; right: 76px; z-index: 4; display: flex; flex-direction: column; align-items: flex-end; gap: 3px; pointer-events: none; }
+/* the day's news under the timeframes at the right, one row each */
+.news-strip { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; margin-left: auto; padding: 2px 0 6px; }
 .news-strip[hidden] { display: none; }
 .news-strip .ns { pointer-events: auto; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 7px; border-radius: 7px; cursor: pointer; white-space: nowrap;
   background: var(--glass); border: 1px solid var(--line); color: var(--text2); font: 600 11px/1 var(--font); font-variant-numeric: tabular-nums; }
