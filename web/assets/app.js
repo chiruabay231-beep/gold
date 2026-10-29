@@ -354,24 +354,68 @@
       } catch { this.noOlder = true; return 0; } finally { this.busy = false; }
     }
 
-    /** Live: `onBar(newBar)` after every trade / candle update. */
+    /** Live: `onBar(newBar)` after every trade / candle update. A stream that drops (network, the
+     *  exchange's own cut, a sleeping tab) or goes quiet for 30 s is opened again, after the trades
+     *  missed meanwhile are fetched, so the newest bar never stands still while the bid / ask move. */
     live(onBar) {
+      this.onBar = onBar;
+      this.stopped = false;
+      this.connect();
+      clearInterval(this.watch);
+      this.watch = setInterval(() => {
+        if (this.stopped) return;
+        if (Date.now() - (this.heardAt || 0) > 30000 && this.ws) { try { this.ws.close(); } catch { /* gone */ } }
+      }, 5000);
+    }
+
+    connect() {
       const m = this.market;
       const ws = new WebSocket(m.futures
         ? `wss://fstream.binance.com/ws/${m.name.toLowerCase()}@aggTrade`
         : `wss://stream.binance.com:9443/ws/${m.name.toLowerCase()}@kline_1s`);
+      this.heardAt = Date.now();
       ws.onmessage = (ev) => {
+        this.heardAt = Date.now();
         const x = JSON.parse(ev.data);
         if (m.futures) {
           if (x.a == null || x.a <= this.lastId) return;
           this.lastId = x.a;
-          onBar(this.add(x.T / 1000, +x.p, +x.p, +x.p, +x.p, +x.q));
+          this.onBar(this.add(x.T / 1000, +x.p, +x.p, +x.p, +x.p, +x.q));
         } else if (x.k) {
           const k = x.k;
-          onBar(this.addOpenSecond(k.t / 1000, +k.o, +k.h, +k.l, +k.c, +k.v));
+          this.onBar(this.addOpenSecond(k.t / 1000, +k.o, +k.h, +k.l, +k.c, +k.v));
         }
       };
+      ws.onclose = () => {
+        if (this.stopped || this.ws !== ws) return;
+        this.ws = null;
+        setTimeout(() => this.reconnect(), 1500);
+      };
+      ws.onerror = () => { try { ws.close(); } catch { /* closing */ } };
       this.ws = ws;
+    }
+
+    /** The trades (or 1-second candles) missed while the stream was down, then the stream again. */
+    async reconnect() {
+      if (this.stopped) return;
+      try {
+        const m = this.market;
+        if (m.futures && this.lastId) {
+          for (let k = 0; k < 5; k++) {
+            const rows = await (await fetch(`https://fapi.binance.com/fapi/v1/aggTrades?symbol=${m.name}&fromId=${this.lastId + 1}&limit=1000`)).json();
+            if (!Array.isArray(rows) || !rows.length) break;
+            let added = false;
+            rows.forEach((r) => { if (r.a > this.lastId) { this.lastId = r.a; added = this.add(r.T / 1000, +r.p, +r.p, +r.p, +r.p, +r.q) || added; } });
+            this.onBar(added);
+            if (rows.length < 1000) break;
+          }
+        } else if (!m.futures && this.bars.length) {
+          const from = (this.bars[this.bars.length - 1].time) * 1000;
+          const rows = await (await fetch(`https://api.binance.com/api/v3/klines?symbol=${m.name}&interval=1s&startTime=${from}&limit=1000`)).json();
+          if (Array.isArray(rows)) { let added = false; rows.forEach((r) => { added = this.addOpenSecond(r[0] / 1000, +r[1], +r[2], +r[3], +r[4], +r[5]) || added; }); this.onBar(added); }
+        }
+      } catch { /* the stream itself may still come back */ }
+      if (!this.stopped) this.connect();
     }
 
     /** Moves every price by `d` (to sit on the broker's price), and what comes after too. */
@@ -381,7 +425,12 @@
       this.offset += d;
     }
 
-    close() { if (this.ws) { this.ws.onmessage = null; this.ws.close(); } this.ws = null; }
+    close() {
+      this.stopped = true;
+      clearInterval(this.watch);
+      if (this.ws) { this.ws.onmessage = null; this.ws.onclose = null; this.ws.close(); }
+      this.ws = null;
+    }
   }
 
   /** Lots of one order: 0.01 to 200, two decimals. */
@@ -3096,10 +3145,14 @@
       this.computeICT();
       this.quoteLive = false;
       this.setQuote({});
+      let drawn = this.bars.length;
       feed.live((added) => {
         if (token !== this.loadToken || this.replay) return;
         const last = this.bars[this.bars.length - 1];
-        if (last) this.series.update(shown(last));
+        // Several bars at once (quiet seconds filled, trades caught up after a dropped stream): all of them.
+        if (this.bars.length - drawn > 1) this.series.setData(this.bars.map(shown));
+        else if (last) this.series.update(shown(last));
+        drawn = this.bars.length;
         if (!this.quoteLive) this.setQuote({});
         else if (this.owner && this.positions.length && performance.now() - (this.pillAt || 0) > 250) {
           // The money with the bar, a few times a second.
