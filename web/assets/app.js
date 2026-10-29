@@ -5104,31 +5104,37 @@
       return { text: usd ? "tốt USD → xấu cho vàng" : "xấu USD → tốt cho vàng", cls: usd ? "neg" : "pos", out };
     },
 
-    /** Under the timeframes: the day's red and yellow (orange) USD news, or the next day that has some, each
-     *  with its time, a countdown and what the forecast (then the result) means for gold. A tap opens News. */
+    /** At the top right of the chart, one short row per news of the day (red and yellow USD news, or the
+     *  next day that has some): time, a short name, its own countdown (or how long ago), and ▲ / ▼ for gold
+     *  by the forecast (then the result). The figures are in the tooltip; a tap opens News. */
     renderNewsStrip() {
       const box = $("newsStrip");
       if (!box) return;
       const nowS = Date.now() / 1000;
       const all = showInd.news && this.news && !this.replay ? this.goldEvents(2) : [];
       const dayOf = (t) => new Date(t * 1000).toDateString();
-      // Today's (from 2 h ago), else the next day with news.
-      let list = all.filter((e) => dayOf(e.time) === dayOf(nowS) && e.time > nowS - 7200);
+      // Today's (from 1 h ago), else the next day with news; 5 rows at most.
+      let list = all.filter((e) => dayOf(e.time) === dayOf(nowS) && e.time > nowS - 3600);
       if (!list.some((e) => e.time > nowS)) {
         const next = all.find((e) => e.time > nowS);
         if (next) list = list.concat(all.filter((e) => dayOf(e.time) === dayOf(next.time) && e.time > nowS));
       }
+      list = list.slice(0, 5);
       box.hidden = !list.length;
       if (!list.length) return;
+      // Clear of the price axis.
+      box.style.right = ((this.chart && this.chart.priceScale("right").width()) || 70) + 6 + "px";
       const two = (n) => String(n).padStart(2, "0");
       const left = (sec) => { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = Math.floor(sec % 60); return h ? `${h}:${two(m)}:${two(x)}` : `${m}:${two(x)}`; };
+      const day = (t) => (dayOf(t) === dayOf(nowS) ? "" : new Date(t * 1000).toLocaleDateString("vi-VN", { weekday: "short" }) + " ");
       box.innerHTML = list.map((e) => {
-        const red = e.impact === "High", v = this.newsVerdict(e), soon = e.time > nowS && e.time - nowS < 900;
-        const when = e.time > nowS ? `còn <b>${left(e.time - nowS)}</b>` : `đã ra ${Math.max(0, Math.round((nowS - e.time) / 60))} phút`;
-        const figs = `DB ${esc(e.forecast || "–")} · Trước ${esc(e.previous || "–")}${e.actual ? ` · TT <b>${esc(e.actual)}</b>` : ""}`;
-        return `<button type="button" class="ns ${red ? "red" : "yellow"}${soon ? " soon" : ""}${e.time <= nowS ? " past" : ""}" title="${esc(e.title)} · ${esc(figs.replace(/<[^>]+>/g, ""))}">
-          <span class="dot"></span><span class="tm">${clock(e.time)}</span><span class="nm">${esc(e.title.length > 26 ? e.title.slice(0, 25) + "…" : e.title)}</span>
-          <span class="cd">${when}</span><span class="fg">${figs}</span>${v ? `<span class="vd ${v.cls}">${v.out ? "" : "Dự báo: "}${v.text}</span>` : ""}</button>`;
+        const v = this.newsVerdict(e), soon = e.time > nowS && e.time - nowS < 900;
+        const when = e.time > nowS ? left(e.time - nowS) : `✓ ${Math.max(0, Math.round((nowS - e.time) / 60))}′`;
+        const tip = `${e.title} · Dự báo ${e.forecast || "–"} · Trước ${e.previous || "–"}${e.actual ? " · Thực tế " + e.actual : ""}${v ? " · " + v.text : ""}`;
+        const name = e.title.replace(/\s+(m\/m|q\/q|y\/y)$/i, "").replace(/^Advance\s+/i, "");
+        return `<div class="ns ${e.impact === "High" ? "red" : "yellow"}${soon ? " soon" : ""}${e.time <= nowS ? " past" : ""}" title="${esc(tip)}">
+          <span class="dot"></span><b>${day(e.time)}${clock(e.time).slice(0, 5)}</b><span class="nm">${esc(name.length > 16 ? name.slice(0, 15) + "…" : name)}</span>
+          <span class="cd">${when}</span>${v && v.cls !== "muted" ? `<span class="vd ${v.cls}">${v.cls === "pos" ? "▲" : "▼"}</span>` : ""}</div>`;
       }).join("");
       box.querySelectorAll(".ns").forEach((b) => (b.onclick = () => this.setTab("news")));
     },
