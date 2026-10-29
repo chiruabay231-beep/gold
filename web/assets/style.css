@@ -824,3 +824,9 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .news-strip .ns.soon .dot { animation: newsPulse 1s ease-in-out infinite; }
 .news-strip .ns.past { opacity: .7; }
 @keyframes newsPulse { 50% { opacity: .25; } }
+.news-strip .ns-live { max-width: 360px; padding: 6px 9px; border-radius: 9px; background: var(--glass); border: 1px solid var(--down); font: 600 12px/1.35 var(--font);
+  color: var(--text2); text-align: right; cursor: default; }
+.news-strip .ns-live b { color: var(--text); }
+.news-strip .ns-live b.pos { color: var(--up); }
+.news-strip .ns-live b.neg { color: var(--down); }
+.news-strip .ns-live.soon { background: rgba(240, 69, 90, .14); animation: newsPulse 1.2s ease-in-out infinite; }

@@ -5144,13 +5144,32 @@
         const next = all.find((e) => e.time > nowS);
         if (next) list = list.concat(all.filter((e) => dayOf(e.time) === dayOf(next.time) && e.time > nowS));
       }
+      // The red news from 1 minute before it comes out until 15 minutes after: a card on top with the
+      // countdown, then how gold took it (TỐT / XẤU from the move since the release).
+      const live = this.goldEvents(3).find((e) => nowS >= e.time - 60 && nowS <= e.time + 900);
+      if (live) list = list.filter((e) => e !== live);
       list = list.slice(0, 5);
-      box.hidden = !list.length;
-      if (!list.length) return;
+      box.hidden = !list.length && !live;
+      if (box.hidden) return;
       const two = (n) => String(n).padStart(2, "0");
       const left = (sec) => { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = Math.floor(sec % 60); return h ? `${h}:${two(m)}:${two(x)}` : `${m}:${two(x)}`; };
       const day = (t) => (dayOf(t) === dayOf(nowS) ? "" : new Date(t * 1000).toLocaleDateString("vi-VN", { weekday: "short" }) + " ");
-      box.innerHTML = list.map((e) => {
+      const sec = TF_SECONDS[this.interval] || 60;
+      let card = "";
+      if (live) {
+        let line;
+        if (nowS < live.time) line = `<span class="muted">Sắp ra tin · chờ phản ứng giá</span>`;
+        else {
+          const i = this.bars.findIndex((b) => b.time + sec > live.time);
+          const ref = i >= 0 ? this.bars[i].open : null;
+          const price = this.bid != null ? this.bid : this.bars.length ? this.bars[this.bars.length - 1].close : null;
+          const verdict = price != null ? this.verdict(ref != null ? price - ref : null, price) : { text: "Đang đo phản ứng giá…", cls: "" };
+          line = `<b class="${verdict.cls}">${esc(verdict.text)}</b>`;
+        }
+        const t = live.time - nowS, when = t > 0 ? `còn ${Math.ceil(t)}s` : `${Math.floor(-t / 60) ? Math.floor(-t / 60) + "′ " : ""}${Math.floor(-t % 60)}s`;
+        card = `<div class="ns-live${t > 0 ? " soon" : ""}" title="${esc(live.title)}"><div>📰 <b>${esc(live.title)}</b> <span class="muted">${when}</span></div><div>${line}</div></div>`;
+      }
+      box.innerHTML = card + list.map((e) => {
         const v = this.newsVerdict(e), soon = e.time > nowS && e.time - nowS < 900;
         const when = e.time > nowS ? left(e.time - nowS) : `✓ ${Math.max(0, Math.round((nowS - e.time) / 60))}′`;
         const tip = `${e.title} · Dự báo ${e.forecast || "–"} · Trước ${e.previous || "–"}${e.actual ? " · Thực tế " + e.actual : ""}${v ? " · " + v.text : ""}`;
@@ -5564,18 +5583,7 @@
     updateFlow() {
       this.renderNewsStrip();
       const box = $("flowBox");
-      const nowS = Date.now() / 1000;
-      // A red USD release in the last minute takes the place of the money flow.
-      const fresh = this.replay ? null : this.goldEvents(3).find((e) => e.time <= nowS && nowS - e.time < 60);
-      if (fresh && this.bars.length) {
-        const i = this.bars.findIndex((b) => b.time + TF_SECONDS[this.interval] > fresh.time);
-        const ref = i >= 0 ? this.bars[i].open : null;
-        const price = this.bid != null ? this.bid : this.bars[this.bars.length - 1].close;
-        const v = this.verdict(ref != null ? price - ref : null, price);
-        box.hidden = false;
-        box.innerHTML = `<div>📰 <b>${esc(fresh.title)}</b> <span class="muted">${Math.round(60 - (nowS - fresh.time))}s</span></div><div class="${v.cls}"><b>${v.text}</b></div>`;
-        return;
-      }
+      // (A red release's live verdict is in the news rows at the right.)
       const allowed = this.owner || this.features.sharkflow !== false;
       const f = allowed && showInd.flow && window.ICT ? window.ICT.sharkFlow(this.viewBars()) : null;
       if (!f) { box.hidden = true; return; }
