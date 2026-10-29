@@ -1074,7 +1074,7 @@
       $("whoRole").innerHTML = t.login
         ? `#${t.login} · ${esc(t.server || "")} <span class="acct ${t.mode === "real" ? "real" : ""}" title="${t.mode === "real" ? "Tài khoản thật" : "Tài khoản demo"}">✦</span>`
         : "MT5 chưa đăng nhập";
-      const floating = this.positions.reduce((a, p) => a + p.profit, 0);
+      const floating = this.floating();
       if (!sym && !this.symbol) await this.ownerSymbol();
       this.renderPill(floating);
       this.renderSelBar();
@@ -1092,6 +1092,14 @@
       pill.innerHTML = `<span class="grip" title="Kéo để di chuyển · bấm đúp để trả về biểu đồ">⋮⋮</span><span class="go">${mine.length} lệnh · ${fmt(lots, 2)} lot · <b class="${floating >= 0 ? "pos" : "neg"}">${signed(floating)}</b></span><button type="button" class="x" title="Đóng tất cả">✕</button>`;
       pill.querySelector(".go").onclick = () => { if (!this.pillMoved) this.setTab("trade"); };
       pill.querySelector(".x").onclick = (e) => this.closeAll(e.currentTarget);
+    },
+
+    /** Only the pill's money changes with each quote (rebuilding it would drop a tap on its ✕). */
+    pillMoney() {
+      const b = $("posPill").querySelector(".go b");
+      if (!b) return this.renderPill(this.floating());
+      const v = this.floating();
+      b.textContent = signed(v); b.className = v >= 0 ? "pos" : "neg";
     },
 
     /** The pill floats where it was dragged to (anywhere on the page), or sits on the chart. */
@@ -1160,7 +1168,7 @@
     renderTrade() {
       const t = this.account || {};
       const cur = t.currency || "USD";
-      const floating = this.positions.reduce((a, p) => a + p.profit, 0);
+      const floating = this.floating();
       $("accountStats").innerHTML = [
         [`Lãi/lỗ đang chạy`, `<span class="${floating >= 0 ? "pos" : "neg"}">${signed(floating)}</span>`],
         [`Số dư (${cur})`, money(t.balance)], [`Vốn (${cur})`, money(t.equity)],
@@ -1204,7 +1212,7 @@
             <span class="muted small">${fmt(p.entry, this.digitsFor(p.symbol))} → ${fmt(p.price, this.digitsFor(p.symbol))}</span></div>
           <div class="lv">SL ${p.stop ? fmt(p.stop, this.digitsFor(p.symbol)) : "–"} · TP ${p.target ? fmt(p.target, this.digitsFor(p.symbol)) : "–"} · ${clock(p.time)}${p.bot ? " · bot" : ""}</div>
         </div>
-        <div class="right"><div class="move ${p.profit >= 0 ? "pos" : "neg"}">${signed(p.profit)}</div></div>
+        <div class="right"><div class="move ${this.liveProfit(p) >= 0 ? "pos" : "neg"}">${signed(this.liveProfit(p))}</div></div>
         <button class="x" type="button" title="Đóng lệnh">✕</button>
       </div>`;
     },
@@ -1230,7 +1238,7 @@
       const d = this.digitsFor(p.symbol);
       sheet.open(`<h3>${sideName(p.side)} ${p.lots} ${esc(p.symbol)} <span class="muted small">#${p.ticket}</span></h3>
         <p class="muted small">Vào ${fmt(p.entry, d)} · giá ${fmt(p.price, d)} · ${fullTime(p.time)}</p>
-        <p class="big ${p.profit >= 0 ? "pos" : "neg"}">${signed(p.profit)} ${esc((this.account || {}).currency || "USD")}</p>
+        <p class="big ${this.liveProfit(p) >= 0 ? "pos" : "neg"}">${signed(this.liveProfit(p))} ${esc((this.account || {}).currency || "USD")}</p>
         <div class="fields two">
           <label>SL<input id="sStop" inputmode="decimal" value="${p.stop ? fmt(p.stop, d) : ""}" placeholder="không"></label>
           <label>TP<input id="sTarget" inputmode="decimal" value="${p.target ? fmt(p.target, d) : ""}" placeholder="không"></label>
@@ -2898,6 +2906,13 @@
       $("askText").textContent = fmt(this.ask != null ? this.ask : last, this.digits);
       $("spread").textContent = spreadText(this.bid, this.ask, this.digits);
       if (this.draft) this.updatePendingLabels();
+      // The money follows this quote at once (pill, picked trade, chart labels), not the next account read.
+      if (this.owner && this.positions.length && !this.replay) {
+        this.pillMoney();
+        const sb = $("selBar").querySelector("b");
+        const x = this.selected && this.selected.kind === "pos" ? this.findSelected() : null;
+        if (sb && x) { const v = this.liveProfit(x); sb.textContent = signed(v); sb.className = v >= 0 ? "pos" : "neg"; }
+      }
       if (this.requestICT) this.requestICT();
     },
 
@@ -3076,6 +3091,11 @@
         const last = this.bars[this.bars.length - 1];
         if (last) this.series.update(shown(last));
         if (!this.quoteLive) this.setQuote({});
+        else if (this.owner && this.positions.length && performance.now() - (this.pillAt || 0) > 250) {
+          // The money with the bar, a few times a second.
+          this.pillAt = performance.now();
+          this.pillMoney();
+        }
         if (added || !this.ictTime || Date.now() - this.ictTime > 1000) this.computeICT();
       });
       // MT5's own bid/ask for the order buttons; the first one also sets the Binance bars onto the broker's price.
@@ -3261,6 +3281,21 @@
       return out;
     },
 
+    /** A position's money at the chart's live bid / ask (a buy closes at the bid, a sell at the ask), from the
+     *  same quote as the candles so it moves with them; the server's figure (every 2 s) for other symbols. */
+    liveProfit(p) {
+      if (!p || p.symbol !== this.symbol || this.bid == null || this.ask == null || this.replay) return p ? p.profit : 0;
+      let bid = this.bid, ask = this.ask;
+      // Second bars move with every Binance trade, quicker than the broker's quote: the last bar's close
+      // (already on the broker's price) is the bid then, the ask that plus the spread.
+      const last = this.secFeed && this.bars.length ? this.bars[this.bars.length - 1].close : null;
+      if (last != null) { ask = last + (ask - bid); bid = last; }
+      const v = this.pnlAt(p, p.side === "long" ? bid : ask);
+      return v == null || !isFinite(v) ? p.profit : v;
+    },
+
+    floating() { return this.positions.reduce((a, p) => a + (this.liveProfit(p) || 0), 0); },
+
     /** Money at a price for a position: from its live profit (the broker's own contract size), else lots × contract. */
     pnlAt(p, price) {
       if (price == null) return null;
@@ -3342,12 +3377,13 @@
         if (w.entryOf) {
           // Side and lots on the side colour, the money on green / red.
           const p = w.entryOf;
-          const left = `${sideName(p.side)} ${p.lots}`, right = signed(p.profit);
+          const live = this.liveProfit(p);
+          const left = `${sideName(p.side)} ${p.lots}`, right = signed(live);
           const lw = g.measureText(left).width + 12, rw = g.measureText(right).width + 12;
           const x = Math.max(4, width - lw - rw - 10);
           g.fillStyle = p.side === "long" ? "#2b6bf3" : "#f0455a";
           g.beginPath(); g.roundRect(x, top, lw + rw, h, 4); g.fill();
-          g.fillStyle = (p.profit || 0) >= 0 ? "#14b88a" : "#f0455a";
+          g.fillStyle = (live || 0) >= 0 ? "#14b88a" : "#f0455a";
           g.beginPath(); g.roundRect(x + lw, top, rw, h, [0, 4, 4, 0]); g.fill();
           g.fillStyle = "#ffffff";
           g.fillText(left, x + 6, y + 0.5);
@@ -3392,7 +3428,7 @@
       if (!this.owner || !x || this.replay) { bar.hidden = true; return; }
       const pos = this.selected.kind === "pos";
       bar.hidden = false;
-      bar.innerHTML = `<span>${sideName(x.side)}${pos ? "" : " " + x.kind.toUpperCase()} ${x.lots} · #${x.ticket}${pos ? ` · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b>` : ""}</span>
+      bar.innerHTML = `<span>${sideName(x.side)}${pos ? "" : " " + x.kind.toUpperCase()} ${x.lots} · #${x.ticket}${pos ? ` · <b class="${this.liveProfit(x) >= 0 ? "pos" : "neg"}">${signed(this.liveProfit(x))}</b>` : ""}</span>
         <button type="button" data-a="stop" class="sl">${x.stop ? "SL ✎" : "+SL"}</button><button type="button" data-a="target" class="tp">${x.target ? "TP ✎" : "+TP"}</button>
         <button type="button" data-a="edit">Sửa</button>
         <button type="button" data-a="close" class="danger">${pos ? "Đóng" : "Huỷ"}</button>
