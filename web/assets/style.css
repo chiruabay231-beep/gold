@@ -520,6 +520,25 @@ body:not(.in-member) .nav-logout { display: none; }
 .swap-btn[hidden] { display: none; }
 .charts .chart-wrap.focus { box-shadow: 0 0 0 1px var(--gold2); border-radius: 4px; }
 #chartWrap2 .draw-bar { top: auto; bottom: 36px; }
+/* one symbol on 2 / 3 / 4 timeframes: the main chart first, the extra ones beside it */
+.charts.mtf { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-auto-rows: 1fr; height: max(420px, calc(100vh - 250px)); }
+.charts.mtf .chart-wrap { height: auto; min-height: 0; }
+.charts.m3 #chartWrap { grid-row: span 2; }
+.charts.m3, .charts.m4 { grid-template-rows: 1fr 1fr; }
+.tfp-chart { position: absolute; inset: 0; }
+.tfp-head { position: absolute; top: 6px; left: 8px; z-index: 3; max-width: calc(100% - 70px); display: flex; align-items: center; gap: 6px; background: var(--glass); border-radius: 8px; padding: 3px 6px 3px 8px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.tfp-head select { background: var(--chip); color: var(--gold); border: 0; border-radius: 6px; padding: 2px 4px; font: 700 12px/1.2 var(--font); cursor: pointer; }
+.tfp-head .swap-btn { padding: 1px 7px; font-size: 12px; }
+.tfp-price { color: var(--muted); }
+@media (max-width: 600px) {
+  .charts.mtf, .charts.m3, .charts.m4 { height: auto; grid-template-rows: none; grid-auto-rows: auto; }
+  .charts.m2 { grid-template-columns: minmax(0, 1fr); }
+  .tf-pane .tfp-head b, .charts.m3 .tfp-price, .charts.m4 .tfp-price { display: none; }
+  .charts.m2 .chart-wrap { height: 42vh; min-height: 240px; }
+  .charts.m3 #chartWrap, .charts.m4 #chartWrap { grid-row: auto; grid-column: 1 / -1; height: 46vh; min-height: 260px; }
+  .charts.m3 .tf-pane, .charts.m4 .tf-pane { height: 30vh; min-height: 190px; }
+  .charts.m4 .tf-pane:last-child { grid-column: 1 / -1; }
+}
 button.busy { opacity: .55; }
 .ctx hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
 .tpl-row { display: flex; }

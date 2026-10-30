@@ -246,6 +246,8 @@
   const TFS = ["5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "4h", "1d"];
   const TF_SECONDS = { "5s": 5, "10s": 10, "15s": 15, "30s": 30, "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
   const isSecTF = (tf) => TF_SECONDS[tf] < 60;
+  /** One chart; two symbols side by side / stacked; or the one symbol on 2, 3, 4 timeframes. */
+  const LAYOUTS = ["1", "h", "v", "m2", "m3", "m4"];
 
   /* ----- second bars (5s / 10s / 15s) from Binance: MT5 has nothing under one minute ----- */
 
@@ -431,6 +433,189 @@
       clearInterval(this.watch);
       if (this.ws) { this.ws.onmessage = null; this.ws.onclose = null; this.ws.close(); }
       this.ws = null;
+    }
+  }
+
+  /* ----- more timeframes of the same symbol beside the chart (layouts of 2 / 3 / 4 charts) ----- */
+
+  /** The bar holding `t` (the last one at or before it). */
+  function barAt(bars, t) {
+    let lo = 0, hi = bars.length - 1;
+    if (hi < 0 || t < bars[0].time) return null;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (bars[mid].time <= t) lo = mid; else hi = mid - 1; }
+    return bars[lo];
+  }
+
+  /** One extra chart: its own timeframe, the main chart's symbol, live like it (MT5 every 2 s, or Binance). */
+  class TfPane {
+    constructor(term, tf) {
+      this.term = term; this.tf = TF_SECONDS[tf] ? tf : "1h"; this.bars = []; this.token = 0;
+      const wrap = (this.wrap = document.createElement("div"));
+      wrap.className = "chart-wrap tf-pane";
+      wrap.innerHTML = `<div class="tfp-chart"></div><div class="tfp-head"><b></b>
+        <select title="Khung thời gian của ô này">${TFS.map((i) => `<option value="${i}">${i}</option>`).join("")}</select>
+        <span class="tfp-price"></span>
+        <button type="button" class="swap-btn" title="Đưa khung này lên biểu đồ chính (để vẽ, đặt lệnh)">⤢</button></div>`;
+      this.chart = LightweightCharts.createChart(wrap.firstChild, {
+        autoSize: true,
+        layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif" },
+        rightPriceScale: { borderColor: "#222c3d" },
+        timeScale: { borderColor: "#222c3d", timeVisible: true, rightOffset: 6, barSpacing: 5 },
+        localization: { timeFormatter: (t) => term.timeLabel(t) },
+        crosshair: { mode: 0 },
+      });
+      this.series = this.chart.addCandlestickSeries({ borderVisible: false });
+      const sel = wrap.querySelector("select");
+      sel.value = this.tf;
+      sel.onchange = () => { this.tf = sel.value; term.savePaneTfs(); this.load(); };
+      wrap.querySelector("button").onclick = () => term.paneToMain(this);
+      wrap.addEventListener("pointerdown", () => term.closeMenu());
+      this.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => { if (r && r.from < 30) this.older(); });
+      this.chart.subscribeCrosshairMove((param) => term.crossFrom(this.chart, param));
+    }
+
+    symbol() { return this.term.owner ? this.term.symbol || "XAUUSD" : $("chartSymbol").textContent || "XAUUSD"; }
+    key() { return `${this.term.owner ? this.term.symbol : "member"}|${this.tf}`; }
+    ensure() { if (this.loadedKey !== this.key()) this.load(); }
+
+    path(count, before) {
+      const extra = before ? `&before=${before}` : "";
+      return this.term.owner
+        ? `/mt5/candles?symbol=${encodeURIComponent(this.symbol())}&interval=${this.tf}&count=${count}${extra}`
+        : `/member/candles?interval=${this.tf}&count=${count}${extra}`;
+    }
+
+    stop() {
+      clearInterval(this.timer); this.timer = null;
+      if (this.feed) { this.feed.close(); this.feed = null; }
+      if (this.ws) { this.ws.onmessage = null; this.ws.onclose = null; this.ws.close(); this.ws = null; }
+      this.loadedKey = null;
+    }
+
+    destroy() { this.stop(); this.token++; this.chart.remove(); this.wrap.remove(); }
+
+    async load() {
+      const term = this.term, tf = this.tf, sec = TF_SECONDS[tf];
+      this.stop();
+      this.loadedKey = this.key();
+      const token = ++this.token;
+      this.noOlder = false;
+      this.wrap.querySelector("select").value = tf;
+      this.wrap.querySelector("b").textContent = $("chartSymbol").textContent || this.symbol();
+      this.chart.applyOptions({ timeScale: { secondsVisible: isSecTF(tf) } });
+      let bars = [], digits = term.digits != null ? term.digits : 2, live = null;
+      const market = binanceMarket(this.symbol());
+      try {
+        if (isSecTF(tf)) {
+          if (!market) throw new Error("no seconds");
+          const feed = new SecondFeed(Object.assign({}, market), sec);
+          await feed.history(Math.max(240, Math.round(3600 / sec)));
+          if (token !== this.token) { feed.close(); return; }
+          // Onto the broker's price, as the main chart's second bars are.
+          const last = feed.bars[feed.bars.length - 1], step = Math.pow(10, -feed.market.digits);
+          if (last && term.bid != null && term.ask != null) {
+            const d = Math.round(((term.bid + term.ask) / 2 - last.close) / step) * step;
+            if (Math.abs(d) < last.close * 0.01) feed.shift(d);
+          }
+          this.feed = feed; bars = feed.bars; digits = feed.market.digits;
+          live = "feed";
+        } else {
+          try {
+            if (!term.base) throw new Error("no server");
+            const data = await term.call(this.path(800));
+            bars = term.toBars(data.candles || []);
+            if (bars.length < 5) throw new Error("no bars");
+            if (data.digits != null) digits = data.digits;
+            live = "mt5";
+          } catch (e) {
+            if (!market) throw e;
+            const rest = market.futures ? "https://fapi.binance.com/fapi/v1/klines" : "https://api.binance.com/api/v3/klines";
+            const rows = await (await fetch(`${rest}?symbol=${market.name}&interval=${tf}&limit=800`)).json();
+            bars = rows.map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }));
+            if (market.digits != null) digits = market.digits;
+            live = "binance";
+          }
+        }
+      } catch {
+        if (token !== this.token) return;
+        this.wrap.querySelector(".tfp-price").textContent = "chưa tải được nến — thử lại…";
+        this.loadedKey = null;
+        setTimeout(() => { if (token === this.token) this.ensure(); }, 5000);
+        return;
+      }
+      if (token !== this.token) return;
+      this.bars = bars;
+      this.series.applyOptions({ priceFormat: { type: "price", precision: digits, minMove: Math.pow(10, -digits) } });
+      this.digits = digits;
+      this.chart.priceScale("right").applyOptions({ autoScale: true });
+      this.series.setData(bars.map(shown));
+      this.chart.timeScale().scrollToPosition(6, false);
+      this.showPrice();
+      if (live === "feed") {
+        let drawn = bars.length;
+        this.feed.live(() => {
+          if (token !== this.token) return;
+          const last = this.bars[this.bars.length - 1];
+          if (this.bars.length - drawn > 1) this.series.setData(this.bars.map(shown)); else if (last) this.series.update(shown(last));
+          drawn = this.bars.length;
+          this.showPrice();
+        });
+      } else if (live === "mt5") {
+        this.polledAt = Date.now();
+        this.timer = setInterval(() => this.poll(token), 2000);
+      } else {
+        const ws = new WebSocket(`${market.futures ? "wss://fstream.binance.com/ws/" : "wss://stream.binance.com:9443/ws/"}${market.name.toLowerCase()}@kline_${tf}`);
+        ws.onmessage = (ev) => {
+          const k = JSON.parse(ev.data).k;
+          if (!k || token !== this.token) return;
+          this.put({ time: k.t / 1000, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v });
+          this.showPrice();
+        };
+        this.ws = ws;
+      }
+    }
+
+    put(b) {
+      const last = this.bars[this.bars.length - 1];
+      if (!last || b.time > last.time) this.bars.push(b); else if (b.time === last.time) this.bars[this.bars.length - 1] = b; else return;
+      this.series.update(shown(b));
+    }
+
+    /** The newest bars, every bar since the last poll after a sleeping tab. */
+    async poll(token) {
+      if (this.polling) return;
+      const sec = TF_SECONDS[this.tf], late = (Date.now() - (this.polledAt || Date.now())) / 1000;
+      if (late / sec > 700) { this.load(); return; }
+      this.polling = true;
+      try {
+        const data = await this.term.call(this.path(Math.max(3, Math.ceil(late / sec) + 3)));
+        if (token !== this.token) return;
+        this.polledAt = Date.now();
+        this.term.toBars(data.candles || []).forEach((b) => this.put(b));
+        this.showPrice(data.bid);
+      } catch { /* keep the chart */ } finally { this.polling = false; }
+    }
+
+    /** Older bars when scrolled back to the start (MT5 only). */
+    async older() {
+      if (this.noOlder || this.busy || !this.bars.length || !this.timer) return;
+      this.busy = true;
+      const token = this.token;
+      try {
+        const data = await this.term.call(this.path(800, this.bars[0].time));
+        if (token !== this.token) return;
+        const got = this.term.toBars(data.candles || []).filter((b) => b.time < this.bars[0].time);
+        if (!got.length) { this.noOlder = true; return; }
+        this.bars.unshift(...got);
+        const ts = this.chart.timeScale(), r = ts.getVisibleLogicalRange();
+        this.series.setData(this.bars.map(shown));
+        if (r) ts.setVisibleLogicalRange({ from: r.from + got.length, to: r.to + got.length });
+      } catch { this.noOlder = true; } finally { this.busy = false; }
+    }
+
+    showPrice(bid) {
+      const last = this.bars[this.bars.length - 1];
+      this.wrap.querySelector(".tfp-price").textContent = last ? fmt(bid != null ? bid : last.close, this.digits) : "";
     }
   }
 
@@ -1069,9 +1254,11 @@
           hiddenAt = 0;
           if (away < 3) return;
           // Second bars come from a live stream that may have dropped while away: reload them.
+          // The extra timeframes: their streams may have dropped too.
+          if (away > 15) (this.panes || []).forEach((p) => { if (!p.timer) p.load(); });
           if (isSecTF(this.interval) || this.source === "binance") { if (away > 15) this.loadCandles(); return; }
           if (this.pollTimer && this.source === "exness") this.pollBars(this.loadToken);
-          if (this.cmpBars && this.cmpBars.length && this.layout !== "1") this.loadCmp();
+          if (this.cmpBars && this.cmpBars.length && this.pair()) this.loadCmp();
         });
       }
     },
@@ -1082,6 +1269,7 @@
       if (all) {
         clearInterval(this.pollTimer); this.pollTimer = null;
         if (this.socket) { this.socket.close(); this.socket = null; }
+        (this.panes || []).forEach((p) => p.stop());
       }
     },
 
@@ -2785,12 +2973,13 @@
         });
         this.chartStyle = loadChartStyle();
         this.applyChartStyle();
-        this.layout = ["1", "h", "v"].includes(store.get("aurum.layout")) ? store.get("aurum.layout") : "1";
+        this.layout = LAYOUTS.includes(store.get("aurum.layout")) ? store.get("aurum.layout") : "1";
         $("tfButtons").innerHTML = TFS.map((i) => `<button type="button" data-tf="${i}"${i === "30s" ? ' class="sec-end" title="Nến giây lấy từ Binance"' : isSecTF(i) ? ' title="Nến giây lấy từ Binance"' : ""}>${i}</button>`).join("");
         $("tfButtons").querySelectorAll("button").forEach((b) => (b.onclick = () => {
           this.interval = b.dataset.tf; store.set("aurum.tf", this.interval); this.loadCandles();
         }));
         this.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => { if (r && r.from < 30 && !(performance.now() < this.olderHold)) this.loadOlder(); });
+        this.chart.subscribeCrosshairMove((param) => this.crossFrom(this.chart, param));
         this.bindDrag();
         this.bindTicket();
       }
@@ -3247,7 +3436,7 @@
         if (range) this.chart.timeScale().setVisibleLogicalRange({ from: range.from + older.length, to: range.to + older.length });
         this.computeICT();
         if (this.btView) this.applyBtMarkers();
-        if (this.layout !== "1" && this.cmpBars && this.cmpBars.length && this.cmpBars[0].time > this.bars[0].time) this.loadOlderCmp();
+        if (this.pair() && this.cmpBars && this.cmpBars.length && this.cmpBars[0].time > this.bars[0].time) this.loadOlderCmp();
       } catch { this.noOlder = true; } finally { this.loadingOlder = false; }
     },
 
@@ -4832,6 +5021,14 @@
         });
         this.series2.applyOptions(candles);
       }
+      (this.panes || []).forEach((p) => {
+        p.chart.applyOptions({
+          layout: { background: { color: bg }, textColor: light ? "#4b5563" : "#8b95a7" },
+          grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
+          rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" }, timeScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
+        });
+        p.series.applyOptions(candles);
+      });
     },
 
     /* ----- favourite drawing tools: a floating bar on the chart ----- */
@@ -5205,7 +5402,8 @@
 
     layoutMenu(button) {
       const r = button.getBoundingClientRect();
-      const items = [["1", "▭ 1 biểu đồ"], ["h", "◫ 2 biểu đồ ngang"], ["v", "⊟ 2 biểu đồ dọc (trên – dưới)"]].map(([k, n]) => [k, (this.layout === k ? "✓ " : "　") + n]);
+      const items = [["1", "▭ 1 biểu đồ"], ["h", "◫ 2 mã ngang"], ["v", "⊟ 2 mã dọc (trên – dưới)"],
+        ["m2", "◫ 1 mã · 2 khung time"], ["m3", "◧ 1 mã · 3 khung time"], ["m4", "⊞ 1 mã · 4 khung time"]].map(([k, n]) => [k, (this.layout === k ? "✓ " : "　") + n]);
       items.push(["smt", (showInd.smt ? "✓ " : "　") + "SMT (so đỉnh/đáy với mã thứ 2)"]);
       if (this.owner) items.push(["cmp", `　Mã so sánh: ${this.cmpSymbol()}…`]);
       const menu = $("ctxMenu");
@@ -5223,15 +5421,72 @@
     },
 
     setLayout(mode) {
-      if (!["1", "h", "v"].includes(mode)) mode = "h";
+      if (!LAYOUTS.includes(mode)) mode = "h";
       this.layout = mode;
       store.set("aurum.layout", mode);
-      $("charts").className = "charts" + (mode === "h" ? " row" : mode === "v" ? " col" : "");
-      $("chartWrap2").hidden = mode === "1";
+      const many = mode[0] === "m";
+      $("charts").className = "charts" + (mode === "h" ? " row" : mode === "v" ? " col" : many ? ` mtf ${mode}` : "");
+      $("chartWrap2").hidden = !this.pair();
       $("layoutBtn").classList.toggle("on", mode !== "1");
-      if (mode === "1") { this.focusChart(1); this.loadCmp(); return; }
+      this.setPanes(many ? +mode[1] - 1 : 0);
+      if (!this.pair()) { this.focusChart(1); this.loadCmp(); return; }
       this.ensureChart2();
       this.loadCmp();
+    },
+
+    /** Two symbols on two charts (the SMT layouts). */
+    pair() { return this.layout === "h" || this.layout === "v"; },
+
+    /** The timeframes of the extra charts, kept between visits. */
+    paneTfs() {
+      let tfs = [];
+      try { tfs = JSON.parse(store.get("aurum.mtf") || "[]"); } catch { /* defaults */ }
+      return ["1h", "4h", "15m"].map((d, i) => (TF_SECONDS[tfs[i]] ? tfs[i] : d));
+    },
+
+    savePaneTfs() {
+      const tfs = this.paneTfs();
+      (this.panes || []).forEach((p, i) => (tfs[i] = p.tf));
+      store.set("aurum.mtf", JSON.stringify(tfs));
+    },
+
+    /** `n` extra charts of the main chart's symbol, each on its own timeframe. */
+    setPanes(n) {
+      this.panes = this.panes || [];
+      while (this.panes.length > n) this.panes.pop().destroy();
+      if (!n || !window.LightweightCharts) return;
+      const tfs = this.paneTfs();
+      while (this.panes.length < n) {
+        const p = new TfPane(this, tfs[this.panes.length]);
+        $("charts").appendChild(p.wrap);
+        this.panes.push(p);
+      }
+      this.applyChartStyle();
+      this.panes.forEach((p) => p.ensure());
+    },
+
+    /** The picked extra chart's timeframe onto the main chart (drawings, orders), the main one's into it. */
+    paneToMain(pane) {
+      const tf = this.interval;
+      this.interval = pane.tf; store.set("aurum.tf", this.interval);
+      pane.tf = tf;
+      this.savePaneTfs();
+      this.loadCandles();
+    },
+
+    /** One crosshair over every timeframe: the bar holding the same moment on each chart. */
+    crossFrom(from, param) {
+      if (this.syncingCrosshair || !this.layout || this.layout[0] !== "m" || !this.panes || !this.panes.length) return;
+      this.syncingCrosshair = true;
+      try {
+        const t = param && param.point && param.time != null ? param.time - TZ : null;
+        const charts = [{ chart: this.chart, series: this.series, bars: this.viewBars() }].concat(this.panes.map((p) => ({ chart: p.chart, series: p.series, bars: p.bars })));
+        charts.forEach((c) => {
+          if (c.chart === from) return;
+          const b = t == null ? null : barAt(c.bars, t);
+          try { if (b) c.chart.setCrosshairPosition(b.close, b.time + TZ, c.series); else c.chart.clearCrosshairPosition(); } catch { /* not ready */ }
+        });
+      } finally { this.syncingCrosshair = false; }
     },
 
     pickCmp() {
@@ -5282,7 +5537,7 @@
       });
       // Dragging either chart moves both.
       const link = (from, to) => from.timeScale().subscribeVisibleLogicalRangeChange((r) => {
-        if (!r || this.layout === "1") return;
+        if (!r || !this.pair()) return;
         const locked = this.rangeLock && this.rangeLock.get(from);
         if (locked && performance.now() - locked < 120) return; // our own echo
         this.syncRange(from, to);
@@ -5293,7 +5548,7 @@
       link(this.chart2, this.chart);
       // One crosshair across both charts: the same moment on each.
       const follow = (from, to, toSeries, bars) => from.subscribeCrosshairMove((param) => {
-        if (this.syncingCrosshair || this.layout === "1") return;
+        if (this.syncingCrosshair || !this.pair()) return;
         this.syncingCrosshair = true;
         try {
           if (!param || param.time == null || !param.point) to.clearCrosshairPosition();
@@ -5328,7 +5583,7 @@
       if (!this.series2) return;
       this.lines2 = this.lines2 || new Map();
       const wanted = [];
-      if (this.owner && this.layout !== "1" && !this.replay) {
+      if (this.owner && this.pair() && !this.replay) {
         this.positions.filter((p) => p.symbol === this.cmpName).forEach((p) => {
           wanted.push({ key: `p:${p.ticket}:e`, price: p.entry, color: p.side === "long" ? "#2b6bf3" : "#f0455a", lineStyle: 0, title: `${sideName(p.side)} ${p.lots} ${signed(p.profit)}` });
           if (p.stop) wanted.push({ key: `p:${p.ticket}:s`, price: p.stop, color: "#f0455a", lineStyle: 2, title: "SL" });
@@ -5406,7 +5661,7 @@
     /** The chart last touched: its drawing is the one the bar and settings edit. */
     focusChart(n) {
       const next = n === 2 && this.drawings2 ? this.drawings2 : this.drawingsMain;
-      $("chartWrap").classList.toggle("focus", n === 1 && this.layout !== "1");
+      $("chartWrap").classList.toggle("focus", n === 1 && this.pair());
       $("chartWrap2").classList.toggle("focus", n === 2);
       // The drawing bar sits on the chart being edited.
       const wrap = n === 2 && this.drawings2 ? $("chartWrap2") : $("chartWrap");
@@ -5426,10 +5681,10 @@
     },
 
     /** SMT is on (it needs the related market's bars even with one chart). */
-    smtWanted() { return !!(this.layout !== "1" && showInd.smt && window.ICT && (this.owner || this.features.killzones !== false)); },
+    smtWanted() { return !!(this.pair() && showInd.smt && window.ICT && (this.owner || this.features.killzones !== false)); },
 
     async loadCmp() {
-      const show2 = this.layout !== "1" && this.chart2;
+      const show2 = this.pair() && this.chart2;
       clearInterval(this.cmpTimer); this.cmpTimer = null;
       if (this.cmpFeed) { this.cmpFeed.close(); this.cmpFeed = null; }
       if (!show2 && !this.smtWanted()) { this.cmpBars = []; this.cmpView = null; this.computeSMT(); return; }
@@ -5504,7 +5759,7 @@
       const view = (this.cmpBars || []).filter((b) => b.time <= until);
       const changed = full || !this.cmpView || view.length !== this.cmpView.length || this.replay;
       this.cmpView = view;
-      if (this.series2 && this.layout !== "1") {
+      if (this.series2 && this.pair()) {
         if (changed) this.series2.setData(view.map(shown)); else if (view.length) this.series2.update(shown(view[view.length - 1]));
         const last = view[view.length - 1];
         const q = this.cmpQuote || {}, d2 = this.cmpDigits || 2;
@@ -5540,7 +5795,7 @@
 
     /** Shows the same time span on `to` as on `from`; the lock keeps the two from echoing each other. */
     syncRange(from, to) {
-      if (!from || !to || this.layout === "1") return;
+      if (!from || !to || !this.pair()) return;
       const r = from.timeScale().getVisibleLogicalRange();
       const fromBars = from === this.chart ? this.viewBars() : this.cmpView || [];
       const toBars = to === this.chart ? this.viewBars() : this.cmpView || [];
