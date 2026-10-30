@@ -465,6 +465,23 @@
         crosshair: { mode: 0 },
       });
       this.series = this.chart.addCandlestickSeries({ borderVisible: false });
+      // The main chart's layer on this one: a view of the terminal with this chart, its bars and timeframe.
+      const pane = this, v = (this.v = Object.create(term));
+      const own = (get) => ({ get, set() { /* this chart's own */ }, configurable: true });
+      Object.defineProperties(v, { bars: own(() => pane.bars), interval: own(() => pane.tf), digits: own(() => (pane.digits != null ? pane.digits : term.digits)) });
+      Object.assign(v, {
+        chart: this.chart, series: this.series, viewBars: () => pane.bars, replay: null, requestICT: null,
+        ict: null, smt: null, sharks: null, sharkZones: null, newsDots: null, seriesPriceOn: null, studySeries: new Map(), studySig: "",
+      });
+      Object.assign(v, v.axisViews());
+      this.series.attachPrimitive(v.layer());
+      // The symbol's drawings, as on the main chart (edited there).
+      this.lines = new Map();
+      this.drawings = new window.AurumDrawings({
+        chart: this.chart, series: this.series, store,
+        bars: () => pane.bars, sec: () => TF_SECONDS[pane.tf], digits: () => v.digits,
+        symbol: () => term.symbolKey(), magnet: () => false, onChange: () => {}, onEdit: () => {}, interval: () => pane.tf,
+      });
       const sel = wrap.querySelector("select");
       sel.value = this.tf;
       sel.onchange = () => { this.tf = sel.value; term.savePaneTfs(); this.load(); };
@@ -492,7 +509,7 @@
       this.loadedKey = null;
     }
 
-    destroy() { this.stop(); this.token++; this.chart.remove(); this.wrap.remove(); }
+    destroy() { this.stop(); this.token++; clearTimeout(this.analyseTimer); this.chart.remove(); this.wrap.remove(); }
 
     async load() {
       const term = this.term, tf = this.tf, sec = TF_SECONDS[tf];
@@ -551,6 +568,7 @@
       this.series.setData(bars.map(shown));
       this.chart.timeScale().scrollToPosition(6, false);
       this.showPrice();
+      this.analyse();
       if (live === "feed") {
         let drawn = bars.length;
         this.feed.live(() => {
@@ -559,6 +577,7 @@
           if (this.bars.length - drawn > 1) this.series.setData(this.bars.map(shown)); else if (last) this.series.update(shown(last));
           drawn = this.bars.length;
           this.showPrice();
+          this.analyseSoon();
         });
       } else if (live === "mt5") {
         this.polledAt = Date.now();
@@ -579,6 +598,7 @@
       const last = this.bars[this.bars.length - 1];
       if (!last || b.time > last.time) this.bars.push(b); else if (b.time === last.time) this.bars[this.bars.length - 1] = b; else return;
       this.series.update(shown(b));
+      this.analyseSoon();
     }
 
     /** The newest bars, every bar since the last poll after a sleeping tab. */
@@ -610,12 +630,64 @@
         const ts = this.chart.timeScale(), r = ts.getVisibleLogicalRange();
         this.series.setData(this.bars.map(shown));
         if (r) ts.setVisibleLogicalRange({ from: r.from + got.length, to: r.to + got.length });
+        this.analyse();
       } catch { this.noOlder = true; } finally { this.busy = false; }
     }
 
     showPrice(bid) {
       const last = this.bars[this.bars.length - 1];
       this.wrap.querySelector(".tfp-price").textContent = last ? fmt(bid != null ? bid : last.close, this.digits) : "";
+    }
+
+    repaint() { if (this.v.requestICT) this.v.requestICT(); }
+
+    /** ICT, shark flow and the standard indicators on this timeframe, with the main chart's settings. */
+    analyse() {
+      clearTimeout(this.analyseTimer); this.analyseTimer = null;
+      this.analysedAt = Date.now();
+      const term = this.term, v = this.v, bars = this.bars;
+      const flowAllowed = term.owner || term.features.sharkflow !== false;
+      const flow = flowAllowed && (showInd.flow || showInd.zones) && window.ICT && bars.length ? window.ICT.sharkFlow(bars) : null;
+      v.sharks = flow && showInd.flow ? flow.sharks : null;
+      v.sharkZones = flow && showInd.zones ? flow.zones : null;
+      v.ict = null;
+      if ((term.owner || term.features.killzones !== false) && bars.length && window.ICT && term.ictCfg) {
+        try { v.ict = window.ICT.compute(bars, TF_SECONDS[this.tf], term.ictCfg, showInd); } catch { /* none */ }
+      }
+      // Indicators added, removed or changed on the main chart: built again here.
+      const sig = JSON.stringify(term.studies || []);
+      if (sig !== v.studySig) { [...v.studySeries.keys()].forEach((id) => v.dropStudySeries(id)); v.studySig = sig; }
+      if (bars.length) v.applyStudies();
+      this.mirrorDrawings(true);
+      this.syncLines();
+      this.repaint();
+    }
+
+    analyseSoon() {
+      if (this.analyseTimer) return;
+      this.analyseTimer = setTimeout(() => this.analyse(), Math.max(0, 1500 - (Date.now() - (this.analysedAt || 0))));
+    }
+
+    /** The drawings as saved on the main chart (and hidden with them). */
+    mirrorDrawings(quiet) {
+      const d = this.drawings, main = this.term.drawingsMain;
+      if (quiet && this.drawKey === d.key() && d.hidden === !!(main && main.hidden)) return;
+      this.drawKey = d.key();
+      d.hidden = !!(main && main.hidden);
+      d.load();
+    }
+
+    /** Positions, orders and the pending draft on this chart's price axis, read-only. */
+    syncLines() {
+      const wanted = this.term.owner ? this.term.lineCache || [] : [];
+      const keys = new Set();
+      wanted.forEach((w) => {
+        keys.add(w.key);
+        const opts = { price: w.price, color: w.color, lineWidth: w.width, lineStyle: w.style, axisLabelVisible: true, title: w.drawn ? "" : w.title, lineVisible: !w.drawn };
+        const line = this.lines.get(w.key);
+        if (line) line.applyOptions(opts); else this.lines.set(w.key, this.series.createPriceLine(opts));
+      });
+      for (const [k, line] of this.lines) if (!keys.has(k)) { this.series.removePriceLine(line); this.lines.delete(k); }
     }
   }
 
@@ -2885,90 +2957,14 @@
         this.magnet = store.get("aurum.magnet") !== "0";
         this.lastSmtSymbol = this.ictCfg.smtSymbol;
         this.loadStudies();
-        const term = this;
-        // ICT layer: painted in the chart's own frame (under the candles), so it never lags a drag.
-        this.series.attachPrimitive({
-          attached(p) { term.requestICT = p.requestUpdate; },
-          detached() {},
-          updateAllViews() {},
-          paneViews() {
-            return [{
-              zOrder: () => "bottom",
-              renderer: () => ({
-                draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
-                  const ts = term.chart.timeScale();
-                  const X = (i) => ts.logicalToCoordinate(i), Y = (v) => term.series.priceToCoordinate(v);
-                  if (term.ict) window.ICT.draw(context, term.ict, term.ictCfg, X, Y, mediaSize.width, mediaSize.height);
-                  if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
-                  term.drawSharkZones(context, mediaSize.width, false);
-                  term.drawSpread(context, mediaSize.width);
-                  term.drawNews(context, mediaSize.width, mediaSize.height);
-                  term.drawAlerts(context, mediaSize.width);
-                }),
-              }),
-            }, {
-              // Shark bubbles over the candles, like the app.
-              zOrder: () => "top",
-              renderer: () => ({
-                draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
-                  term.drawSharkZones(context, mediaSize.width, true);
-                  if (!term.sharks) return;
-                  const ts = term.chart.timeScale();
-                  window.ICT.drawSharks(context, term.sharks, term.viewBars(), (i) => ts.logicalToCoordinate(i), (v) => term.series.priceToCoordinate(v),
-                    mediaSize.width, (term.chartStyle.up || "#14b88a").slice(0, 7), (term.chartStyle.down || "#f0455a").slice(0, 7));
-                }),
-              }),
-            }, {
-              zOrder: () => "top",
-              renderer: () => ({
-                draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => term.drawTradeLines(context, mediaSize.width)),
-              }),
-            }];
-          },
-          // Open positions: dotted entry line from the entry candle, a dot on it, side and money label.
-          // (a third pane view, above the candles)
-          priceAxisViews() { return term.countdownView ? [term.bidView, term.askView, term.countdownView] : []; },
-        });
-        // The ask on the price axis, kept clear of the bid label just under it.
-        this.askView = {
-          coordinate: () => {
-            const q = this.spreadQuote();
-            if (!q) return -100;
-            const ya = this.series.priceToCoordinate(q.ask), yb = this.series.priceToCoordinate(q.bid);
-            return ya == null || yb == null ? -100 : Math.min(ya, yb - 19);
-          },
-          text: () => { const q = this.spreadQuote(); return q ? fmt(q.ask, this.digits) : ""; },
-          textColor: () => "#ffffff",
-          backColor: () => this.chartStyle.askColor || "#2b6bf3",
-          visible: () => !!this.spreadQuote(),
-          tickVisible: () => false,
-        };
-        // The bid in its own colour, in place of the candle's last price (hidden while the bid / ask show).
-        this.bidView = {
-          coordinate: () => { const q = this.spreadQuote(), y = q ? this.series.priceToCoordinate(q.bid) : null; return y == null ? -100 : y; },
-          text: () => { const q = this.spreadQuote(); return q ? fmt(q.bid, this.digits) : ""; },
-          textColor: () => "#ffffff",
-          backColor: () => this.chartStyle.bidColor || "#f0455a",
-          visible: () => !!this.spreadQuote(),
-          tickVisible: () => false,
-        };
-        this.countdownView = {
-          coordinate: () => {
-            const v = this.viewBars(), b = v[v.length - 1], q = this.spreadQuote();
-            const y = b ? this.series.priceToCoordinate(q ? q.bid : b.close) : null;
-            return y == null ? -100 : y + 19;
-          },
-          text: () => this.countdownText(),
-          textColor: () => "#ffffff",
-          backColor: () => { const v = this.viewBars(), b = v[v.length - 1]; return b && b.close < b.open ? this.chartStyle.down : this.chartStyle.up; },
-          visible: () => !this.replay && this.bars.length > 0 && (this.source === "exness" || !!this.secFeed),
-          tickVisible: () => false,
-        };
-        setInterval(() => { if (this.tab === "chart" && this.requestICT) this.requestICT(); }, 1000);
+        this.series.attachPrimitive(this.layer());
+        Object.assign(this, this.axisViews());
+        setInterval(() => { if (this.tab === "chart") this.repaint(); }, 1000);
         this.drawings = this.drawingsMain = new window.AurumDrawings({
           chart: this.chart, series: this.series, store,
           bars: () => this.viewBars(), sec: () => TF_SECONDS[this.interval], digits: () => this.digits,
-          symbol: () => this.symbolKey(), magnet: () => this.magnet, onChange: () => this.renderDrawBar(),
+          symbol: () => this.symbolKey(), magnet: () => this.magnet,
+          onChange: () => { this.renderDrawBar(); (this.panes || []).forEach((p) => p.mirrorDrawings()); },
           interval: () => this.interval, onEdit: (d, isNew) => this.drawingSettings(d, isNew),
         });
         this.chartStyle = loadChartStyle();
@@ -3184,7 +3180,13 @@
         const x = this.selected && this.selected.kind === "pos" ? this.findSelected() : null;
         if (sb && x) { const v = this.liveProfit(x); sb.textContent = signed(v); sb.className = v >= 0 ? "pos" : "neg"; }
       }
+      this.repaint();
+    },
+
+    /** The chart layers again (money, quotes, countdown), the extra timeframes' too. */
+    repaint() {
       if (this.requestICT) this.requestICT();
+      (this.panes || []).forEach((p) => p.repaint());
     },
 
     async loadCandles() {
@@ -3693,6 +3695,7 @@
         if (!keys.has(k) && !(this.drag && this.drag.key === k)) { this.series.removePriceLine(line); this.lines.delete(k); }
       }
       this.lineCache = wanted;
+      (this.panes || []).forEach((p) => p.syncLines());
       if (this.requestICT) this.requestICT();
       // While a trade or drawing is picked (or a pending price is set), a finger drags it, not the page.
       this.updateTouchAction();
@@ -5208,13 +5211,15 @@
       const flow = flowAllowed && (showInd.flow || showInd.zones) && window.ICT && bars.length ? window.ICT.sharkFlow(bars) : null;
       this.sharks = flow && showInd.flow ? flow.sharks : null;
       this.sharkZones = flow && showInd.zones ? flow.zones : null;
-      if (!allowed || !bars.length || !window.ICT || !this.ictCfg) { this.ict = null; this.redraw(); return; }
+      if (!allowed || !bars.length || !window.ICT || !this.ictCfg) { this.ict = null; this.redraw(); (this.panes || []).forEach((p) => p.analyseSoon()); return; }
       try {
         this.ict = window.ICT.compute(bars, TF_SECONDS[this.interval], this.ictCfg, showInd);
       } catch { this.ict = null; }
       if (this.cmpBars && this.cmpBars.length) this.showCmp(false); else this.computeSMT();
       this.applyStudies();
       this.redraw();
+      // Indicator settings changed here reach the extra timeframes too (at most every 1.5 s).
+      (this.panes || []).forEach((p) => p.analyseSoon());
     },
 
     /** "mm:ss" (or "h:mm:ss") until the current bar closes. */
@@ -5396,6 +5401,95 @@
       const h = Math.floor(left / 3600), m = Math.floor((left % 3600) / 60), sec = left % 60;
       const two = (v) => String(v).padStart(2, "0");
       return h ? `${h}:${two(m)}:${two(sec)}` : `${two(m)}:${two(sec)}`;
+    },
+
+    /** The chart's own layer (ICT, shark zones, spread, news, alerts, trade lines): the main chart's, or an
+     *  extra timeframe's through a view of this terminal on that chart and its bars. */
+    layer() {
+      const term = this;
+      // ICT layer: painted in the chart's own frame (under the candles), so it never lags a drag.
+      return {
+        attached(p) { term.requestICT = p.requestUpdate; },
+        detached() {},
+        updateAllViews() {},
+        paneViews() {
+          return [{
+            zOrder: () => "bottom",
+            renderer: () => ({
+              draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+                const ts = term.chart.timeScale();
+                const X = (i) => ts.logicalToCoordinate(i), Y = (v) => term.series.priceToCoordinate(v);
+                if (term.ict) window.ICT.draw(context, term.ict, term.ictCfg, X, Y, mediaSize.width, mediaSize.height);
+                if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
+                term.drawSharkZones(context, mediaSize.width, false);
+                term.drawSpread(context, mediaSize.width);
+                term.drawNews(context, mediaSize.width, mediaSize.height);
+                term.drawAlerts(context, mediaSize.width);
+              }),
+            }),
+          }, {
+            // Shark bubbles over the candles, like the app.
+            zOrder: () => "top",
+            renderer: () => ({
+              draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+                term.drawSharkZones(context, mediaSize.width, true);
+                if (!term.sharks) return;
+                const ts = term.chart.timeScale();
+                window.ICT.drawSharks(context, term.sharks, term.viewBars(), (i) => ts.logicalToCoordinate(i), (v) => term.series.priceToCoordinate(v),
+                  mediaSize.width, (term.chartStyle.up || "#14b88a").slice(0, 7), (term.chartStyle.down || "#f0455a").slice(0, 7));
+              }),
+            }),
+          }, {
+            zOrder: () => "top",
+            renderer: () => ({
+              draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => term.drawTradeLines(context, mediaSize.width)),
+            }),
+          }];
+        },
+        // Open positions: dotted entry line from the entry candle, a dot on it, side and money label.
+        // (a third pane view, above the candles)
+        priceAxisViews() { return term.countdownView ? [term.bidView, term.askView, term.countdownView] : []; },
+      };
+    },
+
+    /** Bid, ask and the bar countdown on the price axis. */
+    axisViews() {
+      // The ask on the price axis, kept clear of the bid label just under it.
+      const askView = {
+        coordinate: () => {
+          const q = this.spreadQuote();
+          if (!q) return -100;
+          const ya = this.series.priceToCoordinate(q.ask), yb = this.series.priceToCoordinate(q.bid);
+          return ya == null || yb == null ? -100 : Math.min(ya, yb - 19);
+        },
+        text: () => { const q = this.spreadQuote(); return q ? fmt(q.ask, this.digits) : ""; },
+        textColor: () => "#ffffff",
+        backColor: () => this.chartStyle.askColor || "#2b6bf3",
+        visible: () => !!this.spreadQuote(),
+        tickVisible: () => false,
+      };
+      // The bid in its own colour, in place of the candle's last price (hidden while the bid / ask show).
+      const bidView = {
+        coordinate: () => { const q = this.spreadQuote(), y = q ? this.series.priceToCoordinate(q.bid) : null; return y == null ? -100 : y; },
+        text: () => { const q = this.spreadQuote(); return q ? fmt(q.bid, this.digits) : ""; },
+        textColor: () => "#ffffff",
+        backColor: () => this.chartStyle.bidColor || "#f0455a",
+        visible: () => !!this.spreadQuote(),
+        tickVisible: () => false,
+      };
+      const countdownView = {
+        coordinate: () => {
+          const v = this.viewBars(), b = v[v.length - 1], q = this.spreadQuote();
+          const y = b ? this.series.priceToCoordinate(q ? q.bid : b.close) : null;
+          return y == null ? -100 : y + 19;
+        },
+        text: () => this.countdownText(),
+        textColor: () => "#ffffff",
+        backColor: () => { const v = this.viewBars(), b = v[v.length - 1]; return b && b.close < b.open ? this.chartStyle.down : this.chartStyle.up; },
+        visible: () => !this.replay && this.bars.length > 0 && (this.source === "exness" || !!this.secFeed),
+        tickVisible: () => false,
+      };
+      return { askView, bidView, countdownView };
     },
 
     /* ----- layout: one chart, or two side by side / stacked with SMT ----- */
