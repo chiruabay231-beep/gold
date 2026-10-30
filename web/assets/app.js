@@ -4304,7 +4304,11 @@
       const D = window.AurumDrawings;
       if (d.tool) {
         bar.hidden = false;
-        bar.innerHTML = `<span class="db-grip" title="Kéo để di chuyển · bấm đúp để về giữa">⋮⋮</span><span><b>${esc(D.tools[d.tool].name)}</b> · ${this.hint(d.tool)}</span><button type="button" data-a="cancel">Huỷ</button>`;
+        // The saved templates one tap away: the next drawing starts with the one picked.
+        const tpls = Object.keys(d.templates(d.tool)), next = tpls.length ? d.nextTemplate(d.tool) : null;
+        bar.innerHTML = `<span class="db-grip" title="Kéo để di chuyển · bấm đúp để về giữa">⋮⋮</span><span><b>${esc(D.tools[d.tool].name)}</b> · ${this.hint(d.tool)}</span>`
+          + (tpls.length ? `<button type="button" data-a="tplNext" class="db-pick" title="Mẫu cho đường vẽ tiếp theo">${BAR_ICON.tpl}<span class="db-px">${esc(next || "Mẫu")}</span>${BAR_ICON.chev}</button>` : "")
+          + `<button type="button" data-a="cancel">Huỷ</button>`;
       } else if (d.current) {
         const cur = d.current;
         const pos = cur.tool === "longPosition" || cur.tool === "shortPosition";
@@ -4334,6 +4338,7 @@
           if (a === "lock") d.restyle({ locked: !d.current.locked });
           if (a === "settings") this.drawingSettings(d.current);
           if (a === "tpl") { this.templateMenu(b, d, d.current); return; }
+          if (a === "tplNext") { this.nextTemplateMenu(b, d); return; }
           this.renderDrawBar();
         };
       });
@@ -4855,6 +4860,24 @@
         e.stopPropagation();
         dr.deleteTemplate(d.tool, b.dataset.del);
         b.parentElement.remove();
+      }));
+    },
+
+    /** While a tool is picked: the template its next drawing starts with. */
+    nextTemplateMenu(button, dr) {
+      const tool = dr.tool, names = Object.keys(dr.templates(tool)), next = dr.nextTemplate(tool);
+      const r = button.getBoundingClientRect();
+      const menu = $("ctxMenu");
+      menu.innerHTML = `<div class="muted small" style="padding:4px 10px">Đường vẽ tiếp theo dùng mẫu</div>`
+        + names.map((n) => `<button type="button" data-n="${esc(n)}">${n === next ? "✓ " : "　"}${esc(n)}</button>`).join("")
+        + `<hr><button type="button" data-n="">${next ? "　" : "✓ "}Kiểu gốc của công cụ</button>`;
+      menu.hidden = false;
+      menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + "px";
+      menu.style.top = Math.min(r.bottom + 6, window.innerHeight - menu.offsetHeight - 8) + "px";
+      menu.querySelectorAll("[data-n]").forEach((b) => (b.onclick = () => {
+        this.closeMenu();
+        dr.useTemplate(tool, b.dataset.n || null);
+        this.renderDrawBar();
       }));
     },
 

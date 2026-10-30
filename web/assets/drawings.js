@@ -34,6 +34,7 @@
     arrowMarker: { name: "Mũi tên đánh dấu", n: 2 },
     text: { name: "Văn bản", n: 1 },
   };
+  const LINE_TOOLS = ["trendLine", "trendRay", "horizontalLine", "horizontalRay", "verticalLine", "arrow"];
   const CATEGORIES = [
     ["Công cụ xu hướng", ["trendLine", "trendRay", "horizontalLine", "horizontalRay", "verticalLine"]],
     ["Gann và Fibonacci", ["fibRetracement", "fibExtension"]],
@@ -237,23 +238,45 @@
       this.styles[d.tool] = keep;
       try { this.host.store.set("aurum.drawStyles", JSON.stringify(this.styles)); } catch { /* full */ }
     }
-    /* Named templates per tool ("Lưu bản mẫu vẽ dưới dạng…"), like TradingView. */
+    /* Named templates ("Lưu bản mẫu vẽ dưới dạng…"), like TradingView. Lines of every kind share theirs: one
+     * saved on a trend line serves a ray or a level too. */
+    tplKeys(tool) { return LINE_TOOLS.includes(tool) ? ["@lines"].concat(LINE_TOOLS) : [tool]; }
+    allTemplates() { try { return JSON.parse(this.host.store.get("aurum.drawTpl") || "{}") || {}; } catch { return {}; } }
     templates(tool) {
-      try { return (JSON.parse(this.host.store.get("aurum.drawTpl") || "{}")[tool]) || {}; } catch { return {}; }
+      const all = this.allTemplates(), out = {};
+      // The shared ones first; those kept per tool by earlier versions after them.
+      this.tplKeys(tool).forEach((k) => Object.entries(all[k] || {}).forEach(([n, st]) => { if (!(n in out)) out[n] = st; }));
+      return out;
     }
     saveTemplate(d, name) {
-      let all = {};
-      try { all = JSON.parse(this.host.store.get("aurum.drawTpl") || "{}"); } catch { /* new */ }
+      const all = this.allTemplates(), keys = this.tplKeys(d.tool);
       const keep = JSON.parse(JSON.stringify(d));
       ["id", "tool", "pts", "text", "locked", "_box"].forEach((k) => delete keep[k]);
-      (all[d.tool] = all[d.tool] || {})[name] = keep;
+      keys.forEach((k) => { if (all[k]) delete all[k][name]; });
+      (all[keys[0]] = all[keys[0]] || {})[name] = keep;
       try { this.host.store.set("aurum.drawTpl", JSON.stringify(all)); } catch { /* full */ }
     }
     deleteTemplate(tool, name) {
-      let all = {};
-      try { all = JSON.parse(this.host.store.get("aurum.drawTpl") || "{}"); } catch { return; }
-      if (all[tool]) delete all[tool][name];
+      const all = this.allTemplates();
+      this.tplKeys(tool).forEach((k) => { if (all[k]) delete all[k][name]; });
       try { this.host.store.set("aurum.drawTpl", JSON.stringify(all)); } catch { /* full */ }
+    }
+    /** Picked while the tool is chosen (before drawing): the next drawing starts with that look. */
+    useTemplate(tool, name) {
+      if (!name) { this.resetDefault(tool); } else {
+        const style = this.templates(tool)[name];
+        if (!style) return;
+        const look = Object.assign(this.defaults(tool), JSON.parse(JSON.stringify(style)));
+        ["id", "tool", "pts", "text", "locked", "_box"].forEach((k) => delete look[k]);
+        this.styles[tool] = look;
+        try { this.host.store.set("aurum.drawStyles", JSON.stringify(this.styles)); } catch { /* full */ }
+      }
+      (this.peers || []).forEach((p) => { p.styles = this.styles; });
+    }
+    /** The template the next drawing of `tool` starts with, if its look is one of them. */
+    nextTemplate(tool) {
+      const cur = this.defaults(tool);
+      return Object.entries(this.templates(tool)).find(([, st]) => ["color", "width", "style"].every((k) => st[k] === undefined || JSON.stringify(st[k]) === JSON.stringify(cur[k])))?.[0] || null;
     }
     /** Applies a named template (or, `name` null, the app's own look for the tool) to `d`; that look is then
      *  the tool's look for the next drawings too, as any look given by hand is. */

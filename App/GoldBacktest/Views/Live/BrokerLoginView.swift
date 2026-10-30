@@ -38,6 +38,8 @@ struct BrokerTradeView: View {
     @Environment(LiveMarket.self) private var market
     @State private var closing: MT5TradingState.Position?
     @State private var showSymbols = false
+    /// The history at the bottom of the page.
+    @AppStorage("history.period") private var historyPeriod = TradeHistoryView.Period.today.rawValue
 
     var body: some View {
         List {
@@ -124,6 +126,9 @@ struct BrokerTradeView: View {
         }
         .task { await mt5.watch() }
         .refreshable { await mt5.refresh() }
+        // The history opens on today; a day picked stays while scrolling (its header leaving the screen and
+        // coming back must not put it back on today).
+        .onAppear { historyPeriod = TradeHistoryView.Period.today.rawValue }
 
         .sheet(isPresented: $showSymbols) {
             MT5SymbolSearchView { symbol in

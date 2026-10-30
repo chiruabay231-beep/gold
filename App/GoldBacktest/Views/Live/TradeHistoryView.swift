@@ -129,8 +129,8 @@ struct TradeHistoryView: View {
     }
 
     let source: Source
-    /// Inside another list (the MT5 account page): the bar is a section header and
-    /// the page opens on today.
+    /// Inside another list (the MT5 account page): the bar is a section header (that page
+    /// puts it on today when it opens).
     var embedded = false
     /// Changes when positions close, to reload.
     var reloadKey = 0
@@ -201,7 +201,6 @@ struct TradeHistoryView: View {
                     .textCase(nil)
                     .padding(.horizontal, -16)
                     .task(id: loadKey) { await load() }
-                    .onAppear { periodName = Period.today.rawValue }
                     .sheet(isPresented: $showCustom) { customSheet }
             }
             if let history { summary(history) }

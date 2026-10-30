@@ -340,6 +340,46 @@ struct ColorPalettePicker: View {
     }
 }
 
+/// While a tool is picked: the saved templates, one tap gives the next drawing that look.
+struct NextTemplateMenu: View {
+    let tool: DrawingTool
+    /// Read again after a pick (the checkmark moves).
+    @State private var picked = 0
+
+    var body: some View {
+        let templates = DrawingStyles.templates(for: tool)
+        if !templates.isEmpty {
+            Menu {
+                Text("Đường vẽ tiếp theo dùng mẫu")
+                ForEach(templates) { template in
+                    Button {
+                        DrawingStyles.useForNext(template, tool: tool)
+                        picked += 1
+                        UISelectionFeedbackGenerator().selectionChanged()
+                    } label: {
+                        Label("\(template.name) · \(String(format: "%gpx", template.style.lineWidth))",
+                              systemImage: DrawingStyles.isNext(template, tool: tool) ? "checkmark" : "circle.fill")
+                    }
+                }
+            } label: {
+                HStack(spacing: 3) {
+                    Image(systemName: "square.stack.fill")
+                    Text(templates.first(where: { DrawingStyles.isNext($0, tool: tool) })?.name ?? "Mẫu")
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(.white.opacity(0.22), in: Capsule())
+                .id(picked)
+            }
+            .accessibilityLabel("Mẫu cho đường vẽ tiếp theo")
+        }
+    }
+}
+
 /// Settings of one drawing (gear button): style, label and exact prices.
 struct DrawingSettingsView: View {
     @State var drawing: Drawing

@@ -1025,12 +1025,15 @@ struct LiveView: View {
         .overlay(alignment: .top) {
             VStack(spacing: 8) {
                 if let tool = activeTool {
-                    Text("\(tool.title): \(tool.hint)")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
-                        .background(theme.accent, in: Capsule())
+                    HStack(spacing: 8) {
+                        Text("\(tool.title): \(tool.hint)")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white)
+                        NextTemplateMenu(tool: tool)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(theme.accent, in: Capsule())
                 }
                 if let drawing = selectedDrawing {
                     DrawingActionsBar(drawing: drawing, theme: theme,

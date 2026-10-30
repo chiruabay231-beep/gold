@@ -354,7 +354,19 @@ enum DrawingStyles {
     }
 
     private static func defaultKey(_ tool: DrawingTool) -> String { "drawing.style.\(tool.rawValue)" }
-    private static func templatesKey(_ tool: DrawingTool) -> String { "drawing.templates.\(tool.rawValue)" }
+    /// Lines of every kind share their templates: one saved on a trend line serves a ray or a level too.
+    private static let lineTools: [DrawingTool] = [.trendLine, .trendRay, .horizontalLine, .horizontalRay, .verticalLine, .arrow]
+    private static func group(_ tool: DrawingTool) -> [DrawingTool] { lineTools.contains(tool) ? lineTools : [tool] }
+    private static func templatesKey(_ tool: DrawingTool) -> String {
+        lineTools.contains(tool) ? "drawing.templates.lines" : "drawing.templates.\(tool.rawValue)"
+    }
+    /// Templates kept per tool by earlier versions (read along with the shared ones).
+    private static func legacyKeys(_ tool: DrawingTool) -> [String] {
+        lineTools.contains(tool) ? lineTools.map { "drawing.templates.\($0.rawValue)" } : []
+    }
+    private static func read(_ key: String) -> [Template] {
+        UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode([Template].self, from: $0) } ?? []
+    }
 
     static func defaultStyle(for tool: DrawingTool) -> DrawingStyle? {
         UserDefaults.standard.data(forKey: defaultKey(tool)).flatMap { try? JSONDecoder().decode(DrawingStyle.self, from: $0) }
@@ -369,17 +381,45 @@ enum DrawingStyles {
     }
 
     static func templates(for tool: DrawingTool) -> [Template] {
-        UserDefaults.standard.data(forKey: templatesKey(tool)).flatMap { try? JSONDecoder().decode([Template].self, from: $0) } ?? []
+        var list = read(templatesKey(tool))
+        for key in legacyKeys(tool) {
+            for t in read(key) where !list.contains(where: { $0.name == t.name }) { list.append(t) }
+        }
+        return list
     }
 
     static func saveTemplate(name: String, style: DrawingStyle, for tool: DrawingTool) {
-        var list = templates(for: tool).filter { $0.name != name }
+        var list = read(templatesKey(tool)).filter { $0.name != name }
         list.insert(Template(name: name, style: style), at: 0)
         UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: templatesKey(tool))
+        for key in legacyKeys(tool) { remove(from: key) { $0.name == name } }
     }
 
     static func deleteTemplate(_ template: Template, for tool: DrawingTool) {
-        let list = templates(for: tool).filter { $0.id != template.id }
-        UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: templatesKey(tool))
+        for key in [templatesKey(tool)] + legacyKeys(tool) { remove(from: key) { $0.id == template.id || $0.name == template.name } }
+    }
+
+    private static func remove(from key: String, where match: (Template) -> Bool) {
+        let list = read(key)
+        guard list.contains(where: match) else { return }
+        UserDefaults.standard.set(try? JSONEncoder().encode(list.filter { !match($0) }), forKey: key)
+    }
+
+    /// The template the next drawing of `tool` starts with (picked before drawing it).
+    static func useForNext(_ template: Template, tool: DrawingTool) {
+        var style = defaultStyle(for: tool) ?? template.style
+        style.colorIndex = template.style.colorIndex
+        style.customColor = template.style.customColor
+        style.lineWidth = template.style.lineWidth
+        style.lineStyle = template.style.lineStyle
+        if group(tool).count == 1 { style = template.style }
+        setDefault(style, for: tool)
+    }
+
+    /// Whether the next drawing of `tool` already starts with `template`'s look.
+    static func isNext(_ template: Template, tool: DrawingTool) -> Bool {
+        guard let style = defaultStyle(for: tool) else { return false }
+        return style.colorIndex == template.style.colorIndex && style.customColor == template.style.customColor
+            && style.lineWidth == template.style.lineWidth && style.lineStyle == template.style.lineStyle
     }
 }
