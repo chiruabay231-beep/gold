@@ -239,22 +239,25 @@ struct DrawingActionsBar: View {
 /// (per bar, kept across launches); a double tap puts it back in its place.
 struct BarGrip: View {
     let theme: ChartTheme
+    /// For a bar laid out down: the dots side by side, above the tools.
+    var across = false
     @AppStorage private var x: Double
     @AppStorage private var y: Double
     @State private var start: CGPoint?
 
-    init(key: String, theme: ChartTheme) {
+    init(key: String, theme: ChartTheme, across: Bool = false) {
         self.theme = theme
+        self.across = across
         _x = AppStorage(wrappedValue: 0, "bar.\(key).x")
         _y = AppStorage(wrappedValue: 0, "bar.\(key).y")
     }
 
     var body: some View {
         Image(systemName: "circle.grid.2x1.fill")
-            .rotationEffect(.degrees(90))
+            .rotationEffect(.degrees(across ? 0 : 90))
             .font(.system(size: 9))
             .foregroundColor(theme.text.opacity(0.7))
-            .frame(width: 18, height: 34)
+            .frame(width: across ? 34 : 18, height: across ? 18 : 34)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 1, coordinateSpace: .global)

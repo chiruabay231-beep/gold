@@ -460,12 +460,15 @@
     return bars[i].time + (l - i) * (bars[i + 1].time - bars[i].time);
   }
 
-  /** A hole in the bars while the market trades: a gap over 2 h (and 3 bars) without a weekend day in it.
+  /** A hole in the bars while the market trades: a gap over 3 h (and 3 bars) without a weekend day in it.
    *  MT5 can hand a symbol just opened its old cached bars before the missing stretch is downloaded. */
   function barsHole(bars, sec) {
+    // Only the last 24 hours: further back holidays (an early close) look like holes and made 1h charts
+    // load again and again.
+    const since = bars.length ? bars[bars.length - 1].time - 86400 : 0;
     for (let i = Math.max(1, bars.length - 1500); i < bars.length; i++) {
       const a = bars[i - 1].time, b = bars[i].time;
-      if (b - a <= Math.max(sec * 3, 7200)) continue;
+      if (a < since || b - a <= Math.max(sec * 3, 10800)) continue;
       let weekend = false;
       for (let t = a; t <= b && !weekend; t += 3 * 3600) { const d = new Date(t * 1000).getUTCDay(); weekend = d === 0 || d === 6; }
       if (!weekend) return { after: a, before: b };

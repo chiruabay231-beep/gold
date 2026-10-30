@@ -560,14 +560,17 @@ final class LiveMarket {
         throw CancellationError()
     }
 
-    /// A hole in the bars while the market trades: a gap over 2 h (and 3 bars) with no weekend day in it.
+    /// A hole in the bars while the market trades: a gap over 3 h (and 3 bars) with no weekend day in it.
+    /// Only the last 24 hours are looked at: that is where a symbol just opened misses bars, and further
+    /// back holidays (an early close) look like holes and made 1h charts load again and again.
     static func hole(in bars: [Candle], seconds: Double) -> Bool {
-        guard bars.count > 1 else { return false }
+        guard bars.count > 1, let newest = bars.last?.time else { return false }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
-        for i in max(1, bars.count - 1500)..<bars.count {
+        let since = newest.addingTimeInterval(-86_400)
+        for i in max(1, bars.count - 1500)..<bars.count where bars[i - 1].time >= since {
             let a = bars[i - 1].time, b = bars[i].time
-            guard b.timeIntervalSince(a) > max(seconds * 3, 7200) else { continue }
+            guard b.timeIntervalSince(a) > max(seconds * 3, 10_800) else { continue }
             var t = a, weekend = false
             while t <= b, !weekend {
                 let day = calendar.component(.weekday, from: t)   // 1 = Sunday, 7 = Saturday

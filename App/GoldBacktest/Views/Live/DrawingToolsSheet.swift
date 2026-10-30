@@ -195,14 +195,18 @@ struct FavoriteToolsBar: View {
     var onMore: () -> Void
 
     @AppStorage(DrawingFavorites.key) private var favoritesText = DrawingFavorites.defaultText
+    /// Laid out down instead of across (the last button turns it).
+    @AppStorage("favoriteTools.vertical") private var vertical = false
 
     static let barKey = "favoriteTools"
 
     var body: some View {
-        HStack(spacing: 0) {
-            BarGrip(key: Self.barKey, theme: theme)
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 2) {
+        let stack = vertical ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
+        let items = vertical ? AnyLayout(VStackLayout(spacing: 2)) : AnyLayout(HStackLayout(spacing: 2))
+        stack {
+            BarGrip(key: Self.barKey, theme: theme, across: vertical)
+            ScrollView(vertical ? .vertical : .horizontal, showsIndicators: false) {
+                items {
                     // Thước ngắm: the crosshair only shows while this is on.
                     Button { crosshair.toggle() } label: {
                         Image(systemName: "plus.viewfinder")
@@ -212,7 +216,7 @@ struct FavoriteToolsBar: View {
                             .background(crosshair ? theme.accent : .clear, in: .rect(cornerRadius: 7))
                     }
                     .accessibilityLabel("Thước ngắm")
-                    Divider().frame(height: 20)
+                    Divider().frame(width: vertical ? 20 : nil, height: vertical ? nil : 20)
                     ForEach(DrawingFavorites.decode(favoritesText)) { tool in
                         Button { activeTool = activeTool == tool ? nil : tool } label: {
                             Image(systemName: tool.systemImage)
@@ -230,11 +234,19 @@ struct FavoriteToolsBar: View {
                             .foregroundColor(theme.text)
                     }
                     .accessibilityLabel("Tất cả công cụ vẽ")
+                    // Across ↔ down.
+                    Button { withAnimation(.easeInOut(duration: 0.2)) { vertical.toggle() } } label: {
+                        Image(systemName: vertical ? "arrow.left.and.right" : "arrow.up.and.down")
+                            .font(.system(size: 13, weight: .semibold))
+                            .frame(width: 32, height: 32)
+                            .foregroundColor(theme.text)
+                    }
+                    .accessibilityLabel(vertical ? "Xếp ngang" : "Xếp dọc")
                 }
-                .padding(.trailing, 4)
+                .padding(vertical ? .bottom : .trailing, 4)
             }
-            .frame(maxWidth: 300)
-            .fixedSize(horizontal: true, vertical: false)
+            .frame(maxWidth: vertical ? nil : 300, maxHeight: vertical ? 380 : nil)
+            .fixedSize(horizontal: !vertical, vertical: vertical)
         }
         .background(theme.background.opacity(0.95), in: .rect(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(theme.grid, lineWidth: 1))
