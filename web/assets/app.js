@@ -4473,7 +4473,7 @@
           <div class="fp-tabs">${tabs.map(([k, n]) => `<button type="button" data-tab="${k}" class="${k === tab ? "on" : ""}">${n}</button>`).join("")}</div>
           <div class="fp-body">${render(tab)}</div>
           <div class="fp-foot">
-            ${opts.template ? `<select data-tpl><option value="">Bản mẫu</option><option value="saveAs">Lưu bản mẫu vẽ dưới dạng…</option><option value="reset">Áp dụng mẫu vẽ mặc định</option><option value="save">Đặt làm mặc định cho công cụ</option>${(opts.templateNames ? opts.templateNames() : []).map((n) => `<option value="tpl:${esc(n)}">▦ ${esc(n)}</option>`).join("")}</select>` : ""}
+            ${opts.template ? `<select data-tpl><option value="">Bản mẫu</option><option value="saveAs">Lưu bản mẫu vẽ dưới dạng…</option><option value="reset">Về kiểu gốc của công cụ</option><option value="save">Đặt làm mặc định cho công cụ</option>${(opts.templateNames ? opts.templateNames() : []).map((n) => `<option value="tpl:${esc(n)}">▦ ${esc(n)}</option>`).join("")}</select>` : ""}
             ${opts.onReset ? '<button type="button" class="btn btn-ghost btn-small" data-reset>Mặc định</button>' : ""}
             <span class="grow"></span>
             ${opts.onCancel ? '<button type="button" class="btn btn-ghost btn-small" data-cancel>Hủy bỏ</button>' : ""}
@@ -4648,7 +4648,7 @@
       const names = Object.keys(dr.templates(d.tool));
       const r = button.getBoundingClientRect();
       const menu = $("ctxMenu");
-      menu.innerHTML = `<button type="button" data-k="saveAs">Lưu bản mẫu vẽ dưới dạng…</button><button type="button" data-k="default">Áp dụng mẫu vẽ mặc định</button>`
+      menu.innerHTML = `<button type="button" data-k="saveAs">Lưu bản mẫu vẽ dưới dạng…</button><button type="button" data-k="default">Về kiểu gốc của công cụ</button>`
         + (names.length ? `<hr>` + names.map((n) => `<div class="tpl-row"><button type="button" data-k="tpl" data-n="${esc(n)}">${esc(n)}</button><button type="button" class="tpl-x" data-del="${esc(n)}" title="Xoá bản mẫu">✕</button></div>`).join("") : "");
       menu.hidden = false;
       menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + "px";

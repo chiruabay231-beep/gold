@@ -387,7 +387,10 @@ struct DrawingSettingsView: View {
                 Section {
                     ForEach(templates) { template in
                         Button {
+                            // On the chart at once (and the tool's look for the next ones), the sheet stays.
                             drawing.style = template.style
+                            onSave(drawing)
+                            UISelectionFeedbackGenerator().selectionChanged()
                         } label: {
                             HStack {
                                 Circle().fill(template.style.customColor?.color
@@ -397,6 +400,9 @@ struct DrawingSettingsView: View {
                                 Spacer()
                                 Text(String(format: "%gpx · %@", template.style.lineWidth, template.style.lineStyle.title))
                                     .font(.caption).foregroundColor(.secondary)
+                                if drawing.style == template.style {
+                                    Image(systemName: "checkmark").foregroundColor(.accentColor)
+                                }
                             }
                         }
                     }
@@ -415,26 +421,20 @@ struct DrawingSettingsView: View {
                     } label: {
                         Label("Lưu làm mặc định cho hình mới", systemImage: "checkmark.seal")
                     }
-                    Button {
-                        var fresh = Drawing(tool: drawing.tool, points: drawing.points)
-                        if let style = DrawingStyles.defaultStyle(for: drawing.tool) { fresh.style = style }
-                        drawing.style = fresh.style
-                        drawing.fib = fresh.fib
-                    } label: {
-                        Label("Áp dụng mặc định", systemImage: "arrow.uturn.backward")
-                    }
                     Button(role: .destructive) {
+                        // The app's own look (the "default" is the last look used, so applying it changed nothing).
                         DrawingStyles.setDefault(nil, for: drawing.tool)
                         let fresh = Drawing(tool: drawing.tool, points: drawing.points)
                         drawing.style = fresh.style
                         drawing.fib = nil
+                        onSave(drawing)
                     } label: {
                         Label("Về kiểu gốc của app", systemImage: "arrow.counterclockwise")
                     }
                 } header: {
                     Text("Mẫu kiểu \(drawing.tool.title)")
                 } footer: {
-                    Text("Hình mới của công cụ này tự dùng kiểu bạn chỉnh lần gần nhất. Lưu mẫu để có nhiều kiểu (vd: kháng cự đỏ 0.5px, hỗ trợ xanh), chạm để áp dụng, vuốt trái để xoá.")
+                    Text("Hình mới của công cụ này tự dùng kiểu bạn chỉnh hoặc áp dụng lần gần nhất. Lưu mẫu để có nhiều kiểu (vd: kháng cự đỏ 0.5px, hỗ trợ xanh), chạm để áp dụng ngay (dấu ✓), vuốt trái để xoá. Mẫu cũng chọn được trên thanh kiểu của hình vẽ.")
                 }
 
                 if drawing.positionLevels != nil {

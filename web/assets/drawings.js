@@ -191,7 +191,9 @@
     }
 
     /** The look of a new drawing of `tool`: the user's saved default over the built-in one. */
-    defaults(tool) {
+    /** A tool's look for a new drawing: the app's own, under the look last given to that tool (`own` false:
+     *  the app's own only). */
+    defaults(tool, own = true) {
       const color = tool === "longPosition" ? COLORS[2] : tool === "shortPosition" ? COLORS[1] : tool === "text" ? "#ff9800" : COLORS[0];
       const base = {
         color, width: tool === "brush" ? 2 : 1, style: "solid", rr: 2, locked: false,
@@ -212,7 +214,7 @@
           labelSide: tool === "fibExtension" ? "right" : "left", fontSize: 11, trend: true, extendLeft: false, extendRight: false,
         };
       }
-      const saved = this.styles[tool];
+      const saved = own ? this.styles[tool] : null;
       return saved ? Object.assign(base, JSON.parse(JSON.stringify(saved))) : base;
     }
 
@@ -253,14 +255,16 @@
       if (all[tool]) delete all[tool][name];
       try { this.host.store.set("aurum.drawTpl", JSON.stringify(all)); } catch { /* full */ }
     }
-    /** Applies a named template (or the tool's default when `name` is null) to `d`. */
+    /** Applies a named template (or, `name` null, the app's own look for the tool) to `d`; that look is then
+     *  the tool's look for the next drawings too, as any look given by hand is. */
     applyTemplate(d, name) {
-      const style = name ? this.templates(d.tool)[name] : this.defaults(d.tool);
+      const style = name ? this.templates(d.tool)[name] : this.defaults(d.tool, false);
       if (!style) return;
       const keep = { id: d.id, tool: d.tool, pts: d.pts, text: d.text, locked: d.locked };
       Object.keys(d).forEach((k) => delete d[k]);
-      Object.assign(d, this.defaults(d.tool), JSON.parse(JSON.stringify(style)), keep);
+      Object.assign(d, this.defaults(d.tool, false), JSON.parse(JSON.stringify(style)), keep);
       this.changed(d);
+      this.remember(d);
     }
 
     resetDefault(tool) {
