@@ -220,7 +220,10 @@
     }
 
     newDrawing(tool) {
-      return Object.assign({ id: Math.random().toString(36).slice(2, 10), tool, pts: [] }, this.defaults(tool));
+      const d = Object.assign({ id: Math.random().toString(36).slice(2, 10), tool, pts: [] }, this.defaults(tool));
+      // A template picked before drawing: its label on this drawing.
+      if (this.nextText && this.nextText[tool]) { d.text = this.nextText[tool]; delete this.nextText[tool]; }
+      return d;
     }
 
     /** The look just given to a drawing becomes its tool's look for the next ones (like TradingView),
@@ -251,7 +254,8 @@
     saveTemplate(d, name) {
       const all = this.allTemplates(), keys = this.tplKeys(d.tool);
       const keep = JSON.parse(JSON.stringify(d));
-      ["id", "tool", "pts", "text", "locked", "_box"].forEach((k) => delete keep[k]);
+      ["id", "tool", "pts", "locked", "_box"].forEach((k) => delete keep[k]);
+      if (!keep.text) delete keep.text; // a label written on the drawing comes back with the template
       keys.forEach((k) => { if (all[k]) delete all[k][name]; });
       (all[keys[0]] = all[keys[0]] || {})[name] = keep;
       try { this.host.store.set("aurum.drawTpl", JSON.stringify(all)); } catch { /* full */ }
@@ -263,11 +267,14 @@
     }
     /** Picked while the tool is chosen (before drawing): the next drawing starts with that look. */
     useTemplate(tool, name) {
-      if (!name) { this.resetDefault(tool); } else {
+      if (!name) { this.resetDefault(tool); if (this.nextText) delete this.nextText[tool]; } else {
         const style = this.templates(tool)[name];
         if (!style) return;
         const look = Object.assign(this.defaults(tool), JSON.parse(JSON.stringify(style)));
         ["id", "tool", "pts", "text", "locked", "_box"].forEach((k) => delete look[k]);
+        // The template's label goes on the next drawing only (the look stays for the ones after it).
+        this.nextText = this.nextText || {};
+        if (style.text) this.nextText[tool] = style.text; else delete this.nextText[tool];
         this.styles[tool] = look;
         try { this.host.store.set("aurum.drawStyles", JSON.stringify(this.styles)); } catch { /* full */ }
       }
@@ -283,7 +290,8 @@
     applyTemplate(d, name) {
       const style = name ? this.templates(d.tool)[name] : this.defaults(d.tool, false);
       if (!style) return;
-      const keep = { id: d.id, tool: d.tool, pts: d.pts, text: d.text, locked: d.locked };
+      // The template's label too, when it has one (else the drawing keeps its own).
+      const keep = { id: d.id, tool: d.tool, pts: d.pts, text: name && style.text ? style.text : d.text, locked: d.locked };
       Object.keys(d).forEach((k) => delete d[k]);
       Object.assign(d, this.defaults(d.tool, false), JSON.parse(JSON.stringify(style)), keep);
       this.changed(d);

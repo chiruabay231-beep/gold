@@ -212,7 +212,7 @@ struct DrawingActionsBar: View {
             ForEach(templates) { template in
                 Button {
                     var d = drawing
-                    d.style = template.style
+                    d.apply(template)
                     onChange(d)
                 } label: {
                     Label("\(template.name) · \(String(format: "%gpx", template.style.lineWidth))",
@@ -428,7 +428,7 @@ struct DrawingSettingsView: View {
                     ForEach(templates) { template in
                         Button {
                             // On the chart at once (and the tool's look for the next ones), the sheet stays.
-                            drawing.style = template.style
+                            drawing.apply(template)
                             onSave(drawing)
                             UISelectionFeedbackGenerator().selectionChanged()
                         } label: {
@@ -504,7 +504,7 @@ struct DrawingSettingsView: View {
                 Button("Lưu") {
                     let name = templateName.trimmingCharacters(in: .whitespaces)
                     guard !name.isEmpty else { return }
-                    DrawingStyles.saveTemplate(name: name, style: drawing.style, for: drawing.tool)
+                    DrawingStyles.saveTemplate(name: name, style: drawing.style, text: drawing.text, for: drawing.tool)
                     templates = DrawingStyles.templates(for: drawing.tool)
                 }
             }

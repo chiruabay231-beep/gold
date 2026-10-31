@@ -1697,6 +1697,7 @@ struct LiveView: View {
         // Starts with the look last used for this tool.
         var drawing = new
         if let style = DrawingStyles.defaultStyle(for: drawing.tool) { drawing.style = style }
+        if let label = DrawingStyles.takeNextText(for: drawing.tool), !label.isEmpty { drawing.text = label }
         if drawing.tool == .text {
             drawingText = ""
             editingTextDrawing = drawing

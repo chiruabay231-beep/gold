@@ -329,6 +329,12 @@ struct DrawingStyle: Codable, Hashable {
 }
 
 extension Drawing {
+    /// A saved template on this drawing: its look, and its label when it has one.
+    mutating func apply(_ template: DrawingStyles.Template) {
+        style = template.style
+        if let label = template.text, !label.isEmpty { text = label }
+    }
+
     var style: DrawingStyle {
         get { DrawingStyle(colorIndex: colorIndex, customColor: customColor, lineWidth: lineWidth, lineStyle: lineStyle,
                            riskReward: riskReward, textAlign: textAlign, fib: fib) }
@@ -351,6 +357,8 @@ enum DrawingStyles {
         var id = UUID()
         var name: String
         var style: DrawingStyle
+        /// The label written on the drawing it was saved from ("DM", "OTE"…), put back with it.
+        var text: String?
     }
 
     private static func defaultKey(_ tool: DrawingTool) -> String { "drawing.style.\(tool.rawValue)" }
@@ -388,9 +396,10 @@ enum DrawingStyles {
         return list
     }
 
-    static func saveTemplate(name: String, style: DrawingStyle, for tool: DrawingTool) {
+    static func saveTemplate(name: String, style: DrawingStyle, text: String? = nil, for tool: DrawingTool) {
         var list = read(templatesKey(tool)).filter { $0.name != name }
-        list.insert(Template(name: name, style: style), at: 0)
+        let label = text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        list.insert(Template(name: name, style: style, text: label?.isEmpty == false ? label : nil), at: 0)
         UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: templatesKey(tool))
         for key in legacyKeys(tool) { remove(from: key) { $0.name == name } }
     }
@@ -414,6 +423,17 @@ enum DrawingStyles {
         style.lineStyle = template.style.lineStyle
         if group(tool).count == 1 { style = template.style }
         setDefault(style, for: tool)
+        // Its label goes on the next drawing only.
+        UserDefaults.standard.set(template.text, forKey: nextTextKey(tool))
+    }
+
+    private static func nextTextKey(_ tool: DrawingTool) -> String { "drawing.nextText.\(tool.rawValue)" }
+
+    /// The label of a template picked before drawing, taken once by the drawing it goes on.
+    static func takeNextText(for tool: DrawingTool) -> String? {
+        let text = UserDefaults.standard.string(forKey: nextTextKey(tool))
+        UserDefaults.standard.removeObject(forKey: nextTextKey(tool))
+        return text
     }
 
     /// Whether the next drawing of `tool` already starts with `template`'s look.

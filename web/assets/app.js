@@ -3510,10 +3510,12 @@
       const out = [];
       if (this.replay) {
         const price = this.bars[this.replay.idx].close;
+        // Like a real position: from the entry candle (a dot there), "BUY 0.1 | +12.40" at the right, SL / TP with their money.
         this.replay.trades.forEach((t) => {
-          out.push({ key: `rp:${t.id}:entry`, price: t.entry, color: t.side === "long" ? "#2b6bf3" : "#f0455a", width: 1, style: 0, title: `Replay ${sideName(t.side)} ${t.lots} ${signed(this.replayProfit(t, price))}` });
-          if (t.stop) out.push({ key: `rp:${t.id}:stop`, price: t.stop, color: "#f0455a", width: 1, style: 2, title: "SL" });
-          if (t.target) out.push({ key: `rp:${t.id}:target`, price: t.target, color: "#14b88a", width: 1, style: 2, title: "TP" });
+          const p = { side: t.side, lots: t.lots, profit: this.replayProfit(t, price) };
+          out.push({ key: `rp:${t.id}:entry`, price: t.entry, color: t.side === "long" ? "#2b6bf3" : "#f0455a", width: 1, style: 0, title: "", entryOf: p, from: t.time, drawn: true });
+          if (t.stop) out.push({ key: `rp:${t.id}:stop`, price: t.stop, color: "#f0455a", width: 1, style: 2, title: `SL ${money0(this.replayProfit(t, t.stop))}`, from: t.time, drawn: true });
+          if (t.target) out.push({ key: `rp:${t.id}:target`, price: t.target, color: "#14b88a", width: 1, style: 2, title: `TP ${money0(this.replayProfit(t, t.target))}`, from: t.time, drawn: true });
         });
         return out;
       }
