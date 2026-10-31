@@ -3627,7 +3627,8 @@
       const list = (this.lineCache || []).filter((w) => w.drawn).map((w) => (d && d.key === w.key ? Object.assign({}, w, { price: d.price, title: this.dragTitle(d), width: 2 }) : w));
       if (d && d.pull && d.key !== d.base && !list.some((w) => w.key === d.key)) {
         // Pulling a new SL / TP out of a position's entry.
-        const p = this.positions.find((x) => x.ticket === +d.key.split(":")[1]);
+        const [kind, id] = d.key.split(":");
+        const p = kind === "rp" ? this.replayTrade(id) : this.positions.find((x) => x.ticket === +id);
         const stop = d.key.endsWith(":stop");
         if (p) list.push({ key: d.key, price: d.price, color: stop ? "#f0455a" : "#14b88a", width: 2, style: 2, title: this.dragTitle(d), from: p.time, drawn: true });
       }
@@ -3763,7 +3764,9 @@
         return best && best.w;
       };
       const draggable = (key) => {
-        if (!this.owner || this.replay) return false;
+        // Replay trades: their SL / TP dragged, or pulled out of the entry, as real ones (no MT5 involved).
+        if (this.replay) return key.startsWith("rp:");
+        if (!this.owner) return false;
         if (key.startsWith("draft:")) return true;
         const s = this.selected;
         if (!s) return false;
@@ -3808,7 +3811,7 @@
         const w = hit(y, draggable, x);
         if (!w) return;
         // Not moved until the finger has gone 8 px up or down: a tap or a shaky press changes nothing.
-        this.drag = { key: w.key, price: w.price, start: w.price, base: w.key, pull: /^pos:\d+:entry$/.test(w.key), pid: e.pointerId, y0: e.clientY, armed: false };
+        this.drag = { key: w.key, price: w.price, start: w.price, base: w.key, pull: /^(pos:\d+|rp:\w+):entry$/.test(w.key), pid: e.pointerId, y0: e.clientY, armed: false };
         lock(true);
         e.stopPropagation();
       }, true);
@@ -3899,9 +3902,15 @@
       });
     },
 
+    replayTrade(id) { return this.replay ? this.replay.trades.find((t) => t.id === id) : null; },
+
     dragTitle(d) {
       const [kind, ticket, field] = d.key.split(":");
       const name = { entry: kind === "draft" ? "Giá chờ" : "Giá", stop: "SL", target: "TP" }[field];
+      if (kind === "rp") {
+        const t = this.replayTrade(ticket);
+        return `${name} ${fmt(d.price, this.digits)}${t ? " · " + signed(this.replayProfit(t, d.price)) : ""}`;
+      }
       if (kind === "pos") {
         const p = this.positions.find((x) => x.ticket === +ticket);
         const v = p ? this.pnlAt(p, d.price) : null;
@@ -3932,8 +3941,9 @@
     /** Pulling a position's entry line: below it (a buy) sets the SL, above it the TP; a sell the other way. */
     pullTo(price) {
       const d = this.drag;
-      const ticket = +d.base.split(":")[1];
-      const p = this.positions.find((x) => x.ticket === ticket);
+      const [kind, id] = d.base.split(":");
+      const ticket = kind === "rp" ? id : +id;
+      const p = kind === "rp" ? this.replayTrade(id) : this.positions.find((x) => x.ticket === ticket);
       if (!p) return;
       // Within 12 px of the entry nothing is pulled out yet (an SL / TP on the entry would lose it).
       const ey = this.series.priceToCoordinate(p.entry), py = this.series.priceToCoordinate(price);
@@ -3943,7 +3953,7 @@
       }
       const long = p.side === "long";
       const field = (long ? price < p.entry : price > p.entry) ? "stop" : "target";
-      const key = `pos:${ticket}:${field}`;
+      const key = `${kind}:${ticket}:${field}`;
       if (d.key !== key) { d.key = key; d.start = p[field] || null; this.syncLines(); }
       d.price = price;
       const opts = { price, color: field === "stop" ? "#f0455a" : "#14b88a", lineWidth: 2, lineStyle: 2, axisLabelVisible: true, title: "", lineVisible: false };
@@ -3955,6 +3965,7 @@
     async commitDrag(d) {
       const [kind, ticket, field] = d.key.split(":");
       if (kind === "draft") { this.syncLines(); return; }
+      if (kind === "rp") return this.moveReplayLevel(ticket, field, d.price);
       const list = kind === "pos" ? this.positions : this.orders;
       const x = list.find((y) => y.ticket === +ticket);
       if (!x) return this.syncLines();
@@ -4558,6 +4569,24 @@
       if (store.get("aurum.jask") !== "0") this.journalAsk(t);
     },
 
+    /** A replay trade's SL / TP dragged: on the side the price allows, then into its journal entry. */
+    moveReplayLevel(id, field, price) {
+      const t = this.replayTrade(id);
+      if (!t || field === "entry") return this.syncLines();
+      const now = this.bars[this.replay.idx].close, long = t.side === "long";
+      const below = (field === "stop") === long;
+      if (below ? price >= now : price <= now) {
+        toast(`${field === "stop" ? "SL" : "TP"} của lệnh ${long ? "MUA" : "BÁN"} phải ${below ? "dưới" : "trên"} giá hiện tại ${fmt(now, this.digits)}`, true);
+        return this.syncLines();
+      }
+      t[field] = +price.toFixed(this.digits);
+      const list = this.journal(), e = list.find((x) => x.id === t.id && x.trade);
+      if (e) { e.trade[field] = t[field]; this.saveJournal(list); }
+      toast(`Replay: ${field === "stop" ? "SL" : "TP"} ${fmt(t[field], this.digits)} (${signed(this.replayProfit(t, t[field]))})`);
+      this.syncLines();
+      this.renderReplayBar();
+    },
+
     replayProfit(t, price) { return (price - t.entry) * (t.side === "long" ? 1 : -1) * t.lots * this.contractSize(); },
 
     replayClose(t, price, reason) {
@@ -4654,9 +4683,10 @@
     journalTags(skip) {
       const own = (() => { try { return JSON.parse(store.get("aurum.jtags") || "[]"); } catch { return []; } })();
       const base = skip
-        ? ["Chưa có setup", "Ngoài killzone", "Ngược xu hướng", "Sắp có tin", "Chưa quét thanh khoản", "Giá giữa vùng", "Spread cao", "Đã đủ lệnh hôm nay"]
+        ? ["Chưa có setup", "Ngoài killzone", "Ngược xu hướng", "Sắp có tin", "Chưa quét thanh khoản", "Chưa phá trendline", "Giá giữa vùng", "Spread cao", "Đã đủ lệnh hôm nay"]
         : ["Quét thanh khoản", "FVG", "MSS / BOS", "Killzone London", "Killzone NY", "Phiên Á", "Đỉnh/đáy ngày", "Đỉnh/đáy tuần", "OTE (Fib)",
-          "DM", "VI", "Cung cầu cá mập", "Dòng tiền cùng hướng", "Theo xu hướng khung lớn", "Ngược xu hướng", "SMT", "Tin tức"];
+          "DM", "VI", "Cung cầu cá mập", "Dòng tiền cùng hướng", "Theo xu hướng khung lớn", "Ngược xu hướng", "SMT", "Tin tức",
+          "Chạm trendline", "Phá trendline", "Retest trendline", "Trendline tăng", "Trendline giảm", "Kênh giá"];
       return base.concat(own.filter((t) => !base.includes(t)));
     },
 
@@ -4681,8 +4711,32 @@
           .sort((a, b) => Math.abs(a.price - last.close) - Math.abs(b.price - last.close)).slice(0, 8)
           .map((l) => ({ kind: l.kind, label: l.label, price: r(l.price) })),
         dms: (ict.dms || []).slice(-3).map((x) => ({ high: x.high, price: r(x.price), age: age(x.index) })),
+        trendlines: this.trendlinesAt(bars).map((l) => Object.assign(l, { price: r(l.price) })),
         flow: flow ? { value: +flow.flow.toFixed(2), situation: flow.situation, zones: (flow.zones || []).slice(0, 4).map((z) => ({ demand: z.demand, top: r(z.top), bottom: r(z.bottom), strength: +z.strength.toFixed(2) })) } : null,
       };
+    },
+
+    /** The trend lines drawn on this symbol that reach the replay bar, nearest first: their price there, slope,
+     *  and whether the last bars touched or crossed them. */
+    trendlinesAt(bars) {
+      const n = bars.length, d = this.drawingsMain;
+      if (!d || n < 6) return [];
+      const last = bars[n - 1], range = Math.max(...bars.slice(-50).map((b) => b.high)) - Math.min(...bars.slice(-50).map((b) => b.low));
+      return d.list.filter((x) => ["trendLine", "trendRay"].includes(x.tool) && x.pts.length === 2 && x.pts[0].t !== x.pts[1].t).map((x) => {
+        const [a, b] = x.pts[0].t < x.pts[1].t ? x.pts : [x.pts[1], x.pts[0]];
+        const at = (t) => a.p + ((t - a.t) * (b.p - a.p)) / (b.t - a.t);
+        const reaches = x.tool === "trendRay" || /right|both/.test(x.extend || "") || last.time <= b.t;
+        if (!reaches || last.time < a.t) return null;
+        const side = (bar) => Math.sign(bar.close - at(bar.time));
+        const recent = bars.slice(-4);
+        return {
+          up: b.p > a.p, price: at(last.time), dist: Math.abs(last.close - at(last.time)), text: x.text || "",
+          touched: recent.some((bar) => bar.low <= at(bar.time) && bar.high >= at(bar.time)),
+          broken: side(bars[n - 6]) !== 0 && side(last) !== 0 && side(bars[n - 6]) !== side(last),
+          near: range > 0 ? Math.abs(last.close - at(last.time)) / range < 0.15 : false,
+        };
+      }).filter((l) => l && (l.touched || l.broken || l.near)).sort((p, q) => p.dist - q.dist).slice(0, 4)
+        .map(({ dist, ...l }) => l);
     },
 
     /** Tags the chart itself suggests (picked in advance, can be unpicked). */
@@ -4695,6 +4749,11 @@
       if (/london/i.test(ctx.killzone || "")) out.push("Killzone London");
       if (/new york|ny/i.test(ctx.killzone || "")) out.push("Killzone NY");
       if (/asia|á/i.test(ctx.killzone || "")) out.push("Phiên Á");
+      const tl = (ctx.trendlines || [])[0];
+      if (tl) {
+        if (tl.broken) out.push("Phá trendline"); else if (tl.touched) out.push("Chạm trendline");
+        out.push(tl.up ? "Trendline tăng" : "Trendline giảm");
+      }
       return out;
     },
 
