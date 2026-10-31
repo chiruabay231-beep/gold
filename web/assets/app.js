@@ -4503,6 +4503,7 @@
       toast(`Replay: ${side === "long" ? "MUA" : "BÁN"} ${lots} @ ${fmt(t.entry, this.digits)}`);
       this.syncLines();
       this.renderReplayBar();
+      if (store.get("aurum.jask") !== "0") this.journalAsk(t);
     },
 
     replayProfit(t, price) { return (price - t.entry) * (t.side === "long" ? 1 : -1) * t.lots * this.contractSize(); },
@@ -4510,7 +4511,9 @@
     replayClose(t, price, reason) {
       const r = this.replay;
       r.trades = r.trades.filter((x) => x !== t);
-      r.closed.unshift(Object.assign({}, t, { exit: price, reason, profit: this.replayProfit(t, price) }));
+      const profit = this.replayProfit(t, price);
+      r.closed.unshift(Object.assign({}, t, { exit: price, reason, profit }));
+      this.journalResult(t, price, reason, profit);
     },
 
     /** SL/TP of replay trades hit inside the new bar (SL first when both are inside). */
@@ -4553,7 +4556,10 @@
           <button type="button" class="rb buybg" data-a="buy">BUY</button>
           <input id="rStop" inputmode="decimal" placeholder="SL" value="${esc((this.rDraft || {}).stop || "")}">
           <input id="rTarget" inputmode="decimal" placeholder="TP" value="${esc((this.rDraft || {}).target || "")}">
+          <button type="button" class="rb" data-a="skip" title="Không vào lệnh ở nến này: ghi lý do vào nhật ký">Bỏ qua</button>
           ${r.trades.length ? `<button type="button" class="rb" data-a="closeAll">Đóng ${r.trades.length} lệnh</button>` : ""}
+          <button type="button" class="rb" data-a="journal" title="Nhật ký backtest: lý do từng lệnh, thống kê, xuất file">📓 ${this.journal().length}</button>
+          <label class="r-ask" title="Hỏi lý do mỗi lần bấm BUY / SELL"><input type="checkbox" data-a="ask" ${store.get("aurum.jask") !== "0" ? "checked" : ""}> Hỏi lý do</label>
           <span class="r-pnl">Đang mở <b class="${floating >= 0 ? "pos" : "neg"}">${signed(floating)}</b> · Đã đóng ${r.closed.length ? `${wins}/${r.closed.length} thắng ` : ""}<b class="${done >= 0 ? "pos" : "neg"}">${signed(done)}</b> USD</span>
         </div>`;
       const on = (a, f) => { const b = bar.querySelector(`[data-a=${a}]`); if (b) b.onclick = f; };
@@ -4563,12 +4569,175 @@
       on("step", () => { this.replayPause(); this.replayStep(); });
       on("sell", () => this.replayOrder("short"));
       on("buy", () => this.replayOrder("long"));
+      on("skip", () => this.journalAsk(null));
+      on("journal", () => { this.replayPause(); this.journalSheet(); });
+      bar.querySelector("[data-a=ask]").onchange = (e) => store.set("aurum.jask", e.target.checked ? "1" : "0");
       on("closeAll", () => { r.trades.slice().forEach((t) => this.replayClose(t, price, "Đóng tay")); this.syncLines(); this.renderReplayBar(); });
       bar.querySelector("[data-a=speed]").onchange = (e) => {
         r.speed = +e.target.value; store.set("aurum.rspeed", String(r.speed));
         if (r.playing) { clearInterval(r.timer); r.timer = setInterval(() => this.replayStep(), 1000 / r.speed); }
       };
       ["rStop", "rTarget"].forEach((id) => ($(id).oninput = () => { this.rDraft = { stop: $("rStop").value, target: $("rTarget").value }; }));
+    },
+
+    /* ----- backtest journal: why each replay trade (or pass) was taken, with the chart around it ----- */
+
+    journal() { try { return JSON.parse(store.get("aurum.journal") || "[]"); } catch { return []; } },
+
+    saveJournal(list) {
+      // The newest 3000 decisions (a few MB at most).
+      try { store.set("aurum.journal", JSON.stringify(list.slice(-3000))); } catch { toast("Bộ nhớ trình duyệt đầy: xuất nhật ký rồi xoá bớt", true); }
+    },
+
+    journalTags(skip) {
+      const own = (() => { try { return JSON.parse(store.get("aurum.jtags") || "[]"); } catch { return []; } })();
+      const base = skip
+        ? ["Chưa có setup", "Ngoài killzone", "Ngược xu hướng", "Sắp có tin", "Chưa quét thanh khoản", "Giá giữa vùng", "Spread cao", "Đã đủ lệnh hôm nay"]
+        : ["Quét thanh khoản", "FVG", "MSS / BOS", "Killzone London", "Killzone NY", "Phiên Á", "Đỉnh/đáy ngày", "Đỉnh/đáy tuần", "OTE (Fib)",
+          "DM", "VI", "Cung cầu cá mập", "Dòng tiền cùng hướng", "Theo xu hướng khung lớn", "Ngược xu hướng", "SMT", "Tin tức"];
+      return base.concat(own.filter((t) => !base.includes(t)));
+    },
+
+    /** What the chart showed at the replay bar: recent bars, ICT marks near it, money flow, time. */
+    journalContext() {
+      const bars = this.viewBars(), n = bars.length, last = bars[n - 1], d = this.digits;
+      const r = (v) => (v == null ? null : +(+v).toFixed(d));
+      const ict = this.ict || {};
+      const age = (i) => (i == null ? null : n - 1 - i);
+      const sma = (k) => (n >= k ? r(bars.slice(-k).reduce((a, b) => a + b.close, 0) / k) : null);
+      const flow = window.ICT && n > 30 ? (() => { try { return window.ICT.sharkFlow(bars); } catch { return null; } })() : null;
+      const live = (ict.boxes || []).filter((b) => b.end >= n - 1);
+      return {
+        vnTime: new Date(last.time * 1000).toLocaleString("vi-VN", { timeZone: "Asia/Ho_Chi_Minh", weekday: "short", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }),
+        killzone: live.map((b) => b.label || ((this.ictCfg.sessions || []).find((x) => x.color === b.color) || {}).name || "killzone").join(", ") || null,
+        sma50: sma(50), sma200: sma(200),
+        bars: bars.slice(-40).map((b) => [b.time, r(b.open), r(b.high), r(b.low), r(b.close)]),
+        fvgs: (ict.fvgs || []).filter((g) => g.end == null || g.end >= n - 3).slice(-6).map((g) => ({ bull: g.bull, top: r(g.top), bottom: r(g.bottom), age: age(g.start) })),
+        breaks: (ict.breaks || []).slice(-4).map((b) => ({ bull: b.bull, mss: !!b.shift, price: r(b.price), age: age(b.end) })),
+        sweeps: (ict.sweeps || []).filter((s) => age(s.index) <= 60).slice(-6).map((s) => ({ bull: s.bull, label: s.label || "", price: r(s.price), age: age(s.index) })),
+        levels: (ict.levels || []).filter((l) => !l.mitigated && l.kind !== "mid" && l.label)
+          .sort((a, b) => Math.abs(a.price - last.close) - Math.abs(b.price - last.close)).slice(0, 8)
+          .map((l) => ({ kind: l.kind, label: l.label, price: r(l.price) })),
+        dms: (ict.dms || []).slice(-3).map((x) => ({ high: x.high, price: r(x.price), age: age(x.index) })),
+        flow: flow ? { value: +flow.flow.toFixed(2), situation: flow.situation, zones: (flow.zones || []).slice(0, 4).map((z) => ({ demand: z.demand, top: r(z.top), bottom: r(z.bottom), strength: +z.strength.toFixed(2) })) } : null,
+      };
+    },
+
+    /** Tags the chart itself suggests (picked in advance, can be unpicked). */
+    journalHints(ctx, skip) {
+      if (skip) return [];
+      const out = [];
+      if (ctx.sweeps.some((s) => s.age <= 12)) out.push("Quét thanh khoản");
+      if (ctx.fvgs.length) out.push("FVG");
+      if (ctx.breaks.some((b) => b.age <= 15)) out.push("MSS / BOS");
+      if (/london/i.test(ctx.killzone || "")) out.push("Killzone London");
+      if (/new york|ny/i.test(ctx.killzone || "")) out.push("Killzone NY");
+      if (/asia|á/i.test(ctx.killzone || "")) out.push("Phiên Á");
+      return out;
+    },
+
+    /** One decision at the replay bar: a trade just placed (`trade`), or a pass (`trade` null). */
+    journalAsk(trade) {
+      const r = this.replay;
+      if (!r) return;
+      this.replayPause();
+      const bar = this.bars[r.idx], skip = !trade, ctx = this.journalContext();
+      const tags = this.journalTags(skip), picked = new Set(this.journalHints(ctx, skip));
+      const head = skip ? "Bỏ qua cây nến này" : `${trade.side === "long" ? "MUA" : "BÁN"} ${trade.lots} @ ${fmt(trade.entry, this.digits)}`;
+      sheet.open(`<h3>📓 ${esc(head)}</h3>
+        <p class="muted small">${esc(ctx.vnTime)}${ctx.killzone ? " · " + esc(ctx.killzone) : ""} · ${esc(this.symbolKey())} ${esc(this.interval)}</p>
+        <p class="small">${skip ? "Vì sao không vào lệnh?" : "Vì sao vào lệnh này? (chọn các lý do)"} <span class="muted">— đã chọn sẵn theo chart, bấm để bỏ</span></p>
+        <div class="chips jtags">${tags.map((t) => `<button type="button" data-t="${esc(t)}" class="${picked.has(t) ? "on" : ""}">${esc(t)}</button>`).join("")}<button type="button" data-add>＋ Lý do khác</button></div>
+        ${skip ? "" : `<div class="fields"><label>Bias khung lớn<select id="jBias"><option value="">—</option><option value="up">Tăng</option><option value="down">Giảm</option><option value="range">Đi ngang</option></select></label>
+          <label>Độ tự tin<select id="jConf"><option value="">—</option><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option></select></label></div>`}
+        <div class="fields"><label>Ghi chú (tuỳ ý)<textarea id="jNote" rows="3" maxlength="600" placeholder="vd: quét đáy Á rồi MSS M5, vào ở FVG, SL dưới đáy quét"></textarea></label></div>
+        <div class="row-btns end"><button class="btn btn-ghost btn-small" data-close>${skip ? "Huỷ" : "Không ghi"}</button><button class="btn btn-gold btn-small" id="jSave">Lưu vào nhật ký</button></div>`, (el) => {
+        el.querySelectorAll("[data-t]").forEach((b) => (b.onclick = () => b.classList.toggle("on")));
+        el.querySelector("[data-add]").onclick = (e) => {
+          const t = (prompt("Lý do mới (sẽ được nhớ cho lần sau):") || "").trim().slice(0, 40);
+          if (!t) return;
+          const own = (() => { try { return JSON.parse(store.get("aurum.jtags") || "[]"); } catch { return []; } })();
+          if (!own.includes(t)) { own.push(t); store.set("aurum.jtags", JSON.stringify(own)); }
+          const b = document.createElement("button");
+          b.type = "button"; b.dataset.t = t; b.className = "on"; b.textContent = t;
+          b.onclick = () => b.classList.toggle("on");
+          e.currentTarget.before(b);
+        };
+        el.querySelector("#jSave").onclick = () => {
+          const list = this.journal();
+          const entry = {
+            id: trade ? trade.id : Math.random().toString(36).slice(2, 8),
+            at: Date.now(), sym: this.symbolKey(), tf: this.interval, time: bar.time, price: bar.close, digits: this.digits,
+            action: skip ? "skip" : trade.side === "long" ? "buy" : "sell",
+            tags: [...el.querySelectorAll("[data-t].on")].map((b) => b.dataset.t),
+            note: el.querySelector("#jNote").value.trim(),
+            bias: skip ? null : el.querySelector("#jBias").value || null,
+            confidence: skip ? null : +el.querySelector("#jConf").value || null,
+            trade: skip ? null : { lots: trade.lots, entry: trade.entry, stop: trade.stop, target: trade.target },
+            result: null, ctx,
+          };
+          list.push(entry);
+          this.saveJournal(list);
+          sheet.close();
+          toast(skip ? "Đã ghi: bỏ qua" : "Đã ghi lý do vào nhật ký");
+          this.renderReplayBar();
+        };
+      });
+    },
+
+    /** A replay trade closed: its result (money and R) into its journal entry. */
+    journalResult(t, exit, reason, profit) {
+      const list = this.journal(), e = list.find((x) => x.id === t.id && x.action !== "skip");
+      if (!e) return;
+      const risk = t.stop ? Math.abs(t.entry - t.stop) : null;
+      const move = (exit - t.entry) * (t.side === "long" ? 1 : -1);
+      e.result = { exit: +(+exit).toFixed(this.digits), reason, profit: +profit.toFixed(2), r: risk ? +(move / risk).toFixed(2) : null, bars: this.replay ? Math.round((this.bars[this.replay.idx].time - t.time) / (TF_SECONDS[this.interval] || 60)) : null };
+      this.saveJournal(list);
+    },
+
+    journalSheet() {
+      const list = this.journal();
+      const trades = list.filter((e) => e.action !== "skip"), done = trades.filter((e) => e.result);
+      const win = (e) => e.result.profit > 0;
+      const rOf = (arr) => arr.reduce((a, e) => a + (e.result.r || 0), 0);
+      const pct = (a, b) => (b ? Math.round((a / b) * 100) + "%" : "—");
+      const byTag = {};
+      done.forEach((e) => e.tags.forEach((t) => { (byTag[t] = byTag[t] || []).push(e); }));
+      const tagRows = Object.entries(byTag).sort((a, b) => b[1].length - a[1].length).map(([t, arr]) =>
+        `<tr><td>${esc(t)}</td><td>${arr.length}</td><td>${pct(arr.filter(win).length, arr.length)}</td><td class="${rOf(arr) >= 0 ? "pos" : "neg"}">${rOf(arr).toFixed(1)}R</td></tr>`).join("");
+      const when = (e) => new Date((e.time + TZ) * 1000).toLocaleString("vi-VN", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+      const act = { buy: '<b class="pos">MUA</b>', sell: '<b class="neg">BÁN</b>', skip: '<span class="muted">Bỏ qua</span>' };
+      const rows = list.slice().reverse().slice(0, 200).map((e) => `<tr><td>${when(e)}<br><span class="muted small">${esc(e.sym)} ${esc(e.tf)}</span></td><td>${act[e.action]}</td>
+        <td>${esc(e.tags.join(", "))}${e.note ? `<br><span class="muted small">${esc(e.note)}</span>` : ""}</td>
+        <td>${e.result ? `<span class="${e.result.profit >= 0 ? "pos" : "neg"}">${signed(e.result.profit)}${e.result.r != null ? ` · ${e.result.r}R` : ""}</span><br><span class="muted small">${esc(e.result.reason)}</span>` : e.action === "skip" ? "" : '<span class="muted">chưa đóng</span>'}</td>
+        <td><button type="button" class="tpl-x" data-del="${esc(e.id)}" title="Xoá">✕</button></td></tr>`).join("");
+      sheet.open(`<h3>📓 Nhật ký backtest</h3>
+        <div class="jstats"><div><span>Quyết định</span><b>${list.length}</b></div><div><span>Lệnh đã đóng</span><b>${done.length}</b></div>
+          <div><span>Tỉ lệ thắng</span><b>${pct(done.filter(win).length, done.length)}</b></div><div><span>Tổng R</span><b class="${rOf(done) >= 0 ? "pos" : "neg"}">${rOf(done).toFixed(1)}R</b></div>
+          <div><span>Bỏ qua</span><b>${list.length - trades.length}</b></div></div>
+        ${tagRows ? `<p class="small"><b>Theo lý do</b> <span class="muted">(lệnh đã đóng)</span></p><div class="jtable"><table><tr><th>Lý do</th><th>Lệnh</th><th>Thắng</th><th>R</th></tr>${tagRows}</table></div>` : ""}
+        <div class="row-btns"><button class="btn btn-gold btn-small" id="jJson">⬇ Xuất file (gửi cho Claude)</button><button class="btn btn-ghost btn-small" id="jCsv">⬇ Excel (CSV)</button>
+          ${list.length ? '<button class="btn btn-ghost btn-small" id="jClear">Xoá hết</button>' : ""}</div>
+        ${rows ? `<div class="jtable"><table><tr><th>Nến</th><th></th><th>Lý do</th><th>Kết quả</th><th></th></tr>${rows}</table></div>` : '<p class="muted">Chưa có gì. Trong Replay, bấm BUY / SELL hoặc "Bỏ qua" và chọn lý do.</p>'}`, (el) => {
+        const download = (name, text, type) => {
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(new Blob([text], { type }));
+          a.download = name; document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+        };
+        const stamp = new Date().toISOString().slice(0, 10);
+        el.querySelector("#jJson").onclick = () => download(`aurum-nhat-ky-${stamp}.json`, JSON.stringify({ app: "Aurum Pro", kind: "backtest-journal", version: 1, exported: new Date().toISOString(), entries: this.journal() }, null, 1), "application/json");
+        el.querySelector("#jCsv").onclick = () => {
+          const q = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+          const lines = [["Thời gian (VN)", "Mã", "Khung", "Hành động", "Giá", "SL", "TP", "Lý do", "Ghi chú", "Bias", "Tự tin", "Kết quả USD", "R", "Đóng do", "Killzone"].map(q).join(",")]
+            .concat(this.journal().map((e) => [e.ctx && e.ctx.vnTime, e.sym, e.tf, e.action, e.price, e.trade && e.trade.stop, e.trade && e.trade.target, e.tags.join("; "), e.note, e.bias, e.confidence,
+              e.result && e.result.profit, e.result && e.result.r, e.result && e.result.reason, e.ctx && e.ctx.killzone].map(q).join(",")));
+          download(`aurum-nhat-ky-${stamp}.csv`, "﻿" + lines.join("\n"), "text/csv");
+        };
+        const clear = el.querySelector("#jClear");
+        if (clear) clear.onclick = () => { if (confirm("Xoá toàn bộ nhật ký backtest? Nên xuất file trước.")) { this.saveJournal([]); this.journalSheet(); } };
+        el.querySelectorAll("[data-del]").forEach((b) => (b.onclick = () => { this.saveJournal(this.journal().filter((e) => e.id !== b.dataset.del)); this.journalSheet(); }));
+      });
     },
 
     /* ----- drawing toolbar on the left of the chart (TradingView-style) ----- */
