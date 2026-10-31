@@ -4579,6 +4579,15 @@
       const bar = $("replayBar");
       const r = this.replay;
       $("replayBtn").classList.toggle("on", !!(r || this.replayPicking));
+      // The chart gives up the bar's height (after it is drawn), so chart and bar fit on the screen together.
+      requestAnimationFrame(() => {
+        const h = bar.hidden ? 0 : bar.offsetHeight + 6;
+        if (h === this.rbHeight) return;
+        const first = !this.rbHeight && h;
+        this.rbHeight = h;
+        document.documentElement.style.setProperty("--rb", h + "px");
+        if (first) setTimeout(() => bar.scrollIntoView({ block: "nearest", behavior: "smooth" }), 50);
+      });
       if (this.replayPicking) {
         bar.hidden = false;
         bar.innerHTML = `<div class="r-row"><b>⏮ Replay</b><span class="muted">Chạm vào nến muốn bắt đầu</span><button type="button" class="btn btn-ghost btn-small" data-a="exit">Huỷ</button></div>`;
