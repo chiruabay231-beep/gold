@@ -2972,6 +2972,8 @@
         this.layout = LAYOUTS.includes(store.get("aurum.layout")) ? store.get("aurum.layout") : "1";
         $("tfButtons").innerHTML = TFS.map((i) => `<button type="button" data-tf="${i}"${i === "30s" ? ' class="sec-end" title="Nến giây lấy từ Binance"' : isSecTF(i) ? ' title="Nến giây lấy từ Binance"' : ""}>${i}</button>`).join("");
         $("tfButtons").querySelectorAll("button").forEach((b) => (b.onclick = () => {
+          // Replay goes back days or months: second bars (Binance, the last hours only) cannot follow it there.
+          if (this.replay && isSecTF(b.dataset.tf)) { toast("Replay dùng khung từ 1m trở lên (nến giây chỉ có vài giờ gần nhất)", true); return; }
           this.interval = b.dataset.tf; store.set("aurum.tf", this.interval); this.loadCandles();
         }));
         this.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => { if (r && r.from < 30 && !(performance.now() < this.olderHold)) this.loadOlder(); });
@@ -3244,7 +3246,11 @@
         this.bars = bars;
         if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); }
         if (replayTime != null) {
-          for (let k = 0; k < 6 && this.bars[0].time > replayTime && !this.noOlder; k++) await this.loadOlder(true);
+          // The bars around the replay moment, fetched there directly (paging back from today could not
+          // reach a moment weeks ago on a small timeframe, and the replay would land somewhere else).
+          this.replayGap = false;
+          if (this.bars[0].time > replayTime) await this.replayWindow(replayTime, token);
+          if (token !== this.loadToken) return;
           let i = this.bars.length - 1;
           while (i > 0 && this.bars[i].time > replayTime) i--;
           this.replay.idx = Math.max(1, Math.min(i, this.bars.length - 2));
@@ -3271,7 +3277,8 @@
 
     // The newest bars every 2 seconds (MT5 has no public stream).
     async pollBars(token) {
-      if (this.polling) return;
+      // A replay window in the past: today's bars would land after a hole (they come back on leaving replay).
+      if (this.polling || this.replayGap) return;
       // A hidden tab or a sleeping phone polls late: fetch every bar since the last poll (else the chart
       // has a hole), or reload when that is more than a fetch holds.
       const sec = TF_SECONDS[this.interval] || 60, nowMs = Date.now();
@@ -4446,7 +4453,11 @@
     replayStep() {
       const r = this.replay;
       if (!r) return;
-      if (r.idx >= this.bars.length - 1) { this.replayPause(); toast("Đã tới nến mới nhất"); return; }
+      if (this.replayGap && r.idx >= this.bars.length - 60) this.replayExtend();
+      if (r.idx >= this.bars.length - 1) {
+        if (this.replayGap) return; // the next bars are on their way
+        this.replayPause(); toast("Đã tới nến mới nhất"); return;
+      }
       r.idx++;
       const bar = this.bars[r.idx];
       this.series.update(shown(bar));
@@ -4477,6 +4488,8 @@
 
     exitReplay() {
       if (this.replay) clearInterval(this.replay.timer);
+      // Bars of a window in the past: today's again.
+      if (this.replayGap) { this.replayGap = false; this.replay = null; this.replayPicking = false; this.renderReplayBar(); this.updateTouchAction(); this.loadCandles(); return; }
       this.replay = null;
       this.replayPicking = false;
       this.series.setData(this.bars.map(shown));
@@ -4490,6 +4503,43 @@
     },
 
     contractSize() { return this.contractOf(this.symbolKey()); },
+
+    /** Bars after `after` (up to 2000 bars on), and whether they reach today's. */
+    async replaySegment(after) {
+      const sec = TF_SECONDS[this.interval] || 60, until = after + 2000 * sec;
+      const data = await this.call(this.exnessPath(5000, until));
+      return { bars: this.toBars(data.candles || []).filter((b) => b.time > after), live: until >= Date.now() / 1000 };
+    },
+
+    /** The bars around replay moment `t` (another timeframe picked during replay): 1000 before, the rest
+     *  after it, joined to today's bars when they reach them. */
+    async replayWindow(t, token) {
+      try {
+        const back = this.toBars((await this.call(this.exnessPath(1000, t + 1))).candles || []);
+        if (token !== this.loadToken || back.length < 5) return;
+        const fwd = await this.replaySegment(back[back.length - 1].time);
+        if (token !== this.loadToken) return;
+        let bars = back.concat(fwd.bars);
+        const end = bars[bars.length - 1].time, today = this.bars;
+        if (fwd.live || end >= today[0].time) bars = bars.concat(today.filter((b) => b.time > end));
+        else this.replayGap = true;
+        this.bars = bars;
+        this.noOlder = false;
+      } catch { /* keep today's bars */ }
+    },
+
+    /** Replay near the end of a window in the past: the next bars. */
+    async replayExtend() {
+      if (this.replayExtending || !this.replay) return;
+      this.replayExtending = true;
+      const token = this.loadToken;
+      try {
+        const seg = await this.replaySegment(this.bars[this.bars.length - 1].time);
+        if (token !== this.loadToken || !this.replay) return;
+        this.bars.push(...seg.bars);
+        if (seg.live || !seg.bars.length) this.replayGap = false;
+      } catch { /* try again on the next bar */ } finally { this.replayExtending = false; }
+    },
 
     replayOrder(side) {
       const r = this.replay;
@@ -4528,6 +4578,7 @@
     renderReplayBar() {
       const bar = $("replayBar");
       const r = this.replay;
+      $("replayBtn").classList.toggle("on", !!(r || this.replayPicking));
       if (this.replayPicking) {
         bar.hidden = false;
         bar.innerHTML = `<div class="r-row"><b>⏮ Replay</b><span class="muted">Chạm vào nến muốn bắt đầu</span><button type="button" class="btn btn-ghost btn-small" data-a="exit">Huỷ</button></div>`;

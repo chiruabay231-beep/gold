@@ -425,6 +425,10 @@ details.set .toggle:first-child { border-top: 1px solid var(--line); }
 .flyout button:hover { background: var(--hover); }
 .flyout button.on { color: var(--gold); }
 .icon-btn.plain.on { color: var(--gold); border-color: var(--gold2); }
+.replay-btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 9px; }
+.replay-btn span { font: 700 12px/1 var(--font); }
+.replay-btn.on { color: #1a1205 !important; background: var(--gold); border-color: var(--gold) !important; box-shadow: 0 0 0 3px rgba(242, 193, 78, .25), 0 0 14px rgba(242, 193, 78, .45); }
+@media (max-width: 600px) { .replay-btn span { display: none; } }
 
 /* floating settings panel: compact, the chart stays visible */
 .float-panel { position: fixed; right: 16px; top: 70px; z-index: 45; width: 380px; max-width: calc(100% - 24px); max-height: calc(100vh - 90px); display: flex; flex-direction: column;
