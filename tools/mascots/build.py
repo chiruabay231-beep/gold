@@ -25,7 +25,8 @@ for kind in ("girl", "boy"):
 # The trade characters (angler / hauler) in each effort, and where their line starts.
 import json  # noqa: E402
 
-CREW = [os.path.join(ROOT, "web", "assets", "crew"), os.path.join(ROOT, "App", "GoldBacktest", "Resources", "Crew")]
+# (Web only for now: the app copies every resource into one folder, so two sets with the same file names clash.)
+CREW = [os.path.join(ROOT, "web", "assets", "crew")]
 for folder in CREW:
     os.makedirs(folder, exist_ok=True)
     for old in os.listdir(folder):
@@ -40,7 +41,7 @@ for name, picture in crew.PICTURES.items():
 # The same characters as silhouettes with a golden rim light.
 import shadow  # noqa: E402
 
-SHADOW = [os.path.join(ROOT, "web", "assets", "crew2"), os.path.join(ROOT, "App", "GoldBacktest", "Resources", "Crew2")]
+SHADOW = [os.path.join(ROOT, "web", "assets", "crew2")]
 for folder in SHADOW:
     os.makedirs(folder, exist_ok=True)
 for name, picture in shadow.PICTURES.items():
@@ -53,6 +54,4 @@ points = dict(crew.POINTS, shadow=shadow.POINTS)
 with open(os.path.join(ROOT, "web", "assets", "crew", "points.js"), "w") as f:
     f.write("// Made by tools/mascots/build.py: where each trade character's line starts (picture coordinates).\n")
     f.write("window.CREW_POINTS = " + json.dumps(points) + ";\n")
-with open(os.path.join(ROOT, "App", "GoldBacktest", "Resources", "Crew", "points.json"), "w") as f:
-    json.dump(points, f)
 print("wrote", 2 * len(STATES), "mascots,", len(crew.PICTURES), "anime and", len(shadow.PICTURES), "silhouette trade characters")
