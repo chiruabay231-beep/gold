@@ -1120,6 +1120,9 @@
     arrowMarker: svg(`<path d="M5 14h14M14 8l6 6-6 6"/>`),
     text: svg(`<path d="M7 7h14M14 7v15M11 22h6"/>`),
   };
+  /** The trade characters' pictures: size on the chart, where the fishing line / the rope starts (picture coordinates). */
+  const CREW = { scale: 0.6, tip: [14, 40], hand: [62.5, 77.4] };
+
   /** What each mascot picture shows. */
   const MASCOT_MOODS = { rich: "lãi đậm", happy: "vui mừng", tea: "nhâm nhi trà (đi ngang)", sleep: "ngủ gật (im lìm)", nervous: "hồi hộp (sắp có tin)",
     cry: "khóc (giá đi ngược)", shock: "hồn lìa khỏi xác", angry: "tức điên (dính SL)", trophy: "ăn mừng TP" };
@@ -1812,6 +1815,10 @@
     /** New fills and closes since the last look (the first look only learns what is there, like the app). */
     watchTrades(t) {
       const deals = t.deals || [], positions = t.positions || [];
+      // (The positions as they were, for the trade characters of the ones that just closed.)
+      const prevPositions = this.crewSeen || [];
+      this.crewSeen = positions;
+      this.crewPrev = prevPositions;
       const known = this.known;
       this.known = { deals: new Set(deals.map((d) => d.ticket)), positions: new Set(positions.map((p) => p.ticket)) };
       if (!known || known.login !== t.login) { this.known.login = t.login; return; }
@@ -1824,6 +1831,10 @@
       });
       deals.filter((d) => !known.deals.has(d.ticket)).forEach((d) => {
         this.mascotEvent = { win: d.profit >= 0, at: Date.now() };
+        if (d.reason === "target" || d.reason === "stop") {
+          const p = (this.crewPrev || []).find((x) => (d.position != null ? x.ticket === d.position : x.symbol === d.symbol) && !positions.some((y) => y.ticket === x.ticket));
+          if (p && p.target) this.crewEnded({ key: "pos:" + p.ticket, buy: p.side === "long", entry: p.entry, tp: p.target, sl: p.stop }, d.reason === "target");
+        }
         const manual = d.reason !== "target" && d.reason !== "stop";
         let text = manual ? Voice.defaults().closed : Voice.phrase(d.reason);
         if (Voice.cfg.details) text += `, ${Voice.spokenSymbol(d.symbol)}, ${Voice.spokenMoney(d.profit)}`;
@@ -2954,9 +2965,15 @@
               if (w.key.startsWith("draft:")) return w.key === "draft:entry";
               const s = this.selected;
               return s && w.key.startsWith(`${s.kind}:${s.ticket}:`);
-            }).map((w) => w.price);
+            }).map((w) => w.price)
+              // The TP of a trade with its angler / hauler on it: the character stands there.
+              .concat(this.crewShowing ? this.crewShowing().map((t) => t.tp) : []);
             if (!res || !keep.length) return res;
-            return { priceRange: { minValue: Math.min(res.priceRange.minValue, ...keep), maxValue: Math.max(res.priceRange.maxValue, ...keep) }, margins: res.margins };
+            let minValue = Math.min(res.priceRange.minValue, ...keep), maxValue = Math.max(res.priceRange.maxValue, ...keep);
+            // An angler sits on a BUY's TP: room above it for her whole figure.
+            const buys = this.crewShowing ? this.crewShowing().filter((t) => t.buy) : [];
+            if (buys.length) maxValue = Math.max(maxValue, ...buys.map((t) => t.tp + (maxValue - minValue) * 0.4));
+            return { priceRange: { minValue, maxValue }, margins: res.margins };
           },
         });
         this.ictCfg = (() => { try { return window.ICT.merge(JSON.parse(store.get("aurum.ictcfg") || "null")); } catch { return window.ICT.defaults(); } })();
@@ -4603,7 +4620,10 @@
       r.trades = r.trades.filter((x) => x !== t);
       const profit = this.replayProfit(t, price);
       r.closed.unshift(Object.assign({}, t, { exit: price, reason, profit }));
-      if (reason === "TP" || reason === "SL") this.mascotEvent = { win: profit >= 0, at: Date.now() };
+      if (reason === "TP" || reason === "SL") {
+        this.mascotEvent = { win: profit >= 0, at: Date.now() };
+        if (t.target) this.crewEnded({ key: "rp:" + t.id, buy: t.side === "long", entry: t.entry, tp: t.target, sl: t.stop }, reason === "TP");
+      }
       this.journalResult(t, price, reason, profit);
     },
 
@@ -4871,6 +4891,102 @@
       });
     },
 
+    /* ----- trade characters: an angler fishing a BUY up to its TP, a hauler dragging a SELL down to its TP ----- */
+
+    /** Open trades with a TP on this chart: the replay's, or the MT5 positions on this symbol. */
+    crewTrades() {
+      if (store.get("aurum.crewOff") === "1") return [];
+      if (this.replay) return this.replay.trades.filter((t) => t.target).map((t) => ({ key: "rp:" + t.id, buy: t.side === "long", entry: t.entry, tp: t.target, sl: t.stop }));
+      if (!this.owner) return [];
+      return this.positions.filter((p) => p.symbol === this.symbol && p.target).map((p) => ({ key: "pos:" + p.ticket, buy: p.side === "long", entry: p.entry, tp: p.target, sl: p.stop }));
+    },
+
+    /** Every trade with a character on the chart now: the open ones and those closed less than a minute ago. */
+    crewShowing() {
+      const done = (this.crewDone || []).filter((x) => Date.now() - x.at < 60000 && x.sym === this.symbolKey());
+      return this.crewTrades().filter((t) => !done.some((d) => d.key === t.key)).concat(done);
+    },
+
+    /** A trade closed at its TP (money) or SL (the line snaps): its character stays a minute. */
+    crewEnded(trade, tpHit) {
+      if (!trade || !trade.tp) return;
+      this.crewDone = (this.crewDone || []).filter((x) => Date.now() - x.at < 60000 && x.key !== trade.key);
+      this.crewDone.push(Object.assign({}, trade, { tpHit, at: Date.now(), sym: this.symbolKey() }));
+      this.placeCrewSoon();
+    },
+
+    placeCrewSoon() {
+      if (this.crewRaf || !$("crew")) return;
+      this.crewRaf = requestAnimationFrame(() => { this.crewRaf = 0; this.placeCrew(); });
+    },
+
+    placeCrew() {
+      const box = $("crew");
+      if (!box || !this.chart) return;
+      const done = (this.crewDone || []).filter((x) => Date.now() - x.at < 60000 && x.sym === this.symbolKey());
+      this.crewDone = done;
+      const live = this.crewTrades().filter((t) => !done.some((d) => d.key === t.key));
+      const bars = this.viewBars();
+      if ((!live.length && !done.length) || !bars.length) { if (box.childElementCount) box.innerHTML = ""; this.crewShown = null; return; }
+      const ts = this.chart.timeScale(), n = bars.length, last = bars[n - 1];
+      const lx = ts.logicalToCoordinate(n - 1), spacing = ts.options().barSpacing || 6;
+      if (lx == null) return;
+      box.style.width = ts.width() + "px";
+      // One picture per trade (re-made only when the set of trades changes).
+      const all = live.map((t) => ({ t, end: null })).concat(done.map((d) => ({ t: d, end: d })));
+      const sig = all.map((x) => x.t.key).join("|");
+      if (this.crewShown !== sig) {
+        box.innerHTML = '<svg class="crew-lines"></svg>' + all.map((x) => `<img class="crew-pic" data-k="${esc(x.t.key)}" alt="" draggable="false">`).join("");
+        // A new character: room for it right of the newest bar (when the chart shows the newest bars).
+        const room = Math.ceil(5 + (CREW.scale * 140 + all.length * 70) / spacing);
+        if (this.crewShown != null || all.length) {
+          const pos = ts.scrollPosition();
+          if (pos > -2 && pos < room) ts.scrollToPosition(room, false);
+        }
+        this.crewShown = sig;
+      }
+      const S = CREW.scale, W = 172 * S, H = 206 * S;
+      let lines = "";
+      all.forEach((x, i) => {
+        const t = x.t, img = box.querySelector(`img[data-k="${CSS.escape(t.key)}"]`);
+        const ytp = this.series.priceToCoordinate(t.tp);
+        if (!img || ytp == null) return;
+        // About five bars right of the newest one, standing on the TP; several trades side by side.
+        const cx = lx + spacing * 5 + (t.buy ? 30 : 40) * S + i * 70;
+        const left = cx - (80 + 6) * S, top = ytp - (156 + 34) * S;
+        const who = t.buy ? "angler" : "hauler";
+        const mood = x.end ? (x.end.tpHit ? "money" : "snap") : ((t.buy ? last.close >= t.entry : last.close <= t.entry) ? "win" : "lose");
+        const src = `assets/crew/${who}-${mood}.svg`;
+        if (img.getAttribute("src") !== src) img.setAttribute("src", src);
+        img.style.cssText = `width:${W}px;height:${H}px;transform:translate(${Math.round(left)}px,${Math.round(top)}px)`;
+        img.title = `${t.buy ? "BUY" : "SELL"} · TP ${fmt(t.tp, this.digits)}`;
+        if (x.end) {
+          // The line just snapped: a short piece falls from the candle.
+          if (!x.end.tpHit && Date.now() - x.end.at < 1500) {
+            const y = this.series.priceToCoordinate(t.buy ? last.high : last.low);
+            if (y != null) lines += `<path class="crew-piece" d="M${lx} ${y} q6 ${t.buy ? -18 : 18} -2 ${t.buy ? -36 : 36}" stroke="${t.buy ? "#e8eef7" : "#c9a46a"}" stroke-width="${t.buy ? 0.8 : 1.5}" fill="none"/>`;
+          }
+          return;
+        }
+        if (t.buy) {
+          const tx = left + (CREW.tip[0] + 6) * S, ty = top + (CREW.tip[1] + 34) * S;
+          const hy = this.series.priceToCoordinate(last.high);
+          if (hy == null) return;
+          const mx = (tx + lx) / 2, my = Math.max(ty, hy) + 16;
+          lines += `<path d="M${tx} ${ty} Q${mx} ${my} ${lx} ${hy - 3}" stroke="#e8eef7" stroke-width=".7" fill="none" opacity=".85"/>`
+            + `<path d="M${lx} ${hy - 3} v2.6 q0 2 -2 1.6" stroke="#f2c14e" stroke-width=".9" fill="none"/>`;
+        } else {
+          const hx = left + (CREW.hand[0] + 6) * S, hy = top + (CREW.hand[1] + 34) * S;
+          const ky = this.series.priceToCoordinate(last.low);
+          if (ky == null) return;
+          lines += `<path d="M${hx} ${hy} L${lx} ${ky + 1}" stroke="#c9a46a" stroke-width="1.5" stroke-linecap="round"/>`
+            + `<path d="M${hx} ${hy} L${lx} ${ky + 1}" stroke="#6b4a1f" stroke-width="1.5" stroke-dasharray="1 2.5" opacity=".7"/>`
+            + `<path d="M${lx - 2} ${ky + 1} h4" stroke="#c9a46a" stroke-width="1.6" stroke-linecap="round"/>`;
+        }
+      });
+      box.querySelector(".crew-lines").innerHTML = lines;
+    },
+
     /* ----- mascots: a buyer and a seller on the chart, cheering or crying with the price ----- */
 
     mascotKey() { return "aurum.mascots." + this.symbolKey(); },
@@ -4902,7 +5018,9 @@
 
     mascotMenu(button) {
       const list = this.mascotList(), off = store.get("aurum.mascotsOff") === "1";
-      const items = [["girl", "👧 Thêm cô gái phe MUA (vui khi giá lên)"], ["boy", "👦 Thêm chàng trai phe BÁN (vui khi giá xuống)"]];
+      const crewOff = store.get("aurum.crewOff") === "1";
+      const items = [["girl", "👧 Thêm cô gái phe MUA (vui khi giá lên)"], ["boy", "👦 Thêm chàng trai phe BÁN (vui khi giá xuống)"],
+        ["crew", (crewOff ? "　" : "✓ ") + "🎣 Câu nến / kéo nến theo lệnh có TP"]];
       if (list.length) items.push(["toggle", off ? "👁 Hiện nhân vật" : "🙈 Ẩn nhân vật"], ["clear", `🗑 Xoá ${list.length} nhân vật trên mã này`]);
       const r = button.getBoundingClientRect(), menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
@@ -4914,6 +5032,7 @@
         const k = b.dataset.k;
         if (k === "girl" || k === "boy") this.addMascot(k);
         if (k === "toggle") { store.set("aurum.mascotsOff", off ? "0" : "1"); this.renderMascots(); }
+        if (k === "crew") { store.set("aurum.crewOff", crewOff ? "0" : "1"); this.crewShown = null; this.placeCrew(); }
         if (k === "clear" && confirm("Xoá các nhân vật trên mã này?")) { this.saveMascots([]); this.renderMascots(); }
         this.renderToolRail();
       }));
@@ -5922,7 +6041,7 @@
                 term.drawSpread(context, mediaSize.width);
                 term.drawNews(context, mediaSize.width, mediaSize.height);
                 term.drawAlerts(context, mediaSize.width);
-                if (!term.isPane) term.placeMascotsSoon();
+                if (!term.isPane) { term.placeMascotsSoon(); term.placeCrewSoon(); }
               }),
             }),
           }, {

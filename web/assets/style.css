@@ -879,3 +879,10 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .mascot .m-x { right: 2px; } .mascot .m-swap { right: 30px; }
 .mascot .m-rs { display: none; position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; border-right: 3px solid var(--gold); border-bottom: 3px solid var(--gold); border-radius: 0 0 6px 0; cursor: nwse-resize; }
 .mascot.sel .m-btn { display: grid; } .mascot.sel .m-rs { display: block; }
+
+/* trade characters (angler / hauler) and their line, over the plot */
+.crew { position: absolute; left: 0; top: 0; bottom: 0; z-index: 2; overflow: hidden; pointer-events: none; }
+.crew-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.crew-pic { position: absolute; left: 0; top: 0; }
+@keyframes crewFall { to { transform: translate(-10px, 60px) rotate(40deg); opacity: 0; } }
+.crew-piece { animation: crewFall 1.4s ease-in forwards; transform-box: fill-box; transform-origin: center; }
