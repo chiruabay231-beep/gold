@@ -1904,10 +1904,25 @@ struct CandleChart: View {
 
     // MARK: - Hit testing
 
+    /// The drawing a touch takes where drawings overlap: the picked one first (so it can be moved even under
+    /// another), else the topmost.
     private func hitDrawing(at location: CGPoint, layout: Layout) -> Drawing? {
+        if let id = selectedDrawingID, let picked = drawings.first(where: { $0.id == id }),
+           let hit = hitDrawing(at: location, layout: layout, among: [picked]) {
+            return hit
+        }
+        return hitDrawing(at: location, layout: layout, among: drawings)
+    }
+
+    /// Every drawing under a touch, topmost first.
+    private func drawingsHit(at location: CGPoint, layout: Layout) -> [Drawing] {
+        drawings.reversed().filter { hitDrawing(at: location, layout: layout, among: [$0]) != nil }
+    }
+
+    private func hitDrawing(at location: CGPoint, layout: Layout, among list: [Drawing]) -> Drawing? {
         let s = scale(layout: layout)
         let tolerance: CGFloat = 16
-        for d in drawings.reversed() {
+        for d in list.reversed() {
             let points = d.points.map { CGPoint(x: s.x(index(for: $0.time)), y: s.y($0.price)) }
             guard let p0 = points.first else { continue }
             if handlePoints(of: d, s: s).contains(where: { hypot($0.x - location.x, $0.y - location.y) < tolerance }) {
@@ -2208,7 +2223,17 @@ struct CandleChart: View {
             return
         }
         if let hit = hitDrawing(at: location, layout: layout) {
-            onSelectDrawing?(hit.id == selectedDrawingID ? nil : hit.id)
+            if hit.id == selectedDrawingID {
+                // A tap on the picked drawing with others under it picks the next one down; alone, lets it go.
+                let under = drawingsHit(at: location, layout: layout)
+                if under.count > 1, let i = under.firstIndex(where: { $0.id == hit.id }) {
+                    onSelectDrawing?(under[(i + 1) % under.count].id)
+                } else {
+                    onSelectDrawing?(nil)
+                }
+            } else {
+                onSelectDrawing?(hit.id)
+            }
             return
         }
         if selectedDrawingID != nil {

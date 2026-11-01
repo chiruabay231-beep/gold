@@ -373,7 +373,10 @@
         this.update();
         return true;
       }
-      const hit = this.hitTest(x, y, touch ? 14 : 8);
+      const tol = touch ? 14 : 8;
+      const hit = this.hitTest(x, y, tol);
+      const under = hit ? this.hitAll(x, y, tol).map((h) => h.d.id) : [];
+      const wasPicked = hit && hit.d.id === this.selected && hit.handle == null;
       if (!hit) {
         if (this.selected) { this.selected = null; this.update(); this.host.onChange(); return "deselect"; }
         return false;
@@ -382,7 +385,10 @@
       (this.peers || []).forEach((p) => { if (p.selected) { p.selected = null; p.update(); } });
       if (!hit.d.locked && !this.lockAll) {
         this.gesture = { kind: hit.handle != null ? "handle" : "move", d: hit.d, handle: hit.handle, x, y,
-          start: hit.d.pts.map((p) => Object.assign({}, p)), anchor: this.point(x, y, false), moved: false };
+          start: hit.d.pts.map((p) => Object.assign({}, p)), anchor: this.point(x, y, false), moved: false,
+          under: wasPicked ? under : null };
+      } else if (wasPicked && under.length > 1) {
+        this.gesture = { kind: "pick", d: hit.d, x, y, moved: false, under };
       }
       this.update();
       this.host.onChange();
@@ -458,7 +464,12 @@
         else if (g.moved && this.pending.pts.length >= spec.n) this.finish();
         else if (g.moved) { this.pending.pts.push(Object.assign({}, this.pending.pts[this.pending.pts.length - 1])); }
       } else if (g.moved) {
-        this.save();
+        if (g.kind !== "pick") this.save();
+      } else if (g.under && g.under.length > 1) {
+        // A tap (no drag) on the drawing already picked, with others under it: the next one down is picked.
+        const i = g.under.indexOf(g.d.id);
+        this.selected = g.under[(i + 1) % g.under.length];
+        this.host.onChange();
       }
       this.update();
       return true;
@@ -508,8 +519,10 @@
 
     /* ----- hit testing ----- */
 
-    hitTest(x, y, tol) {
-      if (this.hidden) return null;
+    /** Every drawing under (x, y), topmost first: `area` when only its filled inside is hit, not a line. */
+    hitAll(x, y, tol) {
+      if (this.hidden) return [];
+      const out = [];
       for (let k = this.list.length - 1; k >= 0; k--) {
         const d = this.list[k];
         if (!this.shownNow(d)) continue;
@@ -517,11 +530,20 @@
         if (pts.some(([a, b]) => a == null || b == null)) continue;
         if (d.id === this.selected) {
           const h = this.handles(d, pts).findIndex(([a, b]) => Math.hypot(a - x, b - y) <= tol);
-          if (h >= 0) return { d, handle: h };
+          if (h >= 0) { out.push({ d, handle: h, area: false }); continue; }
         }
-        if (this.near(d, pts, x, y, tol)) return { d, handle: null };
+        const hit = this.near(d, pts, x, y, tol);
+        if (hit) out.push({ d, handle: null, area: hit === "area" });
       }
-      return null;
+      return out;
+    }
+
+    /** The drawing a press at (x, y) takes when drawings overlap: the picked one's handle, then the picked one
+     *  itself (so it moves even under another), then a line or outline, then a filled inside — topmost first. */
+    hitTest(x, y, tol) {
+      const hits = this.hitAll(x, y, tol);
+      return hits.find((h) => h.handle != null) || hits.find((h) => h.d.id === this.selected)
+        || hits.find((h) => !h.area) || hits[0] || null;
     }
 
     handles(d, pts) {
@@ -547,16 +569,15 @@
         case "trendRay": return seg(p0, [p0[0] + (p1[0] - p0[0]) * 1000, p0[1] + (p1[1] - p0[1]) * 1000]);
         case "rectangle": case "ellipse": {
           // The outline only (inside too when filled), so the chart can still be dragged from an empty box.
-          if (d.fill && inBox(p0, p1) && d.tool === "rectangle") return true;
           const box = [[p0[0], p0[1]], [p1[0], p0[1]], [p1[0], p1[1]], [p0[0], p1[1]], [p0[0], p0[1]]];
           for (let i = 1; i < box.length; i++) if (seg(box[i - 1], box[i])) return true;
-          return false;
+          return d.fill && d.tool === "rectangle" && inBox(p0, p1) ? "area" : false;
         }
-        case "priceRange": case "fixedRangeVolume": case "fibRetracement": return inBox(p0, p1);
+        case "priceRange": case "fixedRangeVolume": case "fibRetracement": return inBox(p0, p1) ? "area" : false;
         case "longPosition": case "shortPosition": {
           const right = Math.max(p0[0], p1[0], p0[0] + 40);
           const yT = pts[2] ? pts[2][1] : this.y(this.target(d));
-          return inBox(p0, [right, p1[1]]) || inBox(p0, [right, yT]);
+          return inBox(p0, [right, p1[1]]) || inBox(p0, [right, yT]) ? "area" : false;
         }
         default:
           for (let i = 1; i < pts.length; i++) if (seg(pts[i - 1], pts[i])) return true;
