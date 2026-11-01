@@ -4938,7 +4938,10 @@
     placeCrew() {
       const box = $("crew");
       if (!box || !this.chart) return;
-      const done = (this.crewDone || []).filter((x) => Date.now() - x.at < 60000 && x.sym === this.symbolKey());
+      const now = performance.now(), wall = Date.now();
+      const dt = Math.min(0.05, Math.max(0.001, (now - (this.crewAt || now)) / 1000));
+      this.crewAt = now;
+      const done = (this.crewDone || []).filter((x) => wall - x.at < 60000 && x.sym === this.symbolKey());
       this.crewDone = done;
       const live = this.crewTrades().filter((t) => !done.some((d) => d.key === t.key));
       const bars = this.viewBars();
@@ -4947,8 +4950,7 @@
       const lx = ts.logicalToCoordinate(n - 1), spacing = ts.options().barSpacing || 6;
       if (lx == null) return;
       box.style.width = ts.width() + "px";
-      const S = CREW.scale, W = 172 * S, H = 206 * S, now = Date.now();
-      // One picture per trade (re-made only when the set of trades changes).
+      const S = CREW.scale, custom = this.crewCustom();
       const all = live.map((t) => ({ t, end: null })).concat(done.map((d) => ({ t: d, end: d })));
       const sig = all.map((x) => x.t.key).join("|") + "@" + S;
       if (this.crewShown !== sig) {
@@ -4959,79 +4961,214 @@
         if (pos > -2 && pos < room) ts.scrollToPosition(room, false);
         this.crewShown = sig;
       }
-      this.crewMotion = this.crewMotion || {};
-      let busy = false, lines = "";
+      this.crewPhys = this.crewPhys || {};
+      const paneW = ts.width(), paneH = (this.chart.paneSize ? this.chart.paneSize().height : box.clientHeight) || box.clientHeight;
+      let lines = "", moving = false;
       all.forEach((x, i) => {
         const t = x.t, img = box.querySelector(`img[data-k="${CSS.escape(t.key)}"]`);
-        const ytp = this.series.priceToCoordinate(t.tp);
+        const ytp = this.series.priceToCoordinate(t.tp), py = this.series.priceToCoordinate(last.close);
         if (!img || ytp == null) return;
-        // A jerk of the price: against the trade the character is dragged toward the candle and braces,
-        // with it the character is let go back; either way it settles again in about a third of a second.
-        const mo = this.crewMotion[t.key] || (this.crewMotion[t.key] = { last: last.close, dx: 0, dy: 0, at: 0, brace: 0 });
-        if (!x.end && last.close !== mo.last) {
-          const y0 = this.series.priceToCoordinate(mo.last), y1 = this.series.priceToCoordinate(last.close);
-          const against = t.buy ? last.close < mo.last : last.close > mo.last;
-          const m = Math.max(2, Math.min(16, Math.abs((y1 || 0) - (y0 || 0)) * 0.9)) * (S / 0.6);
-          if (against) { mo.dx = -m * 0.7; mo.dy = t.buy ? m : -m; mo.brace = now + 700; }
-          else { mo.dx = m * 0.35; mo.dy = t.buy ? -m * 0.5 : m * 0.5; }
-          mo.at = now; mo.last = last.close;
-        }
-        const k = Math.max(0, 1 - (now - mo.at) / 350);
-        if (k > 0 || now < mo.brace) busy = true;
-        const ox = mo.dx * k, oy = mo.dy * k;
-        // About five bars right of the newest one, standing on the TP; several trades side by side.
-        const cx = lx + spacing * 5 + (t.buy ? 30 : 40) * S + i * 70 * (S / 0.6) + ox;
-        let left = cx - (80 + 6) * S, top = ytp - (156 + 34) * S + oy;
-        // Zoomed in so far the TP is off the chart: the character stays at the edge, a tag says where the TP is.
-        const paneW = ts.width(), paneH = (this.chart.paneSize ? this.chart.paneSize().height : box.clientHeight) || box.clientHeight;
-        const off = top < 2 - Math.abs(oy) ? "up" : top > paneH - H - 2 + Math.abs(oy) ? "down" : null;
-        top = Math.max(2 + oy, Math.min(paneH - H - 2 + oy, top));
-        left = Math.max(2, Math.min(paneW - W - 2, left));
+        const side = t.buy ? "buy" : "sell", own = custom[side];
         const who = t.buy ? "angler" : "hauler";
-        const mood = x.end ? (x.end.tpHit ? "money" : "snap") : this.crewEffort(t, last.close, now < mo.brace);
-        const src = `${CREW.folder}/${who}-${mood}.svg`;
+        // Spring physics: a price tick kicks the character (harder the faster the price moved), a spring brings it
+        // back; the line's tension goes up when the candle pulls against the trade and drops when it gives way.
+        const ph = this.crewPhys[t.key] || (this.crewPhys[t.key] = { last: last.close, x: 0, y: 0, vx: 0, vy: 0, ten: 0.4, brace: 0 });
+        const effortNow = x.end ? null : this.crewEffort(t, last.close, false);
+        if (!x.end && last.close !== ph.last && py != null) {
+          const y0 = this.series.priceToCoordinate(ph.last);
+          const dpx = y0 == null ? 0 : py - y0;                     // + = the price fell on screen
+          const kick = Math.min(60, Math.abs(dpx)) * 9 * (S / 0.6);
+          const against = t.buy ? last.close < ph.last : last.close > ph.last;
+          if (t.buy) {
+            // Price up: she is lifted (jumps); price down: dragged down toward the candle, bowing.
+            ph.vy += against ? kick : -kick * 0.9; ph.vx += against ? -kick * 0.5 : kick * 0.25;
+          } else {
+            // Price down: he lunges forward and down; price up: yanked back and up toward the candle.
+            ph.vy += against ? -kick * 0.9 : kick * 0.6; ph.vx += against ? -kick * 0.7 : kick * 0.4;
+          }
+          ph.ten = against ? 1 : Math.max(0, ph.ten - 0.6);
+          if (against && Math.abs(dpx) > 1.5) ph.brace = wall + 450 + Math.min(900, Math.abs(dpx) * 40);
+          ph.last = last.close;
+        }
+        // Integrate the spring (slightly under-damped: a small bounce).
+        const k = 170, c = 15, lim = 70 * (S / 0.6);
+        ph.vx += (-k * ph.x - c * ph.vx) * dt; ph.vy += (-k * ph.y - c * ph.vy) * dt;
+        ph.x = Math.max(-lim, Math.min(lim, ph.x + ph.vx * dt)); ph.y = Math.max(-lim, Math.min(lim, ph.y + ph.vy * dt));
+        const restTen = { easy: 0.12, effort: 0.45, strain: 0.8, brace: 0.95 }[effortNow] || 0.4;
+        ph.ten += (restTen - ph.ten) * Math.min(1, dt * 2.5);
+        if (Math.abs(ph.vx) + Math.abs(ph.vy) > 2 || Math.abs(ph.x) + Math.abs(ph.y) > 0.4 || Math.abs(ph.ten - restTen) > 0.02) moving = true;
+        const braced = !x.end && wall < ph.brace;
+        const mood = x.end ? (x.end.tpHit ? "money" : "snap") : braced ? "brace" : effortNow;
+        // The picture: the character's own (uploaded) or the drawn one.
+        const W = own ? 172 * S * (own.w >= own.h ? 1.15 : 1) : 172 * S;
+        const H = own ? W * own.h / own.w : 206 * S;
+        const feet = own ? H * (own.gy || 1) : (156 + 34) * S;
+        const cx = lx + spacing * 5 + (t.buy ? 30 : 40) * S + i * 70 * (S / 0.6);
+        let left = cx - (own ? W / 2 : (80 + 6) * S) + ph.x, top = ytp - feet + ph.y;
+        const off = top < 2 ? "up" : top + feet > paneH - 2 ? "down" : null;
+        top = Math.max(2, Math.min(paneH - feet - 2, top));
+        left = Math.max(2, Math.min(paneW - W - 2, left));
+        const src = own ? own.src : `${CREW.folder}/${who}-${mood}.svg`;
         if (img.getAttribute("src") !== src) img.setAttribute("src", src);
-        img.style.cssText = `width:${W}px;height:${H}px;transform:translate(${left.toFixed(1)}px,${top.toFixed(1)}px)`;
+        // An uploaded picture shows the states by its pose: leaning back harder the harder the pull, a red glow
+        // when braced, a hop with the money, knocked over at the SL. The drawn ones also tilt a little with the spring.
+        const lean = own ? ({ easy: 0, effort: 5, strain: 10, brace: 14, money: 0, snap: 32 }[mood] || 0) * (t.buy ? 1 : 1) : 0;
+        const tilt = Math.max(-10, Math.min(10, ph.vx * 0.03)) + lean;
+        const flip = "";
+        img.style.cssText = `width:${W.toFixed(1)}px;height:${H.toFixed(1)}px;transform-origin:50% ${((feet / H) * 100).toFixed(1)}%;`
+          + `transform:translate(${left.toFixed(1)}px,${top.toFixed(1)}px) rotate(${tilt.toFixed(2)}deg)${flip};`
+          + (own ? (mood === "brace" ? "filter:drop-shadow(0 0 6px #ff4a2a) drop-shadow(0 0 2px #ff4a2a);" : mood === "snap" ? "filter:grayscale(.6) drop-shadow(0 0 3px #f2c14e);" : "filter:drop-shadow(0 0 3px #f2c14e);") : "");
         img.title = `${t.buy ? "BUY" : "SELL"} · TP ${fmt(t.tp, this.digits)}`;
         if (off) {
           // Beside the character (right, or left at the chart's right edge), level with its feet / head.
           const right = left + W + 82 < paneW;
           const tx = right ? left + W + 40 : left - 40, ty = off === "up" ? top + 12 : top + H - 12;
-          const label = `TP ${off === "up" ? "▲" : "▼"} ${fmt(t.tp, this.digits)}`;
           lines += `<g transform="translate(${tx.toFixed(1)} ${ty.toFixed(1)})"><rect x="-38" y="-9" width="76" height="16" rx="8" fill="#14b88a" opacity=".92"/>`
-            + `<text y="3.4" text-anchor="middle" font-size="10" font-weight="700" fill="#fff" font-family="-apple-system, Segoe UI, Roboto, sans-serif">${label}</text></g>`;
+            + `<text y="3.4" text-anchor="middle" font-size="10" font-weight="700" fill="#fff" font-family="-apple-system, Segoe UI, Roboto, sans-serif">TP ${off === "up" ? "▲" : "▼"} ${fmt(t.tp, this.digits)}</text></g>`;
         }
-        const py = this.series.priceToCoordinate(last.close);
+        if (own && x.end) {
+          lines += x.end.tpHit
+            ? `<text x="${(left + W / 2).toFixed(1)}" y="${(top - 4).toFixed(1)}" text-anchor="middle" font-size="${(22 * S / 0.6).toFixed(0)}">💰</text>`
+            : `<text x="${(left + W / 2).toFixed(1)}" y="${(top - 4).toFixed(1)}" text-anchor="middle" font-size="${(20 * S / 0.6).toFixed(0)}" fill="#ff5a70" font-weight="900">!</text>`;
+        }
         if (x.end) {
-          // The line just snapped: a short piece falls from the candle.
-          if (!x.end.tpHit && now - x.end.at < 1500 && py != null) {
+          if (!x.end.tpHit && wall - x.end.at < 1500 && py != null) {
             lines += `<path class="crew-piece" d="M${lx} ${py} q6 ${t.buy ? -18 : 18} -2 ${t.buy ? -36 : 36}" stroke="${t.buy ? "#e8eef7" : "#c9a46a"}" stroke-width="${t.buy ? 0.55 : 1.1}" fill="none"/>`;
           }
           return;
         }
         if (py == null) return;
-        // The line from the rod's tip / the hands to the price on the newest bar: slack when at ease,
-        // tight and quivering when pulling hard.
-        const at = (CREW.points[who] || {})[mood] || (t.buy ? [14, 40] : [62, 77]);
-        const sx = left + (at[0] + 6) * S, sy = top + (at[1] + 34) * S;
-        const sag = { easy: 20, effort: 9, strain: 2, brace: 0 }[mood] * (S / 0.6);
-        const shake = mood === "strain" || mood === "brace" ? Math.sin(now / 28) * 1.6 : 0;
-        if (shake) busy = true;
-        const mx = (sx + lx) / 2 + shake, my = (sy + py) / 2 + sag + shake;
+        // Where the line starts: the uploaded picture's marked point (turned with it), else the drawn rod / shoulder.
+        let sx, sy;
+        if (own) {
+          const ax = own.ax * W, ay = own.ay * H;
+          const ox = W / 2, oy = feet, r = (tilt * Math.PI) / 180;
+          sx = left + ox + (ax - ox) * Math.cos(r) - (ay - oy) * Math.sin(r);
+          sy = top + oy + (ax - ox) * Math.sin(r) + (ay - oy) * Math.cos(r);
+        } else {
+          const at = (CREW.points[who] || {})[mood] || (t.buy ? [14, 40] : [62, 77]);
+          const ax = (at[0] + 6) * S, ay = (at[1] + 34) * S, ox = (80 + 6) * S, oy = feet, r = ((tilt - lean) * Math.PI) / 180;
+          sx = left + ox + (ax - ox) * Math.cos(r) - (ay - oy) * Math.sin(r);
+          sy = top + oy + (ax - ox) * Math.sin(r) + (ay - oy) * Math.cos(r);
+        }
+        // Slack when the pull eases (it sags), tight and quivering when the candle pulls hard.
+        const len = Math.hypot(lx - sx, py - sy);
+        const sag = (1 - ph.ten) * Math.min(40, len * 0.22) * (S / 0.6);
+        const quiver = ph.ten > 0.7 ? Math.sin(now / 22) * 1.8 * (ph.ten - 0.6) * 2.5 : 0;
+        if (quiver) moving = true;
+        const mx = (sx + lx) / 2 + quiver, my = (sy + py) / 2 + sag + quiver;
+        const d = `M${sx.toFixed(1)} ${sy.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${lx} ${py.toFixed(1)}`;
         if (t.buy) {
-          lines += `<path d="M${sx.toFixed(1)} ${sy.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${lx} ${py.toFixed(1)}" stroke="#e8eef7" stroke-width=".55" fill="none" opacity=".9"/>`
+          lines += `<path d="${d}" stroke="#e8eef7" stroke-width="${(0.45 + ph.ten * 0.35).toFixed(2)}" fill="none" opacity=".9"/>`
             + `<path d="M${lx} ${py.toFixed(1)} v2.2 q0 1.6 -1.6 1.3" stroke="#f2c14e" stroke-width=".8" fill="none"/>`;
         } else {
-          const d = `M${sx.toFixed(1)} ${sy.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${lx} ${py.toFixed(1)}`;
-          lines += `<path d="${d}" stroke="#c9a46a" stroke-width="1.1" fill="none" stroke-linecap="round"/>`
-            + `<path d="${d}" stroke="#6b4a1f" stroke-width="1.1" fill="none" stroke-dasharray="1 2" opacity=".7"/>`
+          const w = (0.9 + ph.ten * 0.5).toFixed(2);
+          lines += `<path d="${d}" stroke="#c9a46a" stroke-width="${w}" fill="none" stroke-linecap="round"/>`
+            + `<path d="${d}" stroke="#6b4a1f" stroke-width="${w}" fill="none" stroke-dasharray="1 2" opacity=".7"/>`
             + `<circle cx="${lx}" cy="${py.toFixed(1)}" r="1.4" fill="none" stroke="#c9a46a" stroke-width="1"/>`;
         }
       });
       box.querySelector(".crew-lines").innerHTML = lines;
-      // Keep drawing while a jerk settles or a line quivers.
-      clearTimeout(this.crewTimer);
-      if (busy) this.crewTimer = setTimeout(() => this.placeCrewSoon(), 40);
+      // Keep animating (every frame) while a spring, the line's tension or a quiver is still moving.
+      cancelAnimationFrame(this.crewLoop);
+      if (moving) this.crewLoop = requestAnimationFrame(() => this.placeCrew());
+      else this.crewAt = 0;
+    },
+
+    /** Pictures uploaded for the BUY / SELL character: { buy: { src, w, h, ax, ay, flip }, sell: … }. */
+    crewCustom() {
+      if (this.crewCustomCache === undefined) { try { this.crewCustomCache = JSON.parse(store.get("aurum.crewCustom") || "{}") || {}; } catch { this.crewCustomCache = {}; } }
+      return this.crewCustomCache;
+    },
+
+    saveCrewCustom(v) {
+      this.crewCustomCache = v;
+      try { store.set("aurum.crewCustom", JSON.stringify(v)); } catch { toast("Ảnh quá lớn để lưu trong trình duyệt", true); }
+      this.crewShown = null;
+      this.placeCrew();
+    },
+
+    /** Your own pictures for the characters: pick one, then mark where the line starts (rod tip / shoulder) and
+     *  the ground the feet stand on, erase what should not show (a fish, a watermark), flip it to face the candles. */
+    crewPictureSheet() {
+      const cur = JSON.parse(JSON.stringify(this.crewCustom()));
+      sheet.open(`<h3>Ảnh nhân vật của bạn</h3>
+        <p class="muted small">Dùng ảnh bạn có quyền sử dụng (PNG nền trong suốt là đẹp nhất). Người câu nên quay mặt sang trái, về phía nến (dùng <b>Lật ngang</b>).
+        Chọn công cụ rồi chạm vào ảnh: <b>Nối dây</b> = đầu cần câu / vai, <b>Mặt đất</b> = chỗ chân đứng (đặt trên mức TP), <b>Tẩy</b> = xoá phần thừa (con cá, chữ, bóng nước).</p>
+        <div class="cp-tabs"><button type="button" data-side="buy" class="on">🎣 BUY — người câu</button><button type="button" data-side="sell">🪢 SELL — người kéo</button></div>
+        <div class="cp-edit"></div>
+        <div class="row-btns end"><button class="btn btn-ghost btn-small" data-close>Huỷ</button><button class="btn btn-gold btn-small" id="cpSave">Lưu</button></div>`, (el) => {
+        let side = "buy";
+        const tabs = el.querySelectorAll(".cp-tabs button");
+        tabs.forEach((b) => (b.onclick = () => { side = b.dataset.side; tabs.forEach((x) => x.classList.toggle("on", x === b)); this.crewEditor(el.querySelector(".cp-edit"), cur, side); }));
+        this.crewEditor(el.querySelector(".cp-edit"), cur, side);
+        el.querySelector("#cpSave").onclick = () => { this.saveCrewCustom(cur); sheet.close(); toast("Đã lưu ảnh nhân vật"); };
+      });
+    },
+
+    crewEditor(box, cur, side) {
+      const v = cur[side];
+      box.innerHTML = `<div class="row-btns"><label class="btn btn-ghost btn-small">Chọn ảnh…<input type="file" accept="image/*" hidden></label>
+        ${v ? `<button class="btn btn-ghost btn-small" data-a="flip">⇋ Lật ngang</button><button class="btn btn-ghost btn-small" data-a="clear">Bỏ ảnh</button>` : ""}</div>
+        ${v ? `<div class="cp-tools"><button type="button" data-t="dot" class="on">● Nối dây</button><button type="button" data-t="ground">▁ Mặt đất</button>
+          <button type="button" data-t="erase">⌫ Tẩy</button><label class="muted small">cỡ tẩy <input type="range" min="4" max="40" value="14" data-a="size"></label></div>
+          <div class="cp-pic"><canvas></canvas><i class="cp-dot"></i><i class="cp-ground"></i></div>`
+          : '<p class="muted small">Chưa có ảnh — đang dùng hình vẽ sẵn.</p>'}`;
+      box.querySelector("input[type=file]").onchange = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => {
+          const im = new Image();
+          im.onload = () => {
+            // Down to 360 px on the long side (kept in the browser).
+            const k = Math.min(1, 360 / Math.max(im.width, im.height));
+            const cv = document.createElement("canvas");
+            cv.width = Math.round(im.width * k); cv.height = Math.round(im.height * k);
+            cv.getContext("2d").drawImage(im, 0, 0, cv.width, cv.height);
+            cur[side] = { src: cv.toDataURL("image/png"), w: cv.width, h: cv.height, ax: side === "buy" ? 0.06 : 0.45, ay: 0.08, gy: 0.98 };
+            this.crewEditor(box, cur, side);
+          };
+          im.src = reader.result;
+        };
+        reader.readAsDataURL(file);
+      };
+      if (!v) return;
+      const canvas = box.querySelector("canvas"), g = canvas.getContext("2d");
+      canvas.width = v.w; canvas.height = v.h;
+      const img = new Image();
+      img.onload = () => { g.clearRect(0, 0, v.w, v.h); g.drawImage(img, 0, 0); };
+      img.src = v.src;
+      const marks = () => {
+        box.querySelector(".cp-dot").style.cssText = `left:${(v.ax * 100).toFixed(1)}%;top:${(v.ay * 100).toFixed(1)}%`;
+        box.querySelector(".cp-ground").style.top = `${((v.gy || 1) * 100).toFixed(1)}%`;
+      };
+      marks();
+      let tool = "dot", size = 14, erasing = false;
+      box.querySelectorAll("[data-t]").forEach((b) => (b.onclick = () => { tool = b.dataset.t; box.querySelectorAll("[data-t]").forEach((x) => x.classList.toggle("on", x === b)); }));
+      box.querySelector("[data-a=size]").oninput = (e) => { size = +e.target.value; };
+      const at = (e) => { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height]; };
+      const rub = (e) => {
+        const [fx, fy] = at(e), r = canvas.getBoundingClientRect();
+        g.save(); g.globalCompositeOperation = "destination-out";
+        g.beginPath(); g.arc(fx * v.w, fy * v.h, (size / 2) * (v.w / r.width), 0, Math.PI * 2); g.fill(); g.restore();
+      };
+      canvas.onpointerdown = (e) => {
+        e.preventDefault();
+        const [fx, fy] = at(e);
+        if (tool === "dot") { v.ax = fx; v.ay = fy; marks(); }
+        else if (tool === "ground") { v.gy = fy; marks(); }
+        else { erasing = true; canvas.setPointerCapture(e.pointerId); rub(e); }
+      };
+      canvas.onpointermove = (e) => { if (erasing) rub(e); };
+      canvas.onpointerup = canvas.onpointercancel = () => { if (erasing) { erasing = false; v.src = canvas.toDataURL("image/png"); } };
+      box.querySelector("[data-a=flip]").onclick = () => {
+        const c2 = document.createElement("canvas"); c2.width = v.w; c2.height = v.h;
+        const g2 = c2.getContext("2d"); g2.translate(v.w, 0); g2.scale(-1, 1); g2.drawImage(canvas, 0, 0);
+        v.src = c2.toDataURL("image/png"); v.ax = 1 - v.ax;
+        this.crewEditor(box, cur, side);
+      };
+      box.querySelector("[data-a=clear]").onclick = () => { delete cur[side]; this.crewEditor(box, cur, side); };
     },
 
     /* ----- mascots: a buyer and a seller on the chart, cheering or crying with the price ----- */
@@ -5069,7 +5206,8 @@
       const items = [["girl", "👧 Thêm cô gái phe MUA (vui khi giá lên)"], ["boy", "👦 Thêm chàng trai phe BÁN (vui khi giá xuống)"],
         ["crew", (crewOff ? "　" : "✓ ") + "🎣 Câu nến / kéo nến theo lệnh có TP"],
         ["crewBig", "➕ Nhân vật câu / kéo to lên"], ["crewSmall", "➖ Nhân vật câu / kéo nhỏ lại"],
-        ["crewStyle", CREW.style === "anime" ? "🌑 Câu / kéo kiểu bóng đen viền vàng" : "🎨 Câu / kéo kiểu anime"]];
+        ["crewStyle", CREW.style === "anime" ? "🌑 Câu / kéo kiểu bóng đen viền vàng" : "🎨 Câu / kéo kiểu anime"],
+        ["crewPics", "🖼 Dùng ảnh nhân vật của bạn…"]];
       if (list.length) items.push(["toggle", off ? "👁 Hiện nhân vật" : "🙈 Ẩn nhân vật"], ["clear", `🗑 Xoá ${list.length} nhân vật trên mã này`]);
       const r = button.getBoundingClientRect(), menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
@@ -5082,6 +5220,7 @@
         if (k === "girl" || k === "boy") this.addMascot(k);
         if (k === "toggle") { store.set("aurum.mascotsOff", off ? "0" : "1"); this.renderMascots(); }
         if (k === "crew") { store.set("aurum.crewOff", crewOff ? "0" : "1"); this.crewShown = null; this.placeCrew(); }
+        if (k === "crewPics") { this.crewPictureSheet(); return; }
         if (k === "crewStyle") { store.set("aurum.crewStyle", CREW.style === "anime" ? "shadow" : "anime"); this.placeCrew(); }
         if (k === "crewBig" || k === "crewSmall") {
           const size = Math.max(0.3, Math.min(1.4, Math.round((CREW.scale + (k === "crewBig" ? 0.1 : -0.1)) * 10) / 10));
