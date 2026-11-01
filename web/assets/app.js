@@ -1125,6 +1125,8 @@
     get scale() { return +(store.get("aurum.crewScale") || 0.6); },
     /** "shadow" (silhouettes with a golden rim, the default) or "anime". */
     get style() { return store.get("aurum.crewStyle") === "anime" ? "anime" : "shadow"; },
+    /** How long the money / snapped picture stays after a TP / SL. */
+    endMs: 1200,
     get folder() { return this.style === "anime" ? "assets/crew" : "assets/crew2"; },
     /** Where the line starts in each picture (made with the pictures by tools/mascots/build.py). */
     get points() { const p = window.CREW_POINTS || { angler: {}, hauler: {} }; return this.style === "anime" ? p : p.shadow || p; },
@@ -4902,7 +4904,8 @@
 
     /** Open trades with a TP on this chart: the replay's, or the MT5 positions on this symbol. */
     crewTrades() {
-      if (store.get("aurum.crewOff") === "1") return [];
+      // On the 1-minute chart only (a bar moves enough there for the pull to read).
+      if (store.get("aurum.crewOff") === "1" || this.interval !== "1m") return [];
       if (this.replay) return this.replay.trades.filter((t) => t.target).map((t) => ({ key: "rp:" + t.id, buy: t.side === "long", entry: t.entry, tp: t.target, sl: t.stop }));
       if (!this.owner) return [];
       return this.positions.filter((p) => p.symbol === this.symbol && p.target).map((p) => ({ key: "pos:" + p.ticket, buy: p.side === "long", entry: p.entry, tp: p.target, sl: p.stop }));
@@ -4910,14 +4913,14 @@
 
     /** Every trade with a character on the chart now: the open ones and those closed less than a minute ago. */
     crewShowing() {
-      const done = (this.crewDone || []).filter((x) => Date.now() - x.at < 60000 && x.sym === this.symbolKey());
+      const done = (this.crewDone || []).filter((x) => Date.now() - x.at < CREW.endMs && x.sym === this.symbolKey());
       return this.crewTrades().filter((t) => !done.some((d) => d.key === t.key)).concat(done);
     },
 
     /** A trade closed at its TP (money) or SL (the line snaps): its character stays a minute. */
     crewEnded(trade, tpHit) {
       if (!trade || !trade.tp) return;
-      this.crewDone = (this.crewDone || []).filter((x) => Date.now() - x.at < 60000 && x.key !== trade.key);
+      this.crewDone = (this.crewDone || []).filter((x) => Date.now() - x.at < CREW.endMs && x.key !== trade.key);
       this.crewDone.push(Object.assign({}, trade, { tpHit, at: Date.now(), sym: this.symbolKey() }));
       this.placeCrewSoon();
     },
@@ -4941,7 +4944,7 @@
       const now = performance.now(), wall = Date.now();
       const dt = Math.min(0.05, Math.max(0.001, (now - (this.crewAt || now)) / 1000));
       this.crewAt = now;
-      const done = (this.crewDone || []).filter((x) => wall - x.at < 60000 && x.sym === this.symbolKey());
+      const done = (this.crewDone || []).filter((x) => wall - x.at < CREW.endMs && x.sym === this.symbolKey() && this.interval === "1m");
       this.crewDone = done;
       const live = this.crewTrades().filter((t) => !done.some((d) => d.key === t.key));
       const bars = this.viewBars();
@@ -5097,6 +5100,7 @@
         }
       });
       box.querySelector(".crew-lines").innerHTML = lines;
+      if (done.length) moving = true;
       // Keep animating (every frame) while a spring, the line's tension or a quiver is still moving.
       cancelAnimationFrame(this.crewLoop);
       if (moving) this.crewLoop = requestAnimationFrame(() => this.placeCrew());
@@ -5105,7 +5109,22 @@
 
     /** Pictures uploaded for the BUY / SELL character: { buy: { src, w, h, ax, ay, flip }, sell: … }. */
     crewCustom() {
-      if (this.crewCustomCache === undefined) { try { this.crewCustomCache = JSON.parse(store.get("aurum.crewCustom") || "{}") || {}; } catch { this.crewCustomCache = {}; } }
+      if (this.crewCustomCache === undefined) {
+        try { this.crewCustomCache = JSON.parse(store.get("aurum.crewCustom") || "{}") || {}; } catch { this.crewCustomCache = {}; }
+        // Pictures saved before the line's start was found by itself: find it on the rod's tip / the fist now, once.
+        Object.entries(this.crewCustomCache).forEach(([side, v]) => {
+          if (!v || v.anchorV === 2) return;
+          const im = new Image();
+          im.onload = () => {
+            const cv = document.createElement("canvas");
+            cv.width = v.w; cv.height = v.h;
+            cv.getContext("2d").drawImage(im, 0, 0, v.w, v.h);
+            Object.assign(v, this.crewFindAnchor(cv, side), { anchorV: 2 });
+            this.saveCrewCustom(this.crewCustomCache);
+          };
+          im.src = v.src;
+        });
+      }
       return this.crewCustomCache;
     },
 
@@ -5130,7 +5149,10 @@
         const tabs = el.querySelectorAll(".cp-tabs button");
         tabs.forEach((b) => (b.onclick = () => { side = b.dataset.side; tabs.forEach((x) => x.classList.toggle("on", x === b)); this.crewEditor(el.querySelector(".cp-edit"), cur, side); }));
         this.crewEditor(el.querySelector(".cp-edit"), cur, side);
-        el.querySelector("#cpSave").onclick = () => { this.saveCrewCustom(cur); sheet.close(); toast("Đã lưu ảnh nhân vật"); };
+        el.querySelector("#cpSave").onclick = () => {
+          Object.values(cur).forEach((v) => { if (v) v.anchorV = 2; });
+          this.saveCrewCustom(cur); sheet.close(); toast("Đã lưu ảnh nhân vật");
+        };
       });
     },
 
