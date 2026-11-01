@@ -4987,6 +4987,7 @@
             ph.vy += against ? -kick * 0.9 : kick * 0.6; ph.vx += against ? -kick * 0.7 : kick * 0.4;
           }
           ph.ten = against ? 1 : Math.max(0, ph.ten - 0.6);
+          if (against) { ph.hot = Math.min(1, (ph.hot || 0) + Math.abs(dpx) / 12); ph.kickAt = now; ph.kick = Math.abs(dpx); }
           if (against && Math.abs(dpx) > 1.5) ph.brace = wall + 450 + Math.min(900, Math.abs(dpx) * 40);
           ph.last = last.close;
         }
@@ -4996,6 +4997,9 @@
         ph.x = Math.max(-lim, Math.min(lim, ph.x + ph.vx * dt)); ph.y = Math.max(-lim, Math.min(lim, ph.y + ph.vy * dt));
         const restTen = { easy: 0.12, effort: 0.45, strain: 0.8, brace: 0.95 }[effortNow] || 0.4;
         ph.ten += (restTen - ph.ten) * Math.min(1, dt * 2.5);
+        // How red the line glows: a hard jerk against the trade heats it, it cools in about a second.
+        ph.hot = Math.max(0, (ph.hot || 0) - dt * 0.9);
+        if (ph.hot > 0.01) moving = true;
         if (Math.abs(ph.vx) + Math.abs(ph.vy) > 2 || Math.abs(ph.x) + Math.abs(ph.y) > 0.4 || Math.abs(ph.ten - restTen) > 0.02) moving = true;
         const braced = !x.end && wall < ph.brace;
         const mood = x.end ? (x.end.tpHit ? "money" : "snap") : braced ? "brace" : effortNow;
@@ -5058,14 +5062,35 @@
         if (quiver) moving = true;
         const mx = (sx + lx) / 2 + quiver, my = (sy + py) / 2 + sag + quiver;
         const d = `M${sx.toFixed(1)} ${sy.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${lx} ${py.toFixed(1)}`;
-        if (t.buy) {
-          lines += `<path d="${d}" stroke="#e8eef7" stroke-width="${(0.45 + ph.ten * 0.35).toFixed(2)}" fill="none" opacity=".9"/>`
-            + `<path d="M${lx} ${py.toFixed(1)} v2.2 q0 1.6 -1.6 1.3" stroke="#f2c14e" stroke-width=".8" fill="none"/>`;
-        } else {
-          const w = (0.9 + ph.ten * 0.5).toFixed(2);
-          lines += `<path d="${d}" stroke="#c9a46a" stroke-width="${w}" fill="none" stroke-linecap="round"/>`
-            + `<path d="${d}" stroke="#6b4a1f" stroke-width="${w}" fill="none" stroke-dasharray="1 2" opacity=".7"/>`
-            + `<circle cx="${lx}" cy="${py.toFixed(1)}" r="1.4" fill="none" stroke="#c9a46a" stroke-width="1"/>`;
+        // Black line (with a pale halo on a dark chart), turning red-hot when the price jerks hard against the trade.
+        const light = document.documentElement.dataset.theme === "light", hot = Math.min(1, ph.hot || 0);
+        const mix = (a, b, f) => "#" + [0, 2, 4].map((i) => Math.round(parseInt(a.slice(i + 1, i + 3), 16) * (1 - f) + parseInt(b.slice(i + 1, i + 3), 16) * f).toString(16).padStart(2, "0")).join("");
+        const color = mix(light ? "#111318" : "#05070a", "#ff2a3a", hot);
+        const w = (t.buy ? 0.6 + ph.ten * 0.4 : 1.1 + ph.ten * 0.6) * (1 + hot * 0.6);
+        if (!light) lines += `<path d="${d}" stroke="#d8dee9" stroke-width="${(w + 1.4).toFixed(2)}" fill="none" opacity="${(0.35 * (1 - hot)).toFixed(2)}" stroke-linecap="round"/>`;
+        if (hot > 0.05) lines += `<path d="${d}" stroke="#ff3b2f" stroke-width="${(w + 4 * hot).toFixed(2)}" fill="none" opacity="${(0.32 * hot).toFixed(2)}" stroke-linecap="round"/>`;
+        lines += `<path d="${d}" stroke="${color}" stroke-width="${w.toFixed(2)}" fill="none" stroke-linecap="round"/>`;
+        if (!t.buy) lines += `<path d="${d}" stroke="${hot > 0.3 ? "#ffd2a0" : "#3a3f4c"}" stroke-width="${w.toFixed(2)}" fill="none" stroke-dasharray="1 2.4" opacity=".55"/>`;
+        lines += t.buy ? `<path d="M${lx} ${py.toFixed(1)} v2.2 q0 1.6 -1.6 1.3" stroke="${color}" stroke-width=".9" fill="none"/>`
+          : `<circle cx="${lx}" cy="${py.toFixed(1)}" r="1.5" fill="none" stroke="${color}" stroke-width="1.1"/>`;
+        if (hot > 0.35) {
+          // Sparks running along the hot line, and strain streaks at the hands.
+          for (let k = 0; k < 4; k++) {
+            const f = ((now / 380 + k / 4) % 1), q = 1 - f;
+            const px = q * q * sx + 2 * q * f * mx + f * f * lx, pyy = q * q * sy + 2 * q * f * my + f * f * py;
+            lines += `<circle cx="${px.toFixed(1)}" cy="${pyy.toFixed(1)}" r="${(1.2 + hot).toFixed(1)}" fill="#ffd54a" opacity="${(hot * (0.5 + 0.5 * Math.sin(now / 60 + k))).toFixed(2)}"/>`;
+          }
+          const ang = Math.atan2(py - sy, lx - sx) + Math.PI;
+          [-0.5, 0, 0.5].forEach((o, k) => {
+            const a = ang + o, r0 = 6 * (S / 0.6), r1 = r0 + (6 + hot * 8) * (S / 0.6);
+            lines += `<path d="M${(sx + Math.cos(a) * r0).toFixed(1)} ${(sy + Math.sin(a) * r0).toFixed(1)} L${(sx + Math.cos(a) * r1).toFixed(1)} ${(sy + Math.sin(a) * r1).toFixed(1)}" stroke="${k === 1 ? "#ff3b2f" : "#ffb24a"}" stroke-width="1.4" stroke-linecap="round" opacity="${hot.toFixed(2)}"/>`;
+          });
+        }
+        if (ph.kickAt && now - ph.kickAt < 350 && ph.kick > 2) {
+          // A hard jerk kicks up dust at the feet.
+          const fx = left + W / 2, fy = top + feet, f = (now - ph.kickAt) / 350;
+          lines += `<path d="M${(fx - 10 - f * 14).toFixed(1)} ${fy.toFixed(1)} q-5 -${(4 + f * 4).toFixed(1)} -10 0 M${(fx + 10 + f * 14).toFixed(1)} ${fy.toFixed(1)} q5 -${(4 + f * 4).toFixed(1)} 10 0" stroke="${light ? "#8b95a7" : "#c9d1de"}" stroke-width="1.3" fill="none" opacity="${(1 - f).toFixed(2)}"/>`;
+          moving = true;
         }
       });
       box.querySelector(".crew-lines").innerHTML = lines;

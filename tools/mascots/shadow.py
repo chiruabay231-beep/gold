@@ -111,17 +111,31 @@ def angler_body():
     return head, torso, pack, front_leg, back_leg
 
 
-def rod_and_arms(tip, broken=False):
+FLEX = {"easy": (1.5, "2.2s"), "effort": (3, ".9s"), "strain": (4.5, ".45s"), "brace": (5.5, ".28s")}
+
+
+def flexing(paths, state):
+    """Arm outlines that bend at the elbow and back, in time with the pull: `paths(e)` gives them for a bend e."""
+    if state not in FLEX:
+        return "".join(f'<path d="{d}" {F}/>' for d in paths(0))
+    amp, dur = FLEX[state]
+    rest, bent = paths(0), paths(amp)
+    return "".join(f'<path d="{a}" {F}><animate attributeName="d" values="{a};{b};{a}" dur="{dur}" repeatCount="indefinite"/></path>' for a, b in zip(rest, bent))
+
+
+def rod_and_arms(tip, broken=False, state=None):
     b = ROD_BUTT
     straight = (4, 46)
     # hands on the straight part; the rod bends beyond them toward the (lower) tip
     h1 = (b[0] + (straight[0] - b[0]) * .26, b[1] + (straight[1] - b[1]) * .26)
     h2 = (b[0] + (straight[0] - b[0]) * .42, b[1] + (straight[1] - b[1]) * .42)
     ctrl = (b[0] + (straight[0] - b[0]) * .7, b[1] + (straight[1] - b[1]) * .7)
-    arms = (f'<path d="M85 74 Q92 86 85 97 Q80 101 74 99 Q77 88 77 79Z" {F}/>'
-            f'<path d="M80 92 Q70 {h1[1] - 1:.1f} {h1[0]:.1f} {h1[1] - 3:.1f} L{h1[0] - 1:.1f} {h1[1] + 4:.1f} Q70 {h1[1] + 6:.1f} 81 100Z" {F}/>'
-            f'<ellipse cx="{h1[0]:.1f}" cy="{h1[1]:.1f}" rx="4.6" ry="4.2" {F}/>'
-            f'<path d="M77 71 Q63 {h2[1] - 4:.1f} {h2[0] + 1:.1f} {h2[1] - 3:.1f} L{h2[0]:.1f} {h2[1] + 3:.1f} Q64 {h2[1] + 2:.1f} 79 79Z" {F}/>'
+    def paths(e):
+        # e bends the elbows: the upper arm bulges out, the forearms bow down toward the pull
+        return [f"M85 74 Q{92 + e:.1f} {86 + e * .4:.1f} 85 97 Q80 101 74 99 Q{77 + e * .6:.1f} 88 77 79Z",
+                f"M80 92 Q{70 - e * .3:.1f} {h1[1] - 1 + e:.1f} {h1[0]:.1f} {h1[1] - 3:.1f} L{h1[0] - 1:.1f} {h1[1] + 4:.1f} Q{70 - e * .3:.1f} {h1[1] + 6 + e:.1f} 81 100Z",
+                f"M77 71 Q{63 - e * .2:.1f} {h2[1] - 4 + e * 1.2:.1f} {h2[0] + 1:.1f} {h2[1] - 3:.1f} L{h2[0]:.1f} {h2[1] + 3:.1f} Q{64 - e * .2:.1f} {h2[1] + 2 + e * 1.2:.1f} 79 79Z"]
+    arms = (flexing(paths, state) + f'<ellipse cx="{h1[0]:.1f}" cy="{h1[1]:.1f}" rx="4.6" ry="4.2" {F}/>'
             f'<ellipse cx="{h2[0]:.1f}" cy="{h2[1]:.1f}" rx="4.2" ry="3.8" {F}/>')
     if broken:
         rod = (f'<path d="M{b[0]} {b[1]} L{h2[0] - 10:.1f} {h2[1] - 8:.1f}" stroke="#05060a" stroke-width="2.4" stroke-linecap="round"/>'
@@ -142,7 +156,7 @@ def angler(state):
     head, torso, pack, front_leg, back_leg = angler_body()
     if state in ANGLER:
         cfg = ANGLER[state]
-        person = back_leg + pack + torso + front_leg + twitch(state, rod_and_arms(cfg["tip"])) + head
+        person = back_leg + pack + torso + front_leg + twitch(state, rod_and_arms(cfg["tip"], state=state)) + head
         body = f'<g transform="rotate({cfg["lean"]} {KNEE[0]} {KNEE[1]})"><g>{sway(state, KNEE)}{person}</g></g>'
         rim = "rimHot" if state == "brace" else "rim"
         under = aura(84, 100, 56) if state == "brace" else '<ellipse cx="84" cy="96" rx="44" ry="40" fill="url(#backlight)"/>'
@@ -167,7 +181,7 @@ HAULER = {"easy": 6, "effort": 15, "strain": 24, "brace": 30}
 ROPE_FROM = (80, 57)
 
 
-def hauler_body(arms="rope"):
+def hauler_body(arms="rope", state=None):
     head = (f'<ellipse cx="89" cy="47" rx="9" ry="10.2" {F}/>'
             f'<path d="M84 55 Q86 60 85 64 L93 62 Q93 58 94 55Z" {F}/>'
             # knit cap with a folded band
@@ -182,8 +196,11 @@ def hauler_body(arms="rope"):
                  f'<path d="M100.5 122 Q104.5 138 100.5 152 L108.5 152 Q112.5 138 108.5 124Z" {F}/>'
                  f'<path d="M96.5 150 L112 150 Q119 152 119 156 L96.5 156Z" {F}/>')
     if arms == "rope":
-        arm = (f'<path d="M93 62 Q104 66 104 77 Q100 81 96.5 79 Q98.5 71 90 67Z" {F}/><ellipse cx="102.5" cy="77.5" rx="4.4" ry="4" {F}/>'
-               f'<path d="M86 64 Q94 74 98.5 82 L94.5 86 Q88 78 82 70Z" {F}/><ellipse cx="97.5" cy="84.5" rx="4.2" ry="3.8" {F}/>')
+        def paths(e):
+            # e bends the elbows out as he hauls the rope down over his shoulder
+            return [f"M93 62 Q{104 + e:.1f} {66 + e * .5:.1f} 104 77 Q100 81 96.5 79 Q{98.5 + e * .6:.1f} 71 90 67Z",
+                    f"M86 64 Q{94 - e * .4:.1f} {74 + e:.1f} 98.5 82 L94.5 86 Q{88 - e * .4:.1f} {78 + e:.1f} 82 70Z"]
+        arm = (flexing(paths, state) + f'<ellipse cx="102.5" cy="77.5" rx="4.4" ry="4" {F}/><ellipse cx="97.5" cy="84.5" rx="4.2" ry="3.8" {F}/>')
         rope = (f'<path d="M{ROPE_FROM[0]} {ROPE_FROM[1]} Q90 52 96 60 Q101 68 102.5 77.5 L98 85 Q100 98 108 112 Q112 120 110 132" stroke="#c9a46a" stroke-width="1.7" fill="none" stroke-linecap="round"/>'
                 f'<path d="M{ROPE_FROM[0]} {ROPE_FROM[1]} Q90 52 96 60 Q101 68 102.5 77.5" stroke="#6b4a1f" stroke-width="1.7" fill="none" stroke-dasharray="1 2" opacity=".7"/>')
         return back_leg + torso + front_leg + arm + head, rope
@@ -198,9 +215,10 @@ def hauler_body(arms="rope"):
 def hauler(state):
     if state in HAULER:
         lean = HAULER[state]
-        person, rope = hauler_body()
-        twitchy = twitch(state, person[person.index('<path d="M93 62'):person.index('<ellipse cx="89"')])
-        person = person[:person.index('<path d="M93 62')] + twitchy + person[person.index('<ellipse cx="89"'):]
+        person, rope = hauler_body(state=state)
+        a0 = person.index('<path d="M93 62')
+        twitchy = twitch(state, person[a0:person.index('<ellipse cx="89"')])
+        person = person[:a0] + twitchy + person[person.index('<ellipse cx="89"'):]
         body = f'<g transform="rotate({lean} {FEET[0]} {FEET[1]})"><g>{sway(state, FEET)}{person}{rope}</g></g>'
         rim = "rimHot" if state == "brace" else "rim"
         dust = ('<path d="M36 160 q-6 -4 -12 0 M46 162 q-4 -6 -10 -4" stroke="#9aa3b2" stroke-width="1.4" fill="none" opacity=".6"/>' if state != "easy" else "")
