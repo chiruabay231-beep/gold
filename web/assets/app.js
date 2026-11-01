@@ -1121,7 +1121,11 @@
     text: svg(`<path d="M7 7h14M14 7v15M11 22h6"/>`),
   };
   /** The trade characters' pictures: size on the chart, where the fishing line / the rope starts (picture coordinates). */
-  const CREW = { scale: 0.6, tip: [14, 40], hand: [62.5, 77.4] };
+  const CREW = {
+    get scale() { return +(store.get("aurum.crewScale") || 0.6); },
+    /** Where the line starts in each picture (made with the pictures by tools/mascots/build.py). */
+    points: window.CREW_POINTS || { angler: {}, hauler: {} },
+  };
 
   /** What each mascot picture shows. */
   const MASCOT_MOODS = { rich: "lãi đậm", happy: "vui mừng", tea: "nhâm nhi trà (đi ngang)", sleep: "ngủ gật (im lìm)", nervous: "hồi hộp (sắp có tin)",
@@ -4920,6 +4924,14 @@
       this.crewRaf = requestAnimationFrame(() => { this.crewRaf = 0; this.placeCrew(); });
     },
 
+    /** How hard the character pulls: hard near the entry (or at a loss), less half way, at ease near the TP;
+     *  braced (red, hair up) for a moment when the price jerks against the trade. */
+    crewEffort(t, close, braced) {
+      if (braced) return "brace";
+      const p = t.buy ? (close - t.entry) / (t.tp - t.entry) : (t.entry - close) / (t.entry - t.tp);
+      return p >= 0.66 ? "easy" : p >= 0.33 ? "effort" : "strain";
+    },
+
     placeCrew() {
       const box = $("crew");
       if (!box || !this.chart) return;
@@ -4932,59 +4944,78 @@
       const lx = ts.logicalToCoordinate(n - 1), spacing = ts.options().barSpacing || 6;
       if (lx == null) return;
       box.style.width = ts.width() + "px";
+      const S = CREW.scale, W = 172 * S, H = 206 * S, now = Date.now();
       // One picture per trade (re-made only when the set of trades changes).
       const all = live.map((t) => ({ t, end: null })).concat(done.map((d) => ({ t: d, end: d })));
-      const sig = all.map((x) => x.t.key).join("|");
+      const sig = all.map((x) => x.t.key).join("|") + "@" + S;
       if (this.crewShown !== sig) {
         box.innerHTML = '<svg class="crew-lines"></svg>' + all.map((x) => `<img class="crew-pic" data-k="${esc(x.t.key)}" alt="" draggable="false">`).join("");
         // A new character: room for it right of the newest bar (when the chart shows the newest bars).
-        const room = Math.ceil(5 + (CREW.scale * 140 + all.length * 70) / spacing);
-        if (this.crewShown != null || all.length) {
-          const pos = ts.scrollPosition();
-          if (pos > -2 && pos < room) ts.scrollToPosition(room, false);
-        }
+        const room = Math.ceil(5 + (S * 140 + all.length * 70 * S / 0.6) / spacing);
+        const pos = ts.scrollPosition();
+        if (pos > -2 && pos < room) ts.scrollToPosition(room, false);
         this.crewShown = sig;
       }
-      const S = CREW.scale, W = 172 * S, H = 206 * S;
-      let lines = "";
+      this.crewMotion = this.crewMotion || {};
+      let busy = false, lines = "";
       all.forEach((x, i) => {
         const t = x.t, img = box.querySelector(`img[data-k="${CSS.escape(t.key)}"]`);
         const ytp = this.series.priceToCoordinate(t.tp);
         if (!img || ytp == null) return;
+        // A jerk of the price: against the trade the character is dragged toward the candle and braces,
+        // with it the character is let go back; either way it settles again in about a third of a second.
+        const mo = this.crewMotion[t.key] || (this.crewMotion[t.key] = { last: last.close, dx: 0, dy: 0, at: 0, brace: 0 });
+        if (!x.end && last.close !== mo.last) {
+          const y0 = this.series.priceToCoordinate(mo.last), y1 = this.series.priceToCoordinate(last.close);
+          const against = t.buy ? last.close < mo.last : last.close > mo.last;
+          const m = Math.max(2, Math.min(16, Math.abs((y1 || 0) - (y0 || 0)) * 0.9)) * (S / 0.6);
+          if (against) { mo.dx = -m * 0.7; mo.dy = t.buy ? m : -m; mo.brace = now + 700; }
+          else { mo.dx = m * 0.35; mo.dy = t.buy ? -m * 0.5 : m * 0.5; }
+          mo.at = now; mo.last = last.close;
+        }
+        const k = Math.max(0, 1 - (now - mo.at) / 350);
+        if (k > 0 || now < mo.brace) busy = true;
+        const ox = mo.dx * k, oy = mo.dy * k;
         // About five bars right of the newest one, standing on the TP; several trades side by side.
-        const cx = lx + spacing * 5 + (t.buy ? 30 : 40) * S + i * 70;
-        const left = cx - (80 + 6) * S, top = ytp - (156 + 34) * S;
+        const cx = lx + spacing * 5 + (t.buy ? 30 : 40) * S + i * 70 * (S / 0.6) + ox;
+        const left = cx - (80 + 6) * S, top = ytp - (156 + 34) * S + oy;
         const who = t.buy ? "angler" : "hauler";
-        const mood = x.end ? (x.end.tpHit ? "money" : "snap") : ((t.buy ? last.close >= t.entry : last.close <= t.entry) ? "win" : "lose");
+        const mood = x.end ? (x.end.tpHit ? "money" : "snap") : this.crewEffort(t, last.close, now < mo.brace);
         const src = `assets/crew/${who}-${mood}.svg`;
         if (img.getAttribute("src") !== src) img.setAttribute("src", src);
-        img.style.cssText = `width:${W}px;height:${H}px;transform:translate(${Math.round(left)}px,${Math.round(top)}px)`;
+        img.style.cssText = `width:${W}px;height:${H}px;transform:translate(${left.toFixed(1)}px,${top.toFixed(1)}px)`;
         img.title = `${t.buy ? "BUY" : "SELL"} · TP ${fmt(t.tp, this.digits)}`;
+        const py = this.series.priceToCoordinate(last.close);
         if (x.end) {
           // The line just snapped: a short piece falls from the candle.
-          if (!x.end.tpHit && Date.now() - x.end.at < 1500) {
-            const y = this.series.priceToCoordinate(t.buy ? last.high : last.low);
-            if (y != null) lines += `<path class="crew-piece" d="M${lx} ${y} q6 ${t.buy ? -18 : 18} -2 ${t.buy ? -36 : 36}" stroke="${t.buy ? "#e8eef7" : "#c9a46a"}" stroke-width="${t.buy ? 0.8 : 1.5}" fill="none"/>`;
+          if (!x.end.tpHit && now - x.end.at < 1500 && py != null) {
+            lines += `<path class="crew-piece" d="M${lx} ${py} q6 ${t.buy ? -18 : 18} -2 ${t.buy ? -36 : 36}" stroke="${t.buy ? "#e8eef7" : "#c9a46a"}" stroke-width="${t.buy ? 0.55 : 1.1}" fill="none"/>`;
           }
           return;
         }
+        if (py == null) return;
+        // The line from the rod's tip / the hands to the price on the newest bar: slack when at ease,
+        // tight and quivering when pulling hard.
+        const at = (CREW.points[who] || {})[mood] || (t.buy ? [14, 40] : [62, 77]);
+        const sx = left + (at[0] + 6) * S, sy = top + (at[1] + 34) * S;
+        const sag = { easy: 20, effort: 9, strain: 2, brace: 0 }[mood] * (S / 0.6);
+        const shake = mood === "strain" || mood === "brace" ? Math.sin(now / 28) * 1.6 : 0;
+        if (shake) busy = true;
+        const mx = (sx + lx) / 2 + shake, my = (sy + py) / 2 + sag + shake;
         if (t.buy) {
-          const tx = left + (CREW.tip[0] + 6) * S, ty = top + (CREW.tip[1] + 34) * S;
-          const hy = this.series.priceToCoordinate(last.high);
-          if (hy == null) return;
-          const mx = (tx + lx) / 2, my = Math.max(ty, hy) + 16;
-          lines += `<path d="M${tx} ${ty} Q${mx} ${my} ${lx} ${hy - 3}" stroke="#e8eef7" stroke-width=".7" fill="none" opacity=".85"/>`
-            + `<path d="M${lx} ${hy - 3} v2.6 q0 2 -2 1.6" stroke="#f2c14e" stroke-width=".9" fill="none"/>`;
+          lines += `<path d="M${sx.toFixed(1)} ${sy.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${lx} ${py.toFixed(1)}" stroke="#e8eef7" stroke-width=".55" fill="none" opacity=".9"/>`
+            + `<path d="M${lx} ${py.toFixed(1)} v2.2 q0 1.6 -1.6 1.3" stroke="#f2c14e" stroke-width=".8" fill="none"/>`;
         } else {
-          const hx = left + (CREW.hand[0] + 6) * S, hy = top + (CREW.hand[1] + 34) * S;
-          const ky = this.series.priceToCoordinate(last.low);
-          if (ky == null) return;
-          lines += `<path d="M${hx} ${hy} L${lx} ${ky + 1}" stroke="#c9a46a" stroke-width="1.5" stroke-linecap="round"/>`
-            + `<path d="M${hx} ${hy} L${lx} ${ky + 1}" stroke="#6b4a1f" stroke-width="1.5" stroke-dasharray="1 2.5" opacity=".7"/>`
-            + `<path d="M${lx - 2} ${ky + 1} h4" stroke="#c9a46a" stroke-width="1.6" stroke-linecap="round"/>`;
+          const d = `M${sx.toFixed(1)} ${sy.toFixed(1)} Q${mx.toFixed(1)} ${my.toFixed(1)} ${lx} ${py.toFixed(1)}`;
+          lines += `<path d="${d}" stroke="#c9a46a" stroke-width="1.1" fill="none" stroke-linecap="round"/>`
+            + `<path d="${d}" stroke="#6b4a1f" stroke-width="1.1" fill="none" stroke-dasharray="1 2" opacity=".7"/>`
+            + `<circle cx="${lx}" cy="${py.toFixed(1)}" r="1.4" fill="none" stroke="#c9a46a" stroke-width="1"/>`;
         }
       });
       box.querySelector(".crew-lines").innerHTML = lines;
+      // Keep drawing while a jerk settles or a line quivers.
+      clearTimeout(this.crewTimer);
+      if (busy) this.crewTimer = setTimeout(() => this.placeCrewSoon(), 40);
     },
 
     /* ----- mascots: a buyer and a seller on the chart, cheering or crying with the price ----- */
@@ -5020,7 +5051,8 @@
       const list = this.mascotList(), off = store.get("aurum.mascotsOff") === "1";
       const crewOff = store.get("aurum.crewOff") === "1";
       const items = [["girl", "👧 Thêm cô gái phe MUA (vui khi giá lên)"], ["boy", "👦 Thêm chàng trai phe BÁN (vui khi giá xuống)"],
-        ["crew", (crewOff ? "　" : "✓ ") + "🎣 Câu nến / kéo nến theo lệnh có TP"]];
+        ["crew", (crewOff ? "　" : "✓ ") + "🎣 Câu nến / kéo nến theo lệnh có TP"],
+        ["crewBig", "➕ Nhân vật câu / kéo to lên"], ["crewSmall", "➖ Nhân vật câu / kéo nhỏ lại"]];
       if (list.length) items.push(["toggle", off ? "👁 Hiện nhân vật" : "🙈 Ẩn nhân vật"], ["clear", `🗑 Xoá ${list.length} nhân vật trên mã này`]);
       const r = button.getBoundingClientRect(), menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
@@ -5033,6 +5065,12 @@
         if (k === "girl" || k === "boy") this.addMascot(k);
         if (k === "toggle") { store.set("aurum.mascotsOff", off ? "0" : "1"); this.renderMascots(); }
         if (k === "crew") { store.set("aurum.crewOff", crewOff ? "0" : "1"); this.crewShown = null; this.placeCrew(); }
+        if (k === "crewBig" || k === "crewSmall") {
+          const size = Math.max(0.3, Math.min(1.4, Math.round((CREW.scale + (k === "crewBig" ? 0.1 : -0.1)) * 10) / 10));
+          store.set("aurum.crewScale", String(size));
+          toast(`Cỡ nhân vật câu / kéo: ${Math.round(size / 0.6 * 100)}%`);
+          this.placeCrew();
+        }
         if (k === "clear" && confirm("Xoá các nhân vật trên mã này?")) { this.saveMascots([]); this.renderMascots(); }
         this.renderToolRail();
       }));

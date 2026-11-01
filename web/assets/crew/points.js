@@ -1,0 +1,2 @@
+// Made by tools/mascots/build.py: where each trade character's line starts (picture coordinates).
+window.CREW_POINTS = {"angler": {"easy": [13.0, 44.3], "effort": [25.6, 48.0], "strain": [38.3, 55.6], "brace": [42.8, 59.8]}, "hauler": {"easy": [59.5, 92.0], "effort": [60.0, 80.8], "strain": [66.7, 73.9], "brace": [72.5, 73.2]}};

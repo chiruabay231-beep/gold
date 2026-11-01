@@ -178,7 +178,164 @@ def hauler(state):
     return f'{dust}<g filter="url(#stk)"><g transform="rotate({LEAN} {FEET[0]} {FEET[1]})"><g>{tug}{inner}</g></g></g>{extra}'
 
 
-PICTURES = {
-    "anglerWin": angler("win"), "anglerLose": angler("lose"), "anglerSnap": angler("snap"), "anglerMoney": angler("money"),
-    "haulerWin": hauler("win"), "haulerLose": hauler("lose"), "haulerSnap": hauler("snap"), "haulerMoney": hauler("money"),
-}
+# ======================= pulling with more or less effort =======================
+EFFORTS = ("easy", "effort", "strain", "brace")
+HOT = """<linearGradient id="hotHair" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff2d3d"/><stop offset=".45" stop-color="#ff9a6b"/><stop offset="1" stop-color="#cdd3e6"/></linearGradient>
+<linearGradient id="hotNavy" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff2d3d"/><stop offset=".5" stop-color="#7a3a7a"/><stop offset="1" stop-color="#151c33"/></linearGradient>"""
+DEFS += HOT
+
+
+def bez(b, c, t, k):
+    return tuple(round((1 - k) ** 2 * b[i] + 2 * (1 - k) * k * c[i] + k ** 2 * t[i], 1) for i in range(2))
+
+
+def red_face():
+    return '<path d="M52 56 Q80 50 108 56 L108 92 Q80 98 52 92Z" fill="#ff2a45" opacity=".24"/>'
+
+
+def aura(cx=80, cy=104, r=58):
+    out = ['<ellipse cx="{0}" cy="{1}" rx="{2}" ry="{3}" fill="#ff4a2a" opacity=".12"><animate attributeName="opacity" values=".06;.2;.06" dur=".5s" repeatCount="indefinite"/></ellipse>'.format(cx, cy, r, r * .9)]
+    for i in range(10):
+        a = math.radians(i * 36 + 8)
+        x, y = cx + math.cos(a) * r, cy + math.sin(a) * r * .9
+        x2, y2 = cx + math.cos(a) * (r + 10), cy + math.sin(a) * (r + 10) * .9
+        out.append(f'<path d="M{x:.1f} {y:.1f} L{x2:.1f} {y2:.1f}" stroke="#ff7a3a" stroke-width="2.4" stroke-linecap="round">'
+                   f'<animate attributeName="opacity" values="1;.1;1" dur=".4s" begin="{i * .04:.2f}s" repeatCount="indefinite"/></path>')
+    return "".join(out)
+
+
+def note():
+    return ('<text x="116" y="56" font-size="14" fill="#f2c14e" font-family="Georgia, serif">&#9834;'
+            '<animateTransform attributeName="transform" type="translate" values="0 6; 8 -14" dur="2s" repeatCount="indefinite"/>'
+            '<animate attributeName="opacity" values="0;1;0" dur="2s" repeatCount="indefinite"/></text>')
+
+
+ANGLER = {"easy": dict(lean=-2, tip=(16, 42), bend=0), "effort": dict(lean=4, tip=(20, 52), bend=7),
+          "strain": dict(lean=10, tip=(26, 64), bend=14), "brace": dict(lean=13, tip=(28, 70), bend=18)}
+SEAT = (80, 130)
+
+
+def angler_face(state):
+    face = [skin_face(), blush()]
+    if state == "brace":
+        face.append(red_face())
+    face.append('<path d="M55 59 h21 q1 10 -9 12 q-11 1 -12 -12z M84 59 h21 q-1 13 -12 12 q-10 -2 -9 -12z" fill="url(#lens)" stroke="url(#gold)" stroke-width="1.6"/>'
+                '<path d="M76 61 q4 -3 8 0" stroke="url(#gold)" stroke-width="1.6" fill="none"/><path d="M55 60 l-5 -2 M105 60 l5 -2" stroke="url(#gold)" stroke-width="1.4"/>')
+    if state == "easy":
+        face.append('<path d="M60 60 l5 -3" stroke="#fff" stroke-width="1.6" stroke-linecap="round"><animate attributeName="opacity" values=".1;.9;.1" dur="2s" repeatCount="indefinite"/></path>')
+        face.append(f'<path d="M57 53 Q65 50 73 53 M103 53 Q95 50 87 53" stroke="{INK}" stroke-width="1.8" fill="none" stroke-linecap="round"/>' + MOUTHS["smile"])
+    elif state == "effort":
+        face.append(f'<path d="M57 52 L73 55 M103 52 L87 55" stroke="{INK}" stroke-width="2" stroke-linecap="round"/>' + MOUTHS["smile"].replace("Q80 87", "Q80 85"))
+    else:
+        face.append(f'<path d="M55 50 L73 56 M105 50 L87 56" stroke="{INK}" stroke-width="2.6" stroke-linecap="round"/>' + MOUTHS["teeth"])
+    return "".join(face)
+
+
+def angler_hair_hat(state):
+    back = '<path d="M48 64 Q46 32 80 30 Q114 32 112 64 L110 78 L104 64 L56 64 L50 78Z" fill="url(#navyHair)"/>'
+    hat = ('<path d="M53 42 Q55 15 80 14 Q105 15 107 42Z" fill="url(#olive)"/><rect x="54" y="33" width="52" height="5" fill="url(#gold)"/>'
+           '<ellipse cx="80" cy="43" rx="40" ry="8.5" fill="url(#olive)" stroke="#3e4720" stroke-width=".8"/>'
+           '<path d="M104 28 l6 -4 M104 28 l7 1 M104 28 l5 4" stroke="#ff8a3d" stroke-width="1.6" stroke-linecap="round"/><circle cx="104" cy="28" r="1.8" fill="url(#gold)"/>')
+    if state != "brace":
+        bangs = '<path d="M53 44 L57 55 L61 45 L66 57 L71 45 L77 55 L83 45 L89 56 L95 45 L100 55 L106 44Z" fill="url(#navyHair)"/>'
+        return back, bangs + hat
+    # Powering up: the hat blows off, the hair stands up glowing red.
+    spikes = ('<path d="M47 52 Q42 22 80 20 Q118 22 113 52 L108 30 L103 50 L97 14 L91 46 L84 6 L78 44 L70 10 L64 48 L57 18 L52 50Z" fill="url(#hotNavy)"/>')
+    flying = f'<g transform="translate(-10 -30) rotate(-22 80 30)">{hat}</g>'
+    return back, spikes + flying
+
+
+def angler_pull(state):
+    cfg = ANGLER[state]
+    cooler, body, _, _ = angler_body("whole")
+    b, t = (72, 124), cfg["tip"]
+    m = ((b[0] + t[0]) / 2, (b[1] + t[1]) / 2)
+    c = (m[0] - cfg["bend"] * .4, m[1] - cfg["bend"])
+    rod = (f'<path d="M{b[0]} {b[1]} Q{c[0]:.1f} {c[1]:.1f} {t[0]} {t[1]}" stroke="#1b1e25" stroke-width="2.8" fill="none" stroke-linecap="round"/>'
+           f'<path d="M{b[0]} {b[1]} Q{c[0]:.1f} {c[1]:.1f} {t[0]} {t[1]}" stroke="#7d8796" stroke-width=".7" fill="none" opacity=".7"/>')
+    for k in (.45, .7):
+        x, y = bez(b, c, t, k)
+        rod += f'<circle cx="{x}" cy="{y}" r="1.6" fill="url(#gold)"/>'
+    reel_at = bez(b, c, t, .14)
+    rod += (f'<circle cx="{reel_at[0]}" cy="{reel_at[1]}" r="5" fill="url(#gold)" stroke="#a7771f" stroke-width=".6"/><circle cx="{reel_at[0]}" cy="{reel_at[1]}" r="2" fill="#5a4210"/>'
+            f'<path d="M{reel_at[0]} {reel_at[1]} l5 -3" stroke="#3a2e12" stroke-width="1.4" stroke-linecap="round"/>')
+    near, far = bez(b, c, t, .2), bez(b, c, t, .42)
+    arm = lambda sx, hx, hy: f'<path d="M{sx} 100 Q{(sx + hx) / 2} {max(hy, 100) + 6} {hx} {hy}" stroke="#0f5b45" stroke-width="8" fill="none" stroke-linecap="round"/><circle cx="{hx}" cy="{hy}" r="4.8" fill="url(#skin)"/>'
+    if state == "easy":
+        arms = arm(100, near[0], near[1]) + '<path d="M60 100 Q54 116 62 124" stroke="#0f5b45" stroke-width="8" fill="none" stroke-linecap="round"/><circle cx="63" cy="124" r="4.8" fill="url(#skin)"/>'
+    else:
+        arms = arm(60, far[0], far[1]) + arm(100, near[0], near[1])
+    back, front = angler_hair_hat(state)
+    person = body + rod + arms + back + angler_face(state) + front
+    if state in ("strain", "brace"):
+        person = body + rod + arms + back + angler_face(state) + front + art.vein()
+    motion = {"easy": MOTIONS["breathe"],
+              "effort": '<animateTransform attributeName="transform" type="rotate" values="0 80 130; 1.5 80 130; 0 80 130" dur=".9s" repeatCount="indefinite"/>',
+              "strain": MOTIONS["tremble"], "brace": MOTIONS["tremble"]}[state]
+    inner = cooler + f'<g transform="rotate({cfg["lean"]} {SEAT[0]} {SEAT[1]})"><g>{motion}{person}</g></g>'
+    extra = {"easy": note(), "effort": "", "strain": art.sweat(), "brace": art.steam_puffs()}[state]
+    under = aura(80, 100, 56) if state == "brace" else ""
+    return f'{under}<g filter="url(#stk)">{inner}</g>{extra}'
+
+
+HAULER = {"easy": dict(lean=5, hand=(54, 94)), "effort": dict(lean=11, hand=(46, 86)),
+          "strain": dict(lean=18, hand=(42, 82)), "brace": dict(lean=22, hand=(42, 82))}
+
+
+def hauler_face(state):
+    face = [skin_face(), blush()]
+    if state == "brace":
+        face.append(red_face())
+    if state == "easy":
+        face.append(eyes("blink", "irisR") + brows("normal") + MOUTHS["smile"])
+    elif state == "effort":
+        face.append(eyes("normal", "irisR") + f'<path d="M57 48 L72 52 M103 48 L88 52" stroke="{INK}" stroke-width="2.2" stroke-linecap="round"/>' + MOUTHS["smile"])
+    else:
+        face.append(eyes("angry", "irisR") + brows("angry") + MOUTHS["teeth"])
+    face.append('<path d="M98 80 l6 -5 M100 82 l1 -6" stroke="#c9787a" stroke-width="1.2" stroke-linecap="round"/>')
+    return "".join(face)
+
+
+def hauler_pull(state):
+    cfg = HAULER[state]
+    hx, hy = cfg["hand"]
+    back = '<path d="M46 62 Q42 24 80 22 Q118 24 114 62 L110 80 L104 62 L56 62 L50 80Z" fill="url(#silverHair)"/>'
+    hair = "url(#hotHair)" if state == "brace" else "url(#silverHair)"
+    spikes = (f'<path d="M47 50 Q42 20 80 18 Q118 20 113 50 L108 40 L104 52 L97 34 L92 50 L84 30 L78 48 L70 32 L64 50 L57 36 L52 52Z" fill="{hair}"/>'
+              f'<path d="M84 18 l10 -11 l-2 13z M70 20 l-7 -10 l11 6z" fill="{hair}"/>')
+    if state == "brace":
+        spikes += '<path d="M58 30 L52 4 L68 26 M78 24 L80 -2 L90 22 M98 28 L110 6 L104 32" fill="url(#hotHair)"/>'
+    band = ('<path d="M47 44 Q80 34 113 44 L113 51 Q80 41 47 51Z" fill="url(#bandana)"/>'
+            '<path d="M112 46 q10 -2 16 6 q-8 -2 -14 0z M112 49 q8 4 10 13 q-6 -6 -11 -9z" fill="url(#bandana)"/>')
+    body = hauler_body("none").split('<path d="M61 100')[0]
+    if state == "easy":
+        arms = (f'<path d="M99 100 Q76 104 {hx + 2} {hy + 2}" stroke="url(#skin)" stroke-width="8" fill="none" stroke-linecap="round"/><circle cx="{hx}" cy="{hy}" r="5.6" fill="url(#glove)"/>'
+                '<path d="M61 100 Q52 112 62 118" stroke="url(#skin)" stroke-width="8" fill="none" stroke-linecap="round"/><circle cx="63" cy="118" r="5.2" fill="url(#glove)"/>')
+    else:
+        hx2, hy2 = hx + 7, hy + 7
+        arms = (f'<path d="M61 100 Q50 94 {hx + 1} {hy + 2}" stroke="url(#skin)" stroke-width="8" fill="none" stroke-linecap="round"/>'
+                f'<path d="M99 100 Q72 102 {hx2 + 1} {hy2 + 1}" stroke="url(#skin)" stroke-width="8" fill="none" stroke-linecap="round"/>'
+                f'<circle cx="{hx}" cy="{hy}" r="5.6" fill="url(#glove)"/><circle cx="{hx2}" cy="{hy2}" r="5.6" fill="url(#glove)"/>')
+    arms += f'<path d="M{hx} {hy} Q70 106 98 118" stroke="#c9a46a" stroke-width="1.3" fill="none"/>'
+    person = body + arms + back + hauler_face(state) + spikes + band
+    if state in ("strain", "brace"):
+        person += art.vein()
+    motion = {"easy": '<animateTransform attributeName="transform" type="rotate" values="0 80 156; 1.2 80 156; 0 80 156" dur="2.4s" repeatCount="indefinite"/>',
+              "effort": '<animateTransform attributeName="transform" type="rotate" values="0 80 156; 3 80 156; 0 80 156" dur=".9s" repeatCount="indefinite"/>',
+              "strain": '<animateTransform attributeName="transform" type="rotate" values="0 80 156; 3 80 156; 0 80 156" dur=".45s" repeatCount="indefinite"/>',
+              "brace": MOTIONS["tremble"]}[state]
+    dust = '<path d="M48 160 q-6 -4 -12 0 M114 160 q6 -4 12 0" stroke="#9aa3b2" stroke-width="1.4" fill="none" opacity=".6"/>' if state != "easy" else ""
+    under = aura(80, 104, 58) if state == "brace" else ""
+    extra = {"easy": note(), "effort": "", "strain": art.sweat(), "brace": art.steam_puffs()}[state]
+    return f'{under}{dust}<g filter="url(#stk)"><g transform="rotate({cfg["lean"]} {FEET[0]} {FEET[1]})"><g>{motion}{person}</g></g></g>{extra}'
+
+
+PICTURES = {}
+for st in EFFORTS:
+    PICTURES[f"angler-{st}"] = angler_pull(st)
+    PICTURES[f"hauler-{st}"] = hauler_pull(st)
+PICTURES.update({"angler-money": angler("money"), "angler-snap": angler("snap"), "hauler-money": hauler("money"), "hauler-snap": hauler("snap")})
+
+# Where the line starts in each picture (picture coordinates; the feet stand at y 156).
+POINTS = {"angler": {st: rot(ANGLER[st]["tip"], ANGLER[st]["lean"], SEAT) for st in EFFORTS},
+          "hauler": {st: rot(HAULER[st]["hand"], HAULER[st]["lean"], FEET) for st in EFFORTS}}

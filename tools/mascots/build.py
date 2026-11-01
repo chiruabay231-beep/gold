@@ -22,16 +22,24 @@ for kind in ("girl", "boy"):
         for folder in OUT:
             with open(os.path.join(folder, f"{kind}-{state}.svg"), "w") as f:
                 f.write(svg)
-# The trade characters (angler / hauler), with their own gradients.
+# The trade characters (angler / hauler) in each effort, and where their line starts.
+import json  # noqa: E402
+
 CREW = [os.path.join(ROOT, "web", "assets", "crew"), os.path.join(ROOT, "App", "GoldBacktest", "Resources", "Crew")]
-names = {"anglerWin": "angler-win", "anglerLose": "angler-lose", "anglerMoney": "angler-money", "anglerSnap": "angler-snap",
-         "haulerWin": "hauler-win", "haulerLose": "hauler-lose", "haulerMoney": "hauler-money", "haulerSnap": "hauler-snap"}
 for folder in CREW:
     os.makedirs(folder, exist_ok=True)
-for key, name in names.items():
+    for old in os.listdir(folder):
+        if old.endswith(".svg"):
+            os.remove(os.path.join(folder, old))
+for name, picture in crew.PICTURES.items():
     svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="-6 -34 172 206" width="172" height="206">'
-           f'<defs>{crew.DEFS}</defs>{crew.PICTURES[key]}</svg>')
+           f'<defs>{crew.DEFS}</defs>{picture}</svg>')
     for folder in CREW:
         with open(os.path.join(folder, f"{name}.svg"), "w") as f:
             f.write(svg)
-print("wrote", 2 * len(STATES), "mascots and", len(names), "trade characters; rod tip", crew.ROD_TIP, "hand", crew.HAULER_HAND)
+with open(os.path.join(ROOT, "web", "assets", "crew", "points.js"), "w") as f:
+    f.write("// Made by tools/mascots/build.py: where each trade character's line starts (picture coordinates).\n")
+    f.write("window.CREW_POINTS = " + json.dumps(crew.POINTS) + ";\n")
+with open(os.path.join(ROOT, "App", "GoldBacktest", "Resources", "Crew", "points.json"), "w") as f:
+    json.dump(crew.POINTS, f)
+print("wrote", 2 * len(STATES), "mascots and", len(crew.PICTURES), "trade characters", crew.POINTS)
