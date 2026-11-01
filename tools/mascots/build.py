@@ -37,9 +37,22 @@ for name, picture in crew.PICTURES.items():
     for folder in CREW:
         with open(os.path.join(folder, f"{name}.svg"), "w") as f:
             f.write(svg)
+# The same characters as silhouettes with a golden rim light.
+import shadow  # noqa: E402
+
+SHADOW = [os.path.join(ROOT, "web", "assets", "crew2"), os.path.join(ROOT, "App", "GoldBacktest", "Resources", "Crew2")]
+for folder in SHADOW:
+    os.makedirs(folder, exist_ok=True)
+for name, picture in shadow.PICTURES.items():
+    svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="-6 -34 172 206" width="172" height="206">'
+           f'<defs>{shadow.DEFS}</defs>{picture}</svg>')
+    for folder in SHADOW:
+        with open(os.path.join(folder, f"{name}.svg"), "w") as f:
+            f.write(svg)
+points = dict(crew.POINTS, shadow=shadow.POINTS)
 with open(os.path.join(ROOT, "web", "assets", "crew", "points.js"), "w") as f:
     f.write("// Made by tools/mascots/build.py: where each trade character's line starts (picture coordinates).\n")
-    f.write("window.CREW_POINTS = " + json.dumps(crew.POINTS) + ";\n")
+    f.write("window.CREW_POINTS = " + json.dumps(points) + ";\n")
 with open(os.path.join(ROOT, "App", "GoldBacktest", "Resources", "Crew", "points.json"), "w") as f:
-    json.dump(crew.POINTS, f)
-print("wrote", 2 * len(STATES), "mascots and", len(crew.PICTURES), "trade characters", crew.POINTS)
+    json.dump(points, f)
+print("wrote", 2 * len(STATES), "mascots,", len(crew.PICTURES), "anime and", len(shadow.PICTURES), "silhouette trade characters")

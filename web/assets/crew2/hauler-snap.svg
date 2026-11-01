@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-6 -34 172 206" width="172" height="206"><defs>
+<linearGradient id="skin" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff3ea"/><stop offset="1" stop-color="#ffd6c2"/></linearGradient>
+<linearGradient id="hairGold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff0b0"/><stop offset=".35" stop-color="#f4c55a"/><stop offset="1" stop-color="#b9792a"/></linearGradient>
+<linearGradient id="hairSilver" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset=".4" stop-color="#cdd3e6"/><stop offset="1" stop-color="#6d7391"/></linearGradient>
+<linearGradient id="irisG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#063d2e"/><stop offset=".55" stop-color="#11a77b"/><stop offset="1" stop-color="#8ff7d6"/></linearGradient>
+<linearGradient id="irisR" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4a0712"/><stop offset=".55" stop-color="#d42a40"/><stop offset="1" stop-color="#ffb0bb"/></linearGradient>
+<linearGradient id="jackG" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1fd29d"/><stop offset=".5" stop-color="#0d8a65"/><stop offset="1" stop-color="#064d39"/></linearGradient>
+<linearGradient id="jackR" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff5a6e"/><stop offset=".5" stop-color="#b8172e"/><stop offset="1" stop-color="#5e0815"/></linearGradient>
+<linearGradient id="gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff1b8"/><stop offset=".45" stop-color="#eebd4a"/><stop offset="1" stop-color="#a7771f"/></linearGradient>
+<linearGradient id="tear" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e6f6ff" stop-opacity=".95"/><stop offset="1" stop-color="#6cc4ff" stop-opacity=".85"/></linearGradient>
+<linearGradient id="cloud" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9aa3b8"/><stop offset="1" stop-color="#4b5266"/></linearGradient>
+<filter id="stk" x="-20%" y="-20%" width="140%" height="140%">
+  <feMorphology in="SourceAlpha" operator="dilate" radius="3" result="d"/>
+  <feFlood flood-color="#e9bf5c"/><feComposite in2="d" operator="in" result="gold"/>
+  <feMorphology in="SourceAlpha" operator="dilate" radius="1.6" result="d2"/>
+  <feFlood flood-color="#fffaf0"/><feComposite in2="d2" operator="in" result="cream"/>
+  <feGaussianBlur in="d" stdDeviation="3" result="b"/><feOffset in="b" dy="3" result="bo"/>
+  <feFlood flood-color="#000" flood-opacity=".7"/><feComposite in2="bo" operator="in" result="sh"/>
+  <feMerge><feMergeNode in="sh"/><feMergeNode in="gold"/><feMergeNode in="cream"/><feMergeNode in="SourceGraphic"/></feMerge>
+</filter>
+
+<filter id="gray"><feColorMatrix type="saturate" values=".12"/><feComponentTransfer><feFuncR type="linear" slope=".92"/><feFuncG type="linear" slope=".95"/><feFuncB type="linear" slope="1.05"/></feComponentTransfer></filter>
+<linearGradient id="bill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#b8f5c8"/><stop offset="1" stop-color="#3f9a5c"/></linearGradient>
+<linearGradient id="tea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#d9a35b"/><stop offset="1" stop-color="#8a5422"/></linearGradient>
+
+<linearGradient id="shade" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#2a3142"/><stop offset=".55" stop-color="#11151e"/><stop offset="1" stop-color="#040508"/></linearGradient>
+<linearGradient id="gold" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff1b8"/><stop offset=".45" stop-color="#eebd4a"/><stop offset="1" stop-color="#a7771f"/></linearGradient>
+<filter id="rim" x="-25%" y="-25%" width="150%" height="150%">
+  <feMorphology in="SourceAlpha" operator="dilate" radius="1.3" result="d"/>
+  <feFlood flood-color="#f2c14e"/><feComposite in2="d" operator="in" result="edge"/>
+  <feGaussianBlur in="edge" stdDeviation="2.6" result="glow"/>
+  <feMerge><feMergeNode in="glow"/><feMergeNode in="edge"/><feMergeNode in="SourceGraphic"/></feMerge>
+</filter>
+<filter id="rimHot" x="-25%" y="-25%" width="150%" height="150%">
+  <feMorphology in="SourceAlpha" operator="dilate" radius="1.6" result="d"/>
+  <feFlood flood-color="#ff4a2a"/><feComposite in2="d" operator="in" result="edge"/>
+  <feGaussianBlur in="edge" stdDeviation="3.4" result="glow"/>
+  <feMerge><feMergeNode in="glow"/><feMergeNode in="glow"/><feMergeNode in="edge"/><feMergeNode in="SourceGraphic"/></feMerge>
+</filter>
+</defs><g filter="url(#rim)"><g transform="rotate(-58 80 154) translate(-6 8)"><g><animateTransform attributeName="transform" type="translate" values="-1.4 4; 1.4 4; -1.4 4" dur=".18s" repeatCount="indefinite"/><path d="M76 112 L62 132 L46 150" stroke-width="12" stroke="url(#shade)" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M38 152 h14 l2 -6 q-10 -2 -14 2z" fill="url(#shade)"/><path d="M84 112 L100 128 L102 150" stroke-width="12" stroke="url(#shade)" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M96 152 h16 q1 -6 -9 -6 q-7 0 -7 6z" fill="url(#shade)"/><path d="M70 118 Q72 94 84 72 Q98 64 106 74 Q98 98 92 120 Z" fill="url(#shade)"/><path d="M100 76 Q112 70 122 62" stroke-width="7.5" stroke="url(#shade)" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M94 78 Q82 90 74 84" stroke-width="7.5" stroke="url(#shade)" stroke-linecap="round" stroke-linejoin="round" fill="none"/><path d="M74 84 q-8 -6 -6 -16 q2 -8 -8 -12" stroke="#c9a46a" stroke-width="1.6" fill="none"/><path d="M100 72 l5 -6" stroke-width="7" stroke="url(#shade)" stroke-linecap="round" stroke-linejoin="round" fill="none"/><circle cx="108" cy="58" r="10.5" fill="url(#shade)"/><path d="M97 56 Q97 42 108 42 Q120 42 120 54 Q109 51 97 56Z" fill="url(#shade)"/><circle cx="109" cy="41" r="2.6" fill="url(#shade)"/></g></g></g><text x="118" y="60" font-size="26" font-weight="900" fill="#ff5a70" font-family="Georgia, serif">!</text><g><animateTransform attributeName="transform" type="translate" values="-3 0; 3 0; -3 0" dur="2.4s" repeatCount="indefinite"/><path d="M58 18 q-10 0 -10 -8 q0 -9 11 -8 q4 -9 15 -6 q8 -7 17 0 q12 -1 11 9 q8 2 6 9 q-1 4 -8 4z" fill="url(#cloud)"/><path d="M64 22 v6" stroke="#8fc8ff" stroke-width="1.6" stroke-linecap="round"><animateTransform attributeName="transform" type="translate" values="0 0; 0 22" dur=".7s" begin="0.0s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0" dur=".7s" begin="0.0s" repeatCount="indefinite"/></path><path d="M74 22 v6" stroke="#8fc8ff" stroke-width="1.6" stroke-linecap="round"><animateTransform attributeName="transform" type="translate" values="0 0; 0 22" dur=".7s" begin="0.17s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0" dur=".7s" begin="0.17s" repeatCount="indefinite"/></path><path d="M84 22 v6" stroke="#8fc8ff" stroke-width="1.6" stroke-linecap="round"><animateTransform attributeName="transform" type="translate" values="0 0; 0 22" dur=".7s" begin="0.34s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0" dur=".7s" begin="0.34s" repeatCount="indefinite"/></path><path d="M94 22 v6" stroke="#8fc8ff" stroke-width="1.6" stroke-linecap="round"><animateTransform attributeName="transform" type="translate" values="0 0; 0 22" dur=".7s" begin="0.51s" repeatCount="indefinite"/><animate attributeName="opacity" values="1;0" dur=".7s" begin="0.51s" repeatCount="indefinite"/></path></g></svg>

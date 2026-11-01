@@ -1123,8 +1123,11 @@
   /** The trade characters' pictures: size on the chart, where the fishing line / the rope starts (picture coordinates). */
   const CREW = {
     get scale() { return +(store.get("aurum.crewScale") || 0.6); },
+    /** "shadow" (silhouettes with a golden rim, the default) or "anime". */
+    get style() { return store.get("aurum.crewStyle") === "anime" ? "anime" : "shadow"; },
+    get folder() { return this.style === "anime" ? "assets/crew" : "assets/crew2"; },
     /** Where the line starts in each picture (made with the pictures by tools/mascots/build.py). */
-    points: window.CREW_POINTS || { angler: {}, hauler: {} },
+    get points() { const p = window.CREW_POINTS || { angler: {}, hauler: {} }; return this.style === "anime" ? p : p.shadow || p; },
   };
 
   /** What each mascot picture shows. */
@@ -4986,7 +4989,7 @@
         left = Math.max(2, Math.min(paneW - W - 2, left));
         const who = t.buy ? "angler" : "hauler";
         const mood = x.end ? (x.end.tpHit ? "money" : "snap") : this.crewEffort(t, last.close, now < mo.brace);
-        const src = `assets/crew/${who}-${mood}.svg`;
+        const src = `${CREW.folder}/${who}-${mood}.svg`;
         if (img.getAttribute("src") !== src) img.setAttribute("src", src);
         img.style.cssText = `width:${W}px;height:${H}px;transform:translate(${left.toFixed(1)}px,${top.toFixed(1)}px)`;
         img.title = `${t.buy ? "BUY" : "SELL"} · TP ${fmt(t.tp, this.digits)}`;
@@ -5065,7 +5068,8 @@
       const crewOff = store.get("aurum.crewOff") === "1";
       const items = [["girl", "👧 Thêm cô gái phe MUA (vui khi giá lên)"], ["boy", "👦 Thêm chàng trai phe BÁN (vui khi giá xuống)"],
         ["crew", (crewOff ? "　" : "✓ ") + "🎣 Câu nến / kéo nến theo lệnh có TP"],
-        ["crewBig", "➕ Nhân vật câu / kéo to lên"], ["crewSmall", "➖ Nhân vật câu / kéo nhỏ lại"]];
+        ["crewBig", "➕ Nhân vật câu / kéo to lên"], ["crewSmall", "➖ Nhân vật câu / kéo nhỏ lại"],
+        ["crewStyle", CREW.style === "anime" ? "🌑 Câu / kéo kiểu bóng đen viền vàng" : "🎨 Câu / kéo kiểu anime"]];
       if (list.length) items.push(["toggle", off ? "👁 Hiện nhân vật" : "🙈 Ẩn nhân vật"], ["clear", `🗑 Xoá ${list.length} nhân vật trên mã này`]);
       const r = button.getBoundingClientRect(), menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
@@ -5078,6 +5082,7 @@
         if (k === "girl" || k === "boy") this.addMascot(k);
         if (k === "toggle") { store.set("aurum.mascotsOff", off ? "0" : "1"); this.renderMascots(); }
         if (k === "crew") { store.set("aurum.crewOff", crewOff ? "0" : "1"); this.crewShown = null; this.placeCrew(); }
+        if (k === "crewStyle") { store.set("aurum.crewStyle", CREW.style === "anime" ? "shadow" : "anime"); this.placeCrew(); }
         if (k === "crewBig" || k === "crewSmall") {
           const size = Math.max(0.3, Math.min(1.4, Math.round((CREW.scale + (k === "crewBig" ? 0.1 : -0.1)) * 10) / 10));
           store.set("aurum.crewScale", String(size));
