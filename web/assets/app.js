@@ -4954,7 +4954,7 @@
       const all = live.map((t) => ({ t, end: null })).concat(done.map((d) => ({ t: d, end: d })));
       const sig = all.map((x) => x.t.key).join("|") + "@" + S;
       if (this.crewShown !== sig) {
-        box.innerHTML = '<svg class="crew-lines"></svg>' + all.map((x) => `<img class="crew-pic" data-k="${esc(x.t.key)}" alt="" draggable="false">`).join("");
+        box.innerHTML = all.map((x) => `<img class="crew-pic" data-k="${esc(x.t.key)}" alt="" draggable="false">`).join("") + '<svg class="crew-lines"></svg>';
         // A new character: room for it right of the newest bar (when the chart shows the newest bars).
         const room = Math.ceil(5 + (S * 140 + all.length * 70 * S / 0.6) / spacing);
         const pos = ts.scrollPosition();
@@ -5065,12 +5065,14 @@
         // Black line (with a pale halo on a dark chart), turning red-hot when the price jerks hard against the trade.
         const light = document.documentElement.dataset.theme === "light", hot = Math.min(1, ph.hot || 0);
         const mix = (a, b, f) => "#" + [0, 2, 4].map((i) => Math.round(parseInt(a.slice(i + 1, i + 3), 16) * (1 - f) + parseInt(b.slice(i + 1, i + 3), 16) * f).toString(16).padStart(2, "0")).join("");
-        const color = mix(light ? "#111318" : "#05070a", "#ff2a3a", hot);
-        const w = (t.buy ? 0.6 + ph.ten * 0.4 : 1.1 + ph.ten * 0.6) * (1 + hot * 0.6);
-        if (!light) lines += `<path d="${d}" stroke="#d8dee9" stroke-width="${(w + 1.4).toFixed(2)}" fill="none" opacity="${(0.35 * (1 - hot)).toFixed(2)}" stroke-linecap="round"/>`;
+        const color = mix(light ? "#000000" : "#05070a", "#ff2a3a", hot);
+        const w = (t.buy ? 1.2 + ph.ten * 0.5 : 2 + ph.ten * 0.6) * (1 + hot * 0.5) * Math.max(0.8, S / 0.6);
+        if (!light) lines += `<path d="${d}" stroke="#e8eef7" stroke-width="${(w + 1.8).toFixed(2)}" fill="none" opacity="${(0.55 * (1 - hot)).toFixed(2)}" stroke-linecap="round"/>`;
         if (hot > 0.05) lines += `<path d="${d}" stroke="#ff3b2f" stroke-width="${(w + 4 * hot).toFixed(2)}" fill="none" opacity="${(0.32 * hot).toFixed(2)}" stroke-linecap="round"/>`;
         lines += `<path d="${d}" stroke="${color}" stroke-width="${w.toFixed(2)}" fill="none" stroke-linecap="round"/>`;
-        if (!t.buy) lines += `<path d="${d}" stroke="${hot > 0.3 ? "#ffd2a0" : "#3a3f4c"}" stroke-width="${w.toFixed(2)}" fill="none" stroke-dasharray="1 2.4" opacity=".55"/>`;
+        if (!t.buy && hot > 0.3) lines += `<path d="${d}" stroke="#ffd2a0" stroke-width="${w.toFixed(2)}" fill="none" stroke-dasharray="1 2.4" opacity="${(0.6 * hot).toFixed(2)}"/>`;
+        // The line's end at the hand / the rod tip, so it reads as held.
+        lines += `<circle cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="${(w * 0.8).toFixed(2)}" fill="${color}"/>`;
         lines += t.buy ? `<path d="M${lx} ${py.toFixed(1)} v2.2 q0 1.6 -1.6 1.3" stroke="${color}" stroke-width=".9" fill="none"/>`
           : `<circle cx="${lx}" cy="${py.toFixed(1)}" r="1.5" fill="none" stroke="${color}" stroke-width="1.1"/>`;
         if (hot > 0.35) {
@@ -5181,7 +5183,19 @@
       canvas.onpointerdown = (e) => {
         e.preventDefault();
         const [fx, fy] = at(e);
-        if (tool === "dot") { v.ax = fx; v.ay = fy; marks(); }
+        if (tool === "dot") {
+          // Onto the figure: the nearest drawn pixel within a few pixels of the tap (the rod's tip, the hand).
+          const px = Math.round(fx * v.w), py = Math.round(fy * v.h), r = Math.round(14 * v.w / canvas.getBoundingClientRect().width);
+          const data = g.getImageData(Math.max(0, px - r), Math.max(0, py - r), Math.min(v.w, px + r + 1) - Math.max(0, px - r), Math.min(v.h, py + r + 1) - Math.max(0, py - r));
+          let best = null;
+          for (let y = 0; y < data.height; y++) for (let x = 0; x < data.width; x++) {
+            if (data.data[(y * data.width + x) * 4 + 3] < 120) continue;
+            const ax = Math.max(0, px - r) + x, ay = Math.max(0, py - r) + y, dd = (ax - px) ** 2 + (ay - py) ** 2;
+            if (!best || dd < best.dd) best = { ax, ay, dd };
+          }
+          v.ax = best ? (best.ax + 0.5) / v.w : fx; v.ay = best ? (best.ay + 0.5) / v.h : fy;
+          marks();
+        }
         else if (tool === "ground") { v.gy = fy; marks(); }
         else { erasing = true; canvas.setPointerCapture(e.pointerId); rub(e); }
       };
