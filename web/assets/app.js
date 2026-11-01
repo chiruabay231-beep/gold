@@ -4978,13 +4978,24 @@
         const ox = mo.dx * k, oy = mo.dy * k;
         // About five bars right of the newest one, standing on the TP; several trades side by side.
         const cx = lx + spacing * 5 + (t.buy ? 30 : 40) * S + i * 70 * (S / 0.6) + ox;
-        const left = cx - (80 + 6) * S, top = ytp - (156 + 34) * S + oy;
+        let left = cx - (80 + 6) * S, top = ytp - (156 + 34) * S + oy;
+        // Zoomed in so far the TP is off the chart: the character stays at the edge, a tag says where the TP is.
+        const paneW = ts.width(), paneH = (this.chart.paneSize ? this.chart.paneSize().height : box.clientHeight) || box.clientHeight;
+        const off = top < 2 - Math.abs(oy) ? "up" : top > paneH - H - 2 + Math.abs(oy) ? "down" : null;
+        top = Math.max(2 + oy, Math.min(paneH - H - 2 + oy, top));
+        left = Math.max(2, Math.min(paneW - W - 2, left));
         const who = t.buy ? "angler" : "hauler";
         const mood = x.end ? (x.end.tpHit ? "money" : "snap") : this.crewEffort(t, last.close, now < mo.brace);
         const src = `assets/crew/${who}-${mood}.svg`;
         if (img.getAttribute("src") !== src) img.setAttribute("src", src);
         img.style.cssText = `width:${W}px;height:${H}px;transform:translate(${left.toFixed(1)}px,${top.toFixed(1)}px)`;
         img.title = `${t.buy ? "BUY" : "SELL"} · TP ${fmt(t.tp, this.digits)}`;
+        if (off) {
+          const tx = left + W / 2, ty = off === "up" ? top + 11 : top + H - 11;
+          const label = `TP ${off === "up" ? "▲" : "▼"} ${fmt(t.tp, this.digits)}`;
+          lines += `<g transform="translate(${tx.toFixed(1)} ${ty.toFixed(1)})"><rect x="-38" y="-9" width="76" height="16" rx="8" fill="#14b88a" opacity=".92"/>`
+            + `<text y="3.4" text-anchor="middle" font-size="10" font-weight="700" fill="#fff" font-family="-apple-system, Segoe UI, Roboto, sans-serif">${label}</text></g>`;
+        }
         const py = this.series.priceToCoordinate(last.close);
         if (x.end) {
           // The line just snapped: a short piece falls from the candle.
