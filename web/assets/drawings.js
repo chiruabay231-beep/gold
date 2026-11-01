@@ -32,6 +32,7 @@
     ellipse: { name: "Hình elip", n: 2 },
     path: { name: "Đường dẫn", n: 12 },
     arrowMarker: { name: "Mũi tên đánh dấu", n: 2 },
+    curve: { name: "Đường cong", n: 3 },
     text: { name: "Văn bản", n: 1 },
   };
   const LINE_TOOLS = ["trendLine", "trendRay", "horizontalLine", "horizontalRay", "verticalLine", "arrow"];
@@ -40,7 +41,7 @@
     ["Gann và Fibonacci", ["fibRetracement", "fibExtension"]],
     ["Mô hình", ["elliottImpulse", "elliottCorrection", "headShoulders", "trianglePattern"]],
     ["Dự đoán và đo lường", ["longPosition", "shortPosition", "fixedRangeVolume", "anchoredVolume", "priceRange"]],
-    ["Hình học", ["brush", "rectangle", "arrow", "ellipse", "path", "arrowMarker"]],
+    ["Hình học", ["brush", "rectangle", "arrow", "ellipse", "path", "curve", "arrowMarker"]],
     ["Lưu ý", ["text"]],
   ];
   // Fibonacci levels: ICT's OTE (0.62–0.79) and targets below 0, like the app; the rest can be turned on.
@@ -59,6 +60,8 @@
   const TFS = ["5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "4h", "1d"];
 
   const alpha = (hex, a) => (hex || "#787b86").slice(0, 7) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
+  /** A curve through three points: the quadratic Bézier whose middle passes through b. */
+  const curveCtrl = (a, b, c) => [2 * b[0] - (a[0] + c[0]) / 2, 2 * b[1] - (a[1] + c[1]) / 2];
   const isPos = (t) => t === "longPosition" || t === "shortPosition";
   const hasFill = (t) => ["rectangle", "ellipse", "headShoulders", "trianglePattern", "fibRetracement", "fibExtension", "longPosition", "shortPosition", "priceRange"].includes(t);
 
@@ -574,6 +577,18 @@
           return d.fill && d.tool === "rectangle" && inBox(p0, p1) ? "area" : false;
         }
         case "priceRange": case "fixedRangeVolume": case "fibRetracement": return inBox(p0, p1) ? "area" : false;
+        case "curve": {
+          if (pts.length < 3) return seg(p0, p1);
+          const k = curveCtrl(pts[0], pts[1], pts[2]);
+          let prev = pts[0];
+          for (let i = 1; i <= 32; i++) {
+            const t = i / 32, u = 1 - t;
+            const q = [u * u * pts[0][0] + 2 * u * t * k[0] + t * t * pts[2][0], u * u * pts[0][1] + 2 * u * t * k[1] + t * t * pts[2][1]];
+            if (seg(prev, q)) return true;
+            prev = q;
+          }
+          return false;
+        }
         case "longPosition": case "shortPosition": {
           const right = Math.max(p0[0], p1[0], p0[0] + 40);
           const yT = pts[2] ? pts[2][1] : this.y(this.target(d));
@@ -746,6 +761,14 @@
         }
         case "path": case "brush":
           g.lineJoin = "round"; g.lineCap = "round"; lineTo(pts); break;
+        case "curve": {
+          g.lineCap = "round";
+          if (pts.length < 3) { lineTo(pts); break; }
+          const k = curveCtrl(pts[0], pts[1], pts[2]);
+          g.beginPath(); g.moveTo(pts[0][0], pts[0][1]); g.quadraticCurveTo(k[0], k[1], pts[2][0], pts[2][1]); g.stroke();
+          caption(Math.min(pts[0][0], pts[2][0]), Math.min(pts[0][1], pts[1][1], pts[2][1]), Math.max(pts[0][0], pts[2][0]), Math.max(pts[0][1], pts[1][1], pts[2][1]));
+          break;
+        }
         case "elliottImpulse": case "elliottCorrection": case "headShoulders": case "trianglePattern": {
           if (d.fill && pts.length >= 3) {
             g.beginPath(); g.moveTo(pts[0][0], pts[0][1]); pts.slice(1).forEach((p) => g.lineTo(p[0], p[1])); g.closePath();
@@ -818,7 +841,7 @@
 
     /** Long / short position: one design mirrored for both. A rounded box, the target and stop zones
      * deepening towards their edges, the stretch price has already travelled lit up, a "now" dot,
-     * a thin R:R gauge on the right edge, and labels outside the box. */
+     * the TP / SL labels, and R:R beside the box at the TP line. */
     paintPosition(g, d, pts, lineTo, tag, width) {
       const dg = this.host.digits();
       const long = d.tool === "longPosition";
@@ -869,12 +892,6 @@
       g.strokeStyle = side; g.lineWidth = Math.max(width, this.lw(1.5)); lineTo([[left, ye], [right, ye]]);
       g.fillStyle = side;
       [left, right].forEach((x) => { g.beginPath(); g.arc(x, ye, 2.5, 0, Math.PI * 2); g.fill(); });
-      // R:R gauge on the right edge: reward above / below, risk on the other side, joined at the entry.
-      const gx = right - 6;
-      g.lineCap = "round"; g.lineWidth = 3;
-      g.strokeStyle = alpha(tc, 0.95); g.beginPath(); g.moveTo(gx, ye); g.lineTo(gx, yt + (yt < ye ? 4 : -4)); g.stroke();
-      g.strokeStyle = alpha(sc, 0.95); g.beginPath(); g.moveTo(gx, ye); g.lineTo(gx, ys + (ys < ye ? 4 : -4)); g.stroke();
-      g.lineCap = "butt";
       // Now: a dot with a halo where price is (or where it hit TP / SL).
       if (nowX != null && nowY != null) {
         const c = prog.status === "stop" ? sc : prog.status === "target" ? tc : (long ? prog.price >= entry : prog.price <= entry) ? tc : sc;
@@ -888,40 +905,21 @@
       const rr = risk ? reward / risk : 0;
       const pct = (v) => (v / entry * 100).toFixed(2) + "%";
       const mid = (left + right) / 2;
-      const outside = (y, up) => (up ? y - 7 : y + 26);
       const active = d.id === this.selected || d.id === this.hoverId || d === this.pending;
       g.globalAlpha = active ? 1 : 0.42;
-      tag(`▲ +${reward.toFixed(dg)}  (${pct(reward)})`, mid, outside(yt, yt < ye), tc, "#fff", "center");
-      tag(`▼ −${risk.toFixed(dg)}  (${pct(risk)})`, mid, outside(ys, ys < ye), sc, "#fff", "center");
-      // Entry pill: the side, the price, R:R, and how it is going.
-      let status = "", statusColor = null;
-      if (prog) {
-        const moved = long ? prog.price - entry : entry - prog.price;
-        const r = risk ? moved / risk : 0;
-        if (prog.status === "target") { status = `✓ TP  +${rr.toFixed(2)}R`; statusColor = tc; }
-        else if (prog.status === "stop") { status = "✕ SL  −1R"; statusColor = sc; }
-        else { status = `${moved >= 0 ? "+" : "−"}${Math.abs(moved).toFixed(dg)}  ·  ${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R`; statusColor = moved >= 0 ? tc : sc; }
-      }
+      // TP just under its line (inside the box for a buy, under it for a sell); SL outside its edge.
+      tag(`▲ +${reward.toFixed(dg)}  (${pct(reward)})`, mid, yt + 24, tc, "#fff", "center");
+      tag(`▼ −${risk.toFixed(dg)}  (${pct(risk)})`, mid, ys < ye ? ys - 7 : ys + 26, sc, "#fff", "center");
+      // Only R:R beside the box, level with the TP line; ✓ / ✕ once TP or SL is hit.
+      const done = prog && prog.status === "target" ? "  ✓" : prog && prog.status === "stop" ? "  ✕" : "";
       g.save();
-      g.globalAlpha = active ? 1 : 0.42;
-      g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
-      g.textBaseline = "middle";
-      const sideText = long ? "MUA" : "BÁN", body = `R:R ${rr.toFixed(2)}`;
-      const sw = g.measureText(sideText).width + 14, bwid = g.measureText(body).width + 16, stw = status ? g.measureText(status).width + 14 : 0;
-      const total = sw + bwid + stw, h = 20, px = mid - total / 2, py = ye - h / 2;
-      g.shadowColor = "rgba(0, 0, 0, 0.3)"; g.shadowBlur = 8; g.shadowOffsetY = 1;
-      g.fillStyle = light ? "rgba(255, 255, 255, 0.96)" : "rgba(18, 23, 34, 0.94)";
-      g.beginPath(); g.roundRect(px, py, total, h, 10); g.fill();
-      g.shadowColor = "transparent";
-      g.strokeStyle = alpha(side, 0.55); g.lineWidth = 1; g.stroke();
-      g.fillStyle = side; g.beginPath(); g.roundRect(px + 2, py + 2, sw - 4, h - 4, 8); g.fill();
-      g.fillStyle = "#fff"; g.fillText(sideText, px + 7, py + h / 2 + 0.5);
-      g.fillStyle = light ? "#1d2330" : "#e8ecf3"; g.fillText(body, px + sw + 8, py + h / 2 + 0.5);
-      if (status) {
-        g.fillStyle = alpha(statusColor, 0.18); g.beginPath(); g.roundRect(px + sw + bwid, py + 2, stw - 2, h - 4, 8); g.fill();
-        g.fillStyle = statusColor; g.fillText(status, px + sw + bwid + 7, py + h / 2 + 0.5);
-      }
+      g.setLineDash([]);
+      g.font = "700 12px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+      g.textAlign = "left"; g.textBaseline = "middle";
+      g.fillStyle = light ? "#000000" : "#ffffff";
+      g.fillText(`R:R ${rr.toFixed(2)}${done}`, right + 6, yt);
       g.restore();
+      g.globalAlpha = 1;
     }
 
     paintFib(g, d, pts, w, lineTo) {

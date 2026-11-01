@@ -1093,6 +1093,10 @@
 
   /* ---------------- drawing toolbar icons ---------------- */
 
+  // Axis text: black (white on dark) and bold. Lightweight Charts has no font-weight option, so the
+  // family is a bold face under its own name (style.css), falling back to the system font.
+  const AXIS_FAMILY = "AurumAxis, -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+  const axisFont = (bg, light) => ({ background: { color: bg }, textColor: light ? "#000000" : "#f1f4f9", fontFamily: AXIS_FAMILY, fontSize: 13 });
   const svg = (body) => `<svg viewBox="0 0 28 28" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
   const dot = (x, y) => `<circle cx="${x}" cy="${y}" r="1.8" fill="currentColor"/>`;
   const TOOL_ICON = {
@@ -1118,6 +1122,7 @@
     rectangle: svg(`<rect x="5" y="8" width="18" height="12"/>${dot(5, 8)}${dot(23, 20)}`),
     ellipse: svg(`<ellipse cx="14" cy="14" rx="10" ry="7"/>`),
     arrowMarker: svg(`<path d="M5 14h14M14 8l6 6-6 6"/>`),
+    curve: svg(`<path d="M5 21Q14 -1 23 21"/>${dot(5, 21)}${dot(14, 10)}${dot(23, 21)}`),
     text: svg(`<path d="M7 7h14M14 7v15M11 22h6"/>`),
   };
   /** The trade characters' pictures: size on the chart, where the fishing line / the rope starts (picture coordinates). */
@@ -1169,7 +1174,7 @@
     { id: "fib", title: "Gann và Fibonacci", tools: ["fibRetracement", "fibExtension"] },
     { id: "patterns", title: "Mô hình", tools: ["elliottImpulse", "elliottCorrection", "headShoulders", "trianglePattern", "path"] },
     { id: "forecast", title: "Dự đoán và đo lường", tools: ["longPosition", "shortPosition", "priceRange", "fixedRangeVolume", "anchoredVolume"] },
-    { id: "shapes", title: "Hình học", tools: ["brush", "rectangle", "ellipse", "arrowMarker"] },
+    { id: "shapes", title: "Hình học", tools: ["brush", "rectangle", "ellipse", "curve", "arrowMarker"] },
     { id: "text", title: "Văn bản", tools: ["text"] },
   ];
 
@@ -4345,6 +4350,7 @@
       const n = window.AurumDrawings.tools[tool].n;
       if (tool === "brush") return "kéo để vẽ";
       if (tool === "path") return "chạm từng điểm, chạm lại điểm cuối để xong";
+      if (tool === "curve") return "chạm điểm đầu, điểm giữa (độ cong) rồi điểm cuối";
       if (n === 1) return "chạm vào chỗ cần đặt";
       if (n === 2) return "kéo từ điểm đầu tới điểm cuối (hoặc chạm 2 điểm)";
       return `chạm ${n} điểm`;
@@ -5895,11 +5901,15 @@
 
     applyChartStyle() {
       if (!this.chart) return;
+      if (!this.axisFontAsked && document.fonts && document.fonts.load) {
+        this.axisFontAsked = true;
+        document.fonts.load("13px AurumAxis").then(() => this.applyChartStyle()).catch(() => {});
+      }
       const st = this.chartStyle, light = document.documentElement.dataset.theme === "light";
       const bg = st.customBg ? st.bg : (light ? "#ffffff" : "#151c2a");
       const grid = light && st.grid === "#1a2233" ? "#eef0f4" : st.grid;
       this.chart.applyOptions({
-        layout: { background: { color: bg }, textColor: light ? "#4b5563" : "#8b95a7" },
+        layout: axisFont(bg, light),
         grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
         rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
         timeScale: { borderColor: light ? "#d6dae1" : "#222c3d", secondsVisible: st.seconds || isSecTF(this.interval) },
@@ -5912,7 +5922,7 @@
       this.series.applyOptions(candles);
       if (this.chart2) {
         this.chart2.applyOptions({
-          layout: { background: { color: bg }, textColor: light ? "#4b5563" : "#8b95a7" },
+          layout: axisFont(bg, light),
           grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
           rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" }, timeScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
         });
@@ -5920,7 +5930,7 @@
       }
       (this.panes || []).forEach((p) => {
         p.chart.applyOptions({
-          layout: { background: { color: bg }, textColor: light ? "#4b5563" : "#8b95a7" },
+          layout: axisFont(bg, light),
           grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
           rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" }, timeScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
         });

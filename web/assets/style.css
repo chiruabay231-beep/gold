@@ -1,3 +1,12 @@
+/* The chart axes' bold face (Lightweight Charts takes a family, not a weight). */
+@font-face {
+  font-family: "AurumAxis";
+  font-weight: 400;
+  src: local("SFUI-Bold"), local(".SFUI-Bold"), local("SF Pro Text Bold"), local("SFProText-Bold"),
+       local("Helvetica Neue Bold"), local("HelveticaNeue-Bold"), local("Segoe UI Bold"), local("SegoeUI-Bold"),
+       local("Roboto Bold"), local("Roboto-Bold"), local("Arial Bold"), local("Arial-BoldMT"),
+       local("Liberation Sans Bold"), local("LiberationSans-Bold"), local("DejaVu Sans Bold"), local("DejaVuSans-Bold");
+}
 :root {
   /* TradingView's font stack */
   --font: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif;
