@@ -5066,13 +5066,14 @@
         const light = document.documentElement.dataset.theme === "light", hot = Math.min(1, ph.hot || 0);
         const mix = (a, b, f) => "#" + [0, 2, 4].map((i) => Math.round(parseInt(a.slice(i + 1, i + 3), 16) * (1 - f) + parseInt(b.slice(i + 1, i + 3), 16) * f).toString(16).padStart(2, "0")).join("");
         const color = mix(light ? "#000000" : "#05070a", "#ff2a3a", hot);
-        const w = (t.buy ? 1.2 + ph.ten * 0.5 : 2 + ph.ten * 0.6) * (1 + hot * 0.5) * Math.max(0.8, S / 0.6);
-        if (!light) lines += `<path d="${d}" stroke="#e8eef7" stroke-width="${(w + 1.8).toFixed(2)}" fill="none" opacity="${(0.55 * (1 - hot)).toFixed(2)}" stroke-linecap="round"/>`;
+        // Hair-thin (under half a pixel) unless the line glows hot.
+        const w = (t.buy ? 0.4 + ph.ten * 0.08 : 0.45 + ph.ten * 0.05) * (1 + hot * 1.4);
+        if (!light) lines += `<path d="${d}" stroke="#e8eef7" stroke-width="${(w + 1).toFixed(2)}" fill="none" opacity="${(0.4 * (1 - hot)).toFixed(2)}" stroke-linecap="round"/>`;
         if (hot > 0.05) lines += `<path d="${d}" stroke="#ff3b2f" stroke-width="${(w + 4 * hot).toFixed(2)}" fill="none" opacity="${(0.32 * hot).toFixed(2)}" stroke-linecap="round"/>`;
         lines += `<path d="${d}" stroke="${color}" stroke-width="${w.toFixed(2)}" fill="none" stroke-linecap="round"/>`;
         if (!t.buy && hot > 0.3) lines += `<path d="${d}" stroke="#ffd2a0" stroke-width="${w.toFixed(2)}" fill="none" stroke-dasharray="1 2.4" opacity="${(0.6 * hot).toFixed(2)}"/>`;
         // The line's end at the hand / the rod tip, so it reads as held.
-        lines += `<circle cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="${(w * 0.8).toFixed(2)}" fill="${color}"/>`;
+        lines += `<circle cx="${sx.toFixed(1)}" cy="${sy.toFixed(1)}" r="${Math.max(0.7, w).toFixed(2)}" fill="${color}"/>`;
         lines += t.buy ? `<path d="M${lx} ${py.toFixed(1)} v2.2 q0 1.6 -1.6 1.3" stroke="${color}" stroke-width=".9" fill="none"/>`
           : `<circle cx="${lx}" cy="${py.toFixed(1)}" r="1.5" fill="none" stroke="${color}" stroke-width="1.1"/>`;
         if (hot > 0.35) {
@@ -5133,10 +5134,26 @@
       });
     },
 
+    /** Where the line most likely starts in a picture: the rod's tip for the angler (the far end of the figure up
+     *  toward the candles: left and high), the fist on the rope for the hauler (the figure's top-left point). */
+    crewFindAnchor(canvas, side) {
+      const w = canvas.width, h = canvas.height, data = canvas.getContext("2d").getImageData(0, 0, w, h).data;
+      const solid = (x, y) => x >= 0 && y >= 0 && x < w && y < h && data[(y * w + x) * 4 + 3] >= 120;
+      // The hauler's fist, not the thin rope running off it: only spots with body around them count.
+      const thick = (x, y) => { let n = 0; for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) n += solid(x + i, y + j) ? 1 : 0; return n >= 16; };
+      let best = null;
+      for (let y = 0; y < h * 0.6; y++) for (let x = 0; x < w; x++) {
+        if (!solid(x, y) || (side !== "buy" && !thick(x, y))) continue;
+        const score = side === "buy" ? x + y * 0.35 : x + y;
+        if (!best || score < best.score) best = { score, x, y };
+      }
+      return best ? { ax: (best.x + 0.5) / w, ay: (best.y + 0.5) / h } : {};
+    },
+
     crewEditor(box, cur, side) {
       const v = cur[side];
       box.innerHTML = `<div class="row-btns"><label class="btn btn-ghost btn-small">Chọn ảnh…<input type="file" accept="image/*" hidden></label>
-        ${v ? `<button class="btn btn-ghost btn-small" data-a="flip">⇋ Lật ngang</button><button class="btn btn-ghost btn-small" data-a="clear">Bỏ ảnh</button>` : ""}</div>
+        ${v ? `<button class="btn btn-ghost btn-small" data-a="flip">⇋ Lật ngang</button><button class="btn btn-ghost btn-small" data-a="auto">🎯 Tự tìm ${side === "buy" ? "đầu cần" : "tay nắm dây"}</button><button class="btn btn-ghost btn-small" data-a="clear">Bỏ ảnh</button>` : ""}</div>
         ${v ? `<div class="cp-tools"><button type="button" data-t="dot" class="on">● Nối dây</button><button type="button" data-t="ground">▁ Mặt đất</button>
           <button type="button" data-t="erase">⌫ Tẩy</button><label class="muted small">cỡ tẩy <input type="range" min="4" max="40" value="14" data-a="size"></label></div>
           <div class="cp-pic"><canvas></canvas><i class="cp-dot"></i><i class="cp-ground"></i></div>`
@@ -5154,6 +5171,7 @@
             cv.width = Math.round(im.width * k); cv.height = Math.round(im.height * k);
             cv.getContext("2d").drawImage(im, 0, 0, cv.width, cv.height);
             cur[side] = { src: cv.toDataURL("image/png"), w: cv.width, h: cv.height, ax: side === "buy" ? 0.06 : 0.45, ay: 0.08, gy: 0.98 };
+            Object.assign(cur[side], this.crewFindAnchor(cv, side));
             this.crewEditor(box, cur, side);
           };
           im.src = reader.result;
@@ -5164,7 +5182,10 @@
       const canvas = box.querySelector("canvas"), g = canvas.getContext("2d");
       canvas.width = v.w; canvas.height = v.h;
       const img = new Image();
-      img.onload = () => { g.clearRect(0, 0, v.w, v.h); g.drawImage(img, 0, 0); };
+      img.onload = () => {
+        g.clearRect(0, 0, v.w, v.h); g.drawImage(img, 0, 0);
+        if (v.findAnchor) { delete v.findAnchor; Object.assign(v, this.crewFindAnchor(canvas, side)); marks(); }
+      };
       img.src = v.src;
       const marks = () => {
         box.querySelector(".cp-dot").style.cssText = `left:${(v.ax * 100).toFixed(1)}%;top:${(v.ay * 100).toFixed(1)}%`;
@@ -5185,7 +5206,7 @@
         const [fx, fy] = at(e);
         if (tool === "dot") {
           // Onto the figure: the nearest drawn pixel within a few pixels of the tap (the rod's tip, the hand).
-          const px = Math.round(fx * v.w), py = Math.round(fy * v.h), r = Math.round(14 * v.w / canvas.getBoundingClientRect().width);
+          const px = Math.round(fx * v.w), py = Math.round(fy * v.h), r = Math.round(24 * v.w / canvas.getBoundingClientRect().width);
           const data = g.getImageData(Math.max(0, px - r), Math.max(0, py - r), Math.min(v.w, px + r + 1) - Math.max(0, px - r), Math.min(v.h, py + r + 1) - Math.max(0, py - r));
           let best = null;
           for (let y = 0; y < data.height; y++) for (let x = 0; x < data.width; x++) {
@@ -5204,10 +5225,11 @@
       box.querySelector("[data-a=flip]").onclick = () => {
         const c2 = document.createElement("canvas"); c2.width = v.w; c2.height = v.h;
         const g2 = c2.getContext("2d"); g2.translate(v.w, 0); g2.scale(-1, 1); g2.drawImage(canvas, 0, 0);
-        v.src = c2.toDataURL("image/png"); v.ax = 1 - v.ax;
+        v.src = c2.toDataURL("image/png"); v.ax = 1 - v.ax; v.findAnchor = true;
         this.crewEditor(box, cur, side);
       };
       box.querySelector("[data-a=clear]").onclick = () => { delete cur[side]; this.crewEditor(box, cur, side); };
+      box.querySelector("[data-a=auto]").onclick = () => { Object.assign(v, this.crewFindAnchor(canvas, side)); marks(); };
     },
 
     /* ----- mascots: a buyer and a seller on the chart, cheering or crying with the price ----- */
