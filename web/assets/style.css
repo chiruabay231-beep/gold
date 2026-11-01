@@ -390,6 +390,12 @@ dialog#sheet h3 { margin: 0 30px 6px 0; display: flex; align-items: center; gap:
 .rb.play { background: var(--gold); color: #1a1205; min-width: 44px; }
 .replay-bar select, .replay-bar input { height: 32px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; color: var(--text); padding: 0 8px; font: 600 13px/1 var(--font); }
 .replay-bar input { width: 74px; }
+.r-lot { display: inline-flex; align-items: center; height: 32px; padding: 0 2px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+.r-lot button { background: none; border: 0; color: var(--text); width: 22px; height: 26px; border-radius: 6px; cursor: pointer; font: 600 15px/1 var(--font); }
+.r-lot button:hover { background: var(--chip); }
+.r-lot .lot-pick { width: 16px; font-size: 10px; color: var(--muted); }
+.replay-bar .r-lot input { width: 54px; height: 28px; border: 0; background: none; padding: 0; text-align: center; font-variant-numeric: tabular-nums; }
+.replay-bar .r-lot input:focus { outline: none; }
 .r-time { font-variant-numeric: tabular-nums; margin-left: auto; }
 .r-pnl { margin-left: auto; font-variant-numeric: tabular-nums; }
 .r-ask { display: flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); cursor: pointer; }

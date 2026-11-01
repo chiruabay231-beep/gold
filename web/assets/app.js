@@ -1655,32 +1655,44 @@
 
     lots() { return clampLots(num($("lotInput").value)); },
 
+    /** A lot box was changed: keep it, and while replaying keep the ticket's and the replay bar's the same
+     *  (BUY / SELL on either places the backtest order). */
+    setLots(input, key) {
+      store.set(key, input.value);
+      if (!this.replay) return;
+      const other = input.id === "rLots" ? $("lotInput") : input.id === "lotInput" ? $("rLots") : null;
+      if (!other) return;
+      other.value = input.value;
+      store.set(other.id === "rLots" ? "aurum.rlots" : "aurum.lots", input.value);
+    },
+
     /** − / + on a lot box: 0.01 a step under 1 lot, 0.1 under 10, then 1. */
     stepLots(input, dir, key) {
       const v = clampLots(num(input.value));
       const step = dir > 0 ? (v < 1 ? 0.01 : v < 10 ? 0.1 : 1) : (v <= 1 ? 0.01 : v <= 10 ? 0.1 : 1);
       input.value = clampLots(v + step * dir).toFixed(2);
-      store.set(key, input.value);
+      this.setLots(input, key);
       if (this.draft) this.updatePendingLabels();
     },
 
     /** Lot choices under a lot box, up to the most allowed (200 lot, or the server's limit). */
     lotMenu(input, key) {
       const menu = $("ctxMenu");
-      const serverMax = this.owner && this.account && this.account.maxLots ? +this.account.maxLots : null;
+      // The broker's limit is for real orders; a backtest takes up to MAX_LOTS.
+      const serverMax = !this.replay && this.owner && this.account && this.account.maxLots ? +this.account.maxLots : null;
       const max = Math.min(MAX_LOTS, serverMax || MAX_LOTS);
       const list = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200];
       const cur = clampLots(num(input.value));
       menu.innerHTML = `<div class="lot-menu">${list.map((v) => `<button type="button" data-v="${v}" class="${cur === v ? "on" : ""} ${v > max ? "over" : ""}" ${v > max ? `title="Vượt giới hạn máy chủ ${max} lot"` : ""}>${v}</button>`).join("")}
         <button type="button" data-v="${max}" class="max">MAX · ${max} lot</button></div>
-        ${serverMax && serverMax < MAX_LOTS ? `<p class="muted small lot-note">Máy chủ đang cho tối đa ${serverMax} lot mỗi lệnh.</p><button type="button" class="lot-raise" data-raise>Nâng giới hạn máy chủ lên ${MAX_LOTS} lot</button>` : `<p class="muted small lot-note">Tối đa ${MAX_LOTS} lot mỗi lệnh.</p>`}`;
+        ${serverMax && serverMax < MAX_LOTS ? `<p class="muted small lot-note">Máy chủ đang cho tối đa ${serverMax} lot mỗi lệnh.</p><button type="button" class="lot-raise" data-raise>Nâng giới hạn máy chủ lên ${MAX_LOTS} lot</button>` : `<p class="muted small lot-note">${this.replay ? "Backtest: t" : "T"}ối đa ${MAX_LOTS} lot mỗi lệnh.</p>`}`;
       menu.hidden = false;
       const r = input.getBoundingClientRect();
       menu.style.left = Math.max(8, Math.min(r.left - 60, window.innerWidth - menu.offsetWidth - 8)) + "px";
       menu.style.top = Math.min(r.bottom + 6, window.innerHeight - menu.offsetHeight - 8) + "px";
       menu.querySelectorAll("[data-v]").forEach((b) => (b.onclick = () => {
         input.value = clampLots(+b.dataset.v).toFixed(2);
-        store.set(key, input.value);
+        this.setLots(input, key);
         this.closeMenu();
         if (this.draft) this.updatePendingLabels();
         if (+b.dataset.v > max) toast(`Máy chủ chỉ cho tối đa ${max} lot mỗi lệnh: lệnh ${b.dataset.v} lot sẽ bị từ chối`, true);
@@ -3039,7 +3051,7 @@
       $("sellBtn").onclick = (e) => this.marketOrder("short", e.currentTarget);
       $("buyBtn").onclick = (e) => this.marketOrder("long", e.currentTarget);
       $("lotInput").value = store.get("aurum.lots") || "0.01";
-      $("lotInput").onchange = () => { $("lotInput").value = this.lots().toFixed(2); store.set("aurum.lots", $("lotInput").value); };
+      $("lotInput").onchange = () => { $("lotInput").value = this.lots().toFixed(2); this.setLots($("lotInput"), "aurum.lots"); };
       document.querySelectorAll("#ticket [data-step]").forEach((b) => (b.onclick = () => this.stepLots($("lotInput"), +b.dataset.step, "aurum.lots")));
       $("lotPick").onclick = () => this.lotMenu($("lotInput"), "aurum.lots");
       $("pendingToggle").onclick = () => this.togglePending();
@@ -4482,6 +4494,8 @@
         trades: (prev && prev.trades) || [], closed: (prev && prev.closed) || [],
       };
       if (prev) clearInterval(prev.timer);
+      // The backtest starts with the ticket's lot (0.01 … 200, picked from its ▾ list).
+      if (!prev) store.set("aurum.rlots", this.lots().toFixed(2));
       this.selected = null; this.renderSelBar();
       this.applyReplay(true);
     },
@@ -4599,8 +4613,8 @@
       const r = this.replay;
       if (!r) return;
       const bar = this.bars[r.idx];
-      const lots = Math.max(0.01, num($("rLots").value) || 0.01);
-      store.set("aurum.rlots", String(lots));
+      const lots = clampLots(num($("rLots").value));
+      store.set("aurum.rlots", lots.toFixed(2));
       const t = { id: Math.random().toString(36).slice(2, 8), side, lots, entry: bar.close, time: bar.time,
         stop: num($("rStop").value), target: num($("rTarget").value) };
       r.trades.push(t);
@@ -4688,7 +4702,7 @@
         </div>
         <div class="r-row">
           <button type="button" class="rb sellbg" data-a="sell">SELL</button>
-          <input id="rLots" inputmode="decimal" value="${esc(store.get("aurum.rlots") || "0.01")}" title="Lot">
+          <span class="r-lot"><button type="button" data-rstep="-1" aria-label="Giảm lot">−</button><input id="rLots" inputmode="decimal" value="${esc(store.get("aurum.rlots") || "0.01")}" title="Lot"><button type="button" class="lot-pick" data-a="rlotPick" title="Chọn nhanh khối lượng (tối đa ${MAX_LOTS} lot)">▾</button><button type="button" data-rstep="1" aria-label="Tăng lot">+</button></span>
           <button type="button" class="rb buybg" data-a="buy">BUY</button>
           <input id="rStop" inputmode="decimal" placeholder="SL" value="${esc((this.rDraft || {}).stop || "")}">
           <input id="rTarget" inputmode="decimal" placeholder="TP" value="${esc((this.rDraft || {}).target || "")}">
@@ -4713,6 +4727,9 @@
         r.speed = +e.target.value; store.set("aurum.rspeed", String(r.speed));
         if (r.playing) { clearInterval(r.timer); r.timer = setInterval(() => this.replayStep(), 1000 / r.speed); }
       };
+      on("rlotPick", () => this.lotMenu($("rLots"), "aurum.rlots"));
+      bar.querySelectorAll("[data-rstep]").forEach((b) => (b.onclick = () => this.stepLots($("rLots"), +b.dataset.rstep, "aurum.rlots")));
+      $("rLots").onchange = () => { $("rLots").value = clampLots(num($("rLots").value)).toFixed(2); this.setLots($("rLots"), "aurum.rlots"); };
       ["rStop", "rTarget"].forEach((id) => ($(id).oninput = () => { this.rDraft = { stop: $("rStop").value, target: $("rTarget").value }; }));
     },
 
@@ -6474,16 +6491,34 @@
     },
 
     /** One crosshair over every timeframe: the bar holding the same moment on each chart. */
+    /** Whether a crosshair move on `from` is the mouse's (to pass on to the other charts). The crosshair
+     *  set on another chart fires its own move a moment later: passing that back made the mouse's chart
+     *  jump to the other chart's candle. */
+    crossReal(from, param) {
+      if (param && param.point) {
+        if (!param.sourceEvent) return false;
+        this.crossOwner = from;
+        return true;
+      }
+      if (this.crossOwner !== from) return false;
+      this.crossOwner = null;
+      return true;
+    },
+
     crossFrom(from, param) {
       if (this.syncingCrosshair || !this.layout || this.layout[0] !== "m" || !this.panes || !this.panes.length) return;
+      if (!this.crossReal(from, param)) return;
       this.syncingCrosshair = true;
       try {
         const t = param && param.point && param.time != null ? param.time - TZ : null;
         const charts = [{ chart: this.chart, series: this.series, bars: this.viewBars() }].concat(this.panes.map((p) => ({ chart: p.chart, series: p.series, bars: p.bars })));
+        // The horizontal line follows the mouse's price on every timeframe (one symbol), not the candle's close.
+        const src = charts.find((c) => c.chart === from);
+        const price = t != null && src ? src.series.coordinateToPrice(param.point.y) : null;
         charts.forEach((c) => {
           if (c.chart === from) return;
           const b = t == null ? null : barAt(c.bars, t);
-          try { if (b) c.chart.setCrosshairPosition(b.close, b.time + TZ, c.series); else c.chart.clearCrosshairPosition(); } catch { /* not ready */ }
+          try { if (b) c.chart.setCrosshairPosition(price != null ? price : b.close, b.time + TZ, c.series); else c.chart.clearCrosshairPosition(); } catch { /* not ready */ }
         });
       } finally { this.syncingCrosshair = false; }
     },
@@ -6546,22 +6581,25 @@
       link(this.chart, this.chart2);
       link(this.chart2, this.chart);
       // One crosshair across both charts: the same moment on each.
-      const follow = (from, to, toSeries, bars) => from.subscribeCrosshairMove((param) => {
-        if (this.syncingCrosshair || !this.pair()) return;
+      // The other symbol's line sits as far (in %) from its candle as the mouse is from this one's, so it
+      // moves with the mouse instead of jumping between closes.
+      const at = (list, t) => { let i = list.length - 1; while (i > 0 && list[i].time > t) i--; return list[i]; };
+      const follow = (from, fromSeries, fromBars, to, toSeries, bars) => from.subscribeCrosshairMove((param) => {
+        if (this.syncingCrosshair || !this.pair() || !this.crossReal(from, param)) return;
         this.syncingCrosshair = true;
         try {
           if (!param || param.time == null || !param.point) to.clearCrosshairPosition();
           else {
-            const t = param.time - TZ, list = bars();
-            let i = list.length - 1;
-            while (i > 0 && list[i].time > t) i--;
-            if (list[i]) to.setCrosshairPosition(list[i].close, list[i].time + TZ, toSeries);
+            const t = param.time - TZ, b = at(bars(), t), own = at(fromBars(), t);
+            const mouse = fromSeries.coordinateToPrice(param.point.y);
+            const price = b && own && own.close && mouse != null ? b.close * (mouse / own.close) : b && b.close;
+            if (b) to.setCrosshairPosition(price, b.time + TZ, toSeries);
           }
         } catch { /* nothing to show */ }
         this.syncingCrosshair = false;
       });
-      follow(this.chart, this.chart2, this.series2, () => this.cmpView || []);
-      follow(this.chart2, this.chart, this.series, () => this.viewBars());
+      follow(this.chart, this.series, () => this.viewBars(), this.chart2, this.series2, () => this.cmpView || []);
+      follow(this.chart2, this.series2, () => this.cmpView || [], this.chart, this.series, () => this.viewBars());
       // Drawings on the second chart too, kept per symbol like the first one's.
       this.drawings2 = new window.AurumDrawings({
         chart: this.chart2, series: this.series2, store,
