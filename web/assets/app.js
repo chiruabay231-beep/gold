@@ -470,7 +470,7 @@
       const own = (get) => ({ get, set() { /* this chart's own */ }, configurable: true });
       Object.defineProperties(v, { bars: own(() => pane.bars), interval: own(() => pane.tf), digits: own(() => (pane.digits != null ? pane.digits : term.digits)) });
       Object.assign(v, {
-        chart: this.chart, series: this.series, viewBars: () => pane.bars, replay: null, requestICT: null,
+        chart: this.chart, series: this.series, viewBars: () => pane.bars, replay: null, requestICT: null, isPane: true,
         ict: null, smt: null, sharks: null, sharkZones: null, newsDots: null, seriesPriceOn: null, studySeries: new Map(), studySig: "",
       });
       Object.assign(v, v.axisViews());
@@ -1120,7 +1120,12 @@
     arrowMarker: svg(`<path d="M5 14h14M14 8l6 6-6 6"/>`),
     text: svg(`<path d="M7 7h14M14 7v15M11 22h6"/>`),
   };
+  /** What each mascot picture shows. */
+  const MASCOT_MOODS = { rich: "lãi đậm", happy: "vui mừng", tea: "nhâm nhi trà (đi ngang)", sleep: "ngủ gật (im lìm)", nervous: "hồi hộp (sắp có tin)",
+    cry: "khóc (giá đi ngược)", shock: "hồn lìa khỏi xác", angry: "tức điên (dính SL)", trophy: "ăn mừng TP" };
+
   const RAIL_ICON = {
+    mascot: svg(`<circle cx="14" cy="11" r="6"/><path d="M8 9c1-4 11-4 12 0M11.5 11h.01M16.5 11h.01M12 14c1 1 3 1 4 0M7 25c1-5 4-8 7-8s6 3 7 8"/>`),
     cursor: svg(`<path d="M14 4v20M4 14h20"/>`),
     zoom: svg(`<circle cx="12" cy="12" r="7"/><path d="m17 17 6 6M12 9v6M9 12h6"/>`),
     magnet: svg(`<path d="M7 5v9a7 7 0 0 0 14 0V5h-4v9a3 3 0 0 1-6 0V5Z"/><path d="M7 9h4M17 9h4"/>`),
@@ -1818,6 +1823,7 @@
         Voice.alert(text, "Lệnh đã khớp", `${sideName(p.side)} ${p.lots} lot ${p.symbol} @ ${fmt(p.entry, d2(p.symbol))}`, true);
       });
       deals.filter((d) => !known.deals.has(d.ticket)).forEach((d) => {
+        this.mascotEvent = { win: d.profit >= 0, at: Date.now() };
         const manual = d.reason !== "target" && d.reason !== "stop";
         let text = manual ? Voice.defaults().closed : Voice.phrase(d.reason);
         if (Voice.cfg.details) text += `, ${Voice.spokenSymbol(d.symbol)}, ${Voice.spokenMoney(d.profit)}`;
@@ -2960,6 +2966,7 @@
         this.series.attachPrimitive(this.layer());
         Object.assign(this, this.axisViews());
         setInterval(() => { if (this.tab === "chart") this.repaint(); }, 1000);
+        setInterval(() => { if (this.tab === "chart") this.updateMascotMoods(); }, 1500);
         this.drawings = this.drawingsMain = new window.AurumDrawings({
           chart: this.chart, series: this.series, store,
           bars: () => this.viewBars(), sec: () => TF_SECONDS[this.interval], digits: () => this.digits,
@@ -3790,7 +3797,8 @@
         if (fingers.size > 1) { cancelDrag(); clearTimeout(longPress); return; }
         this.closeMenu();
         this.focusChart(1);
-        if (e.button > 0 || e.target.closest("#selBar, #posPill, #ticket, #drawBar, #favBar, #draftBar, #btChip")) return;
+        if (e.button > 0 || e.target.closest("#selBar, #posPill, #ticket, #drawBar, #favBar, #draftBar, #btChip, #mascots .mascot")) return;
+        if (this.mascotSel) { this.mascotSel = null; document.querySelectorAll("#mascots .sel").forEach((x) => x.classList.remove("sel")); }
         const { x, y } = rel(e);
         down = { x: e.clientX, y: e.clientY, moved: false, menu: false };
         if (x > paneWidth()) return;
@@ -4475,6 +4483,7 @@
       const bar = this.bars[r.idx];
       this.series.update(shown(bar));
       this.replayFill(bar);
+      this.updateMascotMoods();
       this.computeICT();
       this.updateFlow();
       this.syncLines();
@@ -4594,6 +4603,7 @@
       r.trades = r.trades.filter((x) => x !== t);
       const profit = this.replayProfit(t, price);
       r.closed.unshift(Object.assign({}, t, { exit: price, reason, profit }));
+      if (reason === "TP" || reason === "SL") this.mascotEvent = { win: profit >= 0, at: Date.now() };
       this.journalResult(t, price, reason, profit);
     },
 
@@ -4861,6 +4871,178 @@
       });
     },
 
+    /* ----- mascots: a buyer and a seller on the chart, cheering or crying with the price ----- */
+
+    mascotKey() { return "aurum.mascots." + this.symbolKey(); },
+    mascotList() { try { return JSON.parse(store.get(this.mascotKey()) || "[]"); } catch { return []; } },
+    saveMascots(list) { store.set(this.mascotKey(), JSON.stringify(list)); },
+
+    /** A new mascot right of the middle of the chart, standing on the price. */
+    addMascot(kind) {
+      const bars = this.viewBars();
+      if (!bars.length) return;
+      const r = this.chart.timeScale().getVisibleLogicalRange();
+      const list = this.mascotList();
+      // Side by side when there are several; the whole figure inside the chart.
+      const at = 0.5 + ((list.length * 0.14) % 0.42);
+      const i = r ? Math.max(0, Math.min(bars.length - 1, Math.round(r.from + (r.to - r.from) * at))) : bars.length - 1;
+      const size = 120, h = size * 206 / 172, top = h * 0.93 + 8, bottom = 0;
+      let y = this.series.priceToCoordinate(bars[bars.length - 1].close);
+      const paneH = $("chart").clientHeight - 30;
+      y = Math.max(top, Math.min(paneH - 8 - bottom, y == null ? paneH / 2 : y));
+      const p = this.series.coordinateToPrice(y);
+      const m = { id: Math.random().toString(36).slice(2, 9), kind, t: bars[i].time, p: +(p != null ? p : bars[bars.length - 1].close).toFixed(this.digits), size };
+      list.push(m);
+      this.saveMascots(list);
+      store.set("aurum.mascotsOff", "0");
+      this.mascotSel = m.id;
+      this.renderMascots();
+      toast(`${kind === "girl" ? "Cô gái phe MUA" : "Chàng trai phe BÁN"}: kéo để đặt chỗ, góc dưới để đổi cỡ`);
+    },
+
+    mascotMenu(button) {
+      const list = this.mascotList(), off = store.get("aurum.mascotsOff") === "1";
+      const items = [["girl", "👧 Thêm cô gái phe MUA (vui khi giá lên)"], ["boy", "👦 Thêm chàng trai phe BÁN (vui khi giá xuống)"]];
+      if (list.length) items.push(["toggle", off ? "👁 Hiện nhân vật" : "🙈 Ẩn nhân vật"], ["clear", `🗑 Xoá ${list.length} nhân vật trên mã này`]);
+      const r = button.getBoundingClientRect(), menu = $("ctxMenu");
+      menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
+      menu.hidden = false;
+      menu.style.left = Math.min(r.right + 6, window.innerWidth - menu.offsetWidth - 8) + "px";
+      menu.style.top = Math.min(r.top, window.innerHeight - menu.offsetHeight - 8) + "px";
+      menu.querySelectorAll("button").forEach((b) => (b.onclick = () => {
+        this.closeMenu();
+        const k = b.dataset.k;
+        if (k === "girl" || k === "boy") this.addMascot(k);
+        if (k === "toggle") { store.set("aurum.mascotsOff", off ? "0" : "1"); this.renderMascots(); }
+        if (k === "clear" && confirm("Xoá các nhân vật trên mã này?")) { this.saveMascots([]); this.renderMascots(); }
+        this.renderToolRail();
+      }));
+    },
+
+    /** The mascots of this symbol as elements over the chart (again when the list or the symbol changes). */
+    renderMascots() {
+      const box = $("mascots");
+      if (!box || !this.chart) return;
+      this.mascotSym = this.symbolKey();
+      const list = store.get("aurum.mascotsOff") === "1" ? [] : this.mascotList();
+      box.innerHTML = list.map((m) => `<div class="mascot${m.id === this.mascotSel ? " sel" : ""}" data-id="${esc(m.id)}">
+          <img alt="" draggable="false"><button type="button" class="m-btn m-x" title="Xoá">✕</button>
+          <button type="button" class="m-btn m-swap" title="Đổi phe Mua / Bán">⇄</button><i class="m-rs" title="Kéo để đổi cỡ"></i></div>`).join("");
+      box.querySelectorAll(".mascot").forEach((el) => this.bindMascot(el));
+      this.moods = {};
+      this.updateMascotMoods(true);
+      this.placeMascots();
+    },
+
+    bindMascot(el) {
+      const id = el.dataset.id;
+      const edit = (f) => { const list = this.mascotList(), m = list.find((x) => x.id === id); if (m) { f(m, list); this.saveMascots(list); } return m; };
+      el.querySelector(".m-x").onclick = (e) => { e.stopPropagation(); this.saveMascots(this.mascotList().filter((x) => x.id !== id)); this.renderMascots(); this.renderToolRail(); };
+      el.querySelector(".m-swap").onclick = (e) => { e.stopPropagation(); edit((m) => (m.kind = m.kind === "girl" ? "boy" : "girl")); this.renderMascots(); };
+      el.addEventListener("pointerdown", (e) => {
+        e.stopPropagation();
+        if (e.target.closest(".m-btn")) return;
+        const resize = !!e.target.closest(".m-rs");
+        const m = this.mascotList().find((x) => x.id === id);
+        if (!m) return;
+        if (this.mascotSel !== id) { this.mascotSel = id; document.querySelectorAll("#mascots .mascot").forEach((x) => x.classList.toggle("sel", x.dataset.id === id)); }
+        el.setPointerCapture(e.pointerId);
+        const start = { x: e.clientX, y: e.clientY, size: m.size, at: this.mascotXY(m) };
+        let moved = null;
+        const move = (ev) => {
+          const dx = ev.clientX - start.x, dy = ev.clientY - start.y;
+          if (resize) { moved = { size: Math.round(Math.max(60, Math.min(280, start.size + dx))) }; m.size = moved.size; }
+          else if (start.at) {
+            const ts = this.chart.timeScale(), bars = this.viewBars(), sec = TF_SECONDS[this.interval] || 60;
+            const l = ts.coordinateToLogical(start.at.x + dx), price = this.series.coordinateToPrice(start.at.y + dy);
+            if (l == null || price == null || !bars.length) return;
+            moved = { t: indexToTime(bars, l, sec), p: +price.toFixed(this.digits) };
+            Object.assign(m, moved);
+          }
+          this.placeMascot(el, m);
+        };
+        const up = () => {
+          el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up);
+          if (moved) edit((x) => Object.assign(x, moved));
+        };
+        el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+      });
+    },
+
+    /** Where a mascot's feet are on the chart (pixels), or null off the bars. */
+    mascotXY(m) {
+      const bars = this.viewBars();
+      if (!bars.length) return null;
+      const ts = this.chart.timeScale(), sec = TF_SECONDS[this.interval] || 60;
+      const l = timeToIndex(bars, m.t, sec);
+      if (l == null) return null;
+      const i = Math.floor(l), x0 = ts.logicalToCoordinate(i), x1 = ts.logicalToCoordinate(i + 1);
+      const y = this.series.priceToCoordinate(m.p);
+      if (x0 == null || y == null) return null;
+      return { x: x1 == null ? x0 : x0 + (x1 - x0) * (l - i), y };
+    },
+
+    placeMascot(el, m) {
+      const at = this.mascotXY(m), w = m.size, h = w * 206 / 172;
+      if (!at) { el.style.display = "none"; return; }
+      el.style.display = "";
+      el.style.width = w + "px"; el.style.height = h + "px";
+      // The feet stand on the price.
+      el.style.transform = `translate(${Math.round(at.x - w / 2)}px, ${Math.round(at.y - h * 0.93)}px)`;
+    },
+
+    placeMascotsSoon() {
+      // (Nothing to move unless there are mascots, or the symbol changed and its own may come.)
+      if (this.mascotRaf || !$("mascots") || (!$("mascots").childElementCount && this.mascotSym === this.symbolKey())) return;
+      this.mascotRaf = requestAnimationFrame(() => { this.mascotRaf = 0; this.placeMascots(); });
+    },
+
+    placeMascots() {
+      const box = $("mascots");
+      if (!box || !this.chart) return;
+      if (this.mascotSym !== this.symbolKey()) return this.renderMascots();
+      box.style.width = this.chart.timeScale().width() + "px";
+      const list = this.mascotList();
+      box.querySelectorAll(".mascot").forEach((el) => { const m = list.find((x) => x.id === el.dataset.id); if (m) this.placeMascot(el, m); });
+    },
+
+    /** The mood of a mascot (girl wants the price up, boy down): your trade just closed, news coming, then the bars. */
+    mascotMood(kind) {
+      const ev = this.mascotEvent;
+      if (ev && Date.now() - ev.at < 25000) return ev.win ? "trophy" : "angry";
+      const nowS = Date.now() / 1000;
+      if (!this.replay && this.news && this.goldEvents(3).some((e) => e.time > nowS && e.time - nowS < 900)) return "nervous";
+      const b = this.viewBars(), n = b.length;
+      if (n < 12) return "tea";
+      const range = (a) => a.reduce((s, x) => s + x.high - x.low, 0) / a.length;
+      const atr = range(b.slice(-40)) || 1;
+      const move = ((b[n - 1].close - b[n - 6].close) / atr) * (kind === "girl" ? 1 : -1);
+      if (move >= 2.2) return "rich";
+      if (move >= 0.6) return "happy";
+      if (move <= -2.2) return "shock";
+      if (move <= -0.6) return "cry";
+      if (n > 40 && range(b.slice(-8)) < atr * 0.4) return "sleep";
+      return "tea";
+    },
+
+    /** New pictures when a mood changes (held 3 s at least, so a mood does not flicker). */
+    updateMascotMoods(now) {
+      const box = $("mascots");
+      if (!box || !box.childElementCount) return;
+      this.moods = this.moods || {};
+      const list = this.mascotList();
+      box.querySelectorAll(".mascot").forEach((el) => {
+        const m = list.find((x) => x.id === el.dataset.id);
+        if (!m) return;
+        const mood = this.mascotMood(m.kind), was = this.moods[m.id];
+        if (was && was.mood === mood && was.kind === m.kind) return;
+        if (!now && was && Date.now() - was.at < 3000 && was.kind === m.kind) return;
+        this.moods[m.id] = { mood, kind: m.kind, at: Date.now() };
+        el.querySelector("img").src = `assets/mascots/${m.kind}-${mood}.svg`;
+        el.title = `${m.kind === "girl" ? "Phe MUA" : "Phe BÁN"} · ${MASCOT_MOODS[mood]}`;
+      });
+    },
+
     /* ----- drawing toolbar on the left of the chart (TradingView-style) ----- */
 
     renderToolRail() {
@@ -4887,6 +5069,7 @@
         + btn("lock", d.lockAll ? RAIL_ICON.lock : RAIL_ICON.unlock, "Khoá tất cả bản vẽ", d.lockAll)
         + btn("hide", d.hidden ? RAIL_ICON.eyeOff : RAIL_ICON.eye, "Ẩn tất cả bản vẽ", d.hidden)
         + '<i class="sep"></i>'
+        + btn("mascot", RAIL_ICON.mascot, "Nhân vật phe Mua / Bán (vui, khóc theo giá)", this.mascotList().length > 0 && store.get("aurum.mascotsOff") !== "1")
         + btn("trash", RAIL_ICON.trash, "Xoá tất cả bản vẽ", false);
       rail.querySelectorAll("button").forEach((b) => (b.onclick = (e) => {
         e.stopPropagation();
@@ -4899,6 +5082,7 @@
           return;
         }
         this.closeFlyout();
+        if (k === "mascot") { this.mascotMenu(b); return; }
         if (k === "cursor") d.cancel();
         if (k === "measure") d.setTool(d.tool === "priceRange" ? null : "priceRange");
         if (k === "zoom") { const ts = this.chart.timeScale(); ts.applyOptions({ barSpacing: Math.min(50, (ts.options().barSpacing || 6) * 1.5) }); }
@@ -5738,6 +5922,7 @@
                 term.drawSpread(context, mediaSize.width);
                 term.drawNews(context, mediaSize.width, mediaSize.height);
                 term.drawAlerts(context, mediaSize.width);
+                if (!term.isPane) term.placeMascotsSoon();
               }),
             }),
           }, {
