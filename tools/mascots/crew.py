@@ -204,6 +204,16 @@ def aura(cx=80, cy=104, r=58):
     return "".join(out)
 
 
+# Arms twitching on the rod / the rope: slow at ease, quick and jerky when pulling hard.
+TWITCH = {"easy": ("0 0; -.6 .4; 0 0", "2.2s"), "effort": ("0 0; -1.4 1; .6 -.4; 0 0", ".8s"),
+          "strain": ("0 0; -2.2 1.6; .8 -.8; -1.6 1.2; 0 0", ".42s"), "brace": ("0 0; -2.8 2; 1.2 -1; -2.2 1.6; .6 -.4; 0 0", ".26s")}
+
+
+def twitch(state, inner):
+    values, dur = TWITCH[state]
+    return f'<g><animateTransform attributeName="transform" type="translate" values="{values}" dur="{dur}" repeatCount="indefinite"/>{inner}</g>'
+
+
 def note():
     return ('<text x="116" y="56" font-size="14" fill="#f2c14e" font-family="Georgia, serif">&#9834;'
             '<animateTransform attributeName="transform" type="translate" values="0 6; 8 -14" dur="2s" repeatCount="indefinite"/>'
@@ -266,9 +276,9 @@ def angler_pull(state):
     else:
         arms = arm(60, far[0], far[1]) + arm(100, near[0], near[1])
     back, front = angler_hair_hat(state)
-    person = body + rod + arms + back + angler_face(state) + front
+    person = body + twitch(state, rod + arms) + back + angler_face(state) + front
     if state in ("strain", "brace"):
-        person = body + rod + arms + back + angler_face(state) + front + art.vein()
+        person += art.vein()
     motion = {"easy": MOTIONS["breathe"],
               "effort": '<animateTransform attributeName="transform" type="rotate" values="0 80 130; 1.5 80 130; 0 80 130" dur=".9s" repeatCount="indefinite"/>',
               "strain": MOTIONS["tremble"], "brace": MOTIONS["tremble"]}[state]
@@ -317,7 +327,7 @@ def hauler_pull(state):
                 f'<path d="M99 100 Q72 102 {hx2 + 1} {hy2 + 1}" stroke="url(#skin)" stroke-width="8" fill="none" stroke-linecap="round"/>'
                 f'<circle cx="{hx}" cy="{hy}" r="5.6" fill="url(#glove)"/><circle cx="{hx2}" cy="{hy2}" r="5.6" fill="url(#glove)"/>')
     arms += f'<path d="M{hx} {hy} Q70 106 98 118" stroke="#c9a46a" stroke-width="1.3" fill="none"/>'
-    person = body + arms + back + hauler_face(state) + spikes + band
+    person = body + twitch(state, arms) + back + hauler_face(state) + spikes + band
     if state in ("strain", "brace"):
         person += art.vein()
     motion = {"easy": '<animateTransform attributeName="transform" type="rotate" values="0 80 156; 1.2 80 156; 0 80 156" dur="2.4s" repeatCount="indefinite"/>',

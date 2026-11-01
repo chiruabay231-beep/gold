@@ -4991,7 +4991,9 @@
         img.style.cssText = `width:${W}px;height:${H}px;transform:translate(${left.toFixed(1)}px,${top.toFixed(1)}px)`;
         img.title = `${t.buy ? "BUY" : "SELL"} · TP ${fmt(t.tp, this.digits)}`;
         if (off) {
-          const tx = left + W / 2, ty = off === "up" ? top + 11 : top + H - 11;
+          // Beside the character (right, or left at the chart's right edge), level with its feet / head.
+          const right = left + W + 82 < paneW;
+          const tx = right ? left + W + 40 : left - 40, ty = off === "up" ? top + 12 : top + H - 12;
           const label = `TP ${off === "up" ? "▲" : "▼"} ${fmt(t.tp, this.digits)}`;
           lines += `<g transform="translate(${tx.toFixed(1)} ${ty.toFixed(1)})"><rect x="-38" y="-9" width="76" height="16" rx="8" fill="#14b88a" opacity=".92"/>`
             + `<text y="3.4" text-anchor="middle" font-size="10" font-weight="700" fill="#fff" font-family="-apple-system, Segoe UI, Roboto, sans-serif">${label}</text></g>`;
