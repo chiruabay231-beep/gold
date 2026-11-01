@@ -18,6 +18,8 @@ struct DrawingToolbar: View {
     var onAllTools: () -> Void = {}
     var onUndo: () -> Void
     var onRemoveAll: () -> Void
+    /// Adds a mascot (buyer / seller) to the chart.
+    var onMascot: (() -> Void)? = nil
     var onClose: () -> Void
 
     @AppStorage(DrawingFavorites.key) private var favoritesText = DrawingFavorites.defaultText
@@ -57,6 +59,10 @@ struct DrawingToolbar: View {
                     .accessibilityLabel("Ẩn tất cả hình vẽ")
                 Button(action: onUndo) { icon("arrow.uturn.backward", active: false) }
                     .accessibilityLabel("Hoàn tác")
+                if let onMascot {
+                    Button(action: onMascot) { icon("face.smiling", active: false) }
+                        .accessibilityLabel("Nhân vật phe Mua / Bán")
+                }
                 Button(action: onRemoveAll) { icon("trash", active: false) }
                     .accessibilityLabel("Xoá tất cả hình vẽ")
                 separator

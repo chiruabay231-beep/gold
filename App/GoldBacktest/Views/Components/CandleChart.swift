@@ -288,10 +288,16 @@ struct CandleChart: View {
     /// Time of the crosshair shared with another chart (compare split): moving
     /// it here moves the other chart's vertical line too.
     var linkedCrosshair: Binding<Date?>? = nil
+    /// Mascots standing on the chart (dragged to move, tapped to pick), and the mood each shows.
+    var mascots: [ChartMascot] = []
+    var mascotMood: (ChartMascot) -> MascotMood = { _ in .tea }
+    var selectedMascotID: UUID? = nil
+    var onSelectMascot: ((UUID?) -> Void)? = nil
+    var onMascotMoved: ((UUID, Date, Double) -> Void)? = nil
     @Binding var viewport: ChartViewport
 
     /// `ignored`: the rest of a gesture whose line drag was cancelled (a pinch) does nothing.
-    private enum DragMode { case pan, axis, crosshair, moveDrawing, moveHandle, create, priceLine, ignored }
+    private enum DragMode { case pan, axis, crosshair, moveDrawing, moveHandle, create, priceLine, mascot, ignored }
 
     @State private var dragMode: DragMode?
     @State private var panStartOffset: Double = 0
@@ -321,6 +327,8 @@ struct CandleChart: View {
     @State private var activeLineGroup: String?
     /// Where a long press without moving was released: shows the reset menu there.
     @State private var menuPoint: CGPoint?
+    /// The mascot under the finger and how far it has been dragged.
+    @State private var mascotDrag: (id: UUID, offset: CGSize)?
 
     private let axisWidth: CGFloat = 74
     /// Height of a price label on the axis (and of the last price row).
@@ -355,6 +363,9 @@ struct CandleChart: View {
                             draw(in: &context, layout: layout, now: timeline.date)
                         }
                     }
+                }
+                if !mascots.isEmpty {
+                    mascotLayer(layout: layout)
                 }
                 if showHeader {
                     header(layout: layout)
@@ -400,6 +411,45 @@ struct CandleChart: View {
         }
         .onChange(of: drawingTool) { _, _ in pendingPoints = [] }
         .onChange(of: crosshairMode) { _, on in if !on { crosshair = nil } }
+    }
+
+    // MARK: - Mascots
+
+    /// The box of a mascot standing with its feet on its time and price (chart coordinates).
+    private func mascotRect(_ mascot: ChartMascot, scale s: Scale) -> CGRect {
+        let w = CGFloat(mascot.size), h = w * 206 / 172
+        let offset = mascotDrag?.id == mascot.id ? mascotDrag!.offset : .zero
+        let x = s.x(index(for: mascot.time)) + offset.width, y = s.y(mascot.price) + offset.height
+        return CGRect(x: x - w / 2, y: y - h * 0.93, width: w, height: h)
+    }
+
+    private func hitMascot(at location: CGPoint, layout: Layout) -> ChartMascot? {
+        let s = scale(layout: layout)
+        // The figure, not the empty corners of its picture; the one drawn last is on top.
+        return mascots.last { mascotRect($0, scale: s).insetBy(dx: CGFloat($0.size) * 0.18, dy: CGFloat($0.size) * 0.12).contains(location) }
+    }
+
+    private func mascotLayer(layout: Layout) -> some View {
+        let s = scale(layout: layout)
+        let shift: CGFloat = axisLeading ? axisWidth : 0
+        return ZStack(alignment: .topLeading) {
+            ForEach(mascots) { mascot in
+                let rect = mascotRect(mascot, scale: s)
+                MascotView(picture: mascot.picture(mascotMood(mascot)))
+                    .frame(width: rect.width, height: rect.height)
+                    .overlay {
+                        if selectedMascotID == mascot.id {
+                            RoundedRectangle(cornerRadius: 10)
+                                .strokeBorder(Color(red: 0.95, green: 0.76, blue: 0.31).opacity(0.8), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        }
+                    }
+                    .position(x: rect.midX + shift, y: rect.midY)
+                    .accessibilityLabel("\(mascot.kind.title): \(mascotMood(mascot).title)")
+            }
+        }
+        .frame(width: layout.plot.width + shift, height: layout.plot.maxY, alignment: .topLeading)
+        .clipped()
+        .allowsHitTesting(false)
     }
 
     // MARK: - Layout
@@ -2093,6 +2143,11 @@ struct CandleChart: View {
 
     private func handleTap(at screenLocation: CGPoint, layout: Layout) {
         let location = chartLocation(screenLocation, layout: layout)
+        // A mascot: picked (its bar shows); a tap elsewhere lets it go.
+        if menuPoint == nil, drawingTool == nil, !mascots.isEmpty {
+            if let mascot = hitMascot(at: location, layout: layout) { onSelectMascot?(mascot.id); return }
+            if selectedMascotID != nil { onSelectMascot?(nil) }
+        }
         // Taps on the reset menu belong to its buttons; a tap elsewhere closes it.
         if let point = menuPoint {
             let width = layout.axisX + axisWidth, height = layout.timeAxis.maxY
@@ -2178,6 +2233,10 @@ struct CandleChart: View {
                     if startLocation.x > layout.axisX {
                         dragMode = .axis
                         dragStartRange = range
+                    } else if drawingTool == nil, let mascot = hitMascot(at: startLocation, layout: layout) {
+                        dragMode = .mascot
+                        mascotDrag = (mascot.id, .zero)
+                        onSelectMascot?(mascot.id)
                     } else if drawingTool == nil, let line = hitPriceLine(at: startLocation, layout: layout) {
                         dragMode = .priceLine
                         draggedLine = (line.id, line.price)
@@ -2289,12 +2348,21 @@ struct CandleChart: View {
                         let shift = Double(value.translation.height) * pricePerPoint
                         viewport.manualPriceRange = (range.lowerBound + shift)...(range.upperBound + shift)
                     }
+                case .mascot:
+                    if let drag = mascotDrag { mascotDrag = (drag.id, value.translation) }
                 case .ignored, nil:
                     break
                 }
             }
             .onEnded { value in
                 let finger = plotLocation(value.location)
+                if dragMode == .mascot, let drag = mascotDrag, let mascot = mascots.first(where: { $0.id == drag.id }) {
+                    let s = scale(layout: layout)
+                    let x = s.x(index(for: mascot.time)) + value.translation.width
+                    let y = s.y(mascot.price) + value.translation.height
+                    onMascotMoved?(mascot.id, time(forIndex: s.fractionalIndex(atX: x)), s.price(atY: y))
+                }
+                mascotDrag = nil
                 if dragMode == .moveDrawing, let moved = movingPreview {
                     onDrawingChanged?(moved)
                 }

@@ -104,6 +104,11 @@ struct LiveView: View {
     @State private var linkedCrosshairTime: Date?
     @State private var activeTool: DrawingTool?
     @State private var selectedDrawingID: UUID?
+    /// Mascots on this symbol's chart, the one picked, and the last trade that closed (they cheer or sulk).
+    @State private var mascots: [ChartMascot] = []
+    @State private var selectedMascotID: UUID?
+    @State private var mascotTrade: (win: Bool, at: Date)?
+    @State private var askMascot = false
     @State private var editingTextDrawing: Drawing?
     @State private var drawingText = ""
     @State private var legendExpanded = true
@@ -969,7 +974,13 @@ struct LiveView: View {
                         // The pending-order panel closes with a tap on the chart.
                         onBackgroundTap: orderTicket == nil ? nil : { orderTicket = nil },
                         linkedCrosshair: compareMode ? $linkedCrosshairTime : nil,
+                        mascots: mascots,
+                        mascotMood: { mascotMood($0) },
+                        selectedMascotID: selectedMascotID,
+                        onSelectMascot: { selectedMascotID = $0 },
+                        onMascotMoved: { id, time, price in editMascot(id) { $0.time = time; $0.price = price } },
                         viewport: $viewport)
+            .background(mascotWatcher)
         }
         .overlay(alignment: .leading) {
             if showDrawingBar {
@@ -980,7 +991,8 @@ struct LiveView: View {
                                    store.undoDrawing(key: drawingKey)
                                    selectedDrawingID = nil
                                },
-                               onRemoveAll: { confirmClear = true }) {
+                               onRemoveAll: { confirmClear = true },
+                               onMascot: { askMascot = true }) {
                     showDrawingBar = false
                     activeTool = nil
                 }
@@ -1034,6 +1046,9 @@ struct LiveView: View {
                     .padding(.horizontal, 12)
                     .padding(.vertical, 6)
                     .background(theme.accent, in: Capsule())
+                }
+                if let id = selectedMascotID, let mascot = mascots.first(where: { $0.id == id }) {
+                    mascotBar(mascot)
                 }
                 if let drawing = selectedDrawing {
                     DrawingActionsBar(drawing: drawing, theme: theme,
@@ -1786,6 +1801,89 @@ struct LiveView: View {
             }
             .background(theme.background)
         }
+    }
+
+    // MARK: - Mascots
+
+    /// Loads the symbol's mascots, follows closed trades, and asks which one to add.
+    private var mascotWatcher: some View {
+        Color.clear
+            .task(id: drawingKey) {
+                mascots = MascotStore.load(drawingKey)
+                selectedMascotID = nil
+            }
+            .onChange(of: trader.account.history.count) { old, new in
+                if new > old, let trade = trader.account.history.last { mascotTrade = (trade.profit >= 0, Date()) }
+            }
+            .onChange(of: mt5.state?.deals.count ?? 0) { old, new in
+                if new > old, let deal = mt5.state?.deals.max(by: { $0.time < $1.time }) { mascotTrade = (deal.profit >= 0, Date()) }
+            }
+            .confirmationDialog("Thêm nhân vật lên biểu đồ", isPresented: $askMascot, titleVisibility: .visible) {
+                Button("👧 Cô gái phe MUA (vui khi giá lên)") { addMascot(.buyer) }
+                Button("👦 Chàng trai phe BÁN (vui khi giá xuống)") { addMascot(.seller) }
+                if !mascots.isEmpty {
+                    Button("Xoá \(mascots.count) nhân vật trên mã này", role: .destructive) { saveMascots([]) }
+                }
+                Button("Huỷ", role: .cancel) {}
+            } message: {
+                Text("Nhân vật đứng trên giá, kéo để dời chỗ. Vui khi giá đi đúng phe, khóc khi đi ngược, hồi hộp trước tin đỏ, ăn mừng hay tức điên khi lệnh đóng.")
+            }
+    }
+
+    private func mascotMood(_ mascot: ChartMascot) -> MascotMood {
+        let now = Date()
+        let trade = mascotTrade.flatMap { now.timeIntervalSince($0.at) < 25 ? $0.win : nil }
+        let newsSoon = !replay.isActive && todaysRedNews.contains { $0.time > now && $0.time.timeIntervalSince(now) < 900 }
+        return MascotMood.of(chartCandles, wantsUp: mascot.kind.wantsUp, newsSoon: newsSoon, tradeResult: trade)
+    }
+
+    private func saveMascots(_ list: [ChartMascot]) {
+        mascots = list
+        if let id = selectedMascotID, !list.contains(where: { $0.id == id }) { selectedMascotID = nil }
+        MascotStore.save(list, for: drawingKey)
+    }
+
+    private func editMascot(_ id: UUID, _ change: (inout ChartMascot) -> Void) {
+        var list = mascots
+        guard let i = list.firstIndex(where: { $0.id == id }) else { return }
+        change(&list[i])
+        saveMascots(list)
+    }
+
+    /// A new mascot right of the middle of the chart, standing on the last price.
+    private func addMascot(_ kind: ChartMascot.Kind) {
+        let candles = chartCandles
+        guard let last = candles.last else { return }
+        let range = viewport.range(total: candles.count)
+        let share = 0.55 + Double(mascots.count % 3) * 0.13
+        let index = min(candles.count - 1, max(0, range.lowerBound + Int(Double(range.count) * share)))
+        let mascot = ChartMascot(kind: kind, time: candles[index].time, price: last.close)
+        saveMascots(mascots + [mascot])
+        selectedMascotID = mascot.id
+    }
+
+    /// The picked mascot: size, the other side, delete.
+    private func mascotBar(_ mascot: ChartMascot) -> some View {
+        HStack(spacing: 14) {
+            Text(mascot.kind.title).font(.system(size: 12, weight: .semibold)).lineLimit(1)
+            Button { editMascot(mascot.id) { $0.size = max(60, $0.size - 20) } } label: { Image(systemName: "minus.magnifyingglass") }
+                .accessibilityLabel("Nhỏ lại")
+            Button { editMascot(mascot.id) { $0.size = min(260, $0.size + 20) } } label: { Image(systemName: "plus.magnifyingglass") }
+                .accessibilityLabel("To lên")
+            Button { editMascot(mascot.id) { $0.kind = $0.kind == .buyer ? .seller : .buyer } } label: { Image(systemName: "arrow.left.arrow.right") }
+                .accessibilityLabel("Đổi phe")
+            Button(role: .destructive) { saveMascots(mascots.filter { $0.id != mascot.id }) } label: { Image(systemName: "trash") }
+                .accessibilityLabel("Xoá")
+            Button { selectedMascotID = nil } label: { Image(systemName: "xmark") }
+                .accessibilityLabel("Xong")
+        }
+        .font(.system(size: 15, weight: .semibold))
+        .foregroundColor(theme.text)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(theme.background, in: Capsule())
+        .overlay(Capsule().stroke(theme.accent.opacity(0.6), lineWidth: 1))
+        .shadow(color: .black.opacity(0.2), radius: 6, y: 2)
     }
 
     // MARK: - Session and news info
