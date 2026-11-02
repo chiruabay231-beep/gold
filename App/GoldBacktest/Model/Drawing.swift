@@ -12,7 +12,7 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
     case fibRetracement, fibExtension
     case elliottImpulse, elliottCorrection, headShoulders, trianglePattern
     case longPosition, shortPosition, fixedRangeVolume, anchoredVolume, priceRange
-    case brush, rectangle, arrow, ellipse, path, arrowMarker
+    case brush, rectangle, arrow, ellipse, path, curve, arrowMarker
     case text
 
     var id: String { rawValue }
@@ -40,6 +40,7 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
         case .arrow: return "Mũi tên"
         case .ellipse: return "Hình elip"
         case .path: return "Đường dẫn"
+        case .curve: return "Đường cong"
         case .arrowMarker: return "Mũi tên đánh dấu"
         case .text: return "Văn bản"
         }
@@ -68,6 +69,7 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
         case .arrow: return "arrow.up.right"
         case .ellipse: return "oval"
         case .path: return "point.topleft.down.to.point.bottomright.curvepath"
+        case .curve: return "point.bottomleft.forward.to.point.topright.scurvepath"
         case .arrowMarker: return "arrowshape.turn.up.right"
         case .text: return "textformat"
         }
@@ -79,12 +81,41 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
     var pointsNeeded: Int {
         switch self {
         case .horizontalLine, .horizontalRay, .verticalLine, .text, .anchoredVolume: return 1
-        case .fibExtension: return 3
+        case .fibExtension, .curve: return 3
         case .elliottCorrection, .trianglePattern: return 4
         case .elliottImpulse: return 6
         case .headShoulders: return 7
         case .path: return 12
         default: return 2
+        }
+    }
+
+    /// A curve through three points: the control point of the quadratic Bézier whose middle passes through `b`.
+    static func curveControl(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> CGPoint {
+        CGPoint(x: 2 * b.x - (a.x + c.x) / 2, y: 2 * b.y - (a.y + c.y) / 2)
+    }
+
+    /// The curve as a path (a straight line while only two points are placed).
+    static func curvePath(_ points: [CGPoint]) -> Path {
+        var path = Path()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        if points.count >= 3 {
+            path.addQuadCurve(to: points[2], control: curveControl(points[0], points[1], points[2]))
+        } else {
+            path.addLines(points)
+        }
+        return path
+    }
+
+    /// Points along the curve, for hit testing.
+    static func curveSamples(_ points: [CGPoint], count: Int = 32) -> [CGPoint] {
+        guard points.count >= 3 else { return points }
+        let k = curveControl(points[0], points[1], points[2])
+        return (0...count).map { i in
+            let t = CGFloat(i) / CGFloat(count), u = 1 - t
+            return CGPoint(x: u * u * points[0].x + 2 * u * t * k.x + t * t * points[2].x,
+                           y: u * u * points[0].y + 2 * u * t * k.y + t * t * points[2].y)
         }
     }
 
@@ -107,6 +138,7 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
         case .trendLine, .trendRay, .arrow, .arrowMarker: return "Kéo từ điểm đầu đến điểm cuối"
         case .brush: return "Kéo ngón tay để vẽ"
         case .path: return "Chạm từng điểm, chạm lại điểm cuối để xong"
+        case .curve: return "Chạm điểm đầu, điểm giữa (độ cong) rồi điểm cuối"
         default: return "Chạm hoặc kéo tới chỗ cần đặt"
         }
     }
@@ -115,7 +147,7 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
     var isLine: Bool {
         switch self {
         case .trendLine, .trendRay, .horizontalLine, .horizontalRay, .verticalLine, .rectangle,
-             .arrow, .path, .brush, .ellipse, .elliottImpulse, .elliottCorrection, .headShoulders, .trianglePattern,
+             .arrow, .path, .curve, .brush, .ellipse, .elliottImpulse, .elliottCorrection, .headShoulders, .trianglePattern,
              .fibRetracement, .fibExtension, .priceRange:
             return true
         default: return false
@@ -134,7 +166,7 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
         Category(title: "Gann và Fibonacci", tools: [.fibRetracement, .fibExtension]),
         Category(title: "Mô hình", tools: [.elliottImpulse, .elliottCorrection, .headShoulders, .trianglePattern]),
         Category(title: "Dự đoán và đo lường", tools: [.longPosition, .shortPosition, .fixedRangeVolume, .anchoredVolume, .priceRange]),
-        Category(title: "Hình học", tools: [.brush, .rectangle, .arrow, .ellipse, .path, .arrowMarker]),
+        Category(title: "Hình học", tools: [.brush, .rectangle, .arrow, .ellipse, .path, .curve, .arrowMarker]),
         Category(title: "Lưu ý", tools: [.text]),
     ]
 }

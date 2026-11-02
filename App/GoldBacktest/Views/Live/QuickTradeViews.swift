@@ -52,15 +52,19 @@ struct QuickTradePanel: View {
     static func lotText(_ lots: Double) -> String { String(format: "%.2f", lots) }
 }
 
-/// Lot size picker like MT5: presets, quick increments and a stepper.
+/// Lot size picker like MT5: presets up to 200 lot (live, demo and replay alike), quick increments and a stepper.
 struct LotPicker: View {
     @Binding var lots: Double
 
-    private static let presets: [Double] = [0.01, 0.02, 0.05, 0.1, 0.2, 0.3, 0.5, 1, 2, 5]
+    /// The most one order takes in the app (the MT5 server may allow less for real orders).
+    static let maxLots: Double = 200
+    static func clamp(_ value: Double) -> Double { min(maxLots, max(0.01, (value * 100).rounded() / 100)) }
+
+    private static let presets: [Double] = [0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200]
 
     var body: some View {
         VStack(spacing: 10) {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                 ForEach(Self.presets, id: \.self) { value in
                     Button { lots = value } label: {
                         Text(String(format: "%g", value))
@@ -71,12 +75,16 @@ struct LotPicker: View {
                 }
             }
             HStack {
-                ForEach([0.01, 0.1, 0.5], id: \.self) { step in
+                ForEach([0.01, 0.1, 1, 10], id: \.self) { step in
                     Button("+\(String(format: "%g", step))") { set(lots + step) }
                         .frame(maxWidth: .infinity)
                 }
             }
             .font(.system(size: 16))
+            Button { lots = Self.maxLots } label: {
+                Text("MAX · \(Int(Self.maxLots)) lot").font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity, minHeight: 32)
+            }
+            .buttonStyle(.bordered)
             Divider()
             HStack {
                 Button { set(lots - 0.01) } label: { Image(systemName: "chevron.down").frame(width: 44, height: 32) }
@@ -87,11 +95,11 @@ struct LotPicker: View {
             }
         }
         .padding(14)
-        .frame(width: 250)
+        .frame(width: 270)
     }
 
     private func set(_ value: Double) {
-        lots = min(100, max(0.01, (value * 100).rounded() / 100))
+        lots = Self.clamp(value)
     }
 }
 

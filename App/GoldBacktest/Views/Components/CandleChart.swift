@@ -702,7 +702,10 @@ struct CandleChart: View {
             line.move(to: CGPoint(x: 0, y: y))
             line.addLine(to: CGPoint(x: layout.axisX, y: y))
             if showGrid { context.stroke(line, with: .color(theme.grid), lineWidth: theme.isLight ? 1 : 0.5) }
-            context.draw(Text(Self.format(tick, decimals)).font(.system(size: 11, weight: .medium).monospacedDigit()).foregroundColor(theme.text),
+            // Axis prices: black (white on dark) and bold, like the website.
+            let tickText = Self.format(tick, decimals)
+            context.draw(Text(tickText).font(.system(size: Self.axisFont(tickText, 12), weight: .bold).monospacedDigit())
+                            .foregroundColor(theme.isLight ? .black : theme.primaryText),
                          at: CGPoint(x: layout.axisX + 5, y: y), anchor: .leading)
         }
         let timeStep = max(1, Int(Double(range.count) / 4))
@@ -715,7 +718,8 @@ struct CandleChart: View {
             line.addLine(to: CGPoint(x: x, y: layout.volume.maxY))
             if showGrid { context.stroke(line, with: .color(theme.grid), lineWidth: theme.isLight ? 1 : 0.5) }
             if showTimeAxis {
-                context.draw(Text(candles[i].time.formatted(timeFormat)).font(.system(size: 10)).foregroundColor(theme.text),
+                context.draw(Text(candles[i].time.formatted(timeFormat)).font(.system(size: 10.5, weight: .semibold))
+                                .foregroundColor(theme.isLight ? .black : theme.primaryText),
                          at: CGPoint(x: x, y: layout.timeAxis.midY), anchor: .center)
             }
         }
@@ -1280,6 +1284,10 @@ struct CandleChart: View {
             context.stroke(path, with: .color(color), style: stroke)
             context.stroke(Self.arrowHead(from: points[points.count - 2], to: points[points.count - 1], size: 10 + width * 2),
                            with: .color(color), style: StrokeStyle(lineWidth: width, lineCap: .round))
+        case .curve:
+            guard points.count > 1 else { break }
+            context.stroke(DrawingTool.curvePath(points), with: .color(color),
+                           style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round, dash: d.lineStyle.dash))
         case .ellipse:
             guard points.count > 1 else { break }
             let rect = CGRect(x: min(p0.x, points[1].x), y: min(p0.y, points[1].y),
@@ -1403,14 +1411,6 @@ struct CandleChart: View {
         for x in [left, right] {
             context.fill(Path(ellipseIn: CGRect(x: x - 2.5, y: entryY - 2.5, width: 5, height: 5)), with: .color(side))
         }
-        // R:R gauge on the right edge: reward one way, risk the other, joined at the entry.
-        let gx = right - 6
-        for (edge, color) in [(targetY, up), (stopY, down)] {
-            var gauge = Path()
-            gauge.move(to: CGPoint(x: gx, y: entryY))
-            gauge.addLine(to: CGPoint(x: gx, y: edge + (edge < entryY ? 4 : -4)))
-            context.stroke(gauge, with: .color(color), style: StrokeStyle(lineWidth: 3, lineCap: .round))
-        }
         if let now {
             context.fill(Path(ellipseIn: CGRect(x: now.x - 7, y: now.y - 7, width: 14, height: 14)), with: .color(nowColor.opacity(0.25)))
             let dot = CGRect(x: now.x - 3.5, y: now.y - 3.5, width: 7, height: 7)
@@ -1425,29 +1425,23 @@ struct CandleChart: View {
         let rr = risk > 0 ? reward / risk : 0
         func pct(_ v: Double) -> String { String(format: "%.2f%%", levels.entry != 0 ? v / levels.entry * 100 : 0) }
         let mid = (left + right) / 2
+        // TP just under its line (inside the box for a buy, under it for a sell); SL outside its edge.
         pill("▲ +\(Self.format(reward, decimals))  (\(pct(reward)))",
-             center: CGPoint(x: mid, y: targetY + (targetY < entryY ? -16 : 16)), color: up, in: &labels)
+             center: CGPoint(x: mid, y: targetY + 16), color: up, in: &labels)
         pill("▼ −\(Self.format(risk, decimals))  (\(pct(risk)))",
              center: CGPoint(x: mid, y: stopY + (stopY < entryY ? -16 : 16)), color: down, in: &labels)
-        var status = ""
-        var statusColor = up
-        if let progress {
-            let moved = isLong ? progress.price - levels.entry : levels.entry - progress.price
-            let r = risk > 0 ? moved / risk : 0
-            switch progress.status {
-            case .target: status = "✓ TP  +\(String(format: "%.2f", rr))R"; statusColor = up
-            case .stop: status = "✕ SL  −1R"; statusColor = down
-            case .running:
-                status = "\(moved >= 0 ? "+" : "−")\(Self.format(abs(moved), decimals))  ·  \(r >= 0 ? "+" : "−")\(String(format: "%.2f", abs(r)))R"
-                statusColor = moved >= 0 ? up : down
-            }
-        }
+        // Only R:R beside the box, level with the TP line (✓ / ✕ once TP or SL is hit); no pill in the middle.
         var body = "R:R \(String(format: "%.2f", rr))"
         if let lots = positionSizing?.lots(entry: levels.entry, stop: levels.stop) {
             body += " · \(String(format: lots < 1 ? "%.2f" : "%.1f", lots)) lot"
         }
-        entryPill(side: isLong ? "MUA" : "BÁN", sideColor: side, body: body, status: status, statusColor: statusColor,
-                  center: CGPoint(x: mid, y: entryY), in: &labels)
+        switch progress?.status {
+        case .target?: body += "  ✓"
+        case .stop?: body += "  ✕"
+        default: break
+        }
+        labels.draw(Text(body).font(.system(size: 11.5, weight: .bold)).foregroundColor(theme.primaryText),
+                    at: CGPoint(x: right + 6, y: targetY), anchor: .leading)
     }
 
     /// A rounded label with a soft shadow, centred on `center`.
@@ -1459,35 +1453,6 @@ struct CandleChart: View {
         shadow.addFilter(.shadow(color: .black.opacity(0.3), radius: 3, x: 0, y: 1))
         shadow.fill(Path(roundedRect: rect, cornerRadius: 5), with: .color(color))
         context.draw(label, at: CGPoint(x: rect.midX, y: rect.midY), anchor: .center)
-    }
-
-    /// "MUA | R:R 2.40 | +5.30 · +2.12R": the side on its colour, then R:R, then the state.
-    private func entryPill(side: String, sideColor: Color, body: String, status: String, statusColor: Color,
-                           center: CGPoint, in context: inout GraphicsContext) {
-        let font = Font.system(size: 10.5, weight: .semibold)
-        let fit = CGSize(width: 400, height: 30)
-        let sideText = context.resolve(Text(side).font(font).foregroundColor(.white))
-        let bodyText = context.resolve(Text(body).font(font).foregroundColor(theme.primaryText))
-        let statusText = context.resolve(Text(status).font(font).foregroundColor(statusColor))
-        let sideWidth = sideText.measure(in: fit).width + 14
-        let bodyWidth = bodyText.measure(in: fit).width + 16
-        let statusWidth = status.isEmpty ? 0 : statusText.measure(in: fit).width + 14
-        let height: CGFloat = 20
-        let rect = CGRect(x: center.x - (sideWidth + bodyWidth + statusWidth) / 2, y: center.y - height / 2,
-                          width: sideWidth + bodyWidth + statusWidth, height: height)
-        var shadow = context
-        shadow.addFilter(.shadow(color: .black.opacity(0.3), radius: 4, x: 0, y: 1))
-        shadow.fill(Path(roundedRect: rect, cornerRadius: 10), with: .color(theme.background.opacity(0.95)))
-        context.stroke(Path(roundedRect: rect, cornerRadius: 10), with: .color(sideColor.opacity(0.55)), lineWidth: 1)
-        let chip = CGRect(x: rect.minX + 2, y: rect.minY + 2, width: sideWidth - 4, height: height - 4)
-        context.fill(Path(roundedRect: chip, cornerRadius: 8), with: .color(sideColor))
-        context.draw(sideText, at: CGPoint(x: chip.midX, y: chip.midY), anchor: .center)
-        context.draw(bodyText, at: CGPoint(x: rect.minX + sideWidth + bodyWidth / 2, y: rect.midY), anchor: .center)
-        if !status.isEmpty {
-            let state = CGRect(x: rect.minX + sideWidth + bodyWidth, y: rect.minY + 2, width: statusWidth - 2, height: height - 4)
-            context.fill(Path(roundedRect: state, cornerRadius: 8), with: .color(statusColor.opacity(0.18)))
-            context.draw(statusText, at: CGPoint(x: state.midX, y: state.midY), anchor: .center)
-        }
     }
 
     /// An open position's entry like the website: dotted from the fill bar (a dot there) to the right,
@@ -1969,6 +1934,11 @@ struct CandleChart: View {
                 }
             case .elliottImpulse, .elliottCorrection, .headShoulders, .trianglePattern, .brush, .arrow, .path:
                 if zip(points, points.dropFirst()).contains(where: { Self.distance(from: location, toSegment: $0, $1) < tolerance }) {
+                    return d
+                }
+            case .curve:
+                let line = DrawingTool.curveSamples(points)
+                if zip(line, line.dropFirst()).contains(where: { Self.distance(from: location, toSegment: $0, $1) < tolerance }) {
                     return d
                 }
             case .arrowMarker:

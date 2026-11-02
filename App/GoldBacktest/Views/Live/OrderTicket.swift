@@ -80,6 +80,33 @@ struct OrderTicket: Equatable {
         target = targetOffset.map { entry + $0 }
     }
 
+    /// A new pending order opens in the middle of the chart in view (not off its foot): the entry there
+    /// (moved off the price if it would fill at once, towards the side with more room), and SL / TP shortened
+    /// by the same factor if they would leave the view. `view` is the chart's price range in view, with
+    /// some margin off the top and off the foot where the order sheet sits.
+    mutating func center(in view: ClosedRange<Double>, bid: Double, ask: Double, distance: Double) {
+        guard isPending, bid > 0, view.upperBound > view.lowerBound else { return }
+        let hi = view.upperBound, lo = view.lowerBound, mid = (bid + ask) / 2
+        var price = (hi + lo) / 2
+        if abs(price - mid) < distance || price >= hi || price <= lo {
+            let below = mid - lo >= hi - mid
+            let room = max(0, below ? mid - lo : hi - mid)
+            let off = min(max(distance, room * 0.45), max(room * 0.6, distance))
+            price = below ? bid - off : ask + off
+        }
+        move(to: price, bid: bid, ask: ask)
+        let up = max(0, (hi - entry) * 0.9), down = max(0, (entry - lo) * 0.9)
+        let stopRoom = side == .long ? down : up, targetRoom = side == .long ? up : down
+        var k = 1.0
+        if let stop, abs(stop - entry) > 0 { k = min(k, stopRoom / abs(stop - entry)) }
+        if let target, abs(target - entry) > 0 { k = min(k, targetRoom / abs(target - entry)) }
+        if k < 1, k > 0 {
+            let at = entry
+            stop = stop.map { at + ($0 - at) * k }
+            target = target.map { at + ($0 - at) * k }
+        }
+    }
+
     /// Why the order can't be sent as it is, if it can't.
     func problem(bid: Double, ask: Double) -> String? {
         switch (kind, side) {
@@ -190,7 +217,7 @@ struct TradeBar: View {
     }
 
     private func set(_ value: Double) {
-        lots = min(100, max(0.01, (value * 100).rounded() / 100))
+        lots = LotPicker.clamp(value)
     }
 }
 
@@ -233,7 +260,7 @@ struct OrderTicketSheet: View {
                 HStack(spacing: 0) {
                     SlideToSend(title: t.name, enabled: problem == nil && bid > 0, sliding: $sliding, onSend: onSubmit)
                     Menu {
-                        ForEach([0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2], id: \.self) { value in
+                        ForEach([0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200], id: \.self) { value in
                             Button(String(format: "%g lot", value)) { lots = value }
                         }
                     } label: {
@@ -377,10 +404,10 @@ struct OrderTicketSheet: View {
             Text(QuickTradePanel.lotText(lots))
                 .font(.system(size: 17, weight: .semibold).monospacedDigit())
                 .frame(minWidth: 56)
-            Button { lots = min(100, ((lots + 0.01) * 100).rounded() / 100) } label: { Image(systemName: "plus") }
+            Button { lots = LotPicker.clamp(lots + 0.01) } label: { Image(systemName: "plus") }
                 .buttonStyle(.bordered)
             Menu {
-                ForEach([0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2], id: \.self) { value in
+                ForEach([0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200], id: \.self) { value in
                     Button(String(format: "%g lot", value)) { lots = value }
                 }
             } label: {

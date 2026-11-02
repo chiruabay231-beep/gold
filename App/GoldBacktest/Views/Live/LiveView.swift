@@ -1230,9 +1230,28 @@ struct LiveView: View {
         guard currentPrice > 0 else { return }
         let auto = AutoStops.enabled ? autoStopDistance : nil
         if orderTicket == nil { ticketDetent = Self.ticketCompact }
-        orderTicket = OrderTicket.make(side: side, kind: kind, bid: liveQuote.bid, ask: liveQuote.ask,
-                                       distance: defaultDistance, stopDistance: auto,
-                                       targetDistance: auto.map { $0 * AutoStops.riskReward })
+        var ticket = OrderTicket.make(side: side, kind: kind, bid: liveQuote.bid, ask: liveQuote.ask,
+                                      distance: defaultDistance, stopDistance: auto,
+                                      targetDistance: auto.map { $0 * AutoStops.riskReward })
+        // A limit / stop line opens in the middle of the chart in view, SL / TP inside it.
+        if let view = visiblePriceRange {
+            let span = view.upperBound - view.lowerBound
+            ticket.center(in: (view.lowerBound + span * 0.22)...(view.upperBound - span * 0.08),
+                          bid: liveQuote.bid, ask: liveQuote.ask, distance: defaultDistance)
+        }
+        orderTicket = ticket
+    }
+
+    /// The chart's price range in view: the one set by dragging the price axis, or the candles in view.
+    private var visiblePriceRange: ClosedRange<Double>? {
+        if let manual = viewport.manualPriceRange { return manual }
+        let candles = chartCandles
+        guard candles.count > 1 else { return nil }
+        let range = viewport.range(total: candles.count).clamped(to: 0..<candles.count)
+        guard !range.isEmpty else { return nil }
+        let shown = candles[range]
+        guard let low = shown.map(\.low).min(), let high = shown.map(\.high).max(), high > low else { return nil }
+        return low...high
     }
 
     private func submitTicket() {
