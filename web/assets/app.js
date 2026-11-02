@@ -1669,7 +1669,7 @@
         <div>
           <div class="top"><span class="sym">${esc(p.symbol)}</span><span class="side ${buy ? "buy" : "sell"}">${sideName(p.side)} ${p.lots}</span>
             <span class="muted small">${fmt(p.entry, this.digitsFor(p.symbol))} → ${fmt(p.price, this.digitsFor(p.symbol))}</span></div>
-          <div class="lv">SL ${p.stop ? fmt(p.stop, this.digitsFor(p.symbol)) : "–"} · TP ${p.target ? fmt(p.target, this.digitsFor(p.symbol)) : "–"} · ${clock(p.time)}${p.bot ? " · bot" : ""}</div>
+          <div class="lv">SL ${p.stop ? fmt(p.stop, this.digitsFor(p.symbol)) + this.levelMoney(this.pnlAt(p, p.stop)) : "–"} · TP ${p.target ? fmt(p.target, this.digitsFor(p.symbol)) + this.levelMoney(this.pnlAt(p, p.target)) : "–"} · ${clock(p.time)}${p.bot ? " · bot" : ""}</div>
         </div>
         <div class="right"><div class="move ${this.liveProfit(p) >= 0 ? "pos" : "neg"}">${signed(this.liveProfit(p))}</div></div>
         <button class="x" type="button" title="Đóng lệnh">✕</button>
@@ -1683,11 +1683,37 @@
         <div>
           <div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${buy ? "buy" : "sell"}">${sideName(o.side)} ${o.kind.toUpperCase()}</span>
             <span>${o.lots} lot @ ${fmt(o.entry, this.digitsFor(o.symbol))}</span></div>
-          <div class="lv">SL ${o.stop ? fmt(o.stop, this.digitsFor(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, this.digitsFor(o.symbol)) : "–"} · ${clock(o.time)}</div>
+          <div class="lv">SL ${o.stop ? fmt(o.stop, this.digitsFor(o.symbol)) + this.levelMoney(this.valueAt(o.symbol, o.lots, o.side, o.entry, o.stop)) : "–"} · TP ${o.target ? fmt(o.target, this.digitsFor(o.symbol)) + this.levelMoney(this.valueAt(o.symbol, o.lots, o.side, o.entry, o.target)) : "–"} · ${clock(o.time)}</div>
         </div>
         <div class="right"></div>
         <button class="x" type="button" title="Huỷ lệnh chờ">✕</button>
       </div>`;
+    },
+
+    /** " (−23.10)" after a SL / TP price: the money if it is hit, red or green. */
+    levelMoney(v) {
+      if (v == null || !isFinite(v)) return "";
+      return ` <b class="lv-usd ${v >= 0 ? "pos" : "neg"}">${signed(v)}</b>`;
+    },
+
+    /** Under the SL / TP boxes of a sheet: what each price would bring, in the account's money, as it is typed. */
+    bindLevelMoney(el, ids, moneyAt) {
+      const cur = esc((this.account || {}).currency || "USD");
+      ids.forEach(([inputId, kind]) => {
+        const input = el.querySelector("#" + inputId);
+        if (!input) return;
+        const out = document.createElement("span");
+        out.className = "lvl-usd";
+        input.after(out);
+        const show = () => {
+          const v = moneyAt(num(input.value));
+          out.className = "lvl-usd " + (v == null || !isFinite(v) ? "" : v >= 0 ? "pos" : "neg");
+          out.textContent = v == null || !isFinite(v) ? (kind === "sl" ? "Chạm SL: —" : "Chạm TP: —")
+            : `${kind === "sl" ? "Chạm SL" : "Chạm TP"}: ${signed(v)} ${cur}`;
+        };
+        input.addEventListener("input", show);
+        show();
+      });
     },
 
     digitsFor(symbol) { return symbol === this.symbol ? this.digits : (/JPY/.test(symbol) ? 3 : (/XAU|XAG|US30|USTEC|NAS|BTC/.test(symbol) ? 2 : 5)); },
@@ -1708,6 +1734,7 @@
         <div class="chips" id="sChips">${[0.25, 0.5, 0.75, 1].map((f) => `<button type="button" data-f="${f}">${f === 1 ? "Tất cả" : f * 100 + "%"}</button>`).join("")}</div>
         <button class="btn wide ${p.side === "long" ? "sellbg" : "buybg"}" id="sClose">Đóng ${p.lots} lot</button>`, (el) => {
         const lots = el.querySelector("#sLots"), closeBtn = el.querySelector("#sClose");
+        this.bindLevelMoney(el, [["sStop", "sl"], ["sTarget", "tp"]], (price) => (price ? this.pnlAt(p, price) : null));
         const label = () => { closeBtn.textContent = `Đóng ${lots.value || 0} lot${+lots.value >= p.lots ? " (cả lệnh)" : ""}`; };
         lots.oninput = label;
         el.querySelectorAll("#sChips button").forEach((b) => (b.onclick = () => {
@@ -1740,6 +1767,9 @@
         </div>
         <button class="btn btn-gold wide" id="oSave">Lưu</button>
         <button class="btn btn-ghost wide" id="oCancel">Huỷ lệnh chờ</button>`, (el) => {
+        const entryNow = () => num(el.querySelector("#oPrice").value) || o.entry;
+        this.bindLevelMoney(el, [["oStop", "sl"], ["oTarget", "tp"]], (price) => (price ? this.valueAt(o.symbol, o.lots, o.side, entryNow(), price) : null));
+        el.querySelector("#oPrice").addEventListener("input", () => ["oStop", "oTarget"].forEach((id) => el.querySelector("#" + id).dispatchEvent(new Event("input"))));
         el.querySelector("#oSave").onclick = async (e) => {
           const ok = await act(e.currentTarget, () => this.call("/mt5/modify", { ticket: o.ticket, price: num(el.querySelector("#oPrice").value), stop: num(el.querySelector("#oStop").value), target: num(el.querySelector("#oTarget").value) }), "Đã sửa lệnh chờ");
           if (ok) { sheet.close(); this.refresh(); }
