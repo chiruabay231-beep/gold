@@ -1814,10 +1814,44 @@
         const tail = this.bars.slice(-30);
         const last = this.bars.length ? this.bars[this.bars.length - 1].close : null;
         const r = tail.length ? tail.reduce((a, b) => a + b.high - b.low, 0) / tail.length : (last || 1) * 0.0005;
-        if (!num($("pPrice").value) && last) $("pPrice").value = fmt(last - r * 3, this.digits);
+        // The entry starts in the middle of the chart in view (not off its bottom), with SL / TP inside it too.
+        // The chart under the BUY / SELL box: the entry in its middle, SL / TP inside it (so the scale stays put).
+        const ph = (this.chart.paneSize ? this.chart.paneSize().height : 0) || $("chart").clientHeight;
+        const tk = $("ticket");
+        const v0 = Math.min(ph * 0.5, tk && !tk.hidden ? tk.offsetTop + tk.offsetHeight + 12 : 12);
+        // …and above the order bar that opens at the chart's foot (taller on a phone).
+        const v1 = Math.max(v0 + 40, ph - (innerWidth < 600 ? 160 : 64));
+        const mid = this.series.coordinateToPrice((v0 + v1) / 2);
+        const hi = this.series.coordinateToPrice(v0), lo = this.series.coordinateToPrice(v1);
+        if (!num($("pPrice").value) && last) {
+          let entry = mid != null ? mid : last - r * 3;
+          // Right on the price it would fill at once: a little below (or above, if below is out of view).
+          if (Math.abs(entry - last) < r) {
+            // Halfway between the price and the edge with more room, leaving room for the SL beyond it.
+            const below = hi == null || lo == null || last - lo >= hi - last, side = hi != null && lo != null ? (below ? last - lo : hi - last) : r * 6;
+            const off = Math.min(Math.max(r, side * 0.45), side * 0.6);
+            entry = below ? last - off : last + off;
+          }
+          $("pPrice").value = fmt(entry, this.digits);
+        }
         if (!this.draftDist) this.draftDist = { risk: +(r * 3).toFixed(this.digits), reward: +(r * 6).toFixed(this.digits) };
+        // SL on one side of the entry, TP on the other: both inside the chart (same R:R, shorter if needed).
+        const at = num($("pPrice").value);
+        if (hi != null && lo != null && at != null && at < hi && at > lo) {
+          const long = this.draftSide(at) === "long", up = (hi - at) * 0.9, down = (at - lo) * 0.9;
+          const riskRoom = long ? down : up, rewardRoom = long ? up : down;
+          const k = Math.min(1, this.draftDist.risk ? riskRoom / this.draftDist.risk : 1, this.draftDist.reward ? rewardRoom / this.draftDist.reward : 1);
+          if (k < 1) this.draftDist = { risk: +((this.draftDist.risk || 0) * k).toFixed(this.digits), reward: +((this.draftDist.reward || 0) * k).toFixed(this.digits) };
+        }
         this.draft = true;
         this.placeDraftStops();
+        // On a small screen, bring that line to the middle of the screen.
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const y = this.series.priceToCoordinate(num($("pPrice").value));
+          if (y == null) return;
+          const sy = $("chart").getBoundingClientRect().top + y;
+          if (sy < innerHeight * 0.3 || sy > innerHeight * 0.7) window.scrollBy({ top: sy - innerHeight / 2, behavior: "smooth" });
+        }));
       } else {
         this.draft = null;
         $("pPrice").value = ""; $("pStop").value = ""; $("pTarget").value = "";
