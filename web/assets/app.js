@@ -762,22 +762,31 @@
   }
 
   const TAB_TITLE = document.title;
-  /** A tab icon: a green up arrow, a red down arrow, or a grey dash, on a rounded square. */
+  /** A tab icon: the brand's logo with a badge in its corner, a green up arrow or a red down arrow
+   *  (grey dash when the candle stands at its open). */
   const tabIcons = {};
+  let tabLogo = null;
   function tabIcon(dir) {
-    if (tabIcons[dir]) return tabIcons[dir];
-    const c = document.createElement("canvas");
-    c.width = c.height = 64;
-    const g = c.getContext("2d");
-    g.fillStyle = dir > 0 ? "#089981" : dir < 0 ? "#f23645" : "#787b86";
-    g.beginPath(); g.roundRect(2, 2, 60, 60, 14); g.fill();
-    g.fillStyle = "#fff";
-    g.beginPath();
-    if (dir > 0) { g.moveTo(32, 10); g.lineTo(54, 36); g.lineTo(41, 36); g.lineTo(41, 54); g.lineTo(23, 54); g.lineTo(23, 36); g.lineTo(10, 36); }
-    else if (dir < 0) { g.moveTo(32, 54); g.lineTo(54, 28); g.lineTo(41, 28); g.lineTo(41, 10); g.lineTo(23, 10); g.lineTo(23, 28); g.lineTo(10, 28); }
-    else g.roundRect(12, 26, 40, 12, 4);
-    g.closePath(); g.fill();
-    return (tabIcons[dir] = c.toDataURL("image/png"));
+    if (tabIcons[dir]) return Promise.resolve(tabIcons[dir]);
+    tabLogo = tabLogo || new Promise((ok) => { const img = new Image(); img.onload = () => ok(img); img.onerror = () => ok(null); img.src = "favicon.svg"; });
+    return tabLogo.then((img) => {
+      const c = document.createElement("canvas");
+      c.width = c.height = 64;
+      const g = c.getContext("2d");
+      if (img) g.drawImage(img, 0, 0, 64, 64);
+      // The badge: a round disc at the bottom right with a white ring, an arrow inside.
+      const cx = 45, cy = 45, r = 17, k = 0.85;
+      g.fillStyle = "#ffffff"; g.beginPath(); g.arc(cx, cy, r + 3, 0, Math.PI * 2); g.fill();
+      g.fillStyle = dir > 0 ? "#089981" : dir < 0 ? "#f23645" : "#787b86";
+      g.beginPath(); g.arc(cx, cy, r, 0, Math.PI * 2); g.fill();
+      g.fillStyle = "#fff"; g.beginPath();
+      const arrow = (sgn) => [[0, -13], [12, 1], [5, 1], [5, 12], [-5, 12], [-5, 1], [-12, 1]]
+        .forEach(([x, y], i) => g[i ? "lineTo" : "moveTo"](cx + x * k, cy + y * k * sgn));
+      if (dir) arrow(dir > 0 ? 1 : -1);
+      else g.rect(cx - 10, cy - 3, 20, 6);
+      g.closePath(); g.fill();
+      return (tabIcons[dir] = c.toDataURL("image/png"));
+    });
   }
 
   /** Lots of one order: 0.01 to 200, two decimals. */
@@ -3337,32 +3346,25 @@
         : `/member/candles?interval=${this.interval}&count=${count}${extra}`;
     },
 
-    /** The browser tab: the open symbol's price with ▲ / ▼ against the day's open, and a green / red
-     *  arrow for its icon, so the price shows from another tab. */
+    /** The browser tab: the brand's icon with a green ▲ / red ▼ badge, and the open symbol's price, by the
+     *  candle now forming on the chart's timeframe (1m on 1m, 5m on 5m…): up while it is above its open. */
     updateTab(reset) {
       const bars = !reset && this.bars && this.bars.length ? this.viewBars() : [];
       const last = bars.length ? bars[bars.length - 1] : null;
-      let title = TAB_TITLE, dir = 0;
+      let title = TAB_TITLE, dir = null;
       if (last) {
         const price = !this.replay && this.bid != null ? this.bid : last.close;
-        // The day's open (UTC day, the broker's): its first bar in view, or the last bar's own open on 1d.
-        const day = Math.floor(last.time / 86400) * 86400;
-        let i = bars.length - 1;
-        while (i > 0 && bars[i - 1].time >= day) i--;
-        const open = bars[i].open;
-        const ch = open ? (price - open) / open * 100 : 0;
-        dir = price > open ? 1 : price < open ? -1 : 0;
+        dir = price > last.open ? 1 : price < last.open ? -1 : 0;
         const sym = ($("chartSymbol").textContent || this.symbol || "").replace(/m$/, "") || "XAUUSD";
-        title = `${dir > 0 ? "▲" : dir < 0 ? "▼" : "•"} ${fmt(price, this.digits)} ${sym} ${ch >= 0 ? "+" : "−"}${Math.abs(ch).toFixed(2)}%`;
+        title = `${dir > 0 ? "▲" : dir < 0 ? "▼" : "•"} ${fmt(price, this.digits)} ${sym} ${this.interval || ""}`.trim();
       }
       if (document.title !== title) document.title = title;
-      if (this.tabDir === (last ? dir : null)) return;
-      this.tabDir = last ? dir : null;
+      if (this.tabDir === dir) return;
+      this.tabDir = dir;
       const link = document.querySelector('link[rel="icon"]');
       if (!link) return;
-      if (!last) { link.type = "image/svg+xml"; link.href = "favicon.svg"; return; }
-      link.type = "image/png";
-      link.href = tabIcon(dir);
+      if (dir == null) { link.type = "image/svg+xml"; link.href = "favicon.svg"; return; }
+      tabIcon(dir).then((url) => { if (this.tabDir === dir) { link.type = "image/png"; link.href = url; } });
     },
 
     toBars(rows) {
