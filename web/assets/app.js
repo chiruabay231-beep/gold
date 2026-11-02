@@ -475,18 +475,29 @@
       });
       Object.assign(v, v.axisViews());
       this.series.attachPrimitive(v.layer());
-      // The symbol's drawings, as on the main chart (edited there).
+      // The symbol's drawings: the main chart's own list, drawn and edited here too (each chart keeps
+      // its own pick); a change on any chart repaints the others.
       this.lines = new Map();
-      this.drawings = new window.AurumDrawings({
+      const dr = (this.drawings = new window.AurumDrawings({
         chart: this.chart, series: this.series, store,
         bars: () => pane.bars, sec: () => TF_SECONDS[pane.tf], digits: () => v.digits,
-        symbol: () => term.symbolKey(), magnet: () => false, onChange: () => {}, onEdit: () => {}, interval: () => pane.tf,
+        symbol: () => term.symbolKey(), magnet: () => term.magnet, interval: () => pane.tf,
+        onChange: () => term.drawingsChanged(dr), onEdit: (d, isNew) => term.drawingSettings(d, isNew),
+      }));
+      let ownList = [];
+      Object.defineProperty(dr, "list", {
+        get: () => (term.drawingsMain ? term.drawingsMain.list : ownList),
+        set: (list) => { if (term.drawingsMain) term.drawingsMain.list = list; else ownList = list; },
+        configurable: true,
       });
+      dr.keepTool = store.get("aurum.keepTool") === "1";
+      dr.lockAll = store.get("aurum.lockAll") === "1";
+      this.bindDraw();
       const sel = wrap.querySelector("select");
       sel.value = this.tf;
       sel.onchange = () => { this.tf = sel.value; term.savePaneTfs(); this.load(); };
       wrap.querySelector("button").onclick = () => term.paneToMain(this);
-      wrap.addEventListener("pointerdown", () => term.closeMenu());
+      wrap.addEventListener("pointerdown", (e) => { if (!e.target.closest("#ctxMenu")) term.closeMenu(); });
       this.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => { if (r && r.from < 30) this.older(); });
       this.chart.subscribeCrosshairMove((param) => term.crossFrom(this.chart, param));
     }
@@ -509,7 +520,15 @@
       this.loadedKey = null;
     }
 
-    destroy() { this.stop(); this.token++; clearTimeout(this.analyseTimer); this.chart.remove(); this.wrap.remove(); }
+    destroy() {
+      this.stop(); this.token++; clearTimeout(this.analyseTimer);
+      window.removeEventListener("pointermove", this.onWinMove);
+      window.removeEventListener("pointerup", this.onWinUp);
+      window.removeEventListener("pointercancel", this.onWinUp);
+      if (this.term.drawings === this.drawings) this.term.focusChart(1);
+      if ($("drawBar").parentElement === this.wrap) $("chartWrap").appendChild($("drawBar"));
+      this.chart.remove(); this.wrap.remove();
+    }
 
     async load() {
       const term = this.term, tf = this.tf, sec = TF_SECONDS[tf];
@@ -668,13 +687,64 @@
       this.analyseTimer = setTimeout(() => this.analyse(), Math.max(0, 1500 - (Date.now() - (this.analysedAt || 0))));
     }
 
-    /** The drawings as saved on the main chart (and hidden with them). */
-    mirrorDrawings(quiet) {
+    /** The main chart's drawings (one list), hidden with them. */
+    mirrorDrawings() {
       const d = this.drawings, main = this.term.drawingsMain;
-      if (quiet && this.drawKey === d.key() && d.hidden === !!(main && main.hidden)) return;
-      this.drawKey = d.key();
       d.hidden = !!(main && main.hidden);
-      d.load();
+      if (d.selected && !d.list.some((x) => x.id === d.selected)) d.selected = null;
+      d.update();
+    }
+
+    /** Drawing on this chart, like on the main one: pick a tool, tap / drag; tap a drawing to pick it. */
+    bindDraw() {
+      const term = this.term, wrap = this.wrap, dr = this.drawings;
+      const rel = (e) => { const r = wrap.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+      const lock = (on) => {
+        this.chart.applyOptions({ handleScroll: !on, handleScale: !on });
+        const ps = this.chart.priceScale("right");
+        if (on) { this.scaleWasAuto = ps.options().autoScale; ps.applyOptions({ autoScale: false }); } else if (this.scaleWasAuto) ps.applyOptions({ autoScale: true });
+      };
+      let gesture = false;
+      wrap.addEventListener("pointerdown", (e) => {
+        term.focusPane(this);
+        if (e.button > 0 || e.target.closest(".tfp-head, #drawBar")) return;
+        const { x, y } = rel(e);
+        if (x > this.chart.timeScale().width()) return;
+        const r = dr.down(x, y, e);
+        if (r === true) { gesture = true; lock(true); e.stopPropagation(); }
+      }, true);
+      ["mousedown", "touchstart"].forEach((t) => wrap.addEventListener(t, (e) => { if (gesture) e.stopPropagation(); }, { capture: true, passive: true }));
+      wrap.addEventListener("touchmove", (e) => { if (gesture) e.preventDefault(); }, { passive: false });
+      wrap.addEventListener("pointermove", (e) => {
+        if (gesture) return;
+        const { x, y } = rel(e);
+        if (dr.pending) { dr.move(x, y); return; }
+        if (e.pointerType === "mouse") wrap.style.cursor = dr.tool ? "crosshair" : x <= this.chart.timeScale().width() && dr.hitTest(x, y, 8) ? "move" : "";
+      });
+      this.onWinMove = (e) => { if (gesture) { const { x, y } = rel(e); dr.move(x, y); } };
+      this.onWinUp = () => { if (!gesture) return; gesture = false; lock(false); dr.up(); };
+      window.addEventListener("pointermove", this.onWinMove);
+      window.addEventListener("pointerup", this.onWinUp);
+      window.addEventListener("pointercancel", this.onWinUp);
+      wrap.addEventListener("dblclick", () => { if (dr.current) term.drawingSettings(dr.current); });
+      wrap.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        if (dr.pending) { dr.cancel(); return; }
+        const items = [["tools", "✎ Công cụ vẽ…"]];
+        if (dr.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"]);
+        items.push(["main", "⤢ Đưa khung này lên biểu đồ chính"]);
+        const menu = $("ctxMenu");
+        menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
+        menu.hidden = false;
+        menu.style.left = Math.max(8, Math.min(e.clientX, window.innerWidth - menu.offsetWidth - 8)) + "px";
+        menu.style.top = Math.max(8, Math.min(e.clientY, window.innerHeight - menu.offsetHeight - 8)) + "px";
+        menu.querySelectorAll("button").forEach((b) => (b.onclick = () => {
+          term.closeMenu();
+          if (b.dataset.k === "tools") term.drawSheet();
+          if (b.dataset.k === "drawSettings") term.drawingSettings(dr.current);
+          if (b.dataset.k === "main") term.paneToMain(this);
+        }));
+      });
     }
 
     /** Positions, orders and the pending draft on this chart's price axis, read-only. */
@@ -3048,7 +3118,7 @@
           chart: this.chart, series: this.series, store,
           bars: () => this.viewBars(), sec: () => TF_SECONDS[this.interval], digits: () => this.digits,
           symbol: () => this.symbolKey(), magnet: () => this.magnet,
-          onChange: () => { this.renderDrawBar(); (this.panes || []).forEach((p) => p.mirrorDrawings()); },
+          onChange: () => this.drawingsChanged(this.drawingsMain),
           interval: () => this.interval, onEdit: (d, isNew) => this.drawingSettings(d, isNew),
         });
         this.chartStyle = loadChartStyle();
@@ -6479,9 +6549,88 @@
       $("chartWrap2").hidden = !this.pair();
       $("layoutBtn").classList.toggle("on", mode !== "1");
       this.setPanes(many ? +mode[1] - 1 : 0);
+      this.setupSplits();
       if (!this.pair()) { this.focusChart(1); this.loadCmp(); return; }
       this.ensureChart2();
       this.loadCmp();
+    },
+
+    /* ----- 2 / 3 / 4 timeframes: dividers between the charts, dragged to make one bigger ----- */
+
+    /** The dividers' places (share of the width for the first column, of the height for the first row),
+     *  kept per layout. */
+    splitOf(mode) {
+      let v = {};
+      try { v = JSON.parse(store.get("aurum.split." + mode) || "{}"); } catch { /* even */ }
+      const ok = (x) => (typeof x === "number" && x >= 0.12 && x <= 0.88 ? x : 0.5);
+      return { c: ok(v.c), r: ok(v.r) };
+    },
+
+    setupSplits() {
+      const box = $("charts"), mode = this.layout;
+      box.querySelectorAll(".split").forEach((e) => e.remove());
+      ["--c1", "--r1", "--cols", "--rows"].forEach((k) => box.style.removeProperty(k));
+      if (!mode || mode[0] !== "m") return;
+      const sp = this.splitOf(mode);
+      const mk = (dir) => {
+        const e = document.createElement("div");
+        e.className = "split split-" + dir;
+        e.title = "Kéo để đổi cỡ các ô · bấm đúp để chia đều";
+        e.innerHTML = "<i></i>";
+        box.appendChild(e);
+        return e;
+      };
+      const col = mk("col"), row = mode === "m2" ? null : mk("row");
+      const apply = () => {
+        box.style.setProperty("--c1", sp.c);
+        box.style.setProperty("--r1", sp.r);
+        box.style.setProperty("--cols", `minmax(0, ${sp.c}fr) minmax(0, ${1 - sp.c}fr)`);
+        box.style.setProperty("--rows", `minmax(0, ${sp.r}fr) minmax(0, ${1 - sp.r}fr)`);
+        this.placeSplits();
+      };
+      const save = () => store.set("aurum.split." + mode, JSON.stringify({ c: +sp.c.toFixed(3), r: +sp.r.toFixed(3) }));
+      const drag = (el, key) => {
+        el.addEventListener("pointerdown", (e) => {
+          e.preventDefault(); e.stopPropagation();
+          el.setPointerCapture(e.pointerId);
+          el.classList.add("on"); document.body.classList.add("splitting", key === "c" ? "split-x" : "split-y");
+          const move = (ev) => {
+            const r = box.getBoundingClientRect(), gap = parseFloat(getComputedStyle(box).columnGap) || 6;
+            const v = key === "c" ? (ev.clientX - r.left - gap / 2) / (r.width - gap) : (ev.clientY - r.top - gap / 2) / (r.height - gap);
+            sp[key] = Math.max(0.12, Math.min(0.88, v));
+            apply();
+          };
+          const up = () => {
+            el.classList.remove("on"); document.body.classList.remove("splitting", "split-x", "split-y");
+            el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); el.removeEventListener("pointercancel", up);
+            save();
+          };
+          el.addEventListener("pointermove", move); el.addEventListener("pointerup", up); el.addEventListener("pointercancel", up);
+        });
+        el.addEventListener("dblclick", () => { sp[key] = 0.5; apply(); save(); });
+      };
+      drag(col, "c");
+      if (row) drag(row, "r");
+      apply();
+      if (!this.splitWatch && window.ResizeObserver) {
+        this.splitWatch = new ResizeObserver(() => this.placeSplits());
+        this.splitWatch.observe(box);
+      }
+    },
+
+    /** The dividers over the gaps between the charts (none on a phone, where the charts are stacked). */
+    placeSplits() {
+      const box = $("charts"), mode = this.layout;
+      if (!mode || mode[0] !== "m") return;
+      const w = box.clientWidth, h = box.clientHeight, cs = getComputedStyle(box);
+      const gx = parseFloat(cs.columnGap) || 6, gy = parseFloat(cs.rowGap) || 6;
+      const sp = this.splitOf(mode);
+      const c = +box.style.getPropertyValue("--c1") || sp.c, r = +box.style.getPropertyValue("--r1") || sp.r;
+      const x = (w - gx) * c + gx / 2, y = (h - gy) * r + gy / 2;
+      const col = box.querySelector(".split-col"), row = box.querySelector(".split-row");
+      if (col) Object.assign(col.style, { left: x + "px", top: "0px", height: h + "px" });
+      // 3 charts: the main one fills the left column, so the row divider is only over the right one.
+      if (row) Object.assign(row.style, { top: y + "px", left: (mode === "m3" ? x : 0) + "px", width: (mode === "m3" ? w - x : w) + "px" });
     },
 
     /** Two symbols on two charts (the SMT layouts). */
@@ -6504,7 +6653,7 @@
     setPanes(n) {
       this.panes = this.panes || [];
       while (this.panes.length > n) this.panes.pop().destroy();
-      if (!n || !window.LightweightCharts) return;
+      if (!n || !window.LightweightCharts) { this.relinkDrawings(); return; }
       const tfs = this.paneTfs();
       while (this.panes.length < n) {
         const p = new TfPane(this, tfs[this.panes.length]);
@@ -6513,6 +6662,15 @@
       }
       this.applyChartStyle();
       this.panes.forEach((p) => p.ensure());
+      this.relinkDrawings();
+    },
+
+    /** Every chart's drawings know the others: a tool picked on one is ready on all (draw on any chart). */
+    relinkDrawings() {
+      const all = this.allDrawings();
+      all.forEach((d) => d.link(all));
+      const main = this.drawingsMain;
+      if (main) all.forEach((d) => { if (d !== main && d.tool !== main.tool) { d.tool = main.tool; d.pending = null; } });
     },
 
     /** The picked extra chart's timeframe onto the main chart (drawings, orders), the main one's into it. */
@@ -6641,8 +6799,7 @@
         symbol: () => this.cmpName || "XAG", magnet: () => this.magnet, onChange: () => this.renderDrawBar(),
         interval: () => this.interval, onEdit: (d, isNew) => this.drawingSettings(d, isNew),
       });
-      this.drawingsMain.link([this.drawings2]);
-      this.drawings2.link([this.drawingsMain]);
+      this.relinkDrawings();
       this.drawings2.keepTool = this.drawingsMain.keepTool;
       this.drawings2.lockAll = this.drawingsMain.lockAll;
       this.bindDrag2();
@@ -6730,9 +6887,33 @@
     },
 
     /** The chart last touched: its drawing is the one the bar and settings edit. */
+    /** A drawing changed (or was picked) on one chart of the symbol: the bar follows, the others repaint. */
+    drawingsChanged(from) {
+      if (from === this.drawings || !this.drawings) this.renderDrawBar();
+      const main = this.drawingsMain;
+      if (main && from !== main) main.update();
+      (this.panes || []).forEach((p) => { if (p.drawings !== from) p.mirrorDrawings(); });
+    },
+
+    /** An extra timeframe chart was touched: its drawings are the ones the bar and settings edit. */
+    focusPane(pane) {
+      this.closeMenu();
+      $("chartWrap").classList.remove("focus");
+      $("chartWrap2").classList.remove("focus");
+      (this.panes || []).forEach((p) => p.wrap.classList.toggle("focus", p === pane));
+      if ($("drawBar").parentElement !== pane.wrap) pane.wrap.appendChild($("drawBar"));
+      // One pick at a time across the charts.
+      this.allDrawings().forEach((x) => { if (x !== pane.drawings && x.selected) { x.selected = null; x.update(); } });
+      if (this.drawings === pane.drawings) return;
+      this.drawings = pane.drawings;
+      this.renderDrawBar();
+    },
+
     focusChart(n) {
       const next = n === 2 && this.drawings2 ? this.drawings2 : this.drawingsMain;
-      $("chartWrap").classList.toggle("focus", n === 1 && this.pair());
+      (this.panes || []).forEach((p) => p.wrap.classList.remove("focus"));
+      if (n === 1 && this.panes && this.panes.length) (this.panes || []).forEach((p) => { if (p.drawings.selected) { p.drawings.selected = null; p.drawings.update(); } });
+      $("chartWrap").classList.toggle("focus", n === 1 && (this.pair() || !!(this.panes && this.panes.length)));
       $("chartWrap2").classList.toggle("focus", n === 2);
       // The drawing bar sits on the chart being edited.
       const wrap = n === 2 && this.drawings2 ? $("chartWrap2") : $("chartWrap");
@@ -6742,7 +6923,7 @@
       this.renderDrawBar();
     },
 
-    allDrawings() { return [this.drawingsMain, this.drawings2].filter(Boolean); },
+    allDrawings() { return [this.drawingsMain, this.drawings2].concat((this.panes || []).map((p) => p.drawings)).filter(Boolean); },
 
     cmpPath(count, before) {
       const extra = before ? `&before=${before}` : "";

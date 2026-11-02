@@ -558,6 +558,22 @@ body:not(.in-member) .nav-logout { display: none; }
 .charts.mtf .chart-wrap { height: auto; min-height: 0; }
 .charts.m3 #chartWrap { grid-row: span 2; }
 .charts.m3, .charts.m4 { grid-template-rows: 1fr 1fr; }
+/* sizes set by dragging the dividers between the charts */
+.charts.mtf { position: relative; grid-template-columns: var(--cols, minmax(0, 1fr) minmax(0, 1fr)); }
+.charts.m3, .charts.m4 { grid-template-rows: var(--rows, minmax(0, 1fr) minmax(0, 1fr)); }
+.split { position: absolute; z-index: 6; touch-action: none; display: flex; align-items: center; justify-content: center; }
+.split-col { width: 12px; margin-left: -6px; cursor: col-resize; }
+.split-row { height: 12px; margin-top: -6px; cursor: row-resize; }
+.split i { background: var(--line2); border-radius: 3px; transition: background .15s; }
+.split-col i { width: 3px; height: 38px; }
+.split-row i { height: 3px; width: 38px; }
+.split:hover i, .split.on i { background: var(--gold); }
+.split.on::before, .split:hover::before { content: ""; position: absolute; background: rgba(240, 185, 11, .35); }
+.split-col.on::before, .split-col:hover::before { left: 5px; width: 2px; top: 0; bottom: 0; }
+.split-row.on::before, .split-row:hover::before { top: 5px; height: 2px; left: 0; right: 0; }
+body.splitting, body.splitting * { user-select: none; }
+body.split-x, body.split-x * { cursor: col-resize !important; }
+body.split-y, body.split-y * { cursor: row-resize !important; }
 .tfp-chart { position: absolute; inset: 0; }
 .tfp-head { position: absolute; top: 6px; left: 8px; z-index: 3; max-width: calc(100% - 70px); display: flex; align-items: center; gap: 6px; background: var(--glass); border-radius: 8px; padding: 3px 6px 3px 8px; font-size: 12.5px; font-variant-numeric: tabular-nums; }
 .tfp-head select { background: var(--chip); color: var(--gold); border: 0; border-radius: 6px; padding: 2px 4px; font: 700 12px/1.2 var(--font); cursor: pointer; }
@@ -571,6 +587,7 @@ body:not(.in-member) .nav-logout { display: none; }
   .charts.m3 #chartWrap, .charts.m4 #chartWrap { grid-row: auto; grid-column: 1 / -1; height: 46vh; min-height: 260px; }
   .charts.m3 .tf-pane, .charts.m4 .tf-pane { height: 30vh; min-height: 190px; }
   .charts.m4 .tf-pane:last-child { grid-column: 1 / -1; }
+  .split { display: none; }
 }
 button.busy { opacity: .55; }
 .ctx hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
