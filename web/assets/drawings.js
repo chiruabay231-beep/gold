@@ -174,7 +174,7 @@
         const bar = this.host.bars()[Math.round(l)];
         if (bar) {
           const near = [bar.open, bar.high, bar.low, bar.close].map((v) => [v, Math.abs(this.y(v) - y)]).sort((m, k) => m[1] - k[1])[0];
-          if (near[1] < 18) p = near[0];
+          if (near[1] < 10) p = near[0];
         }
       }
       return { t: this.logicalToTime(l), p: +p.toFixed(this.host.digits()) };

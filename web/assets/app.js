@@ -3167,7 +3167,8 @@
           },
         });
         this.ictCfg = (() => { try { return window.ICT.merge(JSON.parse(store.get("aurum.ictcfg") || "null")); } catch { return window.ICT.defaults(); } })();
-        this.magnet = store.get("aurum.magnet") !== "0";
+        // Off unless turned on (TradingView's default): points go where the mouse / finger is, not onto the candle.
+        this.magnet = store.get("aurum.magnet") === "1";
         this.lastSmtSymbol = this.ictCfg.smtSymbol;
         this.loadStudies();
         this.series.attachPrimitive(this.layer());

@@ -30,7 +30,7 @@ struct LiveView: View {
     @AppStorage("live.volume") private var showVolume = true
     @AppStorage("live.highLow") private var showHighLow = true
     @AppStorage("live.candleStyle") private var candleStyle = CandleStyle.candles.rawValue
-    @AppStorage("live.magnet") private var magnet = true
+    @AppStorage("live.magnet") private var magnet = false
     @AppStorage("live.keepTool") private var keepTool = false
     @AppStorage("live.hideDrawings") private var hideDrawings = false
     @AppStorage("live.lockDrawings") private var lockDrawings = false
