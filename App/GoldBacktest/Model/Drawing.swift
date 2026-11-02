@@ -92,7 +92,9 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
 
     /// A curve through three points: the control point of the quadratic Bézier whose middle passes through `b`.
     static func curveControl(_ a: CGPoint, _ b: CGPoint, _ c: CGPoint) -> CGPoint {
-        CGPoint(x: 2 * b.x - (a.x + c.x) / 2, y: 2 * b.y - (a.y + c.y) / 2)
+        let x: CGFloat = 2 * b.x - (a.x + c.x) / 2
+        let y: CGFloat = 2 * b.y - (a.y + c.y) / 2
+        return CGPoint(x: x, y: y)
     }
 
     /// The curve as a path (a straight line while only two points are placed).
@@ -112,11 +114,17 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
     static func curveSamples(_ points: [CGPoint], count: Int = 32) -> [CGPoint] {
         guard points.count >= 3 else { return points }
         let k = curveControl(points[0], points[1], points[2])
-        return (0...count).map { i in
-            let t = CGFloat(i) / CGFloat(count), u = 1 - t
-            return CGPoint(x: u * u * points[0].x + 2 * u * t * k.x + t * t * points[2].x,
-                           y: u * u * points[0].y + 2 * u * t * k.y + t * t * points[2].y)
+        let a = points[0], c = points[2]
+        var out: [CGPoint] = []
+        for i in 0...count {
+            let t = CGFloat(i) / CGFloat(count)
+            let u: CGFloat = 1 - t
+            let wa: CGFloat = u * u, wk: CGFloat = 2 * u * t, wc: CGFloat = t * t
+            let x: CGFloat = wa * a.x + wk * k.x + wc * c.x
+            let y: CGFloat = wa * a.y + wk * k.y + wc * c.y
+            out.append(CGPoint(x: x, y: y))
         }
+        return out
     }
 
     /// Placed point by point (taps, or one drag per point).
