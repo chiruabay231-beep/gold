@@ -761,6 +761,25 @@
     }
   }
 
+  const TAB_TITLE = document.title;
+  /** A tab icon: a green up arrow, a red down arrow, or a grey dash, on a rounded square. */
+  const tabIcons = {};
+  function tabIcon(dir) {
+    if (tabIcons[dir]) return tabIcons[dir];
+    const c = document.createElement("canvas");
+    c.width = c.height = 64;
+    const g = c.getContext("2d");
+    g.fillStyle = dir > 0 ? "#089981" : dir < 0 ? "#f23645" : "#787b86";
+    g.beginPath(); g.roundRect(2, 2, 60, 60, 14); g.fill();
+    g.fillStyle = "#fff";
+    g.beginPath();
+    if (dir > 0) { g.moveTo(32, 10); g.lineTo(54, 36); g.lineTo(41, 36); g.lineTo(41, 54); g.lineTo(23, 54); g.lineTo(23, 36); g.lineTo(10, 36); }
+    else if (dir < 0) { g.moveTo(32, 54); g.lineTo(54, 28); g.lineTo(41, 28); g.lineTo(41, 10); g.lineTo(23, 10); g.lineTo(23, 28); g.lineTo(10, 28); }
+    else g.roundRect(12, 26, 40, 12, 4);
+    g.closePath(); g.fill();
+    return (tabIcons[dir] = c.toDataURL("image/png"));
+  }
+
   /** Lots of one order: 0.01 to 200, two decimals. */
   const MAX_LOTS = 200;
   const clampLots = (v) => Math.min(MAX_LOTS, Math.max(0.01, Math.round((v || 0.01) * 100) / 100));
@@ -1396,6 +1415,7 @@
       this.stop(false);
       this.timers.push(setInterval(() => this.refresh(), this.owner ? 2000 : 5000));
       this.timers.push(setInterval(() => this.loadTab(false), 5000));
+      this.timers.push(setInterval(() => this.updateTab(), 1000));
       if (!this.owner) this.timers.push(setInterval(() => this.refreshMe().catch((e) => this.handleAuth(e)), 30000));
       this.timers.push(setInterval(() => this.loadNews(), 5 * 60 * 1000));
       if (this.owner) {
@@ -1431,6 +1451,7 @@
       this.timers.forEach(clearInterval);
       this.timers = [];
       if (all) {
+        this.updateTab(true);
         clearInterval(this.pollTimer); this.pollTimer = null;
         if (this.socket) { this.socket.close(); this.socket = null; }
         (this.panes || []).forEach((p) => p.stop());
@@ -3314,6 +3335,34 @@
       return this.owner
         ? `/mt5/candles?symbol=${encodeURIComponent(this.symbol)}&interval=${this.interval}&count=${count}${extra}`
         : `/member/candles?interval=${this.interval}&count=${count}${extra}`;
+    },
+
+    /** The browser tab: the open symbol's price with ▲ / ▼ against the day's open, and a green / red
+     *  arrow for its icon, so the price shows from another tab. */
+    updateTab(reset) {
+      const bars = !reset && this.bars && this.bars.length ? this.viewBars() : [];
+      const last = bars.length ? bars[bars.length - 1] : null;
+      let title = TAB_TITLE, dir = 0;
+      if (last) {
+        const price = !this.replay && this.bid != null ? this.bid : last.close;
+        // The day's open (UTC day, the broker's): its first bar in view, or the last bar's own open on 1d.
+        const day = Math.floor(last.time / 86400) * 86400;
+        let i = bars.length - 1;
+        while (i > 0 && bars[i - 1].time >= day) i--;
+        const open = bars[i].open;
+        const ch = open ? (price - open) / open * 100 : 0;
+        dir = price > open ? 1 : price < open ? -1 : 0;
+        const sym = ($("chartSymbol").textContent || this.symbol || "").replace(/m$/, "") || "XAUUSD";
+        title = `${dir > 0 ? "▲" : dir < 0 ? "▼" : "•"} ${fmt(price, this.digits)} ${sym} ${ch >= 0 ? "+" : "−"}${Math.abs(ch).toFixed(2)}%`;
+      }
+      if (document.title !== title) document.title = title;
+      if (this.tabDir === (last ? dir : null)) return;
+      this.tabDir = last ? dir : null;
+      const link = document.querySelector('link[rel="icon"]');
+      if (!link) return;
+      if (!last) { link.type = "image/svg+xml"; link.href = "favicon.svg"; return; }
+      link.type = "image/png";
+      link.href = tabIcon(dir);
     },
 
     toBars(rows) {
