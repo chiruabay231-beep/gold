@@ -3771,16 +3771,16 @@
           // Entry: a dotted line from the entry candle (with a dot on it) and a label with the money in
           // green or red, painted by the chart layer; the price line only keeps the price on the axis.
           out.push({ key: `pos:${p.ticket}:entry`, price: p.entry, color: dim(p.side === "long" ? "#2b6bf3" : "#f0455a", active), width: w, style: 0, title: "", entryOf: p, faded: !!(sel && !active), from: p.time, drawn: true });
-          if (p.stop) out.push({ key: `pos:${p.ticket}:stop`, price: p.stop, color: dim("#f0455a", active), width: w, style: 2, title: `SL ${money0(this.pnlAt(p, p.stop))}`, from: p.time, drawn: true });
-          if (p.target) out.push({ key: `pos:${p.ticket}:target`, price: p.target, color: dim("#14b88a", active), width: w, style: 2, title: `TP ${money0(this.pnlAt(p, p.target))}`, from: p.time, drawn: true });
+          if (p.stop) out.push({ key: `pos:${p.ticket}:stop`, price: p.stop, color: dim("#f0455a", active), width: w, style: 2, title: `SL ${money0(this.pnlAt(p, p.stop))}`, from: p.time, drawn: true, active });
+          if (p.target) out.push({ key: `pos:${p.ticket}:target`, price: p.target, color: dim("#14b88a", active), width: w, style: 2, title: `TP ${money0(this.pnlAt(p, p.target))}`, from: p.time, drawn: true, active });
         });
         this.orders.filter(onChart).forEach((o) => {
           const active = sel && sel.kind === "ord" && sel.ticket === o.ticket;
           const w = active ? 2 : 1;
           out.push({ key: `ord:${o.ticket}:entry`, price: o.entry, color: dim(o.side === "long" ? "#2b6bf3" : "#f0455a", active), width: w, style: 1, title: `${sideName(o.side)} ${o.kind.toUpperCase()} ${o.lots}`, from: o.time, drawn: true });
           const om = (lv) => money0(this.valueAt(o.symbol, o.lots, o.side, o.entry, lv));
-          if (o.stop) out.push({ key: `ord:${o.ticket}:stop`, price: o.stop, color: dim("#f0455a", active), width: w, style: 2, title: `SL ${om(o.stop)}`, from: o.time, drawn: true });
-          if (o.target) out.push({ key: `ord:${o.ticket}:target`, price: o.target, color: dim("#14b88a", active), width: w, style: 2, title: `TP ${om(o.target)}`, from: o.time, drawn: true });
+          if (o.stop) out.push({ key: `ord:${o.ticket}:stop`, price: o.stop, color: dim("#f0455a", active), width: w, style: 2, title: `SL ${om(o.stop)}`, from: o.time, drawn: true, active });
+          if (o.target) out.push({ key: `ord:${o.ticket}:target`, price: o.target, color: dim("#14b88a", active), width: w, style: 2, title: `TP ${om(o.target)}`, from: o.time, drawn: true, active });
         });
         if (this.draft) {
           const price = num($("pPrice").value), stop = num($("pStop").value), target = num($("pTarget").value);
@@ -3884,6 +3884,11 @@
       const list = this.tradeLines();
       if (!list.length) return;
       const light = document.documentElement.dataset.theme === "light";
+      // The picked trade's SL / TP labels slide left, clear of the other trades' labels piled at the right,
+      // and slide back when it is let go.
+      const shifts = (this.tagShifts = this.tagShifts || {});
+      const away = Math.min(170, width * 0.32);
+      let sliding = false;
       g.save();
       g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
       g.textBaseline = "middle";
@@ -3920,7 +3925,12 @@
           g.fillText(right, x + lw + 6, y + 0.5);
         } else if (w.title) {
           const tw = g.measureText(w.title).width + 12;
-          const x = Math.max(4, width - tw - 10);
+          const goal = w.active || (this.drag && this.drag.key === w.key && !/^draft:/.test(w.key)) ? away : 0;
+          let cur = shifts[w.key] || 0;
+          cur += (goal - cur) * 0.28;
+          if (Math.abs(goal - cur) < 0.6) cur = goal; else sliding = true;
+          if (cur) shifts[w.key] = cur; else delete shifts[w.key];
+          const x = Math.max(4, width - tw - 10 - cur);
           g.fillStyle = w.color;
           g.beginPath(); g.roundRect(x, top, tw, h, 4); g.fill();
           g.fillStyle = "#ffffff";
@@ -3929,6 +3939,10 @@
         g.globalAlpha = 1;
       });
       g.restore();
+      if (sliding && !this.tagSlideQueued) {
+        this.tagSlideQueued = true;
+        requestAnimationFrame(() => { this.tagSlideQueued = false; this.repaint(); });
+      }
     },
 
     syncLines() {
