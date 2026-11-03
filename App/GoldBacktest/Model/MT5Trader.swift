@@ -66,6 +66,39 @@ final class MT5Trader {
         await perform { try await $0.mt5Close(ticket: ticket, lots: lots) }
     }
 
+    /// "Đóng tất cả": the server closes them all in one go, trying again any the broker turns down; an older
+    /// server gets them one by one, and a second round for any still open.
+    func closeAll(_ tickets: [Int], symbol: String? = nil) async {
+        guard !tickets.isEmpty else { return }
+        guard let client = RemoteBotSettings.client() else {
+            lastError = "Chưa kết nối máy chủ VPS (Giao dịch → Đăng nhập)"
+            return
+        }
+        busy = true
+        defer { busy = false }
+        do {
+            let result = try await client.mt5CloseAll(symbol: symbol, tickets: tickets)
+            apply(result)
+            if let left = result.left, left > 0 {
+                lastError = "Còn \(left) lệnh chưa đóng được" + (result.error.map { ": \($0)" } ?? "") + ". Bấm Đóng tất cả lần nữa."
+                UINotificationFeedbackGenerator().notificationOccurred(.error)
+            } else {
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            }
+        } catch let error as RemoteBotClient.ServerError where error.code == 404 {
+            for _ in 0..<2 {
+                let open = Set(state?.positions.map(\.ticket) ?? tickets)
+                let todo = tickets.filter { open.contains($0) }
+                if todo.isEmpty { break }
+                for ticket in todo { await close(ticket) }
+                await refresh()
+            }
+        } catch {
+            lastError = error.localizedDescription
+            UINotificationFeedbackGenerator().notificationOccurred(.error)
+        }
+    }
+
     func modify(_ ticket: Int, entry: Double? = nil, stop: Double?, target: Double?) async {
         await perform { try await $0.mt5Modify(ticket: ticket, price: entry, stop: stop, target: target) }
     }

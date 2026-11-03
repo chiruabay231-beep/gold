@@ -30,13 +30,15 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "3.2"
+VERSION = "3.3"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.json")
 STATE_PATH = os.path.join(HERE, "state.json")
+# SL / TP of the MT5 positions as seen (set on opening, or dragged later): MT5's history keeps neither.
+STOPS_PATH = os.path.join(HERE, "stops.json")
 LOG_PATH = os.path.join(HERE, "server.log")
 IS_WINDOWS = os.name == "nt"
 NO_WINDOW = 0x08000000 if IS_WINDOWS else 0  # CREATE_NO_WINDOW
@@ -590,6 +592,24 @@ class Mt5Account:
 
     def __init__(self, server):
         self.server = server
+        self.stops = read_json(STOPS_PATH, {})
+        if not isinstance(self.stops, dict):
+            self.stops = {}
+        threading.Thread(target=self._watch_stops, daemon=True).start()
+
+    def _watch_stops(self):
+        """Every few seconds while MT5 is connected: the SL / TP of the open positions, so a level dragged
+        in MT5 itself (or while no app is open) is still known when the position closes."""
+        while True:
+            time.sleep(5)
+            if not Mt5.connected or Mt5.module is None or not Mt5.lock.acquire(timeout=2):
+                continue
+            try:
+                self._track_stops(Mt5.module.positions_get() or ())
+            except Exception:  # never stop the server for this
+                pass
+            finally:
+                Mt5.lock.release()
 
     @property
     def cfg(self):
@@ -597,6 +617,38 @@ class Mt5Account:
 
     def _mt5(self):
         return Mt5.connect(self.cfg)
+
+    def _track_stops(self, rows, when=None):
+        """Remembers each open position's SL / TP: the first one set and the last one, with when it was
+        last moved (MT5's history has neither once the position is closed)."""
+        changed = False
+        stamp = when or now()
+        for r in rows:
+            key = str(int(r.ticket))
+            sl, tp = float(r.sl or 0), float(r.tp or 0)
+            rec = self.stops.get(key)
+            if rec is None:
+                rec = self.stops[key] = {"sl0": sl or None, "tp0": tp or None, "sl": sl or None, "tp": tp or None,
+                                         "slAt": None, "tpAt": None, "seen": stamp}
+                changed = True
+                continue
+            rec["seen"] = stamp
+            for k, v in (("sl", sl), ("tp", tp)):
+                if (rec.get(k) or 0) != v:
+                    if not rec.get(k + "0") and v:
+                        rec[k + "0"] = v  # set for the first time after opening
+                    elif rec.get(k) is not None or v:
+                        rec[k + "At"] = stamp
+                    rec[k] = v or None
+                    changed = True
+        if changed:
+            # Positions closed more than 120 days ago are forgotten.
+            old = stamp - 120 * 86400
+            self.stops = {k: v for k, v in self.stops.items() if (v.get("seen") or 0) >= old}
+            try:
+                write_json(STOPS_PATH, self.stops)
+            except OSError:
+                pass
 
     def status(self):
         with Mt5.lock:
@@ -729,7 +781,9 @@ class Mt5Account:
             a = mt5.account_info()
             offset = Mt5.offset_seconds
             positions = []
-            for r in (mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()) or ():
+            rows = (mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()) or ()
+            self._track_stops(rows)
+            for r in rows:
                 positions.append({"ticket": int(r.ticket), "symbol": r.symbol,
                                   "side": "long" if r.type == mt5.POSITION_TYPE_BUY else "short", "lots": r.volume,
                                   "entry": r.price_open, "price": r.price_current, "stop": r.sl or None,
@@ -855,7 +909,50 @@ class Mt5Account:
             _, error = mt5_send(mt5, request)
             if error:
                 raise ValueError(error)
+            if rows:
+                self._track_stops(mt5.positions_get(ticket=ticket) or ())
         return self.trading()
+
+    def close_all(self, body):
+        """Closes every open position (of one symbol, or the tickets given) on the server, trying again
+        those the broker turned down (requote, busy…) with a fresh price, up to 3 rounds."""
+        symbol = str(body.get("symbol") or "") or None
+        wanted = {int(t) for t in (body.get("tickets") or [])}
+        closed, errors = 0, {}
+        with Mt5.lock:
+            mt5 = self._mt5()
+            self._check_trading(mt5)
+            for attempt in range(3):
+                rows = [r for r in ((mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()) or ())
+                        if not wanted or int(r.ticket) in wanted]
+                if not rows:
+                    break
+                for r in rows:
+                    tick = mt5.symbol_info_tick(r.symbol)
+                    if tick is None:
+                        errors[int(r.ticket)] = "không có giá"
+                        continue
+                    buy = r.type == mt5.POSITION_TYPE_BUY
+                    request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": r.symbol, "volume": r.volume,
+                               "type": mt5.ORDER_TYPE_SELL if buy else mt5.ORDER_TYPE_BUY, "position": r.ticket,
+                               "price": tick.bid if buy else tick.ask,
+                               "deviation": int(self.cfg.get("deviation", 30)) * (attempt + 1),
+                               "magic": r.magic, "comment": "GoldApp close all", "type_time": mt5.ORDER_TIME_GTC}
+                    _, error = mt5_send(mt5, request)
+                    if error:
+                        errors[int(r.ticket)] = error
+                    else:
+                        closed += 1
+                        errors.pop(int(r.ticket), None)
+                time.sleep(0.4)
+            left = [r for r in ((mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()) or ())
+                    if not wanted or int(r.ticket) in wanted]
+        self.server.log(f"📱 Đóng tất cả MT5: {closed} lệnh" + (f", còn {len(left)} lệnh chưa đóng được" if left else ""),
+                        notify=True)
+        out = self.trading()
+        out.update(closed=closed, left=len(left),
+                   error="; ".join(f"#{k}: {v}" for k, v in errors.items() if any(int(r.ticket) == k for r in left)) or None)
+        return out
 
     def cancel(self, body):
         ticket = int(body.get("ticket", 0))
@@ -938,6 +1035,14 @@ class Mt5Account:
                         opening = None
                 stop_open = getattr(first, "sl", 0) or (opening.sl if opening is not None else 0)
                 target_open = getattr(first, "tp", 0) or (opening.tp if opening is not None else 0)
+                # As seen while it was open (set or dragged from the app, the web or MT5 itself).
+                seen = self.stops.get(str(pid)) or {}
+                if not (fired and fired.group(1) == "sl"):
+                    stop = stop or seen.get("sl") or 0
+                if not (fired and fired.group(1) == "tp"):
+                    target = target or seen.get("tp") or 0
+                stop_open = stop_open or seen.get("sl0") or 0
+                target_open = target_open or seen.get("tp0") or 0
                 positions.append({"ticket": pid, "symbol": first.symbol,
                                   "side": "long" if first.type == mt5.DEAL_TYPE_BUY else "short",
                                   "lots": lots, "entry": first.price, "exit": exit_price,
@@ -945,6 +1050,7 @@ class Mt5Account:
                                   "profit": sum(r.profit + r.swap + r.commission + (getattr(r, "fee", 0) or 0) for r in rows),
                                   "reason": reason, "stop": stop or None, "target": target or None,
                                   "stopOpen": stop_open or None, "targetOpen": target_open or None,
+                                  "stopMovedAt": seen.get("slAt"), "targetMovedAt": seen.get("tpAt"),
                                   "swap": sum(r.swap for r in rows),
                                   "commission": sum(r.commission + (getattr(r, "fee", 0) or 0) for r in rows),
                                   "comment": getattr(first, "comment", "") or "",
@@ -3505,6 +3611,8 @@ def make_handler(server):
                     return self._send(200, server.mt5_account.order(body))
                 if path == "/mt5/close":
                     return self._send(200, server.mt5_account.close(body))
+                if path == "/mt5/close_all":
+                    return self._send(200, server.mt5_account.close_all(body))
                 if path == "/mt5/modify":
                     return self._send(200, server.mt5_account.modify(body))
                 if path == "/mt5/cancel":

@@ -10,3 +10,4 @@ botkit.exe
 cloudflared.exe
 *.dll
 __pycache__/
+stops.json

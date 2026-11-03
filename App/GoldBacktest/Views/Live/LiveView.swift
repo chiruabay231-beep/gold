@@ -530,8 +530,8 @@ struct LiveView: View {
     private func closeAllPositions() {
         UINotificationFeedbackGenerator().notificationOccurred(.warning)
         if tradesMT5 {
-            let tickets = mt5.positions(market.symbol).map(\.ticket)
-            sendMT5 { for ticket in tickets { await mt5.close(ticket) } }
+            let tickets = mt5.positions(market.symbol).map(\.ticket), symbol = market.symbol
+            sendMT5 { await mt5.closeAll(tickets, symbol: symbol) }
         } else {
             for p in trader.account.positions where p.symbol == market.symbolKey { trader.close(p) }
         }

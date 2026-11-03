@@ -1619,7 +1619,13 @@
       const list = this.positions.slice();
       if (!list.length || !confirm(`Đóng tất cả ${list.length} lệnh đang mở?`)) return;
       await act(button, async () => {
-        for (const p of list) await this.call("/mt5/close", { ticket: p.ticket });
+        // The server closes them all and tries again those the broker turns down (3.3+); an older one, one by one.
+        let res = null;
+        try { res = await this.call("/mt5/close_all", { tickets: list.map((p) => p.ticket) }); } catch (e) {
+          if (!/Không có đường dẫn|404/.test(e.message || "")) throw e;
+          for (const p of list) await this.call("/mt5/close", { ticket: p.ticket });
+        }
+        if (res && res.left) throw new Error(`Còn ${res.left} lệnh chưa đóng được${res.error ? ": " + res.error : ""}. Bấm Đóng tất cả lần nữa.`);
       }, "Đã đóng tất cả lệnh");
       this.refresh();
     },

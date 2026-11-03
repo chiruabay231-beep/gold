@@ -356,9 +356,10 @@ struct RemoteBotClient {
 extension RemoteBotClient {
     // MARK: - Trading the MT5 account by hand
 
-    private func post<T: Decodable>(_ path: String, _ object: [String: Any], as type: T.Type) async throws -> T {
+    private func post<T: Decodable>(_ path: String, _ object: [String: Any], as type: T.Type,
+                                    timeout: TimeInterval = 25) async throws -> T {
         let body = try JSONSerialization.data(withJSONObject: object)
-        return try JSONDecoder().decode(T.self, from: await send(path, method: "POST", body: body))
+        return try JSONDecoder().decode(T.self, from: await send(path, method: "POST", body: body, timeout: timeout))
     }
 
     func mt5Trading(symbol: String? = nil) async throws -> MT5TradingState {
@@ -382,6 +383,14 @@ extension RemoteBotClient {
         var object: [String: Any] = ["ticket": ticket]
         if let lots { object["lots"] = lots }
         return try await post("/mt5/close", object, as: MT5TradingState.self)
+    }
+
+    /// Closes every open position (of `symbol`, or only `tickets`) on the server, which tries again those the
+    /// broker turns down (server 3.3+; an older one answers 404).
+    func mt5CloseAll(symbol: String? = nil, tickets: [Int]) async throws -> MT5TradingState {
+        var object: [String: Any] = ["tickets": tickets]
+        if let symbol { object["symbol"] = symbol }
+        return try await post("/mt5/close_all", object, as: MT5TradingState.self, timeout: 60)
     }
 
     /// New SL/TP of a position, or new entry/SL/TP of a pending order. nil removes SL or TP.
@@ -466,6 +475,10 @@ struct MT5TradingState: Decodable {
     var maxLots: Double
     /// The order just sent (answer to /mt5/order).
     var ticket: Int?
+    /// Answer to /mt5/close_all: how many closed, how many are still open, and why.
+    var closed: Int?
+    var left: Int?
+    var error: String?
 }
 
 /// The MT5 account logged in on the VPS.

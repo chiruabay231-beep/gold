@@ -20,6 +20,9 @@ struct TradeHistory {
         var target: Double?
         var stopOpen: Double?
         var targetOpen: Double?
+        /// When the SL / TP was last dragged (server 3.3+), UTC seconds.
+        var stopMovedAt: Double?
+        var targetMovedAt: Double?
         var swap: Double?
         var commission: Double?
         var comment: String?
@@ -629,7 +632,7 @@ struct ClosedPositionDetail: View {
         }
         .padding(.horizontal, 12)
         .padding(.bottom, 8)
-        .presentationDetents([.height(p.reason == "stop" || p.reason == "target" ? 550 : 500)])
+        .presentationDetents([.height(p.reason == "stop" || p.reason == "target" ? 600 : 550)])
         .presentationBackground(.clear)
     }
 
@@ -687,6 +690,7 @@ struct ClosedPositionDetail: View {
                 .font(.subheadline.monospacedDigit())
                 slippage
                 moved
+                result
                 if let comment = p.comment, !comment.isEmpty {
                     Text(comment).font(.subheadline).foregroundColor(.secondary)
                 }
@@ -721,17 +725,50 @@ struct ClosedPositionDetail: View {
         }
     }
 
-    /// The SL/TP moved after opening.
+    /// The SL/TP moved after opening, and when.
     @ViewBuilder
     private var moved: some View {
-        let lines = [("SL", p.stopOpen, p.stop), ("TP", p.targetOpen, p.target)].compactMap { item -> String? in
+        let items: [(String, Double?, Double?, Double?)] = [("SL", p.stopOpen, p.stop, p.stopMovedAt),
+                                                            ("TP", p.targetOpen, p.target, p.targetMovedAt)]
+        let lines = items.compactMap { item -> String? in
             guard let first = item.1, let last = item.2, abs(first - last) > pointSize / 2 else { return nil }
-            return "\(item.0) đã kéo: \(price(first)) → \(price(last))"
+            let when = item.3.map { " lúc " + Self.clock.string(from: Date(timeIntervalSince1970: $0)) } ?? ""
+            return "\(item.0) đã kéo\(when): \(price(first)) → \(price(last))"
         }
         if !lines.isEmpty {
-            Text(lines.joined(separator: " · ")).font(.caption.monospacedDigit()).foregroundColor(.secondary)
+            Text(lines.joined(separator: "\n")).font(.caption.monospacedDigit()).foregroundColor(.secondary)
         }
     }
+
+    /// The result in R: against the SL it opened with, and against the SL after it was dragged (from then on
+    /// that was the risk). Only an SL on the losing side of the entry counts as a risk.
+    @ViewBuilder
+    private var result: some View {
+        let move = (p.exit - p.entry) * sign
+        let r: (Double?) -> Double? = { stop in
+            guard let stop else { return nil }
+            let risk = (p.entry - stop) * sign
+            return risk > pointSize ? move / risk : nil
+        }
+        let atOpen = r(p.stopOpen), dragged = r(p.stop)
+        let movedStop = p.stopOpen != nil && p.stop != nil && abs((p.stopOpen ?? 0) - (p.stop ?? 0)) > pointSize / 2
+        let parts: [String] = (movedStop
+            ? [atOpen.map { "\(Self.rText($0)) theo SL lúc vào" }, dragged.map { "\(Self.rText($0)) theo SL đã kéo" }]
+            : [(atOpen ?? dragged).map { "\(Self.rText($0)) theo SL" }]).compactMap { $0 }
+        if !parts.isEmpty {
+            Text("Kết quả: " + parts.joined(separator: " · "))
+                .font(.footnote.weight(.semibold).monospacedDigit())
+                .foregroundColor(move >= 0 ? HistoryRow.blue : HistoryRow.red)
+        }
+    }
+
+    private static func rText(_ r: Double) -> String { String(format: "%+.2fR", r) }
+
+    private static let clock: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm dd/MM"
+        return f
+    }()
 
     private func label(_ text: String) -> some View {
         Text(text).foregroundColor(.secondary)
