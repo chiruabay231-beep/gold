@@ -962,7 +962,13 @@ struct CandleChart: View {
                 .kerning(0.6).foregroundColor(color))
             context.draw(label, at: CGPoint(x: 6, y: y - 9), anchor: .leading)
             if !line.value.isEmpty {
-                let right = layout.axisX - (line.closable && active ? 40 : 6)
+                // The picked order's SL / TP money moves left, clear of the other orders' figures piled at the
+                // right, and back when it is let go (the order being placed stays put).
+                let group = Self.lineGroup(line.id)
+                let picked = !Self.alwaysDraggable(group)
+                    && (activeLineGroup == group || draggedLine.map { Self.lineGroup($0.id) == group } == true)
+                let away = picked && !line.closable ? min(170, layout.axisX * 0.32) : 0
+                let right = layout.axisX - (line.closable && active ? 40 : 6) - away
                 let value = context.resolve(Text(line.value).font(.system(size: 11, weight: .semibold).monospacedDigit())
                     .foregroundColor((line.valueColor ?? line.color).opacity(alpha)))
                 context.draw(value, at: CGPoint(x: right, y: y - 9), anchor: .trailing)
