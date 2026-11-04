@@ -243,9 +243,49 @@
     return Object.fromEntries(IND.map(([k]) => [k, k === "dm" ? saved[k] === true : saved[k] !== false]));
   })();
 
-  const TFS = ["5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "4h", "1d"];
-  const TF_SECONDS = { "5s": 5, "10s": 10, "15s": 15, "30s": 30, "1m": 60, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
+  const TFS = ["5s", "10s", "15s", "30s", "1m", "2m", "3m", "4m", "5m", "6m", "10m", "12m", "15m", "20m", "30m", "1h", "4h", "1d"];
+  const TF_SECONDS = { "5s": 5, "10s": 10, "15s": 15, "30s": 30, "1m": 60, "2m": 120, "3m": 180, "4m": 240, "5m": 300, "6m": 360,
+    "10m": 600, "12m": 720, "15m": 900, "20m": 1200, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
+  // MT5's other minute charts: in a short list after 1m, so the row stays as it was.
+  const TF_MORE = ["2m", "3m", "4m", "6m", "10m", "12m", "20m"];
   const isSecTF = (tf) => TF_SECONDS[tf] < 60;
+  /** Binance has 1m, 3m, 5m… but not 2m, 4m, 6m, 10m, 12m or 20m: those are merged from its shorter klines. */
+  const BINANCE_KLINE = { "2m": ["1m", 2], "4m": ["1m", 4], "6m": ["3m", 2], "10m": ["5m", 2], "12m": ["3m", 4], "20m": ["5m", 4] };
+  const binanceKline = (tf) => BINANCE_KLINE[tf] || [tf, 1];
+  /** Shorter klines merged into bars of `tf` (the first dropped when it starts in their middle). */
+  function mergeKlines(bars, tf) {
+    const [, factor] = binanceKline(tf);
+    if (factor === 1) return bars;
+    const sec = TF_SECONDS[tf], out = [];
+    bars.forEach((b) => {
+      const t = Math.floor(b.time / sec) * sec, last = out[out.length - 1];
+      if (last && last.time === t) { last.high = Math.max(last.high, b.high); last.low = Math.min(last.low, b.low); last.close = b.close; last.volume += b.volume; }
+      else out.push({ time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume });
+    });
+    if (out.length > 1 && bars.length && bars[0].time > out[0].time) out.shift();
+    return out;
+  }
+  /** Recent Binance bars of `tf` (merged when Binance has no such kline). */
+  async function binanceBars(rest, name, tf, limit) {
+    const [kname, factor] = binanceKline(tf);
+    const rows = await (await fetch(`${rest}?symbol=${name}&interval=${kname}&limit=${Math.min(1000, limit * factor)}`)).json();
+    return mergeKlines(rows.map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] })), tf);
+  }
+  /** A live kline handler for bars of `tf`: each shorter kline into its bar (no minute counted twice). */
+  function klineFolder(tf) {
+    const [, factor] = binanceKline(tf), sec = TF_SECONDS[tf];
+    let bucket = null, done = null, partTime = null, part = null;
+    const merge = (a, b, t) => (a ? { time: t, open: a.open, high: Math.max(a.high, b.high), low: Math.min(a.low, b.low), close: b.close, volume: a.volume + b.volume }
+      : { time: t, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume });
+    return (k, last) => {
+      if (factor === 1) return k;
+      const t = Math.floor(k.time / sec) * sec;
+      if (bucket !== t) { bucket = t; done = last && last.time === t ? Object.assign({}, last) : null; partTime = null; part = null; }
+      if (partTime != null && partTime !== k.time && part) done = merge(done, part, t);
+      partTime = k.time; part = k;
+      return merge(done, k, t);
+    };
+  }
   /** One chart; two symbols side by side / stacked; or the one symbol on 2, 3, 4 timeframes. */
   const LAYOUTS = ["1", "h", "v", "m2", "m3", "m4"];
 
@@ -566,8 +606,7 @@
           } catch (e) {
             if (!market) throw e;
             const rest = market.futures ? "https://fapi.binance.com/fapi/v1/klines" : "https://api.binance.com/api/v3/klines";
-            const rows = await (await fetch(`${rest}?symbol=${market.name}&interval=${tf}&limit=800`)).json();
-            bars = rows.map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }));
+            bars = await binanceBars(rest, market.name, tf, 800);
             if (market.digits != null) digits = market.digits;
             live = "binance";
           }
@@ -602,11 +641,12 @@
         this.polledAt = Date.now();
         this.timer = setInterval(() => this.poll(token), 2000);
       } else {
-        const ws = new WebSocket(`${market.futures ? "wss://fstream.binance.com/ws/" : "wss://stream.binance.com:9443/ws/"}${market.name.toLowerCase()}@kline_${tf}`);
+        const ws = new WebSocket(`${market.futures ? "wss://fstream.binance.com/ws/" : "wss://stream.binance.com:9443/ws/"}${market.name.toLowerCase()}@kline_${binanceKline(tf)[0]}`);
+        const fold = klineFolder(tf);
         ws.onmessage = (ev) => {
           const k = JSON.parse(ev.data).k;
           if (!k || token !== this.token) return;
-          this.put({ time: k.t / 1000, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v });
+          this.put(fold({ time: k.t / 1000, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v }, this.bars[this.bars.length - 1]));
           this.showPrice();
         };
         this.ws = ws;
@@ -3191,12 +3231,17 @@
         this.chartStyle = loadChartStyle();
         this.applyChartStyle();
         this.layout = LAYOUTS.includes(store.get("aurum.layout")) ? store.get("aurum.layout") : "1";
-        $("tfButtons").innerHTML = TFS.map((i) => `<button type="button" data-tf="${i}"${i === "30s" ? ' class="sec-end" title="Nến giây lấy từ Binance"' : isSecTF(i) ? ' title="Nến giây lấy từ Binance"' : ""}>${i}</button>`).join("");
+        $("tfButtons").innerHTML = TFS.filter((i) => !TF_MORE.includes(i)).map((i) => `<button type="button" data-tf="${i}"${i === "30s" ? ' class="sec-end" title="Nến giây lấy từ Binance"' : isSecTF(i) ? ' title="Nến giây lấy từ Binance"' : ""}>${i}</button>`
+          + (i === "1m" ? `<select class="tf-more" id="tfMore" title="Khung phút khác của MT5"><option value="">M+</option>${TF_MORE.map((m) => `<option value="${m}">${m}</option>`).join("")}</select>` : "")).join("");
         $("tfButtons").querySelectorAll("button").forEach((b) => (b.onclick = () => {
           // Replay goes back days or months: second bars (Binance, the last hours only) cannot follow it there.
           if (this.replay && isSecTF(b.dataset.tf)) { toast("Replay dùng khung từ 1m trở lên (nến giây chỉ có vài giờ gần nhất)", true); return; }
           this.interval = b.dataset.tf; store.set("aurum.tf", this.interval); this.loadCandles();
         }));
+        $("tfMore").onchange = (e) => {
+          if (!e.target.value) return;
+          this.interval = e.target.value; store.set("aurum.tf", this.interval); this.loadCandles();
+        };
         this.chart.timeScale().subscribeVisibleLogicalRangeChange((r) => { if (r && r.from < 30 && !(performance.now() < this.olderHold)) this.loadOlder(); });
         this.chart.subscribeCrosshairMove((param) => this.crossFrom(this.chart, param));
         this.bindDrag();
@@ -3438,6 +3483,8 @@
       const replayTime = this.replay ? this.bars[this.replay.idx].time + TF_SECONDS[this.replayInterval || this.interval] - 1 : null;
       this.replayInterval = this.interval;
       document.querySelectorAll("#tfButtons button").forEach((b) => b.classList.toggle("on", b.dataset.tf === this.interval));
+      const more = $("tfMore");
+      if (more) { more.value = TF_MORE.includes(this.interval) ? this.interval : ""; more.classList.toggle("on", TF_MORE.includes(this.interval)); }
       // The picked timeframe in view on a phone, where the row scrolls.
       const tfBox = $("tfButtons"), tfOn = tfBox.querySelector(".on");
       if (tfOn) {
@@ -3716,21 +3763,20 @@
       const interval = this.interval;
       const rest = m.futures ? "https://fapi.binance.com/fapi/v1/klines" : "https://api.binance.com/api/v3/klines";
       try {
-        const res = await fetch(`${rest}?symbol=${m.name}&interval=${interval}&limit=800`);
-        const rows = await res.json();
-        this.bars = rows.map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }));
+        this.bars = await binanceBars(rest, m.name, interval, 800);
         if (this.replay) this.exitReplay();
         if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); }
         this.showFresh(this.bars);
         this.setQuote({});
         this.computeICT();
       } catch { /* chart stays empty */ }
-      const ws = new WebSocket(`${m.futures ? "wss://fstream.binance.com/ws/" : "wss://stream.binance.com:9443/ws/"}${m.name.toLowerCase()}@kline_${interval}`);
+      const ws = new WebSocket(`${m.futures ? "wss://fstream.binance.com/ws/" : "wss://stream.binance.com:9443/ws/"}${m.name.toLowerCase()}@kline_${binanceKline(interval)[0]}`);
+      const fold = klineFolder(interval);
       ws.onmessage = (ev) => {
         const k = JSON.parse(ev.data).k;
         if (!k) return;
-        const b = { time: k.t / 1000, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v };
         const last = this.bars[this.bars.length - 1];
+        const b = fold({ time: k.t / 1000, open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v }, last);
         if (last && b.time === last.time) this.bars[this.bars.length - 1] = b; else if (!last || b.time > last.time) { this.bars.push(b); if (!this.replay) this.computeICT(); }
         if (this.replay) return;
         this.series.update(shown(b));
@@ -7067,8 +7113,7 @@
       } catch {
         // Binance silver as the stand-in (member servers before 2.6, or no MT5).
         try {
-          const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=XAGUSDT&interval=${this.interval}&limit=800`);
-          bars = (await res.json()).map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] }));
+          bars = await binanceBars("https://fapi.binance.com/fapi/v1/klines", "XAGUSDT", this.interval, 800);
           name = "XAGUSDT"; digits = 3;
         } catch { bars = []; }
       }

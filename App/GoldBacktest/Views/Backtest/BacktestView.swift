@@ -56,7 +56,7 @@ struct BacktestView: View {
         TimeZoneOption(id: "Asia/Tokyo", label: "Tokyo"),
     ]
 
-    static let exnessIntervals: [BinanceClient.Interval] = [.m1, .m5, .m15, .m30, .h1, .h4, .d1]
+    static let exnessIntervals: [BinanceClient.Interval] = [.m1, .m2, .m3, .m4, .m5, .m6, .m10, .m12, .m15, .m20, .m30, .h1, .h4, .d1]
     static let dayChoices = [7, 14, 30, 60, 90, 180, 365]
     /// The VPS sends at most 5000 bars a request; 60 requests at most.
     static let maxBars = 300_000

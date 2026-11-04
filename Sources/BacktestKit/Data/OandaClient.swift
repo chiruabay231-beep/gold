@@ -73,6 +73,14 @@ public struct OandaClient {
         return parts.count == 2 && parts.allSatisfy { $0.count == 32 && $0.allSatisfy(\.isHexDigit) }
     }
 
+    /// How many M1 bars make one bar of an interval OANDA does not have; nil when it has it.
+    static func mergedFromM1(_ interval: BinanceClient.Interval) -> Int? {
+        switch interval {
+        case .m3, .m6, .m12, .m20: return Int(interval.seconds / 60)
+        default: return nil
+        }
+    }
+
     /// OANDA's name for an interval: M1, M5, M15, M30, H1, H4, D, W.
     public static func granularity(_ interval: BinanceClient.Interval) -> String {
         switch interval {
@@ -81,7 +89,11 @@ public struct OandaClient {
         case .s15: return "S15"
         case .s30: return "S30"
         case .m1: return "M1"
+        case .m2: return "M2"
+        case .m4: return "M4"
         case .m5: return "M5"
+        case .m10: return "M10"
+        case .m3, .m6, .m12, .m20: return "M1" // merged from M1 bars (see fetchCandles)
         case .m15: return "M15"
         case .m30: return "M30"
         case .h1: return "H1"
@@ -102,6 +114,31 @@ public struct OandaClient {
     /// The most recent `count` candles (at most 5000) built from bid prices,
     /// the same prices MT4/MT5 charts show.
     public func fetchCandles(instrument: String, interval: BinanceClient.Interval, count: Int, to: Date? = nil) async throws -> [OandaCandle] {
+        // OANDA has M2, M4 and M10 but not M3, M6, M12 or M20: those are merged from M1 bars.
+        if let factor = Self.mergedFromM1(interval) {
+            let bars = try await fetchCandles(instrument: instrument, interval: .m1, count: min(5000, count * factor + factor), to: to)
+            var merged: [OandaCandle] = []
+            for bar in bars {
+                let start = CandleAggregator.bucket(bar.candle.time, seconds: interval.seconds)
+                if var last = merged.last, last.candle.time == start {
+                    last.candle.high = max(last.candle.high, bar.candle.high)
+                    last.candle.low = min(last.candle.low, bar.candle.low)
+                    last.candle.close = bar.candle.close
+                    last.candle.volume += bar.candle.volume
+                    last.complete = bar.complete && bar.candle.time.addingTimeInterval(60) >= start.addingTimeInterval(interval.seconds)
+                    merged[merged.count - 1] = last
+                } else {
+                    var first = bar
+                    first.candle.time = start
+                    first.complete = false
+                    merged.append(first)
+                }
+            }
+            if let first = merged.first, let firstBar = bars.first, firstBar.candle.time > first.candle.time, merged.count > 1 {
+                merged.removeFirst()
+            }
+            return Array(merged.suffix(count))
+        }
         var query = [
             URLQueryItem(name: "granularity", value: Self.granularity(interval)),
             URLQueryItem(name: "count", value: String(max(1, min(5000, count)))),

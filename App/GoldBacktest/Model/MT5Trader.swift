@@ -66,8 +66,12 @@ final class MT5Trader {
         await perform { try await $0.mt5Close(ticket: ticket, lots: lots) }
     }
 
-    /// "Đóng tất cả": the server closes them all in one go, trying again any the broker turns down; an older
-    /// server gets them one by one, and a second round for any still open.
+    /// Positions being closed together (all / in profit / at a loss), for the "Đang đóng…" note.
+    private(set) var closingCount = 0
+
+    /// Closes these positions and checks they are gone: the server closes them all in one go (trying again
+    /// any the broker turns down), then whatever is still open is sent again one by one, up to 3 rounds,
+    /// each after a fresh look at the account. Works with an older server too (one by one only).
     func closeAll(_ tickets: [Int], symbol: String? = nil) async {
         guard !tickets.isEmpty else { return }
         guard let client = RemoteBotSettings.client() else {
@@ -75,26 +79,40 @@ final class MT5Trader {
             return
         }
         busy = true
-        defer { busy = false }
+        closingCount = tickets.count
+        defer { busy = false; closingCount = 0 }
+        var problem: String?
+        // "Gone already" is not a problem: the position is closed.
+        func note(_ error: Error) {
+            let text = error.localizedDescription
+            if !text.contains("Không còn lệnh") { problem = text }
+        }
         do {
             let result = try await client.mt5CloseAll(symbol: symbol, tickets: tickets)
             apply(result)
-            if let left = result.left, left > 0 {
-                lastError = "Còn \(left) lệnh chưa đóng được" + (result.error.map { ": \($0)" } ?? "") + ". Bấm Đóng tất cả lần nữa."
-                UINotificationFeedbackGenerator().notificationOccurred(.error)
-            } else {
-                UINotificationFeedbackGenerator().notificationOccurred(.success)
-            }
+            if let error = result.error { problem = error }
         } catch let error as RemoteBotClient.ServerError where error.code == 404 {
-            for _ in 0..<2 {
-                let open = Set(state?.positions.map(\.ticket) ?? tickets)
-                let todo = tickets.filter { open.contains($0) }
-                if todo.isEmpty { break }
-                for ticket in todo { await close(ticket) }
-                await refresh()
-            }
+            // An older server: no one-go close.
         } catch {
-            lastError = error.localizedDescription
+            note(error)
+        }
+        var still = tickets
+        for round in 0..<4 {
+            if round > 0 { try? await Task.sleep(nanoseconds: 400_000_000) }
+            guard let fresh = try? await client.mt5Trading() else { continue }
+            apply(fresh)
+            let open = Set(fresh.positions.map(\.ticket))
+            still = tickets.filter { open.contains($0) }
+            if still.isEmpty || round == 3 { break }
+            for ticket in still {
+                do { apply(try await client.mt5Close(ticket: ticket)) } catch { note(error) }
+            }
+        }
+        if still.isEmpty {
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        } else {
+            lastError = "Còn \(still.count)/\(tickets.count) lệnh chưa đóng được" + (problem.map { ": \($0)" } ?? "")
+                + ". Bấm đóng lần nữa để thử tiếp."
             UINotificationFeedbackGenerator().notificationOccurred(.error)
         }
     }

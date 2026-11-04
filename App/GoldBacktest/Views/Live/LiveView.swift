@@ -500,16 +500,22 @@ struct LiveView: View {
             }
             .lineLimit(1)
             .fixedSize()
-            Button { confirmCloseAll = true } label: {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .heavy))
-                    .foregroundColor(theme.down)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(theme.down.opacity(0.14)))
-                    .overlay(Circle().stroke(theme.down.opacity(0.35), lineWidth: 0.8))
+            if tradesMT5 && mt5.closingCount > 0 {
+                // Closing: the server and the app make sure every one of them goes.
+                ProgressView().controlSize(.small).frame(width: 28, height: 28)
+                    .accessibilityLabel("Đang đóng \(mt5.closingCount) lệnh")
+            } else {
+                Button { confirmCloseAll = true } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 11, weight: .heavy))
+                        .foregroundColor(theme.down)
+                        .frame(width: 28, height: 28)
+                        .background(Circle().fill(theme.down.opacity(0.14)))
+                        .overlay(Circle().stroke(theme.down.opacity(0.35), lineWidth: 0.8))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Đóng lệnh \(Self.displayName(market.symbol)): tất cả, lệnh lãi hoặc lệnh lỗ")
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Đóng tất cả lệnh \(Self.displayName(market.symbol))")
         }
         .padding(.leading, 9)
         .padding(.trailing, 6)
@@ -519,21 +525,28 @@ struct LiveView: View {
         .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(color.opacity(0.35), lineWidth: 1))
         .shadow(color: .black.opacity(theme.isLight ? 0.14 : 0.40), radius: 12, y: 5)
         .contentShape(RoundedRectangle(cornerRadius: 15))
-        .confirmationDialog("Đóng tất cả \(summary.count) lệnh \(Self.displayName(market.symbol))?",
-                            isPresented: $confirmCloseAll, titleVisibility: .visible) {
-            Button("Đóng \(summary.count) lệnh (\(String(format: "%+.2f", summary.profit)) USD)", role: .destructive) {
-                closeAllPositions()
-            }
-        }
+        .bulkCloseDialog("Đóng lệnh \(Self.displayName(market.symbol)) nào?", isPresented: $confirmCloseAll,
+                         profits: openProfits) { kind in closePositions(kind) }
     }
 
-    private func closeAllPositions() {
+    /// Money now of each open position on this chart's symbol.
+    private var openProfits: [Double] {
+        if tradesMT5 { return mt5.positions(market.symbol).map { $0.liveProfit(bid: liveQuote.bid, ask: liveQuote.ask) } }
+        return trader.account.positions.filter { $0.symbol == market.symbolKey }.map { trader.profit($0) ?? 0 }
+    }
+
+    /// Closes this symbol's positions: all of them, those in profit or those at a loss.
+    private func closePositions(_ kind: BulkClose) {
         UINotificationFeedbackGenerator().notificationOccurred(.warning)
         if tradesMT5 {
-            let tickets = mt5.positions(market.symbol).map(\.ticket), symbol = market.symbol
+            let bid = liveQuote.bid, ask = liveQuote.ask
+            let tickets = mt5.positions(market.symbol).filter { kind.includes($0.liveProfit(bid: bid, ask: ask)) }.map(\.ticket)
+            let symbol = market.symbol
             sendMT5 { await mt5.closeAll(tickets, symbol: symbol) }
         } else {
-            for p in trader.account.positions where p.symbol == market.symbolKey { trader.close(p) }
+            for p in trader.account.positions where p.symbol == market.symbolKey && kind.includes(trader.profit(p) ?? 0) {
+                trader.close(p)
+            }
         }
     }
 

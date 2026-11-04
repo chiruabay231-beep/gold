@@ -48,6 +48,40 @@ public struct TradeTick: Equatable, Sendable {
 }
 
 /// Builds bars of any length in seconds from trades or shorter bars.
+/// Live bars of a timeframe Binance does not stream (2m, 4m, 6m…) built from its shorter klines as they
+/// arrive: the bar's finished shorter bars, merged, plus the one still forming.
+public struct KlineMerger: Sendable {
+    public let seconds: TimeInterval
+    private var bucket: Date?
+    private var done: Candle?
+    private var partTime: Date?
+    private var part: Candle?
+
+    public init(seconds: TimeInterval) { self.seconds = seconds }
+
+    /// The bar `kline` belongs to, as it stands now. `last` is the chart's newest bar: fetched with the
+    /// history in the middle of its time, it already holds the bar's earlier part.
+    public mutating func add(_ kline: Candle, last: Candle?) -> Candle {
+        let start = CandleAggregator.bucket(kline.time, seconds: seconds)
+        if bucket != start {
+            bucket = start
+            done = last?.time == start ? last : nil
+            partTime = nil
+            part = nil
+        }
+        if let partTime, partTime != kline.time, let part { done = Self.merge(done, part, start) }
+        partTime = kline.time
+        part = kline
+        return Self.merge(done, kline, start)
+    }
+
+    static func merge(_ a: Candle?, _ b: Candle, _ start: Date) -> Candle {
+        guard let a else { return Candle(time: start, open: b.open, high: b.high, low: b.low, close: b.close, volume: b.volume) }
+        return Candle(time: start, open: a.open, high: max(a.high, b.high), low: min(a.low, b.low), close: b.close,
+                      volume: a.volume + b.volume)
+    }
+}
+
 public enum CandleAggregator {
     /// Start of the bar that contains `time` (bars aligned to the Unix epoch).
     public static func bucket(_ time: Date, seconds: TimeInterval) -> Date {
@@ -92,7 +126,7 @@ public enum BinanceStreamEvent: Equatable, Sendable {
     /// trades), the 24h ticker and the best bid/ask of one symbol.
     public static func url(host: URL, symbol: String, interval: BinanceClient.Interval) -> URL {
         let name = symbol.lowercased()
-        let bars = interval.isSeconds ? "\(name)@aggTrade" : "\(name)@kline_\(interval.rawValue)"
+        let bars = interval.isSeconds ? "\(name)@aggTrade" : "\(name)@kline_\(interval.binanceKline.name)"
         return URL(string: "\(host.absoluteString)/stream?streams=\(bars)/\(name)@ticker/\(name)@bookTicker")!
     }
 

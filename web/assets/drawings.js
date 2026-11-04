@@ -57,7 +57,7 @@
   const DASH = { solid: [], dashed: [6, 4], dotted: [1.5, 3] };
   // Line tools that straighten to level when let go nearly level.
   const FLAT_TOOLS = ["trendLine", "trendRay", "arrow"];
-  const TFS = ["5s", "10s", "15s", "30s", "1m", "5m", "15m", "30m", "1h", "4h", "1d"];
+  const TFS = ["5s", "10s", "15s", "30s", "1m", "2m", "3m", "4m", "5m", "6m", "10m", "12m", "15m", "20m", "30m", "1h", "4h", "1d"];
 
   const alpha = (hex, a) => (hex || "#787b86").slice(0, 7) + Math.round(Math.max(0, Math.min(1, a)) * 255).toString(16).padStart(2, "0");
   /** A curve through three points: the quadratic Bézier whose middle passes through b. */

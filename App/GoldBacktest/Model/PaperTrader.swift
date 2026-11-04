@@ -43,6 +43,18 @@ final class PaperTrader {
         } else {
             liveAccount = PaperAccount()
         }
+        // The last prices seen: a position on a symbol not on screen since the app started can still be closed.
+        prices = UserDefaults.standard.dictionary(forKey: Self.pricesKey) as? [String: Double] ?? [:]
+    }
+
+    private static let pricesKey = "paper.lastPrices"
+    @ObservationIgnored private var lastPriceSave = Date.distantPast
+
+    private func savePrices() {
+        guard !isReplaying, Date().timeIntervalSince(lastPriceSave) > 20 else { return }
+        lastPriceSave = Date()
+        let held = Set(liveAccount.positions.map(\.symbol) + liveAccount.pending.map(\.symbol))
+        UserDefaults.standard.set(prices.filter { held.contains($0.key) }, forKey: Self.pricesKey)
     }
 
     // MARK: - Prices
@@ -60,6 +72,7 @@ final class PaperTrader {
         let involved = account.positions.contains { $0.symbol == symbol } || account.pending.contains { $0.symbol == symbol }
         if involved || prices[symbol] == nil { prices[symbol] = bid }
         guard involved else { return }
+        savePrices()
         var events = account.process(symbol: symbol, bid: bid, ask: ask, time: time)
         events += account.manage(symbol: symbol, price: bid, time: time, rules: Self.rules)
         guard !events.isEmpty else { return }

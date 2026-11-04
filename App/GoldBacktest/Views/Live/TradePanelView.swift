@@ -56,12 +56,60 @@ struct AccountSummary: View {
     }
 }
 
-/// "Lệnh có trạng thái" with "Đóng tất cả" at the right (asks once first).
+/// Which open positions a bulk close takes, like MT5's bulk operations: all of them, those in profit
+/// (take the profit) or those at a loss (cut them).
+enum BulkClose: CaseIterable {
+    case all, profit, loss
+
+    func includes(_ profit: Double) -> Bool {
+        switch self {
+        case .all: return true
+        case .profit: return profit > 0
+        case .loss: return profit < 0
+        }
+    }
+
+    /// "Chốt 2 lệnh đang lãi (+35.20)": the choice with how many it takes and their money now.
+    func title(_ profits: [Double]) -> String {
+        let picked = profits.filter(includes)
+        let money = String(format: "%+.2f", picked.reduce(0, +))
+        switch self {
+        case .all: return "Đóng tất cả \(picked.count) lệnh (\(money))"
+        case .profit: return "Chốt \(picked.count) lệnh đang lãi (\(money))"
+        case .loss: return "Cắt \(picked.count) lệnh đang lỗ (\(money))"
+        }
+    }
+
+    /// The choices worth showing: all, and profit / loss when some (but not all) positions are so.
+    static func choices(_ profits: [Double]) -> [BulkClose] {
+        allCases.filter { kind in
+            let n = profits.filter(kind.includes).count
+            return kind == .all ? n > 0 : n > 0 && n < profits.count
+        }
+    }
+}
+
+extension View {
+    /// Asks which positions to close (all, in profit, at a loss), each with its count and money.
+    func bulkCloseDialog(_ title: String, isPresented: Binding<Bool>, profits: [Double],
+                         onClose: @escaping (BulkClose) -> Void) -> some View {
+        confirmationDialog(title, isPresented: isPresented, titleVisibility: .visible) {
+            ForEach(BulkClose.choices(profits), id: \.self) { kind in
+                Button(kind.title(profits), role: kind == .profit ? nil : .destructive) { onClose(kind) }
+            }
+        }
+    }
+}
+
+/// "Lệnh có trạng thái" with "Đóng lệnh" at the right: all of them, those in profit or those at a loss
+/// (asks once first).
 struct PositionsHeader: View {
     let count: Int
     /// Total lots of the open positions, shown beside the title.
     var lots: Double = 0
-    var onCloseAll: () -> Void
+    /// Each open position's money now, for the choices.
+    var profits: [Double] = []
+    var onClose: (BulkClose) -> Void
 
     @State private var confirm = false
 
@@ -79,15 +127,14 @@ struct PositionsHeader: View {
             Spacer()
             if count > 0 {
                 Button { confirm = true } label: {
-                    Label("Đóng tất cả", systemImage: "xmark.circle.fill")
+                    Label("Đóng lệnh", systemImage: "xmark.circle.fill")
                         .font(.footnote.weight(.semibold))
                         .textCase(nil)
                         .foregroundColor(OrderRow.lossColor)
                 }
                 .buttonStyle(.borderless)
-                .confirmationDialog("Đóng tất cả \(count) lệnh?", isPresented: $confirm, titleVisibility: .visible) {
-                    Button("Đóng \(count) lệnh", role: .destructive) { onCloseAll() }
-                }
+                .bulkCloseDialog("Đóng lệnh nào?", isPresented: $confirm,
+                                 profits: profits.isEmpty ? Array(repeating: 0, count: count) : profits, onClose: onClose)
             }
         }
     }
@@ -166,8 +213,9 @@ struct TradePanelView: View {
                         }
                 }
             } header: {
-                PositionsHeader(count: account.positions.count, lots: account.positions.reduce(0) { $0 + $1.lots }) {
-                    for p in trader.account.positions { trader.close(p) }
+                PositionsHeader(count: account.positions.count, lots: account.positions.reduce(0) { $0 + $1.lots },
+                                profits: account.positions.map { trader.profit($0) ?? 0 }) { kind in
+                    for p in trader.account.positions where kind.includes(trader.profit(p) ?? 0) { trader.close(p) }
                 }
             }
             if !account.pending.isEmpty {

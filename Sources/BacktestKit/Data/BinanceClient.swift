@@ -12,10 +12,25 @@ public struct BinanceClient {
         /// Seconds: Binance only has 1s klines (spot), so 5s–30s bars are
         /// built from trades; OANDA has S5–S30.
         case s5 = "5s", s10 = "10s", s15 = "15s", s30 = "30s"
-        case m1 = "1m", m5 = "5m", m15 = "15m", m30 = "30m"
+        case m1 = "1m", m2 = "2m", m3 = "3m", m4 = "4m", m5 = "5m", m6 = "6m", m10 = "10m", m12 = "12m"
+        case m15 = "15m", m20 = "20m", m30 = "30m"
         case h1 = "1h", h4 = "4h", d1 = "1d", w1 = "1w"
 
         public var isSeconds: Bool { seconds < 60 }
+
+        /// The Binance kline these bars are built from and how many of them make one bar: Binance has
+        /// 1m, 3m, 5m… but not 2m, 4m, 6m, 10m, 12m or 20m (merged from 1m, 3m or 5m bars).
+        public var binanceKline: (name: String, factor: Int) {
+            switch self {
+            case .m2: return ("1m", 2)
+            case .m4: return ("1m", 4)
+            case .m6: return ("3m", 2)
+            case .m10: return ("5m", 2)
+            case .m12: return ("3m", 4)
+            case .m20: return ("5m", 4)
+            default: return (rawValue, 1)
+            }
+        }
 
         public var seconds: TimeInterval {
             switch self {
@@ -24,7 +39,14 @@ public struct BinanceClient {
             case .s15: return 15
             case .s30: return 30
             case .m1: return 60
+            case .m2: return 120
+            case .m3: return 180
+            case .m4: return 240
             case .m5: return 300
+            case .m6: return 360
+            case .m10: return 600
+            case .m12: return 720
+            case .m20: return 1200
             case .m15: return 900
             case .m30: return 1800
             case .h1: return 3600
@@ -114,13 +136,28 @@ public struct BinanceClient {
 
     /// Fetches the most recent `count` candles, paging backwards 1000 at a time.
     public func fetchCandles(symbol: String, interval: Interval, count: Int) async throws -> [Candle] {
-        try await fetchCandles(symbol: symbol, intervalName: interval.rawValue, count: count)
+        let kline = interval.binanceKline
+        let bars = try await fetchCandles(symbol: symbol, intervalName: kline.name, count: count * kline.factor + kline.factor)
+        return Self.merged(bars, interval: interval, count: count)
     }
 
     /// `count` candles that open before `before`, for loading older history.
     public func fetchCandles(symbol: String, interval: Interval, count: Int, before: Date) async throws -> [Candle] {
-        try await fetchCandles(symbol: symbol, intervalName: interval.rawValue, count: count,
-                               endTime: Int64(before.timeIntervalSince1970 * 1000) - 1)
+        let kline = interval.binanceKline
+        // The bar holding `before` is already on the chart: older shorter bars only.
+        let start = CandleAggregator.bucket(before, seconds: interval.seconds)
+        let bars = try await fetchCandles(symbol: symbol, intervalName: kline.name, count: count * kline.factor + kline.factor,
+                                          endTime: Int64(start.timeIntervalSince1970 * 1000) - 1)
+        return Self.merged(bars, interval: interval, count: count)
+    }
+
+    /// Shorter klines merged into `interval` bars (as they are when Binance has the interval); the first
+    /// bar is dropped when the shorter bars start in its middle.
+    static func merged(_ bars: [Candle], interval: Interval, count: Int) -> [Candle] {
+        guard interval.binanceKline.factor > 1 else { return Array(bars.suffix(count)) }
+        var out = CandleAggregator.resample(bars, seconds: interval.seconds)
+        if let first = out.first, let firstBar = bars.first, firstBar.time > first.time, out.count > 1 { out.removeFirst() }
+        return Array(out.suffix(count))
     }
 
     /// Recent bars of a seconds interval. Spot: 1-second klines merged into

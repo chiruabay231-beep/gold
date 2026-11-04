@@ -83,8 +83,9 @@ struct BrokerTradeView: View {
                             }
                     }
                 } header: {
-                    PositionsHeader(count: state.positions.count, lots: state.positions.reduce(0) { $0 + $1.lots }) {
-                        let tickets = state.positions.map(\.ticket)
+                    PositionsHeader(count: state.positions.count, lots: state.positions.reduce(0) { $0 + $1.lots },
+                                    profits: state.positions.map { liveProfit($0) }) { kind in
+                        let tickets = state.positions.filter { kind.includes(liveProfit($0)) }.map(\.ticket)
                         Task { await mt5.closeAll(tickets) }
                     }
                 }

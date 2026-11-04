@@ -373,7 +373,8 @@ class Mt5:
                  float(r["tick_volume"])] for r in rates]
 
 
-MT5_TIMEFRAMES = {"1m": "M1", "5m": "M5", "15m": "M15", "30m": "M30", "1h": "H1", "4h": "H4", "1d": "D1", "1w": "W1"}
+MT5_TIMEFRAMES = {"1m": "M1", "2m": "M2", "3m": "M3", "4m": "M4", "5m": "M5", "6m": "M6", "10m": "M10", "12m": "M12",
+                  "15m": "M15", "20m": "M20", "30m": "M30", "1h": "H1", "4h": "H4", "1d": "D1", "1w": "W1"}
 
 
 class Mt5Feed:
@@ -867,14 +868,21 @@ class Mt5Account:
             if not rows:
                 raise ValueError("Không còn lệnh này")
             r = rows[0]
-            tick = mt5.symbol_info_tick(r.symbol)
             buy = r.type == mt5.POSITION_TYPE_BUY
             volume = float(body.get("lots") or r.volume)
-            request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": r.symbol, "volume": min(volume, r.volume),
-                       "type": mt5.ORDER_TYPE_SELL if buy else mt5.ORDER_TYPE_BUY, "position": r.ticket,
-                       "price": tick.bid if buy else tick.ask, "deviation": int(self.cfg.get("deviation", 30)),
-                       "magic": r.magic, "comment": "GoldApp close", "type_time": mt5.ORDER_TIME_GTC}
-            _, error = mt5_send(mt5, request)
+            # A requote or a busy moment: up to 3 tries, each at a fresh price with more room for slippage.
+            for attempt in range(3):
+                tick = mt5.symbol_info_tick(r.symbol)
+                request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": r.symbol, "volume": min(volume, r.volume),
+                           "type": mt5.ORDER_TYPE_SELL if buy else mt5.ORDER_TYPE_BUY, "position": r.ticket,
+                           "price": tick.bid if buy else tick.ask,
+                           "deviation": int(self.cfg.get("deviation", 30)) * (attempt + 1),
+                           "magic": r.magic, "comment": "GoldApp close", "type_time": mt5.ORDER_TIME_GTC}
+                _, error = mt5_send(mt5, request)
+                if not error or not (mt5.positions_get(ticket=ticket) or ()):
+                    error = None
+                    break
+                time.sleep(0.3)
             if error:
                 raise ValueError(error)
         self.server.log(f"📱 Đóng lệnh MT5 #{ticket} ({r.symbol}, lãi/lỗ {money(r.profit)})", notify=True)
@@ -1072,7 +1080,7 @@ class Mt5Account:
 
     def candles(self, symbol, interval, count, before=None):
         if interval not in MT5_TIMEFRAMES:
-            raise ValueError("MT5 có khung 1m, 5m, 15m, 30m, 1h, 4h, 1d, 1w (không có khung giây)")
+            raise ValueError("MT5 có khung 1m, 2m, 3m, 4m, 5m, 6m, 10m, 12m, 15m, 20m, 30m, 1h, 4h, 1d, 1w (không có khung giây)")
         count = max(1, min(int(count), 5000))
         with Mt5.lock:
             mt5 = self._mt5()

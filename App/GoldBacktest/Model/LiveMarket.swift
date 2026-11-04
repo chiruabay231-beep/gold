@@ -50,7 +50,8 @@ final class LiveMarket {
     /// Bars kept in memory, including older history loaded while scrolling back.
     static let maxBars = 20_000
     static let popularSymbols = ["BTCUSDT", "ETHUSDT", "PAXGUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "DOGEUSDT"]
-    static let intervals: [BinanceClient.Interval] = [.s5, .s10, .s15, .s30, .m1, .m5, .m15, .m30, .h1, .h4, .d1, .w1]
+    static let intervals: [BinanceClient.Interval] = [.s5, .s10, .s15, .s30, .m1, .m2, .m3, .m4, .m5, .m6, .m10, .m12,
+                                                      .m15, .m20, .m30, .h1, .h4, .d1, .w1]
 
     private(set) var source: LiveSource = .binance
     private(set) var symbol = "PAXGUSDT"
@@ -120,6 +121,8 @@ final class LiveMarket {
     /// market redraws the chart a few times a second instead of per trade.
     @ObservationIgnored private var pendingBuffer: LiveCandleBuffer?
     @ObservationIgnored private var lastPublish = Date.distantPast
+    /// 2m, 4m, 6m… bars from Binance's shorter klines (Binance streams no such interval).
+    @ObservationIgnored private var klineMerger: KlineMerger?
     @ObservationIgnored private var flushScheduled = false
     @ObservationIgnored private var loadingOlder = false
     /// No older bars exist (start of the market's history).
@@ -649,8 +652,17 @@ final class LiveMarket {
 
     private func handle(_ event: BinanceStreamEvent) {
         switch event {
-        case .kline(let eventSymbol, let candle, let isClosed):
+        case .kline(let eventSymbol, let kline, let klineClosed):
             guard eventSymbol.uppercased() == symbol else { return }
+            var candle = kline, isClosed = klineClosed
+            let base = interval.binanceKline
+            if base.factor > 1 {
+                if klineMerger?.seconds != interval.seconds { klineMerger = KlineMerger(seconds: interval.seconds) }
+                candle = klineMerger!.add(kline, last: buffer.candles.last)
+                // The bar closes with its last shorter bar.
+                let baseSeconds = interval.seconds / Double(base.factor)
+                isClosed = klineClosed && kline.time.addingTimeInterval(baseSeconds) >= candle.time.addingTimeInterval(interval.seconds)
+            }
             let update = buffer.apply(candle)
             emitPrice(candle.close)
             if update == .appended { lastBarClosed = false }

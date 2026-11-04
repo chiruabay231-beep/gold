@@ -206,6 +206,9 @@ body.in-member .nav-links, body.in-member .nav-login { display: none; }
 .tf button, .icon-btn { flex: none; background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 5px 8px; font: 600 12px/1 var(--font); cursor: pointer; }
 .tf button.on { background: var(--gold); color: #1a1205; border-color: var(--gold); }
 .tf button.sec-end { margin-right: 6px; }
+.tf .tf-more { flex: none; background: transparent; color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 4px 4px; font: 600 12px/1 var(--font); cursor: pointer; }
+.tf .tf-more.on { background: var(--gold); color: #1a1205; border-color: var(--gold); }
+.tf .tf-more option { color: var(--text); background: var(--card); }
 .icon-btn { font-style: italic; font-weight: 800; color: var(--gold); }
 .icon-btn.plain { font-style: normal; font-size: 13px; color: var(--text); }
 .flow { font-size: 12.5px; line-height: 1.45; padding: 2px 4px 6px; }
