@@ -771,7 +771,7 @@
         e.preventDefault();
         if (dr.pending) { dr.cancel(); return; }
         const items = [["tools", "✎ Công cụ vẽ…"]];
-        if (dr.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"]);
+        if (dr.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"], ["drawDel", "🗑 Xoá bản vẽ này"]);
         items.push(["main", "⤢ Đưa khung này lên biểu đồ chính"]);
         const menu = $("ctxMenu");
         menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
@@ -782,6 +782,7 @@
           term.closeMenu();
           if (b.dataset.k === "tools") term.drawSheet();
           if (b.dataset.k === "drawSettings") term.drawingSettings(dr.current);
+          if (b.dataset.k === "drawDel" && dr.current) dr.remove(dr.current.id);
           if (b.dataset.k === "main") term.paneToMain(this);
         }));
       });
@@ -4467,7 +4468,7 @@
       if (myAlerts.length) items.push(["alertsClear", `🔕 Xoá cảnh báo giá (${myAlerts.length})`]);
       items.push(["tools", "✎ Công cụ vẽ…"]);
       if (this.drawings && this.drawings.list.length) items.push(["clear", `🗑 Xoá tất cả bản vẽ (${this.drawings.list.length})`]);
-      if (this.drawings && this.drawings.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"]);
+      if (this.drawings && this.drawings.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"], ["drawDel", "🗑 Xoá bản vẽ này"]);
       items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
       const menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
@@ -4491,6 +4492,7 @@
         if (k === "ind") this.indicatorSheet();
         if (k === "ictSettings") this.ictSettingsSheet();
         if (k === "drawSettings") this.drawingSettings(this.drawings.current);
+        if (k === "drawDel" && this.drawings.current) this.drawings.remove(this.drawings.current.id);
         if (k === "chartStyle") this.chartStyleSheet();
       }));
     },
@@ -4668,9 +4670,18 @@
       });
     },
 
-    /** The drawing bar where it was dragged to (kept), or centred at the top of the chart. */
+    /** The drawing bar where it was dragged to (kept), or centred at the top of the chart; placed again
+     *  whenever the chart holding it changes size (split dividers, layouts), so it never hangs outside. */
     placeDrawBar() {
       const bar = $("drawBar"), wrap = bar.parentElement;
+      if (window.ResizeObserver && wrap) {
+        if (!this.drawBarWatch) this.drawBarWatch = new ResizeObserver(() => { if (!$("drawBar").hidden) this.placeDrawBar(); });
+        if (this.drawBarWatched !== wrap) {
+          if (this.drawBarWatched) this.drawBarWatch.unobserve(this.drawBarWatched);
+          this.drawBarWatch.observe(wrap);
+          this.drawBarWatched = wrap;
+        }
+      }
       let pos = null;
       try { pos = JSON.parse(store.get("aurum.drawBarPos") || "null"); } catch { pos = null; }
       if (!pos || !wrap || wrap.id !== "chartWrap") { bar.classList.remove("moved"); bar.style.left = bar.style.top = ""; }
@@ -7014,7 +7025,7 @@
         e.preventDefault();
         if (this.drawings2.pending) { this.drawings2.cancel(); return; }
         const items = [["reset", "⟲ Đặt lại biểu đồ"], ["tools", "✎ Công cụ vẽ…"]];
-        if (this.drawings2.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"]);
+        if (this.drawings2.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"], ["drawDel", "🗑 Xoá bản vẽ này"]);
         if (this.drawings2.list.length) items.push(["clear", `🗑 Xoá tất cả bản vẽ (${this.drawings2.list.length})`]);
         if (this.owner && this.cmpLive) items.push(["swap", "⇄ Đổi chỗ 2 biểu đồ"]);
         const menu = $("ctxMenu");
@@ -7028,6 +7039,7 @@
           if (k === "reset") { const ts = this.chart2.timeScale(); ts.resetTimeScale(); this.chart2.priceScale("right").applyOptions({ autoScale: true }); ts.scrollToRealTime(); }
           if (k === "tools") this.drawSheet();
           if (k === "drawSettings") this.drawingSettings(this.drawings2.current);
+          if (k === "drawDel" && this.drawings2.current) this.drawings2.remove(this.drawings2.current.id);
           if (k === "clear" && confirm("Xoá tất cả bản vẽ trên " + this.cmpName + "?")) this.drawings2.clear();
           if (k === "swap") $("swapBtn").click();
         }));

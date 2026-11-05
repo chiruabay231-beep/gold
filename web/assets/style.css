@@ -372,8 +372,9 @@ dialog#sheet h3 { margin: 0 30px 6px 0; display: flex; align-items: center; gap:
 @media (max-width: 520px) { .stats { grid-template-columns: repeat(2, 1fr); } }
 
 /* drawings, chart menu, replay, indicator settings */
-.draw-bar { position: absolute; top: 8px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; align-items: center; gap: 6px; white-space: nowrap;
-  max-width: calc(100% - 16px); overflow-x: auto; scrollbar-width: none; background: var(--glass); border: 1px solid var(--line); border-radius: 12px; padding: 5px 8px; font-size: 12.5px; }
+.draw-bar { position: absolute; top: 8px; left: 0; right: 0; margin-inline: auto; width: max-content; z-index: 4; display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  /* A narrow chart (a small pane of a split layout): the buttons go onto a second row, never out of sight. */
+  flex-wrap: wrap; justify-content: center; row-gap: 5px; max-width: calc(100% - 16px); overflow: visible; background: var(--glass); border: 1px solid var(--line); border-radius: 12px; padding: 5px 8px; font-size: 12.5px; }
 .draw-bar::-webkit-scrollbar { display: none; }
 .draw-bar button, .draw-bar select { background: var(--chip); color: var(--text); border: 0; border-radius: 8px; height: 26px; min-width: 26px; padding: 0 8px; cursor: pointer; font: 600 12px/1 var(--font); }
 .draw-bar select { min-width: 66px; padding: 0 4px; }
@@ -789,7 +790,7 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 }
 
 /* the drawing bar can be dragged by its grip */
-.draw-bar.moved { transform: none; }
+.draw-bar.moved { transform: none; right: auto; margin: 0; }
 .draw-bar .db-grip { cursor: grab; color: var(--muted); padding: 0 3px 0 2px; font-size: 13px; letter-spacing: -3px; user-select: none; touch-action: none; align-self: stretch; display: flex; align-items: center; }
 .draw-bar .db-grip:active { cursor: grabbing; }
 
