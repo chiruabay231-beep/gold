@@ -236,6 +236,7 @@
     ["flow", "Dòng tiền cá mập"],
     ["zones", "Vùng cung / cầu cá mập (chờ mua / chờ bán, ghi giá)"],
     ["smt", "SMT (khi mở 2 biểu đồ: so đỉnh/đáy với mã thứ 2)"],
+    ["models", "TTrades Model (nến 1-2-3-4, CISD + mục tiêu Std, breaker / unicorn)"],
   ];
   const showInd = (() => {
     let saved = {};
@@ -513,7 +514,7 @@
       Object.defineProperties(v, { bars: own(() => pane.bars), interval: own(() => pane.tf), digits: own(() => (pane.digits != null ? pane.digits : term.digits)) });
       Object.assign(v, {
         chart: this.chart, series: this.series, viewBars: () => pane.bars, replay: null, requestICT: null, isPane: true,
-        ict: null, smt: null, sharks: null, sharkZones: null, newsDots: null, seriesPriceOn: null, studySeries: new Map(), studySig: "",
+        ict: null, models: null, smt: null, sharks: null, sharkZones: null, newsDots: null, seriesPriceOn: null, studySeries: new Map(), studySig: "",
       });
       Object.assign(v, v.axisViews());
       this.series.attachPrimitive(v.layer());
@@ -724,6 +725,7 @@
       if ((term.owner || term.features.killzones !== false) && bars.length && window.ICT && term.ictCfg) {
         try { v.ict = window.ICT.compute(bars, TF_SECONDS[this.tf], term.ictCfg, showInd); } catch { /* none */ }
       }
+      v.models = term.modelsFor(bars, TF_SECONDS[this.tf], v.digits);
       // Indicators added, removed or changed on the main chart: built again here.
       const sig = JSON.stringify(term.studies || []);
       if (sig !== v.studySig) { [...v.studySeries.keys()].forEach((id) => v.dropStudySeries(id)); v.studySig = sig; }
@@ -3232,6 +3234,7 @@
           },
         });
         this.ictCfg = (() => { try { return window.ICT.merge(JSON.parse(store.get("aurum.ictcfg") || "null")); } catch { return window.ICT.defaults(); } })();
+        this.modelCfg = window.MODELS ? (() => { try { return window.MODELS.merge(JSON.parse(store.get("aurum.modelcfg") || "null")); } catch { return window.MODELS.defaults(); } })() : null;
         // Off unless turned on (TradingView's default): points go where the mouse / finger is, not onto the candle.
         this.magnet = store.get("aurum.magnet") === "1";
         this.lastSmtSymbol = this.ictCfg.smtSymbol;
@@ -3328,13 +3331,15 @@
       sheet.open(`<h3>Chỉ báo</h3>
         <div class="toggles">${IND.filter(([k]) => (k === "flow" || k === "zones" ? flowAllowed : allowed)).map(([k, n]) => `<label class="toggle"><span>${n}</span>
           <span class="switch"><input type="checkbox" data-k="${k}" ${showInd[k] ? "checked" : ""}><span></span></span></label>`).join("")}</div>
-        ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button>' : ""}
+        ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button><button class="btn btn-ghost wide" id="modelsMore">⚙ TTrades Model (nến 1-2-3-4, CISD, Std, breaker)</button>' : ""}
         <h4>Chỉ báo kỹ thuật</h4>
         <div class="list" id="studyList"></div>
         <select id="addStudy" class="add-study"><option value="">＋ Thêm chỉ báo…</option>${Object.entries(window.TA ? window.TA.STUDIES : {}).map(([k, d]) => `<option value="${k}">${esc(d.name)}</option>`).join("")}</select>
         <p class="muted small">Giờ theo New York như bản TradingView. Chuột phải (hoặc giữ lâu) trên biểu đồ để mở menu.</p>`, (el) => {
         const more = el.querySelector("#ictMore");
         if (more) more.onclick = () => { sheet.close(); this.ictSettingsSheet(); };
+        const models = el.querySelector("#modelsMore");
+        if (models) models.onclick = () => { sheet.close(); this.modelsSettingsSheet(); };
         const listStudies = () => {
           const box = el.querySelector("#studyList");
           box.innerHTML = this.studies.length ? this.studies.map((x) => `<div class="study-row" data-id="${x.id}">
@@ -4562,7 +4567,7 @@
       items.push(["tools", "✎ Công cụ vẽ…"]);
       if (this.drawings && this.drawings.list.length) items.push(["clear", `🗑 Xoá tất cả bản vẽ (${this.drawings.list.length})`]);
       if (this.drawings && this.drawings.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"], ["drawDel", "🗑 Xoá bản vẽ này"]);
-      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
+      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["modelsSettings", "⚙ TTrades Model…"], ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
       const menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
       menu.hidden = false;
@@ -4584,6 +4589,7 @@
         if (k === "clear" && confirm("Xoá tất cả bản vẽ trên mã này?")) this.drawings.clear();
         if (k === "ind") this.indicatorSheet();
         if (k === "ictSettings") this.ictSettingsSheet();
+        if (k === "modelsSettings") this.modelsSettingsSheet();
         if (k === "drawSettings") this.drawingSettings(this.drawings.current);
         if (k === "drawDel" && this.drawings.current) this.drawings.remove(this.drawings.current.id);
         if (k === "chartStyle") this.chartStyleSheet();
@@ -6477,6 +6483,58 @@
       });
     },
 
+    /* ----- TTrades Model (models.js) ----- */
+
+    /** The model on these bars (the chart's or an extra timeframe's), or null when it is off. */
+    modelsFor(bars, sec, digits) {
+      const allowed = this.owner || this.features.killzones !== false;
+      if (!showInd.models || !allowed || !window.MODELS || !this.modelCfg || !bars.length) return null;
+      try {
+        return window.MODELS.compute(bars, sec, this.modelCfg, { events: (this.news && this.news.events) || [], fmt: (v) => fmt(v, digits) });
+      } catch { return null; }
+    },
+
+    saveModels() {
+      store.set("aurum.modelcfg", JSON.stringify(this.modelCfg));
+      this.computeICT();
+      this.redraw();
+    },
+
+    modelsSettingsSheet() {
+      if (!window.MODELS) return;
+      sheet.close();
+      const htfOpts = [["auto", "Tự động theo cặp khung"], [900, "15m"], [1800, "30m"], [3600, "H1"], [14400, "H4"], [86400, "D1"], [604800, "W1"]];
+      const render = (tab) => {
+        const cfg = this.modelCfg;
+        const { tog, numf, sel, color, text, head, note } = fieldKit(cfg);
+        if (tab === "style") {
+          return head("Màu") + color("bull", "Tăng") + color("bear", "Giảm") + color("eqColor", "Đường EQ (cân bằng)")
+            + color("projColor", "Mục tiêu Std") + color("breakerColor", "Breaker") + color("unicornColor", "Unicorn");
+        }
+        return `<label class="toggle"><span>Bật TTrades Model</span><span class="switch"><input type="checkbox" data-models ${showInd.models ? "checked" : ""}><span></span></span></label>`
+          + head("Khung lớn (nến 1-2-3-4)") + sel("htf", "Khung lớn", htfOpts) + note("Tự động: 1m→15m, 3m→30m, 5m→H1, 15m→H4, H1→D1, H4→W1 (theo tài liệu).")
+          + tog("swing", "Đánh số nến 1-2-3-4, đáy / đỉnh nến 1 bị quét, mục tiêu") + tog("eqLines", "EQ râu nến 2 / EQ nến 3 (giá phải giữ)")
+          + tog("pcl", "PCH / PCL nến trước của khung lớn")
+          + head("CISD") + tog("cisd", "Hiện CISD") + tog("cisdPoiOnly", "Chỉ CISD tại POI (sau khi quét đỉnh / đáy)") + numf("cisdCount", "Giữ CISD gần nhất")
+          + tog("projections", "Mục tiêu Std của chân thao túng (CISD mới nhất)") + text("projLevels", "lb") + note("Các mức, cách nhau dấu phẩy: -1,-2,-2.5,-4.")
+          + head("Breaker & Unicorn") + tog("breakers", "Breaker block") + tog("unicorn", "Unicorn (breaker trùng FVG)") + numf("breakerCount", "Giữ breaker gần nhất")
+          + head("Khác") + tog("rules", "Luật lịch: Thứ Hai, ngày trước tin đỏ, sắp có tin") + tog("panel", "Bảng tóm tắt ở góc trái dưới");
+      };
+      const open = () => this.openPanel("TTrades Model", [["inputs", "Các đầu vào"], ["style", "Định dạng"]], render, {
+        root: this.modelCfg,
+        onChange: () => this.saveModels(),
+        afterDraw: (panel) => {
+          const on = panel.querySelector("[data-models]");
+          if (on) on.onchange = () => { showInd.models = on.checked; store.set("aurum.ind", JSON.stringify(showInd)); this.computeICT(); this.redraw(); };
+        },
+        onReset: () => {
+          if (!confirm("Đặt lại cài đặt TTrades Model về mặc định?")) return;
+          this.modelCfg = window.MODELS.defaults(); this.saveModels(); open();
+        },
+      });
+      open();
+    },
+
     /* ----- ICT layer ----- */
 
     computeICT() {
@@ -6492,6 +6550,7 @@
       try {
         this.ict = window.ICT.compute(bars, TF_SECONDS[this.interval], this.ictCfg, showInd);
       } catch { this.ict = null; }
+      this.models = this.modelsFor(bars, TF_SECONDS[this.interval], this.digits);
       if (this.cmpBars && this.cmpBars.length) this.showCmp(false); else this.computeSMT();
       this.applyStudies();
       this.redraw();
@@ -6697,6 +6756,7 @@
                 const ts = term.chart.timeScale();
                 const X = (i) => ts.logicalToCoordinate(i), Y = (v) => term.series.priceToCoordinate(v);
                 if (term.ict) window.ICT.draw(context, term.ict, term.ictCfg, X, Y, mediaSize.width, mediaSize.height);
+                if (term.models && window.MODELS) window.MODELS.draw(context, term.models, term.modelCfg, X, Y, mediaSize.width, mediaSize.height, (v) => fmt(v, term.digits));
                 if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
                 term.drawSharkZones(context, mediaSize.width, false);
                 term.drawSpread(context, mediaSize.width);
