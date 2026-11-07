@@ -6516,8 +6516,9 @@
           const t = s.trade, when = bars[Math.min(s.formedAt, bars.length - 1)].time;
           const info = t && t.entry != null ? `vào ${fmt(t.entry, d)} · SL ${fmt(t.stop, d)} · TP ${fmt(t.target, d)}${t.why !== "open" ? ` · <b class="${t.r > 0 ? "pos" : "neg"}">${t.r >= 0 ? "+" : ""}${t.r.toFixed(1)}R</b>` : ""}`
             : `EQ ${fmt(s.eq, d)} · huỷ ${fmt(s.invalid, d)} · mục tiêu ${fmt(s.target, d)}`;
+          const sc = s.list ? ` · ${s.score}/${s.list.length} yếu tố` : "";
           return `<div class="row"><span class="${s.dir > 0 ? "pos" : "neg"}">#${s.n} ${s.dir > 0 ? "MUA" : "BÁN"}</span>
-            <span class="grow" style="margin-left:8px">${fullTime(when)} · <span class="${color[s.status] || "muted"}">${esc(S[s.status])}</span><br><span class="muted small">${info}</span></span>
+            <span class="grow" style="margin-left:8px">${fullTime(when)} · <span class="${color[s.status] || "muted"}">${esc(S[s.status])}</span>${sc}<br><span class="muted small">${info}</span></span>
             <button type="button" class="btn btn-small" data-go="${s.n}">Xem</button><button type="button" class="btn btn-small" data-edit="${s.n}" style="margin-left:6px">Sửa</button></div>`;
         }).join("")}</div>`, (el) => {
         const find = (n) => o.setups.find((s) => s.n === +n);
@@ -6563,6 +6564,12 @@
         return `<label class="toggle"><span>Bật TTrades Model</span><span class="switch"><input type="checkbox" data-models ${showInd.models ? "checked" : ""}><span></span></span></label>`
           + head("Cách hiển thị") + sel("view", "Kiểu", [["setup", "Setup cố định (rõ ràng, không chạy theo nến)"], ["full", "Đầy đủ (câu chuyện nến hiện tại, CISD, breaker)"]])
           + note("Setup cố định: mỗi swing được chốt mức khi nến 2 đóng (huỷ, EQ, mục tiêu), rồi vào lệnh ở CISD đầu tiên hợp lệ. Mức không đổi theo nến mới; mỗi setup có trạng thái riêng.")
+          + head("Checklist vào lệnh (theo tài liệu)")
+          + sel("setupMode", "Cách xét", [["score", "Checklist: đủ yếu tố bắt buộc + đủ điểm"], ["filters", "Theo các công tắc ở mục \"Vào lệnh M1\""]])
+          + numf("setupMinScore", "Số yếu tố tối thiểu (trên 10)")
+          + note("Đánh dấu yếu tố BẮT BUỘC. Mặc định: killzone + hồ sơ ngày + lịch bắt buộc, cần 6/10 — backtest vàng 1m→15m tháng 4–11/2026: 54.5% / 53.3% thắng (TP 1.5R). Bỏ bắt buộc killzone hoặc hồ sơ ngày thì backtest thua lỗ.")
+          + Object.entries(window.MODELS.CHECK_LABELS).map(([k, label]) => `<label class="toggle"><span>${esc(label)}</span><span class="switch"><input type="checkbox" data-must="${k}" ${String(cfg.setupMust || "").split(",").includes(k) ? "checked" : ""}><span></span></span></label>`).join("")
+          + head("Hiển thị setup")
           + numf("setupCount", "Giữ setup đã vào lệnh gần nhất") + tog("setupSkips", "Đánh dấu CISD bị bỏ qua (và lý do)") + tog("setupDead", "Hiện cả setup bị huỷ / hết giờ (mờ)")
           + `<div class="row-btns"><button type="button" class="btn wide" data-setups>📋 Danh sách setup · sửa thành lệnh vẽ</button></div>`
           + head("Khung lớn (nến 1-2-3-4)") + sel("htf", "Khung lớn", htfOpts) + note("Tự động: 1m→15m, 3m→30m, 5m→H1, 15m→H4, H1→D1, H4→W1 (theo tài liệu).")
@@ -6591,6 +6598,12 @@
         afterDraw: (panel) => {
           const bt = panel.querySelector("[data-bt-m1]");
           if (bt) bt.onclick = () => this.modelBacktestSheet();
+          panel.querySelectorAll("[data-must]").forEach((box) => (box.onchange = () => {
+            const set = new Set(String(this.modelCfg.setupMust || "").split(",").filter(Boolean));
+            if (box.checked) set.add(box.dataset.must); else set.delete(box.dataset.must);
+            this.modelCfg.setupMust = [...set].join(",");
+            this.saveModels();
+          }));
           const su = panel.querySelector("[data-setups]");
           if (su) su.onclick = () => this.setupListSheet();
           const on = panel.querySelector("[data-models]");
@@ -6975,6 +6988,8 @@
             renderer: () => ({
               draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
                 term.drawSharkZones(context, mediaSize.width, true);
+                // The TTrades panel over the candles, so they never cross its text.
+                if (term.models && window.MODELS && window.MODELS.drawPanelOnly) window.MODELS.drawPanelOnly(context, term.models, term.modelCfg, mediaSize.width, mediaSize.height);
                 if (!term.sharks) return;
                 const ts = term.chart.timeScale();
                 window.ICT.drawSharks(context, term.sharks, term.viewBars(), (i) => ts.logicalToCoordinate(i), (v) => term.series.priceToCoordinate(v),

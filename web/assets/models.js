@@ -14,6 +14,8 @@
     return {
       // "setup": each swing frozen as a setup with its own levels, trade and status; "full": the live story.
       view: "setup", setupCount: 4, setupSkips: true, setupDead: false,
+      // The checklist: "score" = required factors + a minimum count; "filters" = the "Vào lệnh M1" switches.
+      setupMode: "score", setupMust: "kz,profile,cal", setupMinScore: 6,
       htf: "auto", swing: true, eqLines: true, pcl: true, cisd: true, cisdPoiOnly: true, cisdCount: 3,
       projections: true, projLevels: "-1,-2,-2.5,-4", breakers: true, breakerCount: 3, unicorn: true, rules: true, panel: true,
       // M1 entries (the fractal model's 15m → 1m), shown on the 1-minute chart.
@@ -672,6 +674,43 @@
     const bias = intraday && opt.dailyBias ? dailyBiasAt(bars) : null;
     const align = intraday && opt.htfAlign ? candleBiasAt(bars, 3600) : null;
     const atr = opt.strongCisd > 0 ? rangeAvg(bars, 14) : null;
+    // The checklist from the documents: every factor for each CISD, a trade once the required ones hold and the
+    // score reaches the minimum. (The arrays are for all bars; each one reads only the past.)
+    const dayAll = intraday ? days || dayProfiles(bars) : null;
+    const biasAll = intraday ? bias || dailyBiasAt(bars) : null;
+    const alignAll = intraday ? align || candleBiasAt(bars, 3600) : null;
+    const atrAll = atr || rangeAvg(bars, 14);
+    const bks = breakers(bars, true);
+    const must = new Set(String(cfg.setupMust || "").split(",").filter(Boolean));
+    const minScore = cfg.setupMode === "score" ? Math.max(0, +cfg.setupMinScore || 0) : 0;
+    const poiAt = (e, dir, i) => {
+      const x = dir > 0 ? e.lo : e.hi, tol = atrAll[i] * 0.5;
+      return bks.some((k) => k.dir === dir && k.broke < i && (k.to == null || k.to > i) && x >= k.bottom - tol && x <= k.top + tol);
+    };
+    function checklist(su, e, b, ck, entry, risk, waiting) {
+      const d = su.dir, i = Math.min(e.at, n - 1), h = ck.hour;
+      const list = [
+        { k: "kz", short: "ngoài killzone", label: "Killzone: London 2–5h / NY 7–10h (giờ New York)", ok: !intraday || opt.kz.some(([a, z]) => h >= a && h < z) },
+        { k: "profile", short: "hồ sơ ngày", label: "Hồ sơ ngày: London / NY đảo chiều, không phải London phá hẳn", ok: !intraday || profileAllows(dayAll, ck, i, d) },
+        { k: "zone", short: d > 0 ? "chưa ở discount" : "chưa ở premium", label: d > 0 ? "Mua ở discount của nến 1 + 2" : "Bán ở premium của nến 1 + 2", ok: d > 0 ? b.close <= su.mid : b.close >= su.mid },
+        { k: "dbias", short: "ngược bias ngày", label: "Bias ngày cùng chiều (PDH / PDL, failure to displace)", ok: !intraday || biasAll[i] === d },
+        { k: "h1", short: "ngược nến H1", label: "Nến H1 trước cùng chiều (next candle model)", ok: !intraday || alignAll[i] === d },
+        { k: "ideal", short: "không ideal", label: "Ideal formation: râu nến 2 dài (≥ 40%)", ok: su.ideal },
+        { k: "poi", short: "không tại breaker", label: "Chân CISD tại breaker / unicorn", ok: waiting ? false : poiAt(e, d, i), later: waiting },
+        { k: "cal", short: "Thứ Hai / giờ tin", label: "Không Thứ Hai, không trong giờ ra tin", ok: ck.weekday !== "Mon" && !NEWS_WINDOWS.some(([a, z]) => h >= a && h < z) },
+        { k: "room", short: "không đủ 2R", label: "Còn ≥ 2R tới mục tiêu nến 1", ok: risk > 0 && (su.target - entry) * d >= 2 * risk, later: waiting },
+        { k: "strong", short: "CISD yếu", label: "Nến CISD mạnh (thân ≥ biên độ trung bình)", ok: waiting ? false : Math.abs(b.close - b.open) >= atrAll[i], later: waiting },
+      ];
+      list.forEach((x) => { x.must = cfg.setupMode === "score" ? must.has(x.k) : legacyMust(x.k); });
+      return list;
+    }
+    // The old switches (setupMode "filters"): the ones turned on are required.
+    const legacyMust = (k) => (k === "kz" && intraday && opt.killzones) || (k === "profile" && !!days) || (k === "zone" && opt.discount)
+      || (k === "dbias" && !!bias) || (k === "h1" && !!align) || (k === "ideal" && opt.idealOnly) || (k === "strong" && !!atr)
+      || (k === "cal" && intraday && (opt.skipMonday || opt.newsWindows));
+    const scoreOf = (list) => list.filter((x) => x.ok).length;
+    const passes = (list) => list.every((x) => !x.must || x.ok) && scoreOf(list) >= minScore;
+    const missing = (list) => { const m = list.filter((x) => x.must && !x.ok); return m.length ? m.map((x) => x.short).join(", ") : `${scoreOf(list)}/${list.length} điểm, cần ${minScore}`; };
     // Index of a time on this chart, past the last bar too (for a window that is still open).
     const idxOf = (t) => {
       if (t > last.time) return n - 1 + (t - last.time) / sec;
@@ -706,34 +745,38 @@
         status: "wait", trade: null, skips: [], brokenAt: null,
       };
       out.push(su);
-      if (opt.idealOnly && !su.ideal) { su.status = "skipped"; su.skips.push({ at: formedAt, why: "không phải ideal formation" }); continue; }
       for (let k = from; k <= to; k++) if (dir > 0 ? bars[k].close < su.invalid : bars[k].close > su.invalid) { su.brokenAt = k; break; }
       const hi = Math.max(c1.high, c2.high), lo = Math.min(c1.low, c2.low), mid = (hi + lo) / 2;
+      su.mid = mid;
       for (const e of events) {
         const i = e.at;
         if (e.dir !== dir || i < from) continue;
         if (i > to || (su.brokenAt != null && su.brokenAt <= i)) break;
         const b = bars[i];
-        const skip = (why) => { su.skips.push({ at: i, why, level: e.level }); };
+        const skip = (why, list) => { su.skips.push({ at: i, why, level: e.level, list }); };
+        // The model itself: the CISD respects the equilibrium of the swing.
         if (dir > 0 ? b.close < su.eq : b.close > su.eq) { skip(`đóng ${dir > 0 ? "dưới" : "trên"} ${eq.label}`); continue; }
-        if (i + 1 >= n) { su.status = "signal"; su.trade = { cisd: { level: e.level, from: e.from, at: i }, at: n, stop: cfg.entryStop === "c2" ? su.invalid : dir > 0 ? e.lo : e.hi }; break; }
+        const stop = cfg.entryStop === "c2" ? su.invalid : dir > 0 ? e.lo : e.hi;
+        if (i + 1 >= n) {
+          // The CISD closed on the last bar: the checklist with the close as the entry, the trade at the next open.
+          const list = checklist(su, e, b, nyClock(last.time + sec), b.close, Math.abs(b.close - stop));
+          su.list = list; su.score = scoreOf(list);
+          if (passes(list)) { su.status = "signal"; su.trade = { cisd: { level: e.level, from: e.from, at: i }, at: n, stop }; }
+          else skip(missing(list), list);
+          break;
+        }
         const ck = nyClock(bars[i + 1].time);
-        if (intraday && opt.skipMonday && ck.weekday === "Mon") { skip("Thứ Hai"); continue; }
-        if (intraday && opt.killzones && !opt.kz.some(([a, z]) => ck.hour >= a && ck.hour < z)) { skip("ngoài killzone"); continue; }
-        if (days && !profileAllows(days, ck, i, dir)) { skip("hồ sơ ngày không cho phép"); continue; }
-        if (bias && bias[i] !== dir) { skip("ngược bias ngày"); continue; }
-        if (align && align[i] !== dir) { skip("ngược bias H1"); continue; }
-        if (opt.discount && (dir > 0 ? b.close > mid : b.close < mid)) { skip(dir > 0 ? "không ở discount" : "không ở premium"); continue; }
-        if (atr && Math.abs(b.close - b.open) < atr[i] * opt.strongCisd) { skip("nến CISD yếu"); continue; }
-        if (intraday && opt.newsWindows && NEWS_WINDOWS.some(([a, z]) => ck.hour >= a && ck.hour < z)) { skip("giờ ra tin"); continue; }
-        const entry = bars[i + 1].open, stop = cfg.entryStop === "c2" ? su.invalid : dir > 0 ? e.lo : e.hi;
-        const risk = (entry - stop) * dir;
+        const entry = bars[i + 1].open, risk = (entry - stop) * dir;
         if (risk <= 0 || (intraday && (risk < opt.minRisk || risk > opt.maxRisk))) { skip(risk <= 0 ? "giá đã vượt SL" : risk < opt.minRisk ? "SL quá gần" : "SL quá xa"); continue; }
         let target = entry + dir * risk * (opt.targetR || 2);
         const stdK = { std1: 1, std2: 2, std25: 2.5, std4: 4 }[opt.target];
         if (stdK) { const p = e.proj.find((x) => Math.abs(x.k) === stdK); if (p) target = p.price; }
         if (opt.target === "c1") target = su.target;
         if ((target - entry) * dir < risk * (stdK || opt.target === "c1" ? 1 : 0)) { skip("mục tiêu dưới 1R"); continue; }
+        const list = checklist(su, e, b, ck, entry, risk);
+        su.list = list; su.score = scoreOf(list);
+        const ok = passes(list);
+        if (!ok && !cfg._candidates) { skip(missing(list), list); continue; }
         let exit = null, exitAt = null, why = "time";
         for (let k = i + 1; k < n && k <= i + 1 + opt.maxHold; k++) {
           const x = bars[k];
@@ -742,6 +785,8 @@
         }
         if (exit == null) { exitAt = Math.min(n - 1, i + 1 + opt.maxHold); exit = bars[exitAt].close; if (exitAt === n - 1) why = "open"; }
         const r = ((exit - entry) * dir) / risk - opt.spread / risk;
+        if (cfg._candidates) cfg._candidates.push({ setup: su.n, at: i, time: b.time, list: list.map((x) => x.ok), r, why });
+        if (!ok) { skip(missing(list), list); continue; }
         su.trade = { cisd: { level: e.level, from: e.from, at: i }, at: i + 1, time: bars[i + 1].time, entry, stop, target, risk, exit, exitAt, exitTime: bars[exitAt].time, why, r };
         su.status = why === "open" ? "open" : why === "target" ? "win" : why === "stop" ? (r > 0 ? "win" : "loss") : r > 0 ? "win" : "flat";
         break;
@@ -749,17 +794,24 @@
       if (!su.trade) su.status = su.brokenAt != null ? "broken" : su.active ? "wait" : "expired";
       // Still waiting: may a trade be taken right now? (The time, the day's profile, where price is.)
       if (su.status === "wait") {
-        const ck = nyClock(last.time + sec);
-        if (intraday && opt.skipMonday && ck.weekday === "Mon") su.blocked = "Thứ Hai";
-        else if (intraday && opt.killzones && !opt.kz.some(([a, z]) => ck.hour >= a && ck.hour < z)) su.blocked = "ngoài killzone";
-        else if (days && !profileAllows(days, ck, n - 1, dir)) su.blocked = "hồ sơ ngày không cho phép";
-        else if (opt.discount && (dir > 0 ? last.close > mid : last.close < mid)) su.blocked = dir > 0 ? "giá chưa về discount" : "giá chưa lên premium";
-        su.mid = mid;
+        // What a CISD now would have: the checklist at the last close (the CISD and its leg not known yet).
+        const e = { lo: dir > 0 ? Math.min(c2.low, last.low) : last.low, hi: dir < 0 ? Math.max(c2.high, last.high) : last.high, at: n - 1 };
+        const list = checklist(su, e, last, nyClock(last.time + sec), last.close, Math.abs(last.close - su.invalid), true);
+        su.list = list; su.score = scoreOf(list);
+        const need = list.filter((x) => x.must && !x.ok && !x.later);
+        if (need.length) su.blocked = need.map((x) => x.short).join(", ");
       }
     }
     return out;
   }
 
+  const CHECK_NAMES = { kz: "Killzone", profile: "Hồ sơ ngày", zone: "Vùng", dbias: "Bias ngày", h1: "Nến H1", ideal: "Ideal", poi: "Breaker", cal: "Lịch", room: "≥ 2R", strong: "CISD mạnh" };
+  const CHECK_LABELS = {
+    kz: "Killzone: London 2–5h / NY 7–10h (giờ New York)", profile: "Hồ sơ ngày: London / NY đảo chiều (không phải London phá hẳn)",
+    zone: "Mua ở discount / bán ở premium của nến 1 + 2", dbias: "Bias ngày cùng chiều (PDH / PDL, failure to displace)",
+    h1: "Nến H1 trước cùng chiều (next candle model)", ideal: "Ideal formation: râu nến 2 dài (≥ 40%)", poi: "Chân CISD tại breaker / unicorn",
+    cal: "Không Thứ Hai, không trong giờ ra tin", room: "Còn ≥ 2R tới mục tiêu nến 1", strong: "Nến CISD mạnh (thân ≥ biên độ trung bình)",
+  };
   const SETUP_STATUS = { wait: "chờ CISD", signal: "CISD vừa xác nhận", open: "đang vào lệnh", win: "thắng", loss: "thua", flat: "đóng hoà", broken: "huỷ", expired: "hết giờ", skipped: "bỏ qua" };
 
   /** The entry options from the indicator's settings. */
@@ -873,6 +925,15 @@
       else lines.push({ text: `Hết giờ, không có CISD hợp lệ → chờ setup mới`, dir: 0 });
       const sk = su.skips[su.skips.length - 1];
       if (sk && !t) lines.push({ text: `CISD ${hhmm(bars[Math.min(sk.at, bars.length - 1)].time)} bị bỏ: ${sk.why}`, dir: 0 });
+      // The checklist of the documents for this setup: what holds (✓), what does not (✗), * = required.
+      if (su.list) {
+        const min = cfg.setupMode === "score" ? +cfg.setupMinScore || 0 : 0, ok = su.score;
+        const mustMiss = su.list.filter((x) => x.must && !x.ok && !x.later);
+        const verdict = t && t.entry != null ? "đã đủ → có lệnh" : su.status === "signal" ? "ĐỦ → vào lệnh ở nến kế tiếp"
+          : mustMiss.length ? `thiếu bắt buộc: ${mustMiss.map((x) => CHECK_NAMES[x.k]).join(", ")}` : ok >= min ? "đủ điểm → chờ CISD" : `cần thêm ${min - ok} điểm`;
+        lines.push({ text: `Checklist ${ok}/${su.list.length} (cần ${min}, * bắt buộc): ${verdict}`, dir: t && t.entry != null || su.status === "signal" ? su.dir : 0 });
+        lines.push({ items: su.list.map((x) => ({ text: (x.must ? "*" : "") + CHECK_NAMES[x.k] + (x.k === "zone" ? (su.dir > 0 ? " discount" : " premium") : ""), ok: x.ok, later: x.later && !x.ok })) });
+      }
     }
     // The record of these rules on the bars loaded: every setup that traded, wins and losses.
     const done = out.setups.filter((x) => x.trade && x.trade.r != null && x.status !== "open");
@@ -882,7 +943,11 @@
     }
     // Honest notes from the backtests (gold, April to November 2026): the model alone has no edge.
     if (!(sec === 60 && htfSec === 900)) out.notes.unshift(`Cặp ${tf}→${out.htfName}: backtest vàng 7 tháng thua lỗ (~40% thắng) — chỉ để tham khảo, nên dùng 1m→15m`);
-    else {
+    else if (cfg.setupMode === "score") {
+      const m = String(cfg.setupMust || "").split(",");
+      const off = [!m.includes("kz") && "killzone", !m.includes("profile") && "hồ sơ ngày"].filter(Boolean);
+      if (off.length) out.notes.unshift(`Không bắt buộc ${off.join(", ")}: backtest vàng thua lỗ (~40–46% thắng)`);
+    } else {
       const off = [!cfg.entryKillzones && "killzone", !cfg.entryDailyProfile && "hồ sơ ngày", !cfg.entryDiscount && "discount"].filter(Boolean);
       if (off.length) out.notes.unshift(`Đang tắt bộ lọc ${off.join(", ")}: không có bộ lọc, mô hình chỉ ~40% thắng và lỗ sau phí`);
     }
@@ -919,7 +984,7 @@
       }
     };
     const xi = (i) => X(i);
-    if (o.view === "setup") { drawSetups(g, o, cfg, X, Y, w, fmt, hline); drawPanel(g, o, cfg, w, h); g.restore(); return; }
+    if (o.view === "setup") { drawSetups(g, o, cfg, X, Y, w, fmt, hline); g.restore(); return; }
 
     // Breakers and unicorns (under the rest).
     (o.breakers || []).forEach((b) => {
@@ -1024,8 +1089,13 @@
       g.fillText(`${t.dir > 0 ? "MUA" : "BÁN"} ${res}`, x0 + 7, ya + (t.dir > 0 ? 4 : -2));
     });
 
-    drawPanel(g, o, cfg, w, h);
     g.restore();
+  }
+
+  /** The panel alone, drawn over the candles (the chart's top layer). */
+  function drawPanelOnly(g, o, cfg, w, h) {
+    if (!o) return;
+    g.save(); g.textBaseline = "middle"; drawPanel(g, o, cfg, w, h); g.restore();
   }
 
   /** X of a fractional bar index (a window that runs past the last bar). */
@@ -1129,7 +1199,7 @@
       // Labels right of the box: "#n BÁN entry · result", the stop and the target (kept apart when close).
       const lx = left + width + 4;
       const res = t.why === "open" ? " · đang chạy" : ` · ${t.r >= 0 ? "+" : ""}${t.r.toFixed(1)}R ${t.r > 0 ? "✓" : "✗"}`;
-      pill(g, `#${s.n} ${s.dir > 0 ? "MUA" : "BÁN"} ${fmt(t.entry)}${res}`, lx, ye, t.why === "open" ? (s.dir > 0 ? cfg.bull : cfg.bear) : t.r > 0 ? cfg.bull : cfg.bear, "#ffffff");
+      pill(g, `#${s.n} ${s.dir > 0 ? "MUA" : "BÁN"} ${fmt(t.entry)}${s.score != null ? ` · ${s.score}/${s.list.length}` : ""}${res}`, lx, ye, t.why === "open" ? (s.dir > 0 ? cfg.bull : cfg.bear) : t.r > 0 ? cfg.bull : cfg.bear, "#ffffff");
       const gap = (y) => (Math.abs(y - ye) < 17 ? ye + Math.sign(y - ye || 1) * 17 : y);
       pill(g, `SL ${fmt(t.stop)}`, lx, gap(ys), "rgba(242, 54, 69, 0.85)", "#ffffff");
       pill(g, `TP ${fmt(t.target)}`, lx, gap(yt2), "rgba(8, 153, 129, 0.85)", "#ffffff");
@@ -1138,22 +1208,41 @@
 
   /** The panel: the story in a few lines, bottom left. */
   function drawPanel(g, o, cfg, w, h) {
-    if (cfg.panel && o.lines && o.lines.length) {
-      g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
-      const lh = 17, pad = 8, maxW = Math.min(w - 20, 560);
-      const rows = o.lines.map((l) => ({ l, text: fit(g, l.text, maxW - pad * 2 - 10) }));
-      const bw = Math.min(maxW, Math.max(...rows.map((r) => g.measureText(r.text).width)) + pad * 2 + 10);
-      const bh = rows.length * lh + pad * 2 - 4, bx = 10, by = h - bh - 44;
-      g.fillStyle = "rgba(15, 20, 30, 0.82)";
-      g.beginPath(); g.roundRect(bx, by, bw, bh, 8); g.fill();
-      rows.forEach((r, i) => {
-        const yy = by + pad + i * lh + 6;
-        g.fillStyle = r.l.warn ? "#f5a524" : r.l.dir > 0 ? cfg.bull : r.l.dir < 0 ? cfg.bear : "#c9d1dc";
-        g.beginPath(); g.arc(bx + pad + 3, yy, 3, 0, Math.PI * 2); g.fill();
-        g.fillStyle = "#e8ecf3"; g.textAlign = "left";
-        g.fillText(r.text, bx + pad + 12, yy + 0.5);
+    if (!cfg.panel || !o.lines || !o.lines.length) return;
+    g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+    const lh = 17, pad = 8, maxW = Math.min(w - 20, 560), inner = maxW - pad * 2 - 10;
+    // Rows: a text line, or chips (the checklist) wrapped onto as many rows as they need.
+    const rows = [];
+    o.lines.forEach((l) => {
+      if (!l.items) { rows.push({ l, text: fit(g, l.text, inner) }); return; }
+      let row = [], x = 0;
+      l.items.forEach((it) => {
+        const cw = g.measureText(`✓ ${it.text}`).width + 12;
+        if (row.length && x + cw > inner) { rows.push({ chips: row, width: x }); row = []; x = 0; }
+        row.push({ it, x, cw }); x += cw + 4;
       });
-    }
+      if (row.length) rows.push({ chips: row, width: x });
+    });
+    const bw = Math.min(maxW, Math.max(...rows.map((r) => (r.chips ? r.width : g.measureText(r.text).width))) + pad * 2 + 10);
+    const bh = rows.length * lh + pad * 2 - 4, bx = 10, by = h - bh - 44;
+    g.fillStyle = "rgba(15, 20, 30, 0.94)";
+    g.beginPath(); g.roundRect(bx, by, bw, bh, 8); g.fill();
+    rows.forEach((r, i) => {
+      const yy = by + pad + i * lh + 6;
+      if (r.chips) {
+        r.chips.forEach(({ it, x, cw }) => {
+          const c = it.ok ? cfg.bull : it.later ? "#787b86" : cfg.bear;
+          g.fillStyle = rgba(c, 0.22); g.beginPath(); g.roundRect(bx + pad + 12 + x, yy - 7, cw, 14, 4); g.fill();
+          g.fillStyle = it.ok ? "#9ff0d6" : it.later ? "#b2b5be" : "#ffb3ba"; g.textAlign = "left";
+          g.fillText(`${it.ok ? "✓" : it.later ? "…" : "✗"} ${it.text}`, bx + pad + 18 + x, yy + 0.5);
+        });
+        return;
+      }
+      g.fillStyle = r.l.warn ? "#f5a524" : r.l.dir > 0 ? cfg.bull : r.l.dir < 0 ? cfg.bear : "#c9d1dc";
+      g.beginPath(); g.arc(bx + pad + 3, yy, 3, 0, Math.PI * 2); g.fill();
+      g.fillStyle = "#e8ecf3"; g.textAlign = "left";
+      g.fillText(r.text, bx + pad + 12, yy + 0.5);
+    });
   }
 
   function fit(g, text, max) {
@@ -1163,5 +1252,5 @@
     return t + "…";
   }
 
-  window.MODELS = { defaults, merge, compute, draw, pairOf, aggregate, cisds, breakers, htfStory, HTF_NAMES, entries, setupTimeline, SETUP_STATUS, liquidityEntries, dailyBot, botEntries, BOT_MODELS, entryDefaults, entryOptions, stats, SKIPS, nyClock };
+  window.MODELS = { defaults, merge, compute, draw, drawPanelOnly, pairOf, aggregate, cisds, breakers, htfStory, HTF_NAMES, entries, setupTimeline, SETUP_STATUS, CHECK_NAMES, CHECK_LABELS, liquidityEntries, dailyBot, botEntries, BOT_MODELS, entryDefaults, entryOptions, stats, SKIPS, nyClock };
 })();
