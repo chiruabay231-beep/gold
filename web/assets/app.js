@@ -236,7 +236,7 @@
     ["flow", "Dòng tiền cá mập"],
     ["zones", "Vùng cung / cầu cá mập (chờ mua / chờ bán, ghi giá)"],
     ["smt", "SMT (khi mở 2 biểu đồ: so đỉnh/đáy với mã thứ 2)"],
-    ["models", "TTrades Model (nến 1-2-3-4, CISD + mục tiêu Std, breaker / unicorn)"],
+    ["plan", "Kế hoạch giao dịch (ngày → H4 → H1, trend 3 đỉnh / 3 đáy, breakout thật / giả, nến rút râu)"],
   ];
   const showInd = (() => {
     let saved = {};
@@ -514,7 +514,7 @@
       Object.defineProperties(v, { bars: own(() => pane.bars), interval: own(() => pane.tf), digits: own(() => (pane.digits != null ? pane.digits : term.digits)) });
       Object.assign(v, {
         chart: this.chart, series: this.series, viewBars: () => pane.bars, replay: null, requestICT: null, isPane: true,
-        ict: null, models: null, smt: null, sharks: null, sharkZones: null, newsDots: null, seriesPriceOn: null, studySeries: new Map(), studySig: "",
+        ict: null, models: null, plan: null, smt: null, sharks: null, sharkZones: null, newsDots: null, seriesPriceOn: null, studySeries: new Map(), studySig: "",
       });
       Object.assign(v, v.axisViews());
       this.series.attachPrimitive(v.layer());
@@ -726,6 +726,7 @@
         try { v.ict = window.ICT.compute(bars, TF_SECONDS[this.tf], term.ictCfg, showInd); } catch { /* none */ }
       }
       v.models = term.modelsFor(bars, TF_SECONDS[this.tf], v.digits);
+      v.plan = term.planFor(bars, TF_SECONDS[this.tf], v.digits);
       // Indicators added, removed or changed on the main chart: built again here.
       const sig = JSON.stringify(term.studies || []);
       if (sig !== v.studySig) { [...v.studySeries.keys()].forEach((id) => v.dropStudySeries(id)); v.studySig = sig; }
@@ -3234,6 +3235,7 @@
           },
         });
         this.ictCfg = (() => { try { return window.ICT.merge(JSON.parse(store.get("aurum.ictcfg") || "null")); } catch { return window.ICT.defaults(); } })();
+        this.planCfg = window.PLAN ? (() => { try { return window.PLAN.merge(JSON.parse(store.get("aurum.plancfg") || "null")); } catch { return window.PLAN.defaults(); } })() : null;
         this.modelCfg = window.MODELS ? (() => { try { return window.MODELS.merge(JSON.parse(store.get("aurum.modelcfg") || "null")); } catch { return window.MODELS.defaults(); } })() : null;
         // Off unless turned on (TradingView's default): points go where the mouse / finger is, not onto the candle.
         this.magnet = store.get("aurum.magnet") === "1";
@@ -3331,15 +3333,15 @@
       sheet.open(`<h3>Chỉ báo</h3>
         <div class="toggles">${IND.filter(([k]) => (k === "flow" || k === "zones" ? flowAllowed : allowed)).map(([k, n]) => `<label class="toggle"><span>${n}</span>
           <span class="switch"><input type="checkbox" data-k="${k}" ${showInd[k] ? "checked" : ""}><span></span></span></label>`).join("")}</div>
-        ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button><button class="btn btn-ghost wide" id="modelsMore">⚙ TTrades Model (nến 1-2-3-4, CISD, Std, breaker)</button>' : ""}
+        ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button><button class="btn btn-ghost wide" id="planMore">⚙ Kế hoạch giao dịch (trend, breakout, vùng H1/H4, tín hiệu)</button>' : ""}
         <h4>Chỉ báo kỹ thuật</h4>
         <div class="list" id="studyList"></div>
         <select id="addStudy" class="add-study"><option value="">＋ Thêm chỉ báo…</option>${Object.entries(window.TA ? window.TA.STUDIES : {}).map(([k, d]) => `<option value="${k}">${esc(d.name)}</option>`).join("")}</select>
         <p class="muted small">Giờ theo New York như bản TradingView. Chuột phải (hoặc giữ lâu) trên biểu đồ để mở menu.</p>`, (el) => {
         const more = el.querySelector("#ictMore");
         if (more) more.onclick = () => { sheet.close(); this.ictSettingsSheet(); };
-        const models = el.querySelector("#modelsMore");
-        if (models) models.onclick = () => { sheet.close(); this.modelsSettingsSheet(); };
+        const plan = el.querySelector("#planMore");
+        if (plan) plan.onclick = () => { sheet.close(); this.planSettingsSheet(); };
         const listStudies = () => {
           const box = el.querySelector("#studyList");
           box.innerHTML = this.studies.length ? this.studies.map((x) => `<div class="study-row" data-id="${x.id}">
@@ -4567,7 +4569,7 @@
       items.push(["tools", "✎ Công cụ vẽ…"]);
       if (this.drawings && this.drawings.list.length) items.push(["clear", `🗑 Xoá tất cả bản vẽ (${this.drawings.list.length})`]);
       if (this.drawings && this.drawings.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"], ["drawDel", "🗑 Xoá bản vẽ này"]);
-      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["modelsSettings", "⚙ TTrades Model…"], ...(this.models && this.models.setups && this.models.setups.length ? [["setups", "📋 Setup TTrades (sửa thành lệnh vẽ)…"]] : []), ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
+      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["planSettings", "⚙ Kế hoạch giao dịch…"], ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
       const menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
       menu.hidden = false;
@@ -4589,7 +4591,7 @@
         if (k === "clear" && confirm("Xoá tất cả bản vẽ trên mã này?")) this.drawings.clear();
         if (k === "ind") this.indicatorSheet();
         if (k === "ictSettings") this.ictSettingsSheet();
-        if (k === "modelsSettings") this.modelsSettingsSheet();
+        if (k === "planSettings") this.planSettingsSheet();
         if (k === "setups") this.setupListSheet();
         if (k === "drawSettings") this.drawingSettings(this.drawings.current);
         if (k === "drawDel" && this.drawings.current) this.drawings.remove(this.drawings.current.id);
@@ -6484,6 +6486,96 @@
       });
     },
 
+    /* ----- Kế hoạch giao dịch (plan.js) ----- */
+
+    /** x of any time on this chart (between bars, or past the last one). */
+    timeX(t) {
+      const b = this.viewBars(), n = b.length, ts = this.chart.timeScale();
+      if (!n) return null;
+      let sec = Infinity;
+      for (let i = Math.max(1, n - 20); i < n; i++) sec = Math.min(sec, b[i].time - b[i - 1].time);
+      if (!isFinite(sec) || sec <= 0) sec = 60;
+      let l;
+      if (t >= b[n - 1].time) l = n - 1 + (t - b[n - 1].time) / sec;
+      else if (t <= b[0].time) l = (t - b[0].time) / sec;
+      else {
+        let lo = 0, hi = n - 1;
+        while (hi - lo > 1) { const m = (lo + hi) >> 1; if (b[m].time <= t) lo = m; else hi = m; }
+        l = lo + Math.min(1, (t - b[lo].time) / sec);
+      }
+      const i = Math.floor(l), a = ts.logicalToCoordinate(i), c = ts.logicalToCoordinate(i + 1);
+      return a == null || c == null ? a : a + (c - a) * (l - i);
+    },
+
+    /** Day, H4 and H1 candles of the chart's symbol (for the plan), from the VPS; again after a minute. */
+    async loadHtf() {
+      const key = this.symbolKey();
+      if (this.htfLoading || (this.htfData && this.htfData.key === key && Date.now() - this.htfData.at < 60000)) return;
+      this.htfLoading = true;
+      try {
+        const get = async (interval, count) => {
+          const path = this.owner ? `/mt5/candles?symbol=${encodeURIComponent(this.symbol)}&interval=${interval}&count=${count}` : `/member/candles?interval=${interval}&count=${count}`;
+          const data = await this.call(path);
+          return this.toBars(data.candles || []);
+        };
+        const [d1, h4, h1] = await Promise.all([get("1d", 30), get("4h", 180), get("1h", 500)]);
+        this.htfData = { key, at: Date.now(), d1, h4, h1 };
+        this.computeICT();
+      } catch { this.htfData = { key, at: Date.now(), d1: [], h4: [], h1: [] }; }
+      finally { this.htfLoading = false; }
+    },
+
+    planFor(bars, sec, digits) {
+      if (!showInd.plan || !window.PLAN || !this.planCfg || !bars.length || !sec || sec >= 86400) return null;
+      if (this.source === "exness" && (!this.htfData || this.htfData.key !== this.symbolKey() || Date.now() - this.htfData.at > 60000)) this.loadHtf();
+      const h = this.htfData && this.htfData.key === this.symbolKey() ? this.htfData : {};
+      // The day / H4 / H1 candles as known at the last bar (a replay must not see later ones).
+      const upTo = bars[bars.length - 1].time + sec, cut = (list) => (list || []).filter((c) => c.time < upTo);
+      try {
+        return window.PLAN.compute(bars, sec, this.planCfg, { d1: cut(h.d1), h4: cut(h.h4), h1: cut(h.h1), fmt: (v) => fmt(v, digits) });
+      } catch { return null; }
+    },
+
+    savePlan() {
+      store.set("aurum.plancfg", JSON.stringify(this.planCfg));
+      this.computeICT();
+      this.redraw();
+    },
+
+    planSettingsSheet() {
+      if (!window.PLAN) return;
+      sheet.close();
+      const render = (tab) => {
+        const cfg = this.planCfg;
+        const { tog, numf, sel, color, head, note } = fieldKit(cfg);
+        if (tab === "style") return head("Màu") + color("bull", "Mua") + color("bear", "Bán") + color("level", "PDH / PDL") + color("zoneBuy", "Vùng mua") + color("zoneSell", "Vùng bán") + color("trendColor", "Trendline");
+        return `<label class="toggle"><span>Bật Kế hoạch giao dịch</span><span class="switch"><input type="checkbox" data-plan ${showInd.plan ? "checked" : ""}><span></span></span></label>`
+          + note("Theo cách vào lệnh của bạn: 1) kế hoạch ngày từ nến hôm qua (đi tiếp, đảo chiều hay chờ quét PDH / PDL); 2) H4 đóng trên / dưới giá mở ngày; 3) vùng FVG / OB H1 – H4; 4) trend kẻ qua 3 đỉnh / 3 đáy và breakout thật / giả; 5) vào lệnh ở nến rút râu. Thuận bias ngày thì gồng, ngược bias thì chốt ngắn.")
+          + head("Ngày → H4 → H1") + tog("levels", "PDH / PDL / giá mở ngày") + tog("h4", "H4 so với giá mở ngày") + tog("zones", "Vùng FVG / OB H1 – H4") + numf("zoneCount", "Số vùng mỗi phía")
+          + head("Trend") + tog("trend", "Trend 3 đỉnh / 3 đáy") + sel("trendTf", "Khung kẻ trend", [["auto", "Tự động (1m→15m, 5m→H1, 15m→H4)"], ["900", "15m"], ["3600", "H1"], ["14400", "H4"]])
+          + numf("touches", "Số lần chạm tối thiểu") + numf("fakeBars", "Breakout giả nếu đóng lại trong (nến khung trend)")
+          + head("Tín hiệu (nến rút râu)") + tog("signals", "Hiện tín hiệu")
+          + tog("sigRetest", "Retest sau breakout THẬT") + tog("sigFake", "Breakout GIẢ (vào theo trend)") + tog("sigTrend", "Chạm trend (lần chạm thứ 4+)") + tog("sigZone", "Vùng FVG / OB H1 – H4 cùng chiều trend") + tog("sigSweep", "Quét PDH / PDL rồi rút râu")
+          + note("Backtest vàng (tháng 4–11/2026, SL 10–50 pip, spread 0.3, tháng 4–6 | tháng 7–11). Khung 5m: retest breakout thật +7.5R | +14.4R (46% thắng, ~0.3 lệnh/ngày, dương cả trên dữ liệu 24/7); quét PDH / PDL −6.9R | +15.4R; breakout giả −15.4R | −32.0R; vùng H1/H4 −43.6R | −65.3R; chạm trend −14.5R | −37.4R. Khung 1m: retest −5.0R | +6.0R (~0.9 lệnh/ngày), các loại khác đều âm. Vì vậy mặc định chỉ bật retest và nên xem ở khung 5m; bật thêm loại khác để tự đối chiếu với thống kê trên chart.")
+          + numf("maxSlPips", "SL tối đa (pip · vàng: 1 pip = 0.1)") + numf("minSlPips", "SL tối thiểu (pip, để spread không ăn hết lệnh)") + numf("tpWith", "TP khi thuận bias ngày (R, gồng tới thanh khoản)", 0.5) + numf("tpAgainst", "TP khi ngược bias ngày (R, chốt ngắn)", 0.5) + numf("tpNeutral", "TP khi ngày đi ngang (R)", 0.5)
+          + numf("spread", "Spread + phí (giá)", 0.05) + numf("signalCount", "Số tín hiệu gần nhất trên chart")
+          + head("Khác") + tog("panel", "Bảng kế hoạch ở góc trái dưới");
+      };
+      const open = () => this.openPanel("Kế hoạch giao dịch", [["inputs", "Các đầu vào"], ["style", "Định dạng"]], render, {
+        root: this.planCfg,
+        onChange: () => this.savePlan(),
+        afterDraw: (panel) => {
+          const on = panel.querySelector("[data-plan]");
+          if (on) on.onchange = () => { showInd.plan = on.checked; store.set("aurum.ind", JSON.stringify(showInd)); this.computeICT(); this.redraw(); };
+        },
+        onReset: () => {
+          if (!confirm("Đặt lại cài đặt Kế hoạch giao dịch về mặc định?")) return;
+          this.planCfg = window.PLAN.defaults(); this.savePlan(); open();
+        },
+      });
+      open();
+    },
+
     /* ----- TTrades Model (models.js) ----- */
 
     /** The model on these bars (the chart's or an extra timeframe's), or null when it is off. */
@@ -6780,6 +6872,7 @@
         this.ict = window.ICT.compute(bars, TF_SECONDS[this.interval], this.ictCfg, showInd);
       } catch { this.ict = null; }
       this.models = this.modelsFor(bars, TF_SECONDS[this.interval], this.digits);
+      this.plan = this.planFor(bars, TF_SECONDS[this.interval], this.digits);
       if (this.cmpBars && this.cmpBars.length) this.showCmp(false); else this.computeSMT();
       this.applyStudies();
       this.redraw();
@@ -6986,6 +7079,7 @@
                 const X = (i) => ts.logicalToCoordinate(i), Y = (v) => term.series.priceToCoordinate(v);
                 if (term.ict) window.ICT.draw(context, term.ict, term.ictCfg, X, Y, mediaSize.width, mediaSize.height);
                 if (term.models && window.MODELS) window.MODELS.draw(context, term.models, term.modelCfg, X, Y, mediaSize.width, mediaSize.height, (v) => fmt(v, term.digits));
+                if (term.plan && window.PLAN) window.PLAN.draw(context, term.plan, term.planCfg, (t) => term.timeX(t), X, Y, mediaSize.width, mediaSize.height, (v) => fmt(v, term.digits));
                 if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
                 term.drawSharkZones(context, mediaSize.width, false);
                 term.drawSpread(context, mediaSize.width);
@@ -7002,6 +7096,7 @@
                 term.drawSharkZones(context, mediaSize.width, true);
                 // The TTrades panel over the candles, so they never cross its text.
                 if (term.models && window.MODELS && window.MODELS.drawPanelOnly) window.MODELS.drawPanelOnly(context, term.models, term.modelCfg, mediaSize.width, mediaSize.height);
+                if (term.plan && window.PLAN) window.PLAN.drawPanel(context, term.plan, term.planCfg, mediaSize.width, mediaSize.height);
                 if (!term.sharks) return;
                 const ts = term.chart.timeScale();
                 window.ICT.drawSharks(context, term.sharks, term.viewBars(), (i) => ts.logicalToCoordinate(i), (v) => term.series.priceToCoordinate(v),
