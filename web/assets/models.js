@@ -15,7 +15,7 @@
       htf: "auto", swing: true, eqLines: true, pcl: true, cisd: true, cisdPoiOnly: true, cisdCount: 3,
       projections: true, projLevels: "-1,-2,-2.5,-4", breakers: true, breakerCount: 3, unicorn: true, rules: true, panel: true,
       // M1 entries (the fractal model's 15m → 1m), shown on the 1-minute chart.
-      entries: true, entryTarget: "1.5R", entrySpread: 0.3, entryKillzones: true, entryNyPm: false, entrySkipMonday: false, entryOnePerSwing: true,
+      entries: true, entryTarget: "1.5R", entrySpread: 0.3, entryKillzones: true, entryNyPm: false, entryAsia: false, entrySkipMonday: false, entryOnePerSwing: true,
       entryStop: "leg", entryIdeal: false, entryDailyProfile: true, entryDailyBias: false, entryNews: false,
       entryDiscount: true, entryAlignH1: false, entryStrong: false, entryPartial: false, entryMode: "market",
       bull: "#089981", bear: "#f23645", eqColor: "#f2c14e", projColor: "#9c6bff", breakerColor: "#787b86", unicornColor: "#e91e63",
@@ -296,7 +296,7 @@
     return { htf: 900, killzones: true, skipMonday: true, target: "2R", minRisk: 0.8, maxRisk: 15, spread: 0.3, maxHold: 240,
       maxPerSetup: 2, poiOnly: true, kz: [[2, 5], [7, 10]], stopMode: "leg", idealOnly: false,
       dailyProfile: false, dailyBias: false, newsWindows: false,
-      targetR: 2, entryMode: "market", limitBars: 15, partialFrac: 0, partialR: 1,
+      targetR: 2, minTargetR: 1, entryMode: "market", limitBars: 15, partialFrac: 0, partialR: 1,
       htfAlign: false, discount: false, strongCisd: 0 };
   }
 
@@ -333,6 +333,8 @@
   /** May a trade of `dir` open at bar `i` (New York clock `ck`) by the day's profile? */
   function profileAllows(days, ck, i, dir) {
     const d = days.get(ck.hour >= 20 ? ck.day + 1 : ck.day);
+    // Asia (20:00 to midnight New York): London has not traded yet, so the day's profile says nothing.
+    if (ck.hour >= 20) return true;
     if (!d) return false;
     if (ck.hour >= 2 && ck.hour < 5) {
       // In London: only after London has taken the Asia side against the trade (the manipulation).
@@ -484,10 +486,12 @@
       const risk = Math.abs(entry - stop);
       if (((s.dir > 0 ? entry <= stop : entry >= stop) || risk < opt.minRisk || risk > opt.maxRisk) && no("risk")) continue;
       let target = entry + s.dir * risk * (opt.targetR || 2);
-      if (opt.target === "std2" || opt.target === "std4") {
-        const p = e.proj.find((x) => Math.abs(x.k) === (opt.target === "std2" ? 2 : 4));
-        target = p ? p.price : target;
-        if ((target - entry) * s.dir < risk && no("risk")) continue; // less than 1R to the target: not worth it
+      // Targets on the chart: a standard deviation of the 1m leg, or the swing's own target (candle 1's other end).
+      const stdK = { std1: 1, std2: 2, std25: 2.5, std4: 4 }[opt.target];
+      if (stdK || opt.target === "c1") {
+        const p = stdK ? e.proj.find((x) => Math.abs(x.k) === stdK) : null;
+        target = stdK ? (p ? p.price : target) : s.target;
+        if ((target - entry) * s.dir < risk * opt.minTargetR && no("target")) continue; // too little room to the target
       }
       // Partial: take `partialFrac` at `partialR` and move the stop to the entry (break-even).
       const partialAt = opt.partialFrac > 0 ? entry + s.dir * risk * opt.partialR : null;
@@ -507,7 +511,8 @@
       }
       if (exit == null) { exitAt = Math.min(bars.length - 1, start + opt.maxHold); exit = bars[exitAt].close; if (exitAt === bars.length - 1) why = "open"; }
       const r = banked + left * ((exit - entry) * s.dir) / risk - opt.spread / risk;
-      out.push({ dir: s.dir, at: start, signalAt: i, time: bars[start].time, entry, stop, target, risk, exit, exitAt, exitTime: bars[exitAt].time, why, r, kind: s.kind, partial: banked > 0 });
+      const h = ck.hour, session = h >= 20 ? "asia" : h >= 2 && h < 5 ? "london" : h >= 7 && h < 10 ? "ny" : h >= 13.5 && h < 16 ? "pm" : "other";
+      out.push({ dir: s.dir, at: start, signalAt: i, time: bars[start].time, entry, stop, target, risk, exit, exitAt, exitTime: bars[exitAt].time, why, r, kind: s.kind, partial: banked > 0, session });
       used.set(s.id, (used.get(s.id) || 0) + 1);
       busyUntil = exitAt;
     }
@@ -520,7 +525,7 @@
     return { target: rTarget ? "R" : cfg.entryTarget, targetR: rTarget || 2, spread: +cfg.entrySpread || 0,
       discount: cfg.entryDiscount, htfAlign: cfg.entryAlignH1, strongCisd: cfg.entryStrong ? 1 : 0,
       partialFrac: cfg.entryPartial ? 0.5 : 0, partialR: 1, entryMode: cfg.entryMode, killzones: cfg.entryKillzones, skipMonday: cfg.entrySkipMonday,
-      kz: cfg.entryNyPm ? [[2, 5], [7, 10], [13.5, 16]] : [[2, 5], [7, 10]],
+      kz: [[2, 5], [7, 10]].concat(cfg.entryNyPm ? [[13.5, 16]] : [], cfg.entryAsia ? [[20, 24]] : []),
       maxPerSetup: cfg.entryOnePerSwing ? 1 : 2, stopMode: cfg.entryStop, idealOnly: cfg.entryIdeal, maxRisk: cfg.entryStop === "c2" ? 40 : 15,
       dailyProfile: cfg.entryDailyProfile, dailyBias: cfg.entryDailyBias, newsWindows: cfg.entryNews };
   }
@@ -532,7 +537,7 @@
     ideal: ["Không phải ideal formation", "entryIdeal"], monday: ["Thứ Hai", "entrySkipMonday"], killzone: ["Ngoài killzone", "entryKillzones"],
     profile: ["Hồ sơ ngày không cho phép", "entryDailyProfile"], bias: ["Ngược bias ngày", "entryDailyBias"], h1: ["Ngược bias nến H1", "entryAlignH1"],
     discount: ["Không ở discount / premium", "entryDiscount"], strong: ["Nến CISD yếu", "entryStrong"], news: ["Giờ ra tin", "entryNews"],
-    perSwing: ["Swing đã có lệnh", "entryOnePerSwing"], unfilled: ["Limit không khớp", "entryMode"], risk: ["SL quá gần (< 0.8) hoặc quá xa", null],
+    perSwing: ["Swing đã có lệnh", "entryOnePerSwing"], unfilled: ["Limit không khớp", "entryMode"], target: ["Mục tiêu quá gần (dưới 1R)", "entryTarget"], risk: ["SL quá gần (< 0.8) hoặc quá xa", null],
   };
 
   /** Win rate, R and drawdown of a list of trades. */

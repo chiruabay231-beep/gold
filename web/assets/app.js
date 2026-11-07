@@ -6519,10 +6519,10 @@
           + tog("projections", "Mục tiêu Std của chân thao túng (CISD mới nhất)") + text("projLevels", "lb") + note("Các mức, cách nhau dấu phẩy: -1,-2,-2.5,-4.")
           + head("Breaker & Unicorn") + tog("breakers", "Breaker block") + tog("unicorn", "Unicorn (breaker trùng FVG)") + numf("breakerCount", "Giữ breaker gần nhất")
           + head("Vào lệnh M1 (15m → 1m)") + tog("entries", "Hiện điểm vào M1 trên khung 1m (mũi tên, SL / TP, kết quả)")
-          + sel("entryTarget", "Chốt lời", [["1R", "1R"], ["1.5R", "1.5R"], ["2R", "2R (tối thiểu theo tài liệu)"], ["3R", "3R"], ["std2", "Mức -2 Std"], ["std4", "Mức -4 Std"]])
+          + sel("entryTarget", "Chốt lời", [["1R", "1R"], ["1.5R", "1.5R"], ["2R", "2R (tối thiểu theo tài liệu)"], ["3R", "3R"], ["std1", "Mức -1 Std"], ["std2", "Mức -2 Std"], ["std4", "Mức -4 Std"], ["c1", "Đáy / đỉnh nến 1 (mục tiêu swing)"]])
           + sel("entryMode", "Vào lệnh", [["market", "Giá mở nến kế tiếp"], ["limit", "Lệnh limit tại mức CISD (chờ 15 nến)"]])
           + sel("entryStop", "Cắt lỗ", [["leg", "Ngoài chân thao túng M1"], ["c2", "Đỉnh / đáy nến 2 (15m)"]])
-          + tog("entryKillzones", "Chỉ trong killzone London 2–5h, NY 7–10h (giờ New York)") + tog("entryNyPm", "Thêm killzone NY chiều 13:30–16h (giờ New York)") + tog("entrySkipMonday", "Bỏ Thứ Hai")
+          + tog("entryKillzones", "Chỉ trong killzone London 2–5h, NY 7–10h (giờ New York)") + tog("entryNyPm", "Thêm killzone NY chiều 13:30–16h (giờ New York)") + tog("entryAsia", "Thêm phiên Á 20h–0h (giờ New York)") + tog("entrySkipMonday", "Bỏ Thứ Hai")
           + tog("entryOnePerSwing", "Một lệnh mỗi swing 15m") + tog("entryIdeal", "Chỉ ideal formation (nến 2 râu dài)") + numf("entrySpread", "Spread + phí mỗi lệnh (giá)", 0.05)
           + tog("entryDailyProfile", "Hồ sơ ngày: London đảo chiều → NY theo; London phá hẳn → bỏ NY; London đi ngang → NY đảo chiều")
           + tog("entryDailyBias", "Bias ngày (PDH / PDL, failure to displace) cùng chiều") + tog("entryNews", "Tránh giờ ra tin 8:25–8:45 và 9:55–10:15 (NY)")
@@ -6580,8 +6580,8 @@
         <p class="muted small">Bot vào lệnh khung 1m theo mô hình fractal: swing nến 2 / nến 3 trên 15m → CISD trên 1m (sau khi quét đỉnh / đáy) theo hướng swing,
         vào ở giá mở nến kế tiếp. Không nhìn trước tương lai; cây nến chạm cả SL và TP tính là thua. Dùng cài đặt ở mục "Vào lệnh M1".</p>
         <div class="fields two"><label>Số ngày<select id="btDays">${[7, 14, 30, 60, 90].map((d) => `<option value="${d}" ${d === days ? "selected" : ""}>${d} ngày</option>`).join("")}</select></label>
-        <label>Chốt lời<select id="btTarget">${[["1R", "1R"], ["1.5R", "1.5R"], ["2R", "2R"], ["3R", "3R"], ["std2", "-2 Std"], ["std4", "-4 Std"]].map(([v, n]) => `<option value="${v}" ${v === cfg.entryTarget ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
-        <div class="toggles bt-filters">${[["entryKillzones", "Killzone London 2–5h, NY 7–10h"], ["entryNyPm", "Thêm NY chiều 13:30–16h"], ["entrySkipMonday", "Bỏ Thứ Hai"], ["entryOnePerSwing", "Một lệnh mỗi swing 15m"],
+        <label>Chốt lời<select id="btTarget">${[["1R", "1R"], ["1.5R", "1.5R"], ["2R", "2R"], ["3R", "3R"], ["std1", "-1 Std"], ["std2", "-2 Std"], ["std4", "-4 Std"], ["c1", "Đáy / đỉnh nến 1"]].map(([v, n]) => `<option value="${v}" ${v === cfg.entryTarget ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
+        <div class="toggles bt-filters">${[["entryKillzones", "Killzone London 2–5h, NY 7–10h"], ["entryNyPm", "Thêm NY chiều 13:30–16h"], ["entryAsia", "Thêm phiên Á 20h–0h NY (7–11h VN)"], ["entrySkipMonday", "Bỏ Thứ Hai"], ["entryOnePerSwing", "Một lệnh mỗi swing 15m"],
           ["entryDailyProfile", "Hồ sơ ngày (London / NY reversal)"], ["entryDiscount", "Mua discount / bán premium của swing"], ["entryDailyBias", "Bias ngày (PDH / PDL) cùng chiều"],
           ["entryAlignH1", "Đồng thuận bias nến H1"], ["entryStrong", "Nến CISD mạnh"], ["entryPartial", "Chốt 50% ở 1R + dời SL hoà vốn"], ["entryNews", "Tránh giờ ra tin 8:30 / 10:00"], ["entryIdeal", "Chỉ ideal formation"]]
           .map(([k, n]) => `<label class="toggle"><span>${n}</span><span class="switch"><input type="checkbox" data-f="${k}" ${cfg[k] ? "checked" : ""}><span></span></span></label>`).join("")}</div>
@@ -6616,6 +6616,12 @@
       const months = {};
       trades.forEach((t) => { const k = new Date(t.time * 1000).toISOString().slice(0, 7); (months[k] = months[k] || []).push(t); });
       const first = bars[0].time, last = bars[bars.length - 1].time;
+      // Per trading day (days with bars), and the stop / target distances in price.
+      const tradingDays = new Set(bars.map((b) => Math.floor(b.time / 86400))).size || 1;
+      const byDay = {};
+      trades.forEach((t) => { const k = Math.floor(t.time / 86400); byDay[k] = (byDay[k] || 0) + 1; });
+      const perDay = trades.length / tradingDays, maxDay = Math.max(0, ...Object.values(byDay));
+      const avg = (f) => (trades.length ? trades.reduce((a, t) => a + f(t), 0) / trades.length : 0).toFixed(2);
       out.innerHTML = `<p class="muted small">${bars.length.toLocaleString("vi-VN")} nến M1 · ${fullTime(first)} → ${fullTime(last)}</p>
         <div class="kvs">
           <div class="kv"><span>Số lệnh</span><b>${st.trades}</b></div>
@@ -6625,7 +6631,13 @@
           <div class="kv"><span>Profit factor</span><b>${st.profitFactor == null ? "–" : st.profitFactor.toFixed(2)}</b></div>
           <div class="kv"><span>Sụt vốn lớn nhất</span><b>${st.maxDD.toFixed(1)}R</b></div>
           <div class="kv"><span>Thua liên tiếp</span><b>${st.worstStreak}</b></div>
+          <div class="kv"><span>Lệnh mỗi ngày</span><b>${perDay.toFixed(2)} · nhiều nhất ${maxDay}</b></div>
+          <div class="kv"><span>SL / TP trung bình</span><b>${avg((t) => t.risk)} / ${avg((t) => Math.abs(t.target - t.entry))} giá</b></div>
         </div>
+        <h4>Theo phiên</h4>
+        <div class="list">${[["london", "London 2–5h NY"], ["ny", "New York 7–10h"], ["pm", "NY chiều 13:30–16h"], ["asia", "Phiên Á 20h–0h"]].filter(([k]) => trades.some((t) => t.session === k)).map(([k, n]) => {
+          const s = M.stats(trades.filter((t) => t.session === k));
+          return `<div class="row"><span class="grow">${n}</span><span>${s.trades} lệnh · ${pct(s.winRate)}</span><b class="${s.totalR >= 0 ? "pos" : "neg"}" style="margin-left:10px">${r(s.totalR)}</b></div>`; }).join("") || '<div class="empty">Không có lệnh nào</div>'}</div>
         <p class="muted small">Hoà vốn cần thắng khoảng: TP 1R → 50%, 1.5R → 40%, 2R → 34%, 3R → 25% (chưa tính phí). 1R = khoảng cách vào lệnh → cắt lỗ.</p>
         ${this.skipsHtml(trades, tally, bars)}
         <h4>Theo tháng</h4>
