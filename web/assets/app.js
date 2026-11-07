@@ -6518,12 +6518,20 @@
           + head("CISD") + tog("cisd", "Hiện CISD") + tog("cisdPoiOnly", "Chỉ CISD tại POI (sau khi quét đỉnh / đáy)") + numf("cisdCount", "Giữ CISD gần nhất")
           + tog("projections", "Mục tiêu Std của chân thao túng (CISD mới nhất)") + text("projLevels", "lb") + note("Các mức, cách nhau dấu phẩy: -1,-2,-2.5,-4.")
           + head("Breaker & Unicorn") + tog("breakers", "Breaker block") + tog("unicorn", "Unicorn (breaker trùng FVG)") + numf("breakerCount", "Giữ breaker gần nhất")
+          + head("Vào lệnh M1 (15m → 1m)") + tog("entries", "Hiện điểm vào M1 trên khung 1m (mũi tên, SL / TP, kết quả)")
+          + sel("entryTarget", "Chốt lời", [["2R", "2R (tối thiểu theo tài liệu)"], ["std2", "Mức -2 Std"], ["std4", "Mức -4 Std"]])
+          + sel("entryStop", "Cắt lỗ", [["leg", "Ngoài chân thao túng M1"], ["c2", "Đỉnh / đáy nến 2 (15m)"]])
+          + tog("entryKillzones", "Chỉ trong killzone London 2–5h, NY 7–10h (giờ New York)") + tog("entrySkipMonday", "Bỏ Thứ Hai")
+          + tog("entryOnePerSwing", "Một lệnh mỗi swing 15m") + tog("entryIdeal", "Chỉ ideal formation (nến 2 râu dài)") + numf("entrySpread", "Spread + phí mỗi lệnh (giá)", 0.05)
+          + `<button type="button" class="btn btn-gold wide" data-bt-m1>▶ Backtest bot M1 trên dữ liệu MT5</button>`
           + head("Khác") + tog("rules", "Luật lịch: Thứ Hai, ngày trước tin đỏ, sắp có tin") + tog("panel", "Bảng tóm tắt ở góc trái dưới");
       };
       const open = () => this.openPanel("TTrades Model", [["inputs", "Các đầu vào"], ["style", "Định dạng"]], render, {
         root: this.modelCfg,
         onChange: () => this.saveModels(),
         afterDraw: (panel) => {
+          const bt = panel.querySelector("[data-bt-m1]");
+          if (bt) bt.onclick = () => this.modelBacktestSheet();
           const on = panel.querySelector("[data-models]");
           if (on) on.onchange = () => { showInd.models = on.checked; store.set("aurum.ind", JSON.stringify(showInd)); this.computeICT(); this.redraw(); };
         },
@@ -6533,6 +6541,99 @@
         },
       });
       open();
+    },
+
+    /** 1-minute bars of the chart's symbol for the last `days`, fetched from the VPS (MT5) page by page. */
+    async historyM1(days, progress) {
+      const key = `${this.symbolKey()}|${days}`;
+      if (this.m1Cache && this.m1Cache.key === key && Date.now() - this.m1Cache.at < 10 * 60 * 1000) return this.m1Cache.bars;
+      const per = this.owner ? 5000 : 1000, want = days * 1440, from = Date.now() / 1000 - days * 86400;
+      let bars = [], before = null;
+      for (let page = 0; page < 80 && bars.length < want; page++) {
+        const extra = before ? `&before=${before}` : "";
+        const path = this.owner ? `/mt5/candles?symbol=${encodeURIComponent(this.symbol)}&interval=1m&count=${per}${extra}` : `/member/candles?interval=1m&count=${per}${extra}`;
+        const data = await this.call(path);
+        const got = this.toBars(data.candles || []);
+        if (!got.length) break;
+        bars = got.concat(bars.filter((b) => b.time > got[got.length - 1].time));
+        before = got[0].time;
+        if (progress) progress(bars.length);
+        if (got[0].time <= from || got.length < per * 0.5) break;
+      }
+      bars = bars.filter((b) => b.time >= from);
+      this.m1Cache = { key, bars, at: Date.now() };
+      return bars;
+    },
+
+    /** The M1 bot (TTrades fractal model) over past 1-minute bars: win rate, R, drawdown, month by month. */
+    modelBacktestSheet() {
+      if (!window.MODELS || !this.modelCfg) return;
+      sheet.close();
+      const cfg = this.modelCfg;
+      const days = +(store.get("aurum.btm1days") || 30);
+      sheet.open(`<h3>Backtest bot M1 · TTrades</h3>
+        <p class="muted small">Bot vào lệnh khung 1m theo mô hình fractal: swing nến 2 / nến 3 trên 15m → CISD trên 1m (sau khi quét đỉnh / đáy) theo hướng swing,
+        vào ở giá mở nến kế tiếp. Không nhìn trước tương lai; cây nến chạm cả SL và TP tính là thua. Dùng cài đặt ở mục "Vào lệnh M1".</p>
+        <div class="fields two"><label>Số ngày<select id="btDays">${[7, 14, 30, 60, 90].map((d) => `<option value="${d}" ${d === days ? "selected" : ""}>${d} ngày</option>`).join("")}</select></label>
+        <label>Chốt lời<select id="btTarget">${[["2R", "2R"], ["std2", "-2 Std"], ["std4", "-4 Std"]].map(([v, n]) => `<option value="${v}" ${v === cfg.entryTarget ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
+        <button class="btn btn-gold wide" id="btRun">▶ Chạy backtest ${esc(this.symbol || "")}</button>
+        <div id="btOut" class="bt-out"></div>`, (el) => {
+        const out = el.querySelector("#btOut");
+        el.querySelector("#btRun").onclick = async (e) => {
+          const button = e.currentTarget;
+          const d = +el.querySelector("#btDays").value;
+          store.set("aurum.btm1days", String(d));
+          cfg.entryTarget = el.querySelector("#btTarget").value;
+          store.set("aurum.modelcfg", JSON.stringify(cfg));
+          button.disabled = true;
+          out.innerHTML = `<p class="muted">Đang tải nến M1…</p>`;
+          try {
+            const bars = await this.historyM1(d, (n) => { out.innerHTML = `<p class="muted">Đang tải nến M1… ${n.toLocaleString("vi-VN")} cây</p>`; });
+            if (bars.length < 500) throw new Error("Chưa đủ nến M1 (máy chủ trả về quá ít)");
+            const trades = window.MODELS.entries(bars, window.MODELS.entryOptions(cfg));
+            this.renderBacktestM1(out, bars, trades);
+          } catch (err) {
+            out.innerHTML = `<p class="neg">Không chạy được: ${esc(err.message || String(err))}</p>`;
+          } finally { button.disabled = false; }
+        };
+      });
+    },
+
+    renderBacktestM1(out, bars, trades) {
+      const M = window.MODELS, st = M.stats(trades), d = this.digits;
+      const pct = (v) => (v * 100).toFixed(1) + "%", r = (v) => (v >= 0 ? "+" : "") + v.toFixed(1) + "R";
+      const months = {};
+      trades.forEach((t) => { const k = new Date(t.time * 1000).toISOString().slice(0, 7); (months[k] = months[k] || []).push(t); });
+      const first = bars[0].time, last = bars[bars.length - 1].time;
+      out.innerHTML = `<p class="muted small">${bars.length.toLocaleString("vi-VN")} nến M1 · ${fullTime(first)} → ${fullTime(last)}</p>
+        <div class="kvs">
+          <div class="kv"><span>Số lệnh</span><b>${st.trades}</b></div>
+          <div class="kv"><span>Tỉ lệ thắng</span><b class="${st.winRate >= 0.34 ? "pos" : "neg"}">${pct(st.winRate)}</b></div>
+          <div class="kv"><span>Tổng</span><b class="${st.totalR >= 0 ? "pos" : "neg"}">${r(st.totalR)}</b></div>
+          <div class="kv"><span>TB mỗi lệnh</span><b>${(st.avgR >= 0 ? "+" : "") + st.avgR.toFixed(2)}R</b></div>
+          <div class="kv"><span>Profit factor</span><b>${st.profitFactor == null ? "–" : st.profitFactor.toFixed(2)}</b></div>
+          <div class="kv"><span>Sụt vốn lớn nhất</span><b>${st.maxDD.toFixed(1)}R</b></div>
+          <div class="kv"><span>Thua liên tiếp</span><b>${st.worstStreak}</b></div>
+        </div>
+        <p class="muted small">Với chốt 2R, cần thắng trên ~34% (cộng phí) mới có lãi. 1R = khoảng cách vào lệnh → cắt lỗ.</p>
+        <h4>Theo tháng</h4>
+        <div class="list">${Object.entries(months).map(([k, l]) => { const s = M.stats(l); return `<div class="row"><span class="grow">${k}</span><span>${s.trades} lệnh · ${pct(s.winRate)}</span><b class="${s.totalR >= 0 ? "pos" : "neg"}" style="margin-left:10px">${r(s.totalR)}</b></div>`; }).join("")}</div>
+        <h4>Lệnh gần nhất</h4>
+        <div class="list">${trades.slice(-40).reverse().map((t) => `<div class="row clickable" data-t="${t.time}"><span class="${t.dir > 0 ? "pos" : "neg"}">${t.dir > 0 ? "MUA" : "BÁN"}</span>
+          <span class="grow" style="margin-left:8px">${fullTime(t.time)} · ${fmt(t.entry, d)} · SL ${fmt(t.stop, d)} · TP ${fmt(t.target, d)}</span>
+          <b class="${t.why === "open" ? "" : t.r > 0 ? "pos" : "neg"}">${t.why === "open" ? "đang chạy" : r(t.r)}</b></div>`).join("") || '<div class="empty">Không có lệnh nào</div>'}</div>`;
+      out.querySelectorAll("[data-t]").forEach((row) => (row.onclick = () => this.showBacktestTrade(+row.dataset.t)));
+    },
+
+    /** A backtest trade on the 1-minute chart. */
+    showBacktestTrade(t) {
+      sheet.close();
+      const go = () => {
+        const i = this.bars.findIndex((b) => b.time >= t);
+        if (i < 0) return toast("Lệnh này cũ hơn các nến đang có trên biểu đồ: kéo biểu đồ về trước để tải thêm", true);
+        this.chart.timeScale().setVisibleLogicalRange({ from: i - 60, to: i + 90 });
+      };
+      if (this.interval !== "1m") { this.interval = "1m"; store.set("aurum.tf", "1m"); this.loadCandles().then(go); } else go();
     },
 
     /* ----- ICT layer ----- */

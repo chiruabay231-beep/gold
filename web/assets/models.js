@@ -14,6 +14,9 @@
     return {
       htf: "auto", swing: true, eqLines: true, pcl: true, cisd: true, cisdPoiOnly: true, cisdCount: 3,
       projections: true, projLevels: "-1,-2,-2.5,-4", breakers: true, breakerCount: 3, unicorn: true, rules: true, panel: true,
+      // M1 entries (the fractal model's 15m → 1m), shown on the 1-minute chart.
+      entries: true, entryTarget: "2R", entrySpread: 0.3, entryKillzones: true, entrySkipMonday: true, entryOnePerSwing: true,
+      entryStop: "leg", entryIdeal: false,
       bull: "#089981", bear: "#f23645", eqColor: "#f2c14e", projColor: "#9c6bff", breakerColor: "#787b86", unicornColor: "#e91e63",
     };
   }
@@ -151,7 +154,7 @@
         for (let k = up.start; k <= i; k++) if (bars[k].high > bars[hi].high) hi = k;
         let lo = up.start;
         for (let k = Math.max(0, up.start - 3); k <= hi; k++) if (bars[k].low < bars[lo].low) lo = k;
-        const poi = sweptAbove(bars, piv.highs, hi, 60) || poiLevels.some((p) => bars[hi].high > p && Math.min(bars[up.start].low, bars[lo].low) < p);
+        const poi = sweptAbove(bars, piv.highs, hi, 60, i) || poiLevels.some((p) => bars[hi].high > p && Math.min(bars[up.start].low, bars[lo].low) < p);
         if (!onlyPoi || poi) out.push(projected(-1, up.level, up.start, i, bars[hi].high, bars[lo].low, hi, poi, levels));
       }
       if (down && !down.used && i > down.end && b.close > down.level) {
@@ -160,7 +163,7 @@
         for (let k = down.start; k <= i; k++) if (bars[k].low < bars[lo].low) lo = k;
         let hi = down.start;
         for (let k = Math.max(0, down.start - 3); k <= lo; k++) if (bars[k].high > bars[hi].high) hi = k;
-        const poi = sweptBelow(bars, piv.lows, lo, 60) || poiLevels.some((p) => bars[lo].low < p && Math.max(bars[down.start].high, bars[hi].high) > p);
+        const poi = sweptBelow(bars, piv.lows, lo, 60, i) || poiLevels.some((p) => bars[lo].low < p && Math.max(bars[down.start].high, bars[hi].high) > p);
         if (!onlyPoi || poi) out.push(projected(1, down.level, down.start, i, bars[hi].high, bars[lo].low, lo, poi, levels));
       }
     }
@@ -168,11 +171,25 @@
   }
 
   /** The extreme at `at` took a pivot high / low formed before it (within `look` bars). */
-  function sweptAbove(bars, highs, at, look) {
-    return highs.some((p) => p < at - 1 && p >= at - look && bars[at].high > bars[p].high);
+  /** First index in the sorted list `xs` whose value is ≥ v. */
+  function lowerBound(xs, v) {
+    let lo = 0, hi = xs.length;
+    while (lo < hi) { const m = (lo + hi) >> 1; if (xs[m] < v) lo = m + 1; else hi = m; }
+    return lo;
   }
-  function sweptBelow(bars, lows, at, look) {
-    return lows.some((p) => p < at - 1 && p >= at - look && bars[at].low < bars[p].low);
+  function sweptAbove(bars, highs, at, look, now) {
+    for (let k = lowerBound(highs, at - look); k < highs.length && highs[k] < at - 1; k++) {
+      const p = highs[k];
+      if (p + 3 <= now && bars[at].high > bars[p].high) return true;
+    }
+    return false;
+  }
+  function sweptBelow(bars, lows, at, look, now) {
+    for (let k = lowerBound(lows, at - look); k < lows.length && lows[k] < at - 1; k++) {
+      const p = lows[k];
+      if (p + 3 <= now && bars[at].low < bars[p].low) return true;
+    }
+    return false;
   }
 
   /** CISD with the standard deviations of the manipulation leg: bullish 1 = the low, 0 = the high before it;
@@ -257,6 +274,122 @@
     return notes;
   }
 
+  /* ----- M1 entries (TTrades fractal model: 15m swing → 1m CISD) and their backtest ----- */
+
+  const NY_OFF = new Map();
+  const NY_PARTS = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", weekday: "short" });
+  /** New York hour (0-24, fractional) and weekday of a UTC time, cached per hour. */
+  function nyClock(t) {
+    const hk = Math.floor(t / 3600);
+    let v = NY_OFF.get(hk);
+    if (!v) {
+      const p = Object.fromEntries(NY_PARTS.formatToParts(new Date(hk * 3600000)).map((x) => [x.type, x.value]));
+      v = { hour: +p.hour % 24, weekday: p.weekday };
+      NY_OFF.set(hk, v);
+    }
+    return { hour: v.hour + (t % 3600) / 3600, weekday: v.weekday };
+  }
+
+  function entryDefaults() {
+    return { htf: 900, killzones: true, skipMonday: true, target: "2R", minRisk: 0.8, maxRisk: 15, spread: 0.3, maxHold: 240,
+      maxPerSetup: 2, poiOnly: true, kz: [[2, 5], [7, 10]], stopMode: "leg", idealOnly: false };
+  }
+
+  /** The higher timeframe setups and, for each chart bar, the one it trades in (candle 3 / candle 4 window). */
+  function setupsOf(bars, htfSec) {
+    const h = aggregate(bars, 60, htfSec);
+    const at = new Array(bars.length).fill(null);
+    for (let j = 1; j < h.length; j++) {
+      const c1 = h[j - 1], c2 = h[j], c3 = h[j + 1], c4 = h[j + 2];
+      if (!c2.done || !c3) continue;
+      const tookLow = c2.low < c1.low, tookHigh = c2.high > c1.high;
+      let dir = 0, kind = null;
+      if (tookLow && c2.close > c1.low && !(tookHigh && c2.close < c1.high && c2.close < c2.open)) { dir = 1; kind = "c2"; }
+      else if (tookHigh && c2.close < c1.high) { dir = -1; kind = "c2"; }
+      else if (tookLow && c3.done && c3.close > c2.high) { dir = 1; kind = "c3"; }
+      else if (tookHigh && c3.done && c3.close < c2.low) { dir = -1; kind = "c3"; }
+      if (!dir) continue;
+      const range = c2.high - c2.low || 1e-9, wick = dir > 0 ? bodyBot(c2) - c2.low : c2.high - bodyTop(c2);
+      const eq = kind === "c3" ? (c3.high + c3.low) / 2 : wick >= range * 0.3 ? (dir > 0 ? c2.low + wick / 2 : c2.high - wick / 2) : (c2.high + c2.low) / 2;
+      const from = kind === "c3" ? (c4 ? c4.start : null) : c3.start;
+      const to = kind === "c3" ? (c4 ? c4.end : null) : (c4 ? c4.end : c3.end);
+      if (from == null) continue;
+      // The ideal formation: candle 2 back inside candle 1 with a large wick.
+      const ideal = kind === "c2" && wick >= range * 0.4;
+      const setup = { id: j, dir, kind, eq, ideal, stop: dir > 0 ? c2.low : c2.high, target: dir > 0 ? c1.high : c1.low, from, to, c2 };
+      for (let i = from; i <= to; i++) at[i] = setup;
+    }
+    return at;
+  }
+
+  /** Entries on the chart's 1-minute bars: a CISD (at a point of interest) in the direction of the 15-minute
+   *  swing, while candle 3 / candle 4 of that swing trade and price respects its equilibrium. Entry at the next
+   *  bar's open, stop beyond the manipulation leg, target 2R (or the -2 / -4 projection). No look-ahead. */
+  function entries(bars, opt) {
+    opt = Object.assign(entryDefaults(), opt || {});
+    const setupAt = setupsOf(bars, opt.htf);
+    const events = cisds(bars, [1, 2, 2.5, 4], [], opt.poiOnly);
+    const out = [], used = new Map();
+    let busyUntil = -1;
+    for (const e of events) {
+      const i = e.at, s = setupAt[i];
+      if (!s || s.dir !== e.dir || i + 1 >= bars.length || i <= busyUntil) continue;
+      if (opt.idealOnly && !s.ideal) continue;
+      const b = bars[i];
+      // The swing still holds: no close beyond candle 2's extreme, and the close respects the equilibrium.
+      if (s.dir > 0 ? b.close < s.eq : b.close > s.eq) continue;
+      let broken = false;
+      for (let k = s.from; k <= i; k++) if (s.dir > 0 ? bars[k].close < s.stop : bars[k].close > s.stop) { broken = true; break; }
+      if (broken) continue;
+      const ck = nyClock(bars[i + 1].time);
+      if (opt.skipMonday && ck.weekday === "Mon") continue;
+      if (opt.killzones && !opt.kz.some(([a, z]) => ck.hour >= a && ck.hour < z)) continue;
+      if ((used.get(s.id) || 0) >= opt.maxPerSetup) continue;
+      // Stop beyond the 1-minute manipulation leg, or (the model's rule) beyond the higher timeframe candle 2.
+      const entry = bars[i + 1].open, stop = opt.stopMode === "c2" ? s.stop : s.dir > 0 ? e.lo : e.hi, risk = Math.abs(entry - stop);
+      if ((s.dir > 0 ? entry <= stop : entry >= stop) || risk < opt.minRisk || risk > opt.maxRisk) continue;
+      let target = entry + s.dir * risk * 2;
+      if (opt.target === "std2" || opt.target === "std4") {
+        const p = e.proj.find((x) => Math.abs(x.k) === (opt.target === "std2" ? 2 : 4));
+        target = p ? p.price : target;
+        if ((target - entry) * s.dir < risk) continue; // less than 1R to the target: not worth it
+      }
+      // Walk forward: stop first when both are inside one bar.
+      let exit = null, exitAt = null, why = "time";
+      for (let k = i + 1; k < bars.length && k <= i + opt.maxHold; k++) {
+        const x = bars[k];
+        if (s.dir > 0 ? x.low <= stop : x.high >= stop) { exit = stop; exitAt = k; why = "stop"; break; }
+        if (s.dir > 0 ? x.high >= target : x.low <= target) { exit = target; exitAt = k; why = "target"; break; }
+      }
+      if (exit == null) { exitAt = Math.min(bars.length - 1, i + opt.maxHold); exit = bars[exitAt].close; if (exitAt === bars.length - 1) why = "open"; }
+      const r = ((exit - entry) * s.dir - opt.spread) / risk;
+      out.push({ dir: s.dir, at: i + 1, time: bars[i + 1].time, entry, stop, target, risk, exit, exitAt, exitTime: bars[exitAt].time, why, r, kind: s.kind });
+      used.set(s.id, (used.get(s.id) || 0) + 1);
+      busyUntil = exitAt;
+    }
+    return out;
+  }
+
+  /** The entry options from the indicator's settings. */
+  function entryOptions(cfg) {
+    return { target: cfg.entryTarget, spread: +cfg.entrySpread || 0, killzones: cfg.entryKillzones, skipMonday: cfg.entrySkipMonday,
+      maxPerSetup: cfg.entryOnePerSwing ? 1 : 2, stopMode: cfg.entryStop, idealOnly: cfg.entryIdeal, maxRisk: cfg.entryStop === "c2" ? 40 : 15 };
+  }
+
+  /** Win rate, R and drawdown of a list of trades. */
+  function stats(trades) {
+    const closed = trades.filter((t) => t.why !== "open");
+    const wins = closed.filter((t) => t.r > 0), losses = closed.filter((t) => t.r <= 0);
+    let eq = 0, peak = 0, dd = 0, streak = 0, worst = 0;
+    closed.forEach((t) => {
+      eq += t.r; peak = Math.max(peak, eq); dd = Math.max(dd, peak - eq);
+      streak = t.r <= 0 ? streak + 1 : 0; worst = Math.max(worst, streak);
+    });
+    const gain = wins.reduce((a, t) => a + t.r, 0), loss = -losses.reduce((a, t) => a + t.r, 0);
+    return { trades: closed.length, wins: wins.length, winRate: closed.length ? wins.length / closed.length : 0, totalR: eq,
+      avgR: closed.length ? eq / closed.length : 0, profitFactor: loss ? gain / loss : null, maxDD: dd, worstStreak: worst };
+  }
+
   /* ----- everything ----- */
 
   function compute(bars, sec, cfg, ctx = {}) {
@@ -277,6 +410,9 @@
     }
     if (cfg.breakers) out.breakers = breakers(bars, cfg.unicorn).slice(-Math.max(1, cfg.breakerCount));
     if (cfg.rules) out.notes = rules(bars[bars.length - 1].time, ctx.events);
+    if (cfg.entries && sec === 60) {
+      try { out.entries = entries(bars, entryOptions(cfg)).slice(-40); } catch { out.entries = []; }
+    }
     // The lines of the panel.
     const lines = [];
     const sw = out.htf && out.htf.swing;
@@ -293,6 +429,8 @@
       const t = last.proj.map((p) => `${p.k} ${fmt(p.price)}`).join(" · ");
       lines.push({ text: `CISD ${last.dir > 0 ? "TĂNG" : "GIẢM"} ${fmt(last.level)}${last.poi ? " (tại POI)" : ""} → mục tiêu ${t}`, dir: last.dir });
     }
+    const live = (out.entries || []).filter((t) => t.why === "open").pop();
+    if (live) lines.push({ text: `TÍN HIỆU ${live.dir > 0 ? "MUA" : "BÁN"} M1 · vào ${fmt(live.entry)} · SL ${fmt(live.stop)} · TP ${fmt(live.target)}`, dir: live.dir });
     out.notes.forEach((t) => lines.push({ text: "⚠ " + t, dir: 0, warn: true }));
     out.lines = lines;
     return out;
@@ -408,6 +546,28 @@
       hline(c.dir > 0 ? c.lo : c.hi, x1, xe, rgba(cfg.projColor, 0.5), [], "1");
     });
 
+    // M1 entries: the trade as a small position box (target green, stop red), an arrow at the entry and the result.
+    (o.entries || []).forEach((t) => {
+      const x0 = xi(t.at), x1 = t.why === "open" ? w : xi(t.exitAt);
+      const ye = Y(t.entry), ys = Y(t.stop), yt = Y(t.target);
+      if (x0 == null || x1 == null || ye == null || ys == null || yt == null || x1 < 0 || x0 > w) return;
+      const left = Math.max(0, x0), width = Math.max(3, x1 - left);
+      g.fillStyle = rgba(cfg.bull, 0.13); g.fillRect(left, Math.min(ye, yt), width, Math.abs(yt - ye));
+      g.fillStyle = rgba(cfg.bear, 0.13); g.fillRect(left, Math.min(ye, ys), width, Math.abs(ys - ye));
+      g.strokeStyle = t.dir > 0 ? cfg.bull : cfg.bear; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(left, Math.round(ye) + 0.5); g.lineTo(left + width, Math.round(ye) + 0.5); g.stroke();
+      // The arrow under a buy / over a sell.
+      const ya = t.dir > 0 ? Math.max(ye, ys) + 10 : Math.min(ye, ys) - 10;
+      g.fillStyle = t.dir > 0 ? cfg.bull : cfg.bear;
+      g.beginPath();
+      if (t.dir > 0) { g.moveTo(x0, ya - 6); g.lineTo(x0 - 5, ya + 3); g.lineTo(x0 + 5, ya + 3); }
+      else { g.moveTo(x0, ya + 6); g.lineTo(x0 - 5, ya - 3); g.lineTo(x0 + 5, ya - 3); }
+      g.closePath(); g.fill();
+      const res = t.why === "open" ? "đang chạy" : `${t.r >= 0 ? "+" : ""}${t.r.toFixed(1)}R`;
+      g.fillStyle = t.why === "open" ? "#f2c14e" : t.r > 0 ? cfg.bull : cfg.bear; g.textAlign = "left";
+      g.fillText(`${t.dir > 0 ? "MUA" : "BÁN"} ${res}`, x0 + 7, ya + (t.dir > 0 ? 4 : -2));
+    });
+
     // The panel: the story in a few lines, bottom left.
     if (cfg.panel && o.lines && o.lines.length) {
       g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
@@ -435,5 +595,5 @@
     return t + "…";
   }
 
-  window.MODELS = { defaults, merge, compute, draw, pairOf, aggregate, cisds, breakers, htfStory, HTF_NAMES };
+  window.MODELS = { defaults, merge, compute, draw, pairOf, aggregate, cisds, breakers, htfStory, HTF_NAMES, entries, entryDefaults, entryOptions, stats, nyClock };
 })();

@@ -938,3 +938,9 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .lv-usd.pos, .lvl-usd.pos { color: var(--up); }
 .lv-usd.neg, .lvl-usd.neg { color: var(--down); }
 .lvl-usd { display: block; margin-top: 4px; font: 700 13px/1.2 var(--font); font-variant-numeric: tabular-nums; color: var(--muted); }
+
+/* backtest of the M1 bot */
+.bt-out .row { display: flex; align-items: center; gap: 6px; padding: 7px 2px; border-top: 1px solid var(--line); font-size: 13px; font-variant-numeric: tabular-nums; }
+.bt-out .row.clickable { cursor: pointer; }
+.bt-out .row.clickable:hover { background: var(--hover); }
+.bt-out h4 { margin: 14px 0 4px; }
