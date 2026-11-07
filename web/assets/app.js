@@ -135,11 +135,12 @@
   const fmt = (v, d = 2) => (v == null ? "–" : Number(v).toFixed(d));
   const signed = (v, d = 2) => (v == null ? "–" : (v >= 0 ? "+" : "") + Number(v).toFixed(d));
   const money = (v) => (v == null ? "–" : Number(v).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }));
+  // Formatters made once: toLocaleString builds one per call, too slow for labels drawn every frame.
+  const CLOCK_TIME = new Intl.DateTimeFormat("vi-VN", { hour: "2-digit", minute: "2-digit" });
+  const CLOCK_DAY = new Intl.DateTimeFormat("vi-VN", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
   const clock = (t) => {
     const date = new Date(t * 1000), today = new Date();
-    return date.toDateString() === today.toDateString()
-      ? date.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })
-      : date.toLocaleString("vi-VN", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+    return date.toDateString() === today.toDateString() ? CLOCK_TIME.format(date) : CLOCK_DAY.format(date);
   };
   const fullTime = (t) => new Date(t * 1000).toLocaleString("vi-VN", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" });
   /** "XAUUSDm" → "XAU/USD", "US30m" → "US30": the broker's suffix dropped, currency pairs split. */
@@ -498,6 +499,7 @@
         <button type="button" class="swap-btn" title="Đưa khung này lên biểu đồ chính (để vẽ, đặt lệnh)">⤢</button></div>`;
       this.chart = LightweightCharts.createChart(wrap.firstChild, {
         autoSize: true,
+        kineticScroll: { mouse: true, touch: true },
         layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif" },
         rightPriceScale: { borderColor: "#222c3d" },
         timeScale: { borderColor: "#222c3d", timeVisible: true, rightOffset: 6, barSpacing: 5 },
@@ -2407,8 +2409,13 @@
     },
 
     goldEvents(minRank) {
+      // Kept until the news change: the chart asks for them every frame.
+      const list = (this.news && this.news.events) || [], memo = this.goldMemo;
+      if (memo && memo.list === list && memo.rank === minRank) return memo.out;
       const rank = { High: 3, Medium: 2, Low: 1 };
-      return ((this.news && this.news.events) || []).filter((e) => e.country === "USD" && (rank[e.impact] || 0) >= minRank);
+      const out = list.filter((e) => e.country === "USD" && (rank[e.impact] || 0) >= minRank);
+      this.goldMemo = { list, rank: minRank, out };
+      return out;
     },
 
     /** Gold's move since a release (the chart's bars, timeframes up to 15 minutes). */
@@ -3196,6 +3203,7 @@
       if (!this.chart) {
         this.chart = LightweightCharts.createChart(el, {
           autoSize: true,
+          kineticScroll: { mouse: true, touch: true },
           layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif" },
           grid: { vertLines: { color: "#1a2233" }, horzLines: { color: "#1a2233" } },
           rightPriceScale: { borderColor: "#222c3d" },
@@ -6975,6 +6983,7 @@
       const term = this;
       this.chart2 = LightweightCharts.createChart($("chart2"), {
         autoSize: true,
+        kineticScroll: { mouse: true, touch: true },
         layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif" },
         rightPriceScale: { borderColor: "#222c3d" },
         timeScale: { borderColor: "#222c3d", timeVisible: true, secondsVisible: isSecTF(this.interval), rightOffset: 8 },

@@ -295,6 +295,61 @@ struct CandleChart: View {
     var onSelectMascot: ((UUID?) -> Void)? = nil
     var onMascotMoved: ((UUID, Date, Double) -> Void)? = nil
     @Binding var viewport: ChartViewport
+    /// The view while a finger pans or zooms: drawn here at every move, handed on to the screen (the other
+    /// chart, the indicators) about 10 times a second, so the whole screen is not rebuilt at every finger move.
+    @State private var liveViewport: ChartViewport?
+    @State private var liveCommit = Date.distantPast
+    private var vp: ChartViewport { liveViewport ?? viewport }
+
+    private func moveView(_ change: (inout ChartViewport) -> Void) {
+        var v = vp
+        change(&v)
+        liveViewport = v
+        if Date().timeIntervalSince(liveCommit) > 0.1 {
+            liveCommit = Date()
+            viewport = v
+        }
+    }
+
+    /// The finger lifted: the view as it ended up, everywhere.
+    private func settleView() {
+        guard let v = liveViewport else { return }
+        viewport = v
+        liveViewport = nil
+    }
+
+    @State private var flingTask: Task<Void, Never>?
+
+    /// A quick swipe carries the chart on and slows down, like a list on iPhone (0.5 s, easing out).
+    private func fling(points: CGFloat, layout: Layout) {
+        flingTask?.cancel()
+        let barWidth = layout.plot.width / CGFloat(max(vp.visibleCount, 1))
+        guard abs(points) > 24, barWidth > 0 else { settleView(); return }
+        let bars = Double(points / barWidth) * 0.8
+        let start = vp.rightOffset, minOffset = -vp.visibleCount * 0.85, maxOffset = Double(max(candles.count - 10, 0))
+        flingTask = Task { @MainActor in
+            let began = Date(), duration = 0.5
+            while !Task.isCancelled {
+                let p = min(1, Date().timeIntervalSince(began) / duration)
+                let eased = 1 - pow(1 - p, 3)
+                moveView { $0.rightOffset = min(max(start + bars * eased, minOffset), maxOffset) }
+                if p >= 1 { break }
+                try? await Task.sleep(nanoseconds: 16_000_000)
+            }
+            if !Task.isCancelled {
+                settleView()
+                if vp.bounds(total: candles.count).start < 40 { onNeedOlder?() }
+            }
+        }
+    }
+
+    /// A finger on the chart stops a fling where it is.
+    private func stopFling() {
+        guard let task = flingTask else { return }
+        task.cancel()
+        flingTask = nil
+        settleView()
+    }
 
     /// `ignored`: the rest of a gesture whose line drag was cancelled (a pinch) does nothing.
     private enum DragMode { case pan, axis, crosshair, moveDrawing, moveHandle, create, priceLine, mascot, ignored }
@@ -405,8 +460,13 @@ struct CandleChart: View {
         .onChange(of: candles.last?.time) { oldTime, newTime in
             // Keep the same bars on screen when scrolled back and a new bar arrives.
             // (Older bars added in front don't move the view: it is anchored at the right.)
-            if viewport.rightOffset > 0.5, let oldTime, let newTime, newTime > oldTime {
+            if vp.rightOffset > 0.5, let oldTime, let newTime, newTime > oldTime {
                 viewport.rightOffset += 1
+                // In the middle of a pan: the finger's view moves along too.
+                if liveViewport != nil {
+                    liveViewport?.rightOffset += 1
+                    panStartOffset += 1
+                }
             }
         }
         .onChange(of: drawingTool) { _, _ in pendingPoints = [] }
@@ -493,13 +553,13 @@ struct CandleChart: View {
     }
 
     private func scale(layout: Layout) -> Scale {
-        let (start, _) = viewport.bounds(total: candles.count)
-        let barWidth = layout.plot.width / CGFloat(max(viewport.visibleCount, 1))
-        if let manual = viewport.manualPriceRange {
+        let (start, _) = vp.bounds(total: candles.count)
+        let barWidth = layout.plot.width / CGFloat(max(vp.visibleCount, 1))
+        if let manual = vp.manualPriceRange {
             return Scale(start: start, barWidth: barWidth, low: manual.lowerBound, high: manual.upperBound, plot: layout.plot)
         }
         var low = Double.infinity, high = -Double.infinity
-        let range = viewport.range(total: candles.count)
+        let range = vp.range(total: candles.count)
         for i in range {
             low = min(low, candles[i].low)
             high = max(high, candles[i].high)
@@ -690,7 +750,7 @@ struct CandleChart: View {
     private func draw(in context: inout GraphicsContext, layout: Layout, now: Date, axisOnly: Bool = false) {
         guard !candles.isEmpty else { return }
         let s = scale(layout: layout)
-        let range = viewport.range(total: candles.count)
+        let range = vp.range(total: candles.count)
         let ticks = priceTicks(low: s.low, high: s.high, count: 6)
         let decimals = priceDecimals ?? Self.decimals(for: s.high)
 
@@ -2133,6 +2193,7 @@ struct CandleChart: View {
     // MARK: - Gestures
 
     private func handleTap(at screenLocation: CGPoint, layout: Layout) {
+        stopFling()
         let location = chartLocation(screenLocation, layout: layout)
         // A mascot: picked (its bar shows); a tap elsewhere lets it go.
         if menuPoint == nil, drawingTool == nil, !mascots.isEmpty {
@@ -2230,6 +2291,7 @@ struct CandleChart: View {
                 let startLocation = chartLocation(value.startLocation, layout: layout)
                 let location = plotLocation(value.location)
                 if dragMode == nil {
+                    stopFling()
                     let range = currentPriceRange(layout: layout)
                     if startLocation.x > layout.axisX {
                         dragMode = .axis
@@ -2259,10 +2321,10 @@ struct CandleChart: View {
                         movingOriginal = hit
                     } else if crosshair != nil {
                         dragMode = .crosshair
-                    } else if abs(value.translation.width) > abs(value.translation.height) || viewport.manualPriceRange != nil {
+                    } else if abs(value.translation.width) > abs(value.translation.height) || vp.manualPriceRange != nil {
                         dragMode = .pan
-                        panStartOffset = viewport.rightOffset
-                        dragStartRange = viewport.manualPriceRange
+                        panStartOffset = vp.rightOffset
+                        dragStartRange = vp.manualPriceRange
                     } else {
                         return   // mostly vertical: leave it to the enclosing scroll view
                     }
@@ -2274,7 +2336,7 @@ struct CandleChart: View {
                     let factor = pow(2, Double(value.translation.height / 120))
                     let mid = (range.lowerBound + range.upperBound) / 2
                     let half = max((range.upperBound - range.lowerBound) / 2 * factor, 1e-9)
-                    viewport.manualPriceRange = (mid - half)...(mid + half)
+                    moveView { $0.manualPriceRange = (mid - half)...(mid + half) }
                 case .moveDrawing:
                     guard let original = movingOriginal else { return }
                     let s = scale(layout: layout)
@@ -2338,17 +2400,20 @@ struct CandleChart: View {
                 case .crosshair:
                     crosshair = location
                 case .pan:
-                    let barWidth = layout.plot.width / CGFloat(max(viewport.visibleCount, 1))
+                    let barWidth = layout.plot.width / CGFloat(max(vp.visibleCount, 1))
                     let offset = panStartOffset + Double(value.translation.width / barWidth)
                     // Negative offsets leave empty space after the last bar, like TradingView.
-                    let minOffset = -viewport.visibleCount * 0.85
-                    viewport.rightOffset = min(max(offset, minOffset), Double(max(candles.count - 10, 0)))
-                    if viewport.bounds(total: candles.count).start < 40 { onNeedOlder?() }
-                    if let range = dragStartRange {
-                        let pricePerPoint = (range.upperBound - range.lowerBound) / Double(max(layout.plot.height, 1))
-                        let shift = Double(value.translation.height) * pricePerPoint
-                        viewport.manualPriceRange = (range.lowerBound + shift)...(range.upperBound + shift)
+                    let minOffset = -vp.visibleCount * 0.85
+                    let total = candles.count
+                    moveView { v in
+                        v.rightOffset = min(max(offset, minOffset), Double(max(total - 10, 0)))
+                        if let range = dragStartRange {
+                            let pricePerPoint = (range.upperBound - range.lowerBound) / Double(max(layout.plot.height, 1))
+                            let shift = Double(value.translation.height) * pricePerPoint
+                            v.manualPriceRange = (range.lowerBound + shift)...(range.upperBound + shift)
+                        }
                     }
+                    if vp.bounds(total: candles.count).start < 40 { onNeedOlder?() }
                 case .mascot:
                     if let drag = mascotDrag { mascotDrag = (drag.id, value.translation) }
                 case .ignored, nil:
@@ -2356,6 +2421,11 @@ struct CandleChart: View {
                 }
             }
             .onEnded { value in
+                if dragMode == .pan {
+                    fling(points: value.predictedEndTranslation.width - value.translation.width, layout: layout)
+                } else {
+                    settleView()
+                }
                 let finger = plotLocation(value.location)
                 if dragMode == .mascot, let drag = mascotDrag, let mascot = mascots.first(where: { $0.id == drag.id }) {
                     let s = scale(layout: layout)
@@ -2428,11 +2498,15 @@ struct CandleChart: View {
         MagnifyGesture()
             .onChanged { value in
                 if dragMode == .priceLine { cancelLineDrag() }
-                if zoomStartCount == nil { zoomStartCount = viewport.visibleCount }
+                if zoomStartCount == nil { stopFling(); zoomStartCount = vp.visibleCount }
                 let count = (zoomStartCount ?? 80) / Double(max(value.magnification, 0.1))
-                viewport.visibleCount = min(max(count, 15), Double(max(candles.count + 10, 30)), 600)
+                let total = candles.count
+                moveView { $0.visibleCount = min(max(count, 15), Double(max(total + 10, 30)), 600) }
             }
-            .onEnded { _ in zoomStartCount = nil }
+            .onEnded { _ in
+                zoomStartCount = nil
+                settleView()
+            }
     }
 
     private var crosshairGesture: some Gesture {
