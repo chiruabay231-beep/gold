@@ -4567,7 +4567,7 @@
       items.push(["tools", "✎ Công cụ vẽ…"]);
       if (this.drawings && this.drawings.list.length) items.push(["clear", `🗑 Xoá tất cả bản vẽ (${this.drawings.list.length})`]);
       if (this.drawings && this.drawings.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"], ["drawDel", "🗑 Xoá bản vẽ này"]);
-      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["modelsSettings", "⚙ TTrades Model…"], ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
+      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["modelsSettings", "⚙ TTrades Model…"], ...(this.models && this.models.setups && this.models.setups.length ? [["setups", "📋 Setup TTrades (sửa thành lệnh vẽ)…"]] : []), ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
       const menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
       menu.hidden = false;
@@ -4590,6 +4590,7 @@
         if (k === "ind") this.indicatorSheet();
         if (k === "ictSettings") this.ictSettingsSheet();
         if (k === "modelsSettings") this.modelsSettingsSheet();
+        if (k === "setups") this.setupListSheet();
         if (k === "drawSettings") this.drawingSettings(this.drawings.current);
         if (k === "drawDel" && this.drawings.current) this.drawings.remove(this.drawings.current.id);
         if (k === "chartStyle") this.chartStyleSheet();
@@ -6500,6 +6501,54 @@
       this.redraw();
     },
 
+    /** The fixed setups of the TTrades indicator, newest first: show one on the chart, or copy it into a
+     *  long / short position drawing whose entry, stop and target can be dragged. */
+    setupListSheet() {
+      const o = this.models, d = this.digits;
+      if (!o || !o.setups || !o.setups.length) return toast("Chưa có setup: bật TTrades Model, kiểu \"Setup cố định\"", true);
+      sheet.close();
+      const S = window.MODELS.SETUP_STATUS, bars = this.viewBars();
+      const list = o.setups.slice(-40).reverse();
+      const color = { win: "pos", loss: "neg", open: "pos", signal: "pos", wait: "" };
+      sheet.open(`<h3>Setup TTrades · ${esc(o.htfName)} → ${esc(this.interval)}</h3>
+        <p class="muted small">Mức của mỗi setup được chốt khi nến 2 đóng và không đổi theo nến mới. Bấm <b>Sửa</b> để chép setup thành lệnh vẽ (Vị thế Mua / Bán) rồi kéo vào lệnh, SL, TP theo ý bạn.</p>
+        <div class="list">${list.map((s) => {
+          const t = s.trade, when = bars[Math.min(s.formedAt, bars.length - 1)].time;
+          const info = t && t.entry != null ? `vào ${fmt(t.entry, d)} · SL ${fmt(t.stop, d)} · TP ${fmt(t.target, d)}${t.why !== "open" ? ` · <b class="${t.r > 0 ? "pos" : "neg"}">${t.r >= 0 ? "+" : ""}${t.r.toFixed(1)}R</b>` : ""}`
+            : `EQ ${fmt(s.eq, d)} · huỷ ${fmt(s.invalid, d)} · mục tiêu ${fmt(s.target, d)}`;
+          return `<div class="row"><span class="${s.dir > 0 ? "pos" : "neg"}">#${s.n} ${s.dir > 0 ? "MUA" : "BÁN"}</span>
+            <span class="grow" style="margin-left:8px">${fullTime(when)} · <span class="${color[s.status] || "muted"}">${esc(S[s.status])}</span><br><span class="muted small">${info}</span></span>
+            <button type="button" class="btn btn-small" data-go="${s.n}">Xem</button><button type="button" class="btn btn-small" data-edit="${s.n}" style="margin-left:6px">Sửa</button></div>`;
+        }).join("")}</div>`, (el) => {
+        const find = (n) => o.setups.find((s) => s.n === +n);
+        el.querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => {
+          const s = find(b.dataset.go);
+          sheet.close();
+          this.chart.timeScale().setVisibleLogicalRange({ from: s.c1.start - 40, to: Math.max(s.endIdx, s.trade && s.trade.exitAt ? s.trade.exitAt : 0) + 40 });
+        }));
+        el.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => { sheet.close(); this.setupToDrawing(find(b.dataset.edit)); }));
+      });
+    },
+
+    /** A setup as a position drawing: its trade, or for one still waiting: now → its cancel level → candle 1's target. */
+    setupToDrawing(s) {
+      const dr = this.drawings, bars = this.viewBars();
+      if (!dr || !s || !bars.length) return;
+      const sec = TF_SECONDS[this.interval] || 60, t = s.trade;
+      const at = t && t.entry != null ? t.time : bars[bars.length - 1].time;
+      const entry = t && t.entry != null ? t.entry : bars[bars.length - 1].close;
+      const stop = t && t.stop != null ? t.stop : s.invalid, target = t && t.target != null ? t.target : s.target;
+      if ((entry - stop) * s.dir <= 0 || (target - entry) * s.dir <= 0) return toast("Giá đã ra ngoài setup này: không chép được", true);
+      const d = dr.newDrawing(s.dir > 0 ? "longPosition" : "shortPosition");
+      const right = at + sec * 30;
+      d.pts = [{ t: at, p: entry }, { t: right, p: stop }, { t: right, p: target }];
+      d.text = `Setup #${s.n}`;
+      dr.pending = d;
+      dr.finish();
+      this.renderDrawBar();
+      toast(`Đã chép setup #${s.n} thành lệnh vẽ: kéo vào lệnh / SL / TP để chỉnh`);
+    },
+
     modelsSettingsSheet() {
       if (!window.MODELS) return;
       sheet.close();
@@ -6512,6 +6561,10 @@
             + color("projColor", "Mục tiêu Std") + color("breakerColor", "Breaker") + color("unicornColor", "Unicorn");
         }
         return `<label class="toggle"><span>Bật TTrades Model</span><span class="switch"><input type="checkbox" data-models ${showInd.models ? "checked" : ""}><span></span></span></label>`
+          + head("Cách hiển thị") + sel("view", "Kiểu", [["setup", "Setup cố định (rõ ràng, không chạy theo nến)"], ["full", "Đầy đủ (câu chuyện nến hiện tại, CISD, breaker)"]])
+          + note("Setup cố định: mỗi swing được chốt mức khi nến 2 đóng (huỷ, EQ, mục tiêu), rồi vào lệnh ở CISD đầu tiên hợp lệ. Mức không đổi theo nến mới; mỗi setup có trạng thái riêng.")
+          + numf("setupCount", "Giữ setup đã vào lệnh gần nhất") + tog("setupSkips", "Đánh dấu CISD bị bỏ qua (và lý do)") + tog("setupDead", "Hiện cả setup bị huỷ / hết giờ (mờ)")
+          + `<div class="row-btns"><button type="button" class="btn wide" data-setups>📋 Danh sách setup · sửa thành lệnh vẽ</button></div>`
           + head("Khung lớn (nến 1-2-3-4)") + sel("htf", "Khung lớn", htfOpts) + note("Tự động: 1m→15m, 3m→30m, 5m→H1, 15m→H4, H1→D1, H4→W1 (theo tài liệu).")
           + tog("swing", "Đánh số nến 1-2-3-4, đáy / đỉnh nến 1 bị quét, mục tiêu") + tog("eqLines", "EQ râu nến 2 / EQ nến 3 (giá phải giữ)")
           + tog("pcl", "PCH / PCL nến trước của khung lớn")
@@ -6538,6 +6591,8 @@
         afterDraw: (panel) => {
           const bt = panel.querySelector("[data-bt-m1]");
           if (bt) bt.onclick = () => this.modelBacktestSheet();
+          const su = panel.querySelector("[data-setups]");
+          if (su) su.onclick = () => this.setupListSheet();
           const on = panel.querySelector("[data-models]");
           if (on) on.onchange = () => { showInd.models = on.checked; store.set("aurum.ind", JSON.stringify(showInd)); this.computeICT(); this.redraw(); };
         },

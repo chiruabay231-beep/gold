@@ -12,6 +12,8 @@
 
   function defaults() {
     return {
+      // "setup": each swing frozen as a setup with its own levels, trade and status; "full": the live story.
+      view: "setup", setupCount: 4, setupSkips: true, setupDead: false,
       htf: "auto", swing: true, eqLines: true, pcl: true, cisd: true, cisdPoiOnly: true, cisdCount: 3,
       projections: true, projLevels: "-1,-2,-2.5,-4", breakers: true, breakerCount: 3, unicorn: true, rules: true, panel: true,
       // M1 entries (the fractal model's 15m → 1m), shown on the 1-minute chart.
@@ -650,6 +652,107 @@
     return cfg.entryBot === "daily" ? dailyBot(bars, opt) : entries(bars, opt).map((t) => Object.assign(t, { model: "A" }));
   }
 
+  /* ----- fixed setups ----- */
+
+  /** Every higher timeframe swing as a fixed setup. Its levels are taken when candle 2 closes back inside candle 1
+   *  (or candle 3 closes through candle 2) and never move afterwards. Inside its window (candles 3 and 4, or
+   *  candle 4) the first CISD in its direction that passes the rules is the trade: entry at the next bar's open,
+   *  stop beyond the CISD leg (or candle 2), target from the settings. Each setup ends in one status:
+   *  wait (window open), signal (CISD on the last bar: entry at the next open), open, win, loss, flat (closed on
+   *  time), broken (a close beyond candle 2 first), expired (no valid CISD in the window), skipped (not ideal).
+   *  Only the bars up to each moment are read, so a setup on the chart is what it was at that time. */
+  function setupTimeline(bars, sec, htfSec, cfg) {
+    const n = bars.length;
+    if (htfSec <= sec || n < 20) return [];
+    const h = aggregate(bars, sec, htfSec), last = bars[n - 1];
+    const intraday = sec <= 300;
+    const opt = Object.assign(entryDefaults(), entryOptions(cfg));
+    const events = cisds(bars, [1, 2, 2.5, 4], [], cfg.cisdPoiOnly !== false);
+    const days = intraday && opt.dailyProfile ? dayProfiles(bars) : null;
+    const bias = intraday && opt.dailyBias ? dailyBiasAt(bars) : null;
+    const align = intraday && opt.htfAlign ? candleBiasAt(bars, 3600) : null;
+    const atr = opt.strongCisd > 0 ? rangeAvg(bars, 14) : null;
+    // Index of a time on this chart, past the last bar too (for a window that is still open).
+    const idxOf = (t) => {
+      if (t > last.time) return n - 1 + (t - last.time) / sec;
+      let lo = 0, hi = n - 1;
+      while (lo < hi) { const m = (lo + hi) >> 1; if (bars[m].time < t) lo = m + 1; else hi = m; }
+      return lo;
+    };
+    const out = [];
+    let num = 0;
+    for (let j = 1; j < h.length; j++) {
+      const c1 = h[j - 1], c2 = h[j], c3 = h[j + 1] || null;
+      if (!c2.done) continue;
+      const tookLow = c2.low < c1.low, tookHigh = c2.high > c1.high;
+      let dir = 0, kind = null;
+      if (tookLow && c2.close > c1.low && !(tookHigh && c2.close < c1.high && c2.close < c2.open)) { dir = 1; kind = "c2"; }
+      else if (tookHigh && c2.close < c1.high) { dir = -1; kind = "c2"; }
+      else if (tookLow && c3 && c3.done && c3.close > c2.high) { dir = 1; kind = "c3"; }
+      else if (tookHigh && c3 && c3.done && c3.close < c2.low) { dir = -1; kind = "c3"; }
+      if (!dir) continue;
+      const range = c2.high - c2.low || 1e-9, wick = dir > 0 ? bodyBot(c2) - c2.low : c2.high - bodyTop(c2);
+      const eq = kind === "c3" ? { price: (c3.high + c3.low) / 2, label: "EQ nến 3" }
+        : wick >= range * 0.3 ? { price: dir > 0 ? c2.low + wick / 2 : c2.high - wick / 2, label: "EQ râu nến 2" } : { price: (c2.high + c2.low) / 2, label: "EQ nến 2" };
+      const formedAt = kind === "c3" ? c3.end : c2.end;
+      const endTime = kind === "c3" ? c3.time + 2 * htfSec : c2.time + 3 * htfSec;
+      const from = formedAt + 1, toF = idxOf(endTime) - (endTime > last.time ? 0 : 1);
+      const to = Math.min(n - 1, Math.floor(toF));
+      const su = {
+        n: ++num, id: c2.time, dir, kind, ideal: kind === "c2" && wick >= range * 0.4, htfSec,
+        c1: { start: c1.start, end: c1.end, high: c1.high, low: c1.low }, c2: { start: c2.start, end: c2.end, high: c2.high, low: c2.low },
+        formedAt, formedTime: bars[formedAt].time, from, endTime, endIdx: idxOf(endTime), active: last.time + sec < endTime,
+        eq: eq.price, eqLabel: eq.label, invalid: dir > 0 ? c2.low : c2.high, swept: dir > 0 ? c1.low : c1.high, target: dir > 0 ? c1.high : c1.low,
+        status: "wait", trade: null, skips: [], brokenAt: null,
+      };
+      out.push(su);
+      if (opt.idealOnly && !su.ideal) { su.status = "skipped"; su.skips.push({ at: formedAt, why: "không phải ideal formation" }); continue; }
+      for (let k = from; k <= to; k++) if (dir > 0 ? bars[k].close < su.invalid : bars[k].close > su.invalid) { su.brokenAt = k; break; }
+      const hi = Math.max(c1.high, c2.high), lo = Math.min(c1.low, c2.low), mid = (hi + lo) / 2;
+      for (const e of events) {
+        const i = e.at;
+        if (e.dir !== dir || i < from) continue;
+        if (i > to || (su.brokenAt != null && su.brokenAt <= i)) break;
+        const b = bars[i];
+        const skip = (why) => { su.skips.push({ at: i, why, level: e.level }); };
+        if (dir > 0 ? b.close < su.eq : b.close > su.eq) { skip(`đóng ${dir > 0 ? "dưới" : "trên"} ${eq.label}`); continue; }
+        if (i + 1 >= n) { su.status = "signal"; su.trade = { cisd: { level: e.level, from: e.from, at: i }, at: n, stop: cfg.entryStop === "c2" ? su.invalid : dir > 0 ? e.lo : e.hi }; break; }
+        const ck = nyClock(bars[i + 1].time);
+        if (intraday && opt.skipMonday && ck.weekday === "Mon") { skip("Thứ Hai"); continue; }
+        if (intraday && opt.killzones && !opt.kz.some(([a, z]) => ck.hour >= a && ck.hour < z)) { skip("ngoài killzone"); continue; }
+        if (days && !profileAllows(days, ck, i, dir)) { skip("hồ sơ ngày không cho phép"); continue; }
+        if (bias && bias[i] !== dir) { skip("ngược bias ngày"); continue; }
+        if (align && align[i] !== dir) { skip("ngược bias H1"); continue; }
+        if (opt.discount && (dir > 0 ? b.close > mid : b.close < mid)) { skip(dir > 0 ? "không ở discount" : "không ở premium"); continue; }
+        if (atr && Math.abs(b.close - b.open) < atr[i] * opt.strongCisd) { skip("nến CISD yếu"); continue; }
+        if (intraday && opt.newsWindows && NEWS_WINDOWS.some(([a, z]) => ck.hour >= a && ck.hour < z)) { skip("giờ ra tin"); continue; }
+        const entry = bars[i + 1].open, stop = cfg.entryStop === "c2" ? su.invalid : dir > 0 ? e.lo : e.hi;
+        const risk = (entry - stop) * dir;
+        if (risk <= 0 || (intraday && (risk < opt.minRisk || risk > opt.maxRisk))) { skip(risk <= 0 ? "giá đã vượt SL" : risk < opt.minRisk ? "SL quá gần" : "SL quá xa"); continue; }
+        let target = entry + dir * risk * (opt.targetR || 2);
+        const stdK = { std1: 1, std2: 2, std25: 2.5, std4: 4 }[opt.target];
+        if (stdK) { const p = e.proj.find((x) => Math.abs(x.k) === stdK); if (p) target = p.price; }
+        if (opt.target === "c1") target = su.target;
+        if ((target - entry) * dir < risk * (stdK || opt.target === "c1" ? 1 : 0)) { skip("mục tiêu dưới 1R"); continue; }
+        let exit = null, exitAt = null, why = "time";
+        for (let k = i + 1; k < n && k <= i + 1 + opt.maxHold; k++) {
+          const x = bars[k];
+          if (dir > 0 ? x.low <= stop : x.high >= stop) { exit = stop; exitAt = k; why = "stop"; break; }
+          if (dir > 0 ? x.high >= target : x.low <= target) { exit = target; exitAt = k; why = "target"; break; }
+        }
+        if (exit == null) { exitAt = Math.min(n - 1, i + 1 + opt.maxHold); exit = bars[exitAt].close; if (exitAt === n - 1) why = "open"; }
+        const r = ((exit - entry) * dir) / risk - opt.spread / risk;
+        su.trade = { cisd: { level: e.level, from: e.from, at: i }, at: i + 1, time: bars[i + 1].time, entry, stop, target, risk, exit, exitAt, exitTime: bars[exitAt].time, why, r };
+        su.status = why === "open" ? "open" : why === "target" ? "win" : why === "stop" ? (r > 0 ? "win" : "loss") : r > 0 ? "win" : "flat";
+        break;
+      }
+      if (!su.trade) su.status = su.brokenAt != null ? "broken" : su.active ? "wait" : "expired";
+    }
+    return out;
+  }
+
+  const SETUP_STATUS = { wait: "chờ CISD", signal: "CISD vừa xác nhận", open: "đang vào lệnh", win: "thắng", loss: "thua", flat: "đóng hoà", broken: "huỷ", expired: "hết giờ", skipped: "bỏ qua" };
+
   /** The entry options from the indicator's settings. */
   function entryOptions(cfg) {
     const rTarget = /^[\d.]+R$/.test(String(cfg.entryTarget)) ? parseFloat(cfg.entryTarget) : null;
@@ -696,6 +799,7 @@
       const h = aggregate(bars, sec, htfSec);
       if (h.length >= 3) out.htf = htfStory(h, fmt);
     }
+    if (cfg.view === "setup") return setupView(bars, sec, htfSec, cfg, ctx, out, fmt);
     if (cfg.cisd) {
       const levels = String(cfg.projLevels).split(",").map((v) => +v).filter((v) => isFinite(v) && v !== 0);
       const poi = [];
@@ -731,6 +835,45 @@
     return out;
   }
 
+  const hhmm = (t) => new Date(t * 1000).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+  const TF_LABEL = (sec) => (sec < 60 ? `${sec}s` : sec < 3600 ? `${sec / 60}m` : sec < 86400 ? `H${sec / 3600}` : "D1");
+
+  /** The clean view: fixed setups and a short card about the newest one. */
+  function setupView(bars, sec, htfSec, cfg, ctx, out, fmt) {
+    out.view = "setup";
+    out.lastIdx = bars.length - 1;
+    out.setups = setupTimeline(bars, sec, htfSec, cfg);
+    if (cfg.rules) out.notes = rules(bars[bars.length - 1].time, ctx.events);
+    // The setup the card is about: the newest one still running, else the newest.
+    const running = out.setups.filter((x) => x.status === "wait" || x.status === "signal" || x.status === "open");
+    const su = running[running.length - 1] || out.setups[out.setups.length - 1];
+    out.focus = su || null;
+    const lines = [], tf = TF_LABEL(sec);
+    const side = (d) => (d > 0 ? "MUA" : "BÁN");
+    if (!su) lines.push({ text: `${out.htfName}: chưa có setup (chờ nến 2 quét nến 1 rồi đóng lại)`, dir: 0 });
+    else {
+      const how = su.kind === "c2" ? `nến 2 quét ${su.dir > 0 ? "đáy" : "đỉnh"} nến 1 (${fmt(su.swept)}) rồi đóng lại` : `nến 3 đóng mạnh qua nến 2`;
+      lines.push({ text: `Setup #${su.n} ${side(su.dir)} · ${out.htfName}: ${how}`, dir: su.dir });
+      const t = su.trade;
+      if (su.status === "wait") lines.push({ text: `Chờ CISD ${su.dir > 0 ? "tăng" : "giảm"} trên ${tf} đến ${hhmm(su.endTime)} · giữ ${su.dir > 0 ? "trên" : "dưới"} EQ ${fmt(su.eq)} · huỷ nếu đóng ${su.dir > 0 ? "dưới" : "trên"} ${fmt(su.invalid)}`, dir: 0 });
+      else if (su.status === "signal") lines.push({ text: `CISD vừa xác nhận → ${side(su.dir)} ở giá mở nến kế tiếp · SL ${fmt(t.stop)}`, dir: su.dir });
+      else if (su.status === "open") lines.push({ text: `ĐANG ${side(su.dir)} ${fmt(t.entry)} · SL ${fmt(t.stop)} · TP ${fmt(t.target)}`, dir: su.dir });
+      else if (t) lines.push({ text: `Đã xong: ${side(su.dir)} ${fmt(t.entry)} → ${t.r >= 0 ? "+" : ""}${t.r.toFixed(1)}R (${SETUP_STATUS[su.status]})`, dir: t.r > 0 ? 1 : -1 });
+      else if (su.status === "broken") lines.push({ text: `Đã huỷ: có nến đóng ${su.dir > 0 ? "dưới" : "trên"} ${fmt(su.invalid)} → chờ setup mới`, dir: 0 });
+      else lines.push({ text: `Hết giờ, không có CISD hợp lệ → chờ setup mới`, dir: 0 });
+      const sk = su.skips[su.skips.length - 1];
+      if (sk && !t) lines.push({ text: `CISD ${hhmm(bars[Math.min(sk.at, bars.length - 1)].time)} bị bỏ: ${sk.why}`, dir: 0 });
+    }
+    const done = out.setups.slice(-20).filter((x) => x.trade && x.trade.r != null && x.status !== "open");
+    if (done.length) {
+      const w = done.filter((x) => x.trade.r > 0).length, R = done.reduce((a, x) => a + x.trade.r, 0);
+      lines.push({ text: `20 setup gần nhất: ${done.length} lệnh · ${w} thắng / ${done.length - w} thua · ${R >= 0 ? "+" : ""}${R.toFixed(1)}R`, dir: 0 });
+    }
+    out.notes.forEach((t) => lines.push({ text: "⚠ " + t, dir: 0, warn: true }));
+    out.lines = lines;
+    return out;
+  }
+
   /* ----- drawing ----- */
 
   const FONT = "600 10.5px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
@@ -759,6 +902,7 @@
       }
     };
     const xi = (i) => X(i);
+    if (o.view === "setup") { drawSetups(g, o, cfg, X, Y, w, fmt, hline); drawPanel(g, o, cfg, w, h); g.restore(); return; }
 
     // Breakers and unicorns (under the rest).
     (o.breakers || []).forEach((b) => {
@@ -863,7 +1007,119 @@
       g.fillText(`${t.dir > 0 ? "MUA" : "BÁN"} ${res}`, x0 + 7, ya + (t.dir > 0 ? 4 : -2));
     });
 
-    // The panel: the story in a few lines, bottom left.
+    drawPanel(g, o, cfg, w, h);
+    g.restore();
+  }
+
+  /** X of a fractional bar index (a window that runs past the last bar). */
+  function xAt(X, i) {
+    const a = Math.floor(i), xa = X(a);
+    if (xa == null || i === a) return xa;
+    const xb = X(a + 1);
+    return xb == null ? xa : xa + (xb - xa) * (i - a);
+  }
+
+  const STATUS_COLOR = { wait: "#f2c14e", signal: "#f2c14e", open: "#2962ff", win: "#089981", loss: "#f23645", flat: "#787b86", broken: "#787b86", expired: "#787b86", skipped: "#787b86" };
+
+  /** A small rounded tag. */
+  function pill(g, text, x, y, bg, fg, align = "left") {
+    const tw = g.measureText(text).width, pw = tw + 10, ph = 16;
+    const x0 = align === "right" ? x - pw : align === "center" ? x - pw / 2 : x;
+    g.fillStyle = bg; g.beginPath(); g.roundRect(x0, y - ph / 2, pw, ph, 4); g.fill();
+    g.fillStyle = fg; g.textAlign = "left"; g.fillText(text, x0 + 5, y + 0.5);
+    return pw;
+  }
+
+  /** The fixed setups: the swept level, the window with the levels that decide it (EQ to hold, the close that
+   *  cancels it, candle 1's target), the trade as a position box with its labels, and the result. */
+  function drawSetups(g, o, cfg, X, Y, w, fmt, hline) {
+    // Swings form every few candles, so the chart keeps to: the setups still running and the newest one in
+    // full, the last few that traded as their trade only, and (optional) the cancelled ones, faint.
+    const all = o.setups || [], count = Math.max(1, cfg.setupCount || 4);
+    const isDead = (s) => s.status === "broken" || s.status === "expired" || s.status === "skipped";
+    const focus = o.focus;
+    const full = all.filter((s) => s === focus || s.status === "wait" || s.status === "signal" || s.status === "open");
+    const traded = all.filter((s) => s.trade && s.trade.entry != null && !full.includes(s)).slice(-count);
+    const faint = cfg.setupDead ? all.filter((s) => isDead(s) && !full.includes(s)).slice(-count) : [];
+    const list = [...faint, ...traded, ...full];
+    list.forEach((s) => {
+      const newest = s === focus;
+      const brief = traded.includes(s);
+      const dead = isDead(s);
+      const color = dead ? "#787b86" : s.dir > 0 ? cfg.bull : cfg.bear;
+      const x0 = X(s.from > o.lastIdx ? o.lastIdx : s.from), x1 = xAt(X, s.endIdx);
+      const xc1 = X(s.c1.start), xc2 = X(s.c2.end);
+      if (x0 == null || x1 == null || x1 < 0 || (xc1 != null && xc1 > w)) return;
+      g.globalAlpha = dead && !newest ? 0.35 : dead ? 0.6 : 1;
+      if (!brief) {
+      // Candle 1 and 2 of the higher timeframe: numbered rings over / under them, the swept level.
+      [[s.c1, 1], [s.c2, 2]].forEach(([c, k]) => {
+        const xa = X(c.start), xb = X(c.end);
+        if (xa == null || xb == null) return;
+        const y = Y(s.dir > 0 ? c.low : c.high);
+        if (y == null) return;
+        const yc = y + (s.dir > 0 ? 16 : -16), xm = (xa + xb) / 2;
+        g.fillStyle = k === 2 ? color : "rgba(21, 28, 42, 0.85)";
+        g.beginPath(); g.arc(xm, yc, 7, 0, Math.PI * 2); g.fill();
+        g.strokeStyle = color; g.lineWidth = 1; g.stroke();
+        g.fillStyle = k === 2 ? "#ffffff" : color; g.textAlign = "center"; g.fillText(String(k), xm, yc + 0.5);
+      });
+      if (xc1 != null && xc2 != null) hline(s.swept, xc1, xc2 + 6, rgba(color, 0.8), [2, 3], "");
+      // The window: a light band between the cancel level and the target, with the levels.
+      const yi = Y(s.invalid), yt = Y(s.target);
+      if (yi != null && yt != null) {
+        g.fillStyle = rgba(color, newest && !dead ? 0.06 : 0.035);
+        g.fillRect(Math.max(0, x0), Math.min(yi, yt), Math.max(2, x1 - Math.max(0, x0)), Math.abs(yt - yi));
+      }
+      const xl = Math.max(2, x0);
+      hline(s.invalid, x0, x1, rgba(cfg.bear === color ? "#ff9800" : cfg.bear, 0.9), [5, 3], newest ? `Huỷ nếu đóng ${s.dir > 0 ? "dưới" : "trên"} ${fmt(s.invalid)}` : "", "left");
+      if (cfg.eqLines) hline(s.eq, x0, x1, cfg.eqColor, [6, 4], newest ? `${s.eqLabel} ${fmt(s.eq)}` : "", "left");
+      hline(s.target, x0, x1, rgba(color, 0.9), [], newest ? `Mục tiêu nến 1 ${fmt(s.target)}` : "", "left");
+      // The header: number, side, status.
+      const yh = Y(s.dir > 0 ? Math.min(s.invalid, s.target) : Math.max(s.invalid, s.target));
+      if (yh != null) pill(g, `#${s.n} ${s.dir > 0 ? "MUA" : "BÁN"} · ${SETUP_STATUS[s.status]}`, xl, yh + (s.dir > 0 ? 14 : -24), rgba(STATUS_COLOR[s.status], 0.9), "#ffffff");
+      // The CISD that was skipped (newest setup only): a small cross with the reason.
+      if (cfg.setupSkips && newest && !s.trade) s.skips.slice(-3).forEach((k) => {
+        const xx = X(k.at), yy = Y(k.level);
+        if (xx == null || yy == null) return;
+        g.strokeStyle = "#9aa4b2"; g.lineWidth = 1.5;
+        g.beginPath(); g.moveTo(xx - 4, yy - 4); g.lineTo(xx + 4, yy + 4); g.moveTo(xx + 4, yy - 4); g.lineTo(xx - 4, yy + 4); g.stroke();
+        g.fillStyle = "#9aa4b2"; g.textAlign = "left"; g.fillText(k.why, xx + 7, yy + (s.dir > 0 ? 10 : -10));
+      });
+      }
+      g.globalAlpha = 1;
+      const t = s.trade;
+      if (!t) return;
+      // The CISD that triggered it.
+      const xf = X(t.cisd.from), xa = X(t.cisd.at);
+      if (xf != null && xa != null) {
+        hline(t.cisd.level, xf, xa + 4, color, [], "", "left");
+        const yy = Y(t.cisd.level);
+        if (yy != null) { g.fillStyle = color; g.textAlign = "left"; g.fillText("CISD", Math.max(2, xf) + 2, yy + (s.dir > 0 ? 9 : -8)); }
+      }
+      if (t.entry == null) return;
+      // The trade: a position box (target green, stop red) from the entry to the exit.
+      const xe = X(t.at), xx = t.why === "open" ? Math.max(x1, X(o.lastIdx) + 40) : X(t.exitAt);
+      const ye = Y(t.entry), ys = Y(t.stop), yt2 = Y(t.target);
+      if (xe == null || xx == null || ye == null || ys == null || yt2 == null) return;
+      const left = Math.max(0, xe), width = Math.max(24, xx - left);
+      g.fillStyle = rgba(cfg.bull, 0.16); g.fillRect(left, Math.min(ye, yt2), width, Math.abs(yt2 - ye));
+      g.fillStyle = rgba(cfg.bear, 0.16); g.fillRect(left, Math.min(ye, ys), width, Math.abs(ys - ye));
+      g.strokeStyle = s.dir > 0 ? cfg.bull : cfg.bear; g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(left, Math.round(ye) + 0.5); g.lineTo(left + width, Math.round(ye) + 0.5); g.stroke();
+      // Labels on the box's right side: entry, stop, target.
+      // Labels right of the box: "#n BÁN entry · result", the stop and the target (kept apart when close).
+      const lx = left + width + 4;
+      const res = t.why === "open" ? " · đang chạy" : ` · ${t.r >= 0 ? "+" : ""}${t.r.toFixed(1)}R ${t.r > 0 ? "✓" : "✗"}`;
+      pill(g, `#${s.n} ${s.dir > 0 ? "MUA" : "BÁN"} ${fmt(t.entry)}${res}`, lx, ye, t.why === "open" ? (s.dir > 0 ? cfg.bull : cfg.bear) : t.r > 0 ? cfg.bull : cfg.bear, "#ffffff");
+      const gap = (y) => (Math.abs(y - ye) < 17 ? ye + Math.sign(y - ye || 1) * 17 : y);
+      pill(g, `SL ${fmt(t.stop)}`, lx, gap(ys), "rgba(242, 54, 69, 0.85)", "#ffffff");
+      pill(g, `TP ${fmt(t.target)}`, lx, gap(yt2), "rgba(8, 153, 129, 0.85)", "#ffffff");
+    });
+  }
+
+  /** The panel: the story in a few lines, bottom left. */
+  function drawPanel(g, o, cfg, w, h) {
     if (cfg.panel && o.lines && o.lines.length) {
       g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
       const lh = 17, pad = 8, maxW = Math.min(w - 20, 560);
@@ -880,7 +1136,6 @@
         g.fillText(r.text, bx + pad + 12, yy + 0.5);
       });
     }
-    g.restore();
   }
 
   function fit(g, text, max) {
@@ -890,5 +1145,5 @@
     return t + "…";
   }
 
-  window.MODELS = { defaults, merge, compute, draw, pairOf, aggregate, cisds, breakers, htfStory, HTF_NAMES, entries, liquidityEntries, dailyBot, botEntries, BOT_MODELS, entryDefaults, entryOptions, stats, SKIPS, nyClock };
+  window.MODELS = { defaults, merge, compute, draw, pairOf, aggregate, cisds, breakers, htfStory, HTF_NAMES, entries, setupTimeline, SETUP_STATUS, liquidityEntries, dailyBot, botEntries, BOT_MODELS, entryDefaults, entryOptions, stats, SKIPS, nyClock };
 })();
