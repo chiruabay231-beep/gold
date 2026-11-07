@@ -6523,6 +6523,8 @@
           + sel("entryStop", "Cắt lỗ", [["leg", "Ngoài chân thao túng M1"], ["c2", "Đỉnh / đáy nến 2 (15m)"]])
           + tog("entryKillzones", "Chỉ trong killzone London 2–5h, NY 7–10h (giờ New York)") + tog("entrySkipMonday", "Bỏ Thứ Hai")
           + tog("entryOnePerSwing", "Một lệnh mỗi swing 15m") + tog("entryIdeal", "Chỉ ideal formation (nến 2 râu dài)") + numf("entrySpread", "Spread + phí mỗi lệnh (giá)", 0.05)
+          + tog("entryDailyProfile", "Hồ sơ ngày: London đảo chiều → NY theo; London phá hẳn → bỏ NY; London đi ngang → NY đảo chiều")
+          + tog("entryDailyBias", "Bias ngày (PDH / PDL, failure to displace) cùng chiều") + tog("entryNews", "Tránh giờ ra tin 8:25–8:45 và 9:55–10:15 (NY)")
           + `<button type="button" class="btn btn-gold wide" data-bt-m1>▶ Backtest bot M1 trên dữ liệu MT5</button>`
           + head("Khác") + tog("rules", "Luật lịch: Thứ Hai, ngày trước tin đỏ, sắp có tin") + tog("panel", "Bảng tóm tắt ở góc trái dưới");
       };
@@ -6576,6 +6578,9 @@
         vào ở giá mở nến kế tiếp. Không nhìn trước tương lai; cây nến chạm cả SL và TP tính là thua. Dùng cài đặt ở mục "Vào lệnh M1".</p>
         <div class="fields two"><label>Số ngày<select id="btDays">${[7, 14, 30, 60, 90].map((d) => `<option value="${d}" ${d === days ? "selected" : ""}>${d} ngày</option>`).join("")}</select></label>
         <label>Chốt lời<select id="btTarget">${[["2R", "2R"], ["std2", "-2 Std"], ["std4", "-4 Std"]].map(([v, n]) => `<option value="${v}" ${v === cfg.entryTarget ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
+        <div class="toggles bt-filters">${[["entryKillzones", "Killzone London 2–5h, NY 7–10h"], ["entrySkipMonday", "Bỏ Thứ Hai"], ["entryOnePerSwing", "Một lệnh mỗi swing 15m"],
+          ["entryDailyProfile", "Hồ sơ ngày (London / NY reversal)"], ["entryDailyBias", "Bias ngày (PDH / PDL) cùng chiều"], ["entryNews", "Tránh giờ ra tin 8:30 / 10:00"], ["entryIdeal", "Chỉ ideal formation"]]
+          .map(([k, n]) => `<label class="toggle"><span>${n}</span><span class="switch"><input type="checkbox" data-f="${k}" ${cfg[k] ? "checked" : ""}><span></span></span></label>`).join("")}</div>
         <button class="btn btn-gold wide" id="btRun">▶ Chạy backtest ${esc(this.symbol || "")}</button>
         <div id="btOut" class="bt-out"></div>`, (el) => {
         const out = el.querySelector("#btOut");
@@ -6584,6 +6589,7 @@
           const d = +el.querySelector("#btDays").value;
           store.set("aurum.btm1days", String(d));
           cfg.entryTarget = el.querySelector("#btTarget").value;
+          el.querySelectorAll("[data-f]").forEach((x) => { cfg[x.dataset.f] = x.checked; });
           store.set("aurum.modelcfg", JSON.stringify(cfg));
           button.disabled = true;
           out.innerHTML = `<p class="muted">Đang tải nến M1…</p>`;

@@ -16,7 +16,7 @@
       projections: true, projLevels: "-1,-2,-2.5,-4", breakers: true, breakerCount: 3, unicorn: true, rules: true, panel: true,
       // M1 entries (the fractal model's 15m → 1m), shown on the 1-minute chart.
       entries: true, entryTarget: "2R", entrySpread: 0.3, entryKillzones: true, entrySkipMonday: true, entryOnePerSwing: true,
-      entryStop: "leg", entryIdeal: false,
+      entryStop: "leg", entryIdeal: false, entryDailyProfile: true, entryDailyBias: false, entryNews: false,
       bull: "#089981", bear: "#f23645", eqColor: "#f2c14e", projColor: "#9c6bff", breakerColor: "#787b86", unicornColor: "#e91e63",
     };
   }
@@ -284,16 +284,85 @@
     let v = NY_OFF.get(hk);
     if (!v) {
       const p = Object.fromEntries(NY_PARTS.formatToParts(new Date(hk * 3600000)).map((x) => [x.type, x.value]));
-      v = { hour: +p.hour % 24, weekday: p.weekday };
+      const local = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24) / 1000;
+      v = { hour: +p.hour % 24, weekday: p.weekday, day: Math.floor(local / 86400) };
       NY_OFF.set(hk, v);
     }
-    return { hour: v.hour + (t % 3600) / 3600, weekday: v.weekday };
+    return { hour: v.hour + (t % 3600) / 3600, weekday: v.weekday, day: v.day };
   }
 
   function entryDefaults() {
     return { htf: 900, killzones: true, skipMonday: true, target: "2R", minRisk: 0.8, maxRisk: 15, spread: 0.3, maxHold: 240,
-      maxPerSetup: 2, poiOnly: true, kz: [[2, 5], [7, 10]], stopMode: "leg", idealOnly: false };
+      maxPerSetup: 2, poiOnly: true, kz: [[2, 5], [7, 10]], stopMode: "leg", idealOnly: false,
+      dailyProfile: false, dailyBias: false, newsWindows: false };
   }
+
+  /** The day's profile so far, as the model reads it (New York time): Asia = 20:00-24:00 the evening before,
+   *  London = 02:00-05:00.
+   *   - London reversal: London took one side of Asia and closed back inside → New York continues it;
+   *   - London expansion: London broke one side and stayed out → stay out of New York;
+   *   - consolidation / opposing run: London stayed inside Asia → New York may reverse (either way). */
+  function dayProfiles(bars) {
+    const days = new Map(); // NY day → { asiaHi, asiaLo, lonHi, lonLo, lonClose, lonEnd, sweptLow, sweptHigh }
+    bars.forEach((b, i) => {
+      const ck = nyClock(b.time);
+      const key = ck.hour >= 20 ? ck.day + 1 : ck.day;
+      let d = days.get(key);
+      if (!d) { d = { asiaHi: -Infinity, asiaLo: Infinity, lonHi: -Infinity, lonLo: Infinity, lonClose: null, lonEnd: -1, firstSweep: null, sweepAt: {} }; days.set(key, d); }
+      if (ck.hour >= 20) { d.asiaHi = Math.max(d.asiaHi, b.high); d.asiaLo = Math.min(d.asiaLo, b.low); }
+      else if (ck.hour >= 2 && ck.hour < 5 && isFinite(d.asiaHi)) {
+        d.lonHi = Math.max(d.lonHi, b.high); d.lonLo = Math.min(d.lonLo, b.low); d.lonClose = b.close; d.lonEnd = i;
+        if (b.low < d.asiaLo && d.sweepAt.low == null) d.sweepAt.low = i;
+        if (b.high > d.asiaHi && d.sweepAt.high == null) d.sweepAt.high = i;
+      }
+    });
+    days.forEach((d) => {
+      if (!isFinite(d.asiaHi) || d.lonClose == null) { d.kind = "none"; return; }
+      const tookLow = d.lonLo < d.asiaLo, tookHigh = d.lonHi > d.asiaHi;
+      if (tookLow && !tookHigh) d.kind = d.lonClose > d.asiaLo ? "londonReversalUp" : "londonExpansionDown";
+      else if (tookHigh && !tookLow) d.kind = d.lonClose < d.asiaHi ? "londonReversalDown" : "londonExpansionUp";
+      else if (tookHigh && tookLow) d.kind = "londonBoth";
+      else d.kind = "consolidation";
+    });
+    return days;
+  }
+
+  /** May a trade of `dir` open at bar `i` (New York clock `ck`) by the day's profile? */
+  function profileAllows(days, ck, i, dir) {
+    const d = days.get(ck.hour >= 20 ? ck.day + 1 : ck.day);
+    if (!d) return false;
+    if (ck.hour >= 2 && ck.hour < 5) {
+      // In London: only after London has taken the Asia side against the trade (the manipulation).
+      const at = dir > 0 ? d.sweepAt.low : d.sweepAt.high;
+      return at != null && at < i;
+    }
+    if (ck.hour >= 5) {
+      if (d.kind === "londonReversalUp") return dir > 0;
+      if (d.kind === "londonReversalDown") return dir < 0;
+      if (d.kind === "londonExpansionUp" || d.kind === "londonExpansionDown" || d.kind === "londonBoth") return false;
+      return d.kind === "consolidation";
+    }
+    return false;
+  }
+
+  /** The daily bias (previous day high / low, next candle model) for each chart bar: +1, -1 or 0. */
+  function dailyBiasAt(bars) {
+    const days = aggregate(bars, 60, 86400);
+    const bias = new Array(bars.length).fill(0);
+    for (let k = 2; k < days.length; k++) {
+      const b = days[k - 2], c = days[k - 1];
+      let dir = 0;
+      if (c.close > b.high) dir = 1;
+      else if (c.close < b.low) dir = -1;
+      else if (c.high > b.high && c.close < b.high) dir = -1;
+      else if (c.low < b.low && c.close > b.low) dir = 1;
+      for (let i = days[k].start; i <= days[k].end; i++) bias[i] = dir;
+    }
+    return bias;
+  }
+
+  /** New York 08:25-08:45 and 09:55-10:15: the usual release times of red USD news. */
+  const NEWS_WINDOWS = [[8 + 25 / 60, 8.75], [9 + 55 / 60, 10.25]];
 
   /** The higher timeframe setups and, for each chart bar, the one it trades in (candle 3 / candle 4 window). */
   function setupsOf(bars, htfSec) {
@@ -328,6 +397,8 @@
   function entries(bars, opt) {
     opt = Object.assign(entryDefaults(), opt || {});
     const setupAt = setupsOf(bars, opt.htf);
+    const days = opt.dailyProfile ? dayProfiles(bars) : null;
+    const bias = opt.dailyBias ? dailyBiasAt(bars) : null;
     const events = cisds(bars, [1, 2, 2.5, 4], [], opt.poiOnly);
     const out = [], used = new Map();
     let busyUntil = -1;
@@ -344,6 +415,9 @@
       const ck = nyClock(bars[i + 1].time);
       if (opt.skipMonday && ck.weekday === "Mon") continue;
       if (opt.killzones && !opt.kz.some(([a, z]) => ck.hour >= a && ck.hour < z)) continue;
+      if (days && !profileAllows(days, ck, i, s.dir)) continue;
+      if (bias && bias[i] !== s.dir) continue;
+      if (opt.newsWindows && NEWS_WINDOWS.some(([a, z]) => ck.hour >= a && ck.hour < z)) continue;
       if ((used.get(s.id) || 0) >= opt.maxPerSetup) continue;
       // Stop beyond the 1-minute manipulation leg, or (the model's rule) beyond the higher timeframe candle 2.
       const entry = bars[i + 1].open, stop = opt.stopMode === "c2" ? s.stop : s.dir > 0 ? e.lo : e.hi, risk = Math.abs(entry - stop);
@@ -373,7 +447,8 @@
   /** The entry options from the indicator's settings. */
   function entryOptions(cfg) {
     return { target: cfg.entryTarget, spread: +cfg.entrySpread || 0, killzones: cfg.entryKillzones, skipMonday: cfg.entrySkipMonday,
-      maxPerSetup: cfg.entryOnePerSwing ? 1 : 2, stopMode: cfg.entryStop, idealOnly: cfg.entryIdeal, maxRisk: cfg.entryStop === "c2" ? 40 : 15 };
+      maxPerSetup: cfg.entryOnePerSwing ? 1 : 2, stopMode: cfg.entryStop, idealOnly: cfg.entryIdeal, maxRisk: cfg.entryStop === "c2" ? 40 : 15,
+      dailyProfile: cfg.entryDailyProfile, dailyBias: cfg.entryDailyBias, newsWindows: cfg.entryNews };
   }
 
   /** Win rate, R and drawdown of a list of trades. */
