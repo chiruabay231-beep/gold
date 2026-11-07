@@ -15,11 +15,11 @@
       // "setup": each swing frozen as a setup with its own levels, trade and status; "full": the live story.
       view: "setup", setupCount: 4, setupSkips: true, setupDead: false,
       // The checklist: "score" = required factors + a minimum count; "filters" = the "Vào lệnh M1" switches.
-      setupMode: "score", setupMust: "kz,profile,cal", setupMinScore: 6,
+      setupMode: "score", setupMust: "kz,profile,cal", setupMinScore: 6, setupMaxSlPips: 50, setupSlMode: "skip", setupNear: true,
       htf: "auto", swing: true, eqLines: true, pcl: true, cisd: true, cisdPoiOnly: true, cisdCount: 3,
       projections: true, projLevels: "-1,-2,-2.5,-4", breakers: true, breakerCount: 3, unicorn: true, rules: true, panel: true,
       // M1 entries (the fractal model's 15m → 1m), shown on the 1-minute chart.
-      entries: true, entryTarget: "1.5R", entrySpread: 0.3, entryBot: "ttrades", entryKillzones: true, entryNyPm: false, entryAsia: false, entrySkipMonday: false, entryOnePerSwing: true,
+      entries: true, entryTarget: "1R", entrySpread: 0.3, entryBot: "ttrades", entryKillzones: true, entryNyPm: false, entryAsia: false, entrySkipMonday: false, entryOnePerSwing: true,
       entryStop: "leg", entryIdeal: false, entryDailyProfile: true, entryDailyBias: false, entryNews: false,
       entryDiscount: true, entryAlignH1: false, entryStrong: false, entryPartial: false, entryMode: "market",
       bull: "#089981", bear: "#f23645", eqColor: "#f2c14e", projColor: "#9c6bff", breakerColor: "#787b86", unicornColor: "#e91e63",
@@ -682,6 +682,7 @@
     const atrAll = atr || rangeAvg(bars, 14);
     const bks = breakers(bars, true);
     const must = new Set(String(cfg.setupMust || "").split(",").filter(Boolean));
+    const pip = pipSize(last.close), slCap = +cfg.setupMaxSlPips > 0 ? +cfg.setupMaxSlPips * pip : Infinity;
     const minScore = cfg.setupMode === "score" ? Math.max(0, +cfg.setupMinScore || 0) : 0;
     const poiAt = (e, dir, i) => {
       const x = dir > 0 ? e.lo : e.hi, tol = atrAll[i] * 0.5;
@@ -709,6 +710,10 @@
       || (k === "dbias" && !!bias) || (k === "h1" && !!align) || (k === "ideal" && opt.idealOnly) || (k === "strong" && !!atr)
       || (k === "cal" && intraday && (opt.skipMonday || opt.newsWindows));
     const scoreOf = (list) => list.filter((x) => x.ok).length;
+    const nearMiss = (list) => {
+      const miss = list.filter((x) => x.must && !x.ok).length, sc = scoreOf(list);
+      return (miss === 1 && sc >= minScore - 1) || (miss === 0 && sc === minScore - 1);
+    };
     const passes = (list) => list.every((x) => !x.must || x.ok) && scoreOf(list) >= minScore;
     const missing = (list) => { const m = list.filter((x) => x.must && !x.ok); return m.length ? m.map((x) => x.short).join(", ") : `${scoreOf(list)}/${list.length} điểm, cần ${minScore}`; };
     // Index of a time on this chart, past the last bar too (for a window that is still open).
@@ -756,7 +761,7 @@
         const skip = (why, list) => { su.skips.push({ at: i, why, level: e.level, list }); };
         // The model itself: the CISD respects the equilibrium of the swing.
         if (dir > 0 ? b.close < su.eq : b.close > su.eq) { skip(`đóng ${dir > 0 ? "dưới" : "trên"} ${eq.label}`); continue; }
-        const stop = cfg.entryStop === "c2" ? su.invalid : dir > 0 ? e.lo : e.hi;
+        let stop = cfg.entryStop === "c2" ? su.invalid : dir > 0 ? e.lo : e.hi;
         if (i + 1 >= n) {
           // The CISD closed on the last bar: the checklist with the close as the entry, the trade at the next open.
           const list = checklist(su, e, b, nyClock(last.time + sec), b.close, Math.abs(b.close - stop));
@@ -766,7 +771,13 @@
           break;
         }
         const ck = nyClock(bars[i + 1].time);
-        const entry = bars[i + 1].open, risk = (entry - stop) * dir;
+        const entry = bars[i + 1].open;
+        let risk = (entry - stop) * dir;
+        // The largest stop allowed (pips): a farther one is pulled in to it, or the CISD is skipped.
+        if (risk > slCap) {
+          if (cfg.setupSlMode === "skip") { skip(`SL > ${cfg.setupMaxSlPips} pip`); continue; }
+          stop = entry - dir * slCap; risk = slCap;
+        }
         if (risk <= 0 || (intraday && (risk < opt.minRisk || risk > opt.maxRisk))) { skip(risk <= 0 ? "giá đã vượt SL" : risk < opt.minRisk ? "SL quá gần" : "SL quá xa"); continue; }
         let target = entry + dir * risk * (opt.targetR || 2);
         const stdK = { std1: 1, std2: 2, std25: 2.5, std4: 4 }[opt.target];
@@ -776,7 +787,10 @@
         const list = checklist(su, e, b, ck, entry, risk);
         su.list = list; su.score = scoreOf(list);
         const ok = passes(list);
-        if (!ok && !cfg._candidates) { skip(missing(list), list); continue; }
+        // Near misses (one required factor short, or one point): kept as "B" with their own result, so what
+        // the eye would take and the rules leave out can be checked on the chart.
+        const near = !ok && !su.near && nearMiss(list);
+        if (!ok && !near && !cfg._candidates) { skip(missing(list), list); continue; }
         let exit = null, exitAt = null, why = "time";
         for (let k = i + 1; k < n && k <= i + 1 + opt.maxHold; k++) {
           const x = bars[k];
@@ -786,7 +800,10 @@
         if (exit == null) { exitAt = Math.min(n - 1, i + 1 + opt.maxHold); exit = bars[exitAt].close; if (exitAt === n - 1) why = "open"; }
         const r = ((exit - entry) * dir) / risk - opt.spread / risk;
         if (cfg._candidates) cfg._candidates.push({ setup: su.n, at: i, time: b.time, list: list.map((x) => x.ok), r, why });
-        if (!ok) { skip(missing(list), list); continue; }
+        if (!ok) {
+          if (near) su.near = { cisd: { level: e.level, from: e.from, at: i }, at: i + 1, time: bars[i + 1].time, entry, stop, target, risk, exit, exitAt, exitTime: bars[exitAt].time, why, r, missing: missing(list), score: scoreOf(list) };
+          skip(missing(list), list); continue;
+        }
         su.trade = { cisd: { level: e.level, from: e.from, at: i }, at: i + 1, time: bars[i + 1].time, entry, stop, target, risk, exit, exitAt, exitTime: bars[exitAt].time, why, r };
         su.status = why === "open" ? "open" : why === "target" ? "win" : why === "stop" ? (r > 0 ? "win" : "loss") : r > 0 ? "win" : "flat";
         break;
@@ -804,6 +821,9 @@
     }
     return out;
   }
+
+  /** One pip: 0.1 for gold and other prices in the thousands, 0.01 for JPY pairs / silver / oil, 0.0001 for FX. */
+  const pipSize = (p) => (p >= 500 ? 0.1 : p >= 20 ? 0.01 : 0.0001);
 
   const CHECK_NAMES = { kz: "Killzone", profile: "Hồ sơ ngày", zone: "Vùng", dbias: "Bias ngày", h1: "Nến H1", ideal: "Ideal", poi: "Breaker", cal: "Lịch", room: "≥ 2R", strong: "CISD mạnh" };
   const CHECK_LABELS = {
@@ -940,6 +960,11 @@
     if (done.length) {
       const w = done.filter((x) => x.trade.r > 0).length, R = done.reduce((a, x) => a + x.trade.r, 0);
       lines.push({ text: `Trên chart (${out.setups.length} setup): ${done.length} lệnh · ${w} thắng / ${done.length - w} thua (${Math.round((w / done.length) * 100)}%) · ${R >= 0 ? "+" : ""}${R.toFixed(1)}R`, dir: R > 0 ? 1 : R < 0 ? -1 : 0 });
+    }
+    const nb = cfg.setupNear ? out.setups.filter((x) => !x.trade && x.near && x.near.why !== "open") : [];
+    if (nb.length) {
+      const w = nb.filter((x) => x.near.r > 0).length, R = nb.reduce((a, x) => a + x.near.r, 0);
+      lines.push({ text: `Gần đủ (B, không vào): ${nb.length} lần · ${w} thắng / ${nb.length - w} thua (${Math.round((w / nb.length) * 100)}%) · ${R >= 0 ? "+" : ""}${R.toFixed(1)}R`, dir: 0 });
     }
     // Honest notes from the backtests (gold, April to November 2026): the model alone has no edge.
     if (!(sec === 60 && htfSec === 900)) out.notes.unshift(`Cặp ${tf}→${out.htfName}: backtest vàng 7 tháng thua lỗ (~40% thắng) — chỉ để tham khảo, nên dùng 1m→15m`);
@@ -1126,9 +1151,23 @@
     const isDead = (s) => s.status === "broken" || s.status === "expired" || s.status === "skipped";
     const focus = o.focus;
     const full = all.filter((s) => s === focus || s.status === "wait" || s.status === "signal" || s.status === "open");
-    const traded = all.filter((s) => s.trade && s.trade.entry != null && !full.includes(s)).slice(-count);
+    const traded = all.filter((s) => ((s.trade && s.trade.entry != null) || (cfg.setupNear && s.near)) && !full.includes(s)).slice(-count);
     const faint = cfg.setupDead ? all.filter((s) => isDead(s) && !full.includes(s)).slice(-count) : [];
     const list = [...faint, ...traded, ...full];
+    // A near miss: the trade it would have been, dashed and without fill, with what it lacked.
+    const drawNear = (s, t, color) => {
+      const xe = X(t.at), xx = t.why === "open" ? X(o.lastIdx) + 40 : X(t.exitAt);
+      const ye = Y(t.entry), ys = Y(t.stop), yt = Y(t.target);
+      if (xe == null || xx == null || ye == null || ys == null || yt == null) return;
+      const left = Math.max(0, xe), width = Math.max(24, xx - left);
+      g.save(); g.globalAlpha = 0.75; g.setLineDash([3, 3]); g.lineWidth = 1;
+      g.strokeStyle = cfg.bull; g.strokeRect(left, Math.min(ye, yt), width, Math.abs(yt - ye));
+      g.strokeStyle = cfg.bear; g.strokeRect(left, Math.min(ye, ys), width, Math.abs(ys - ye));
+      g.setLineDash([]);
+      const res = t.why === "open" ? "đang chạy" : `${t.r >= 0 ? "+" : ""}${t.r.toFixed(1)}R ${t.r > 0 ? "✓" : "✗"}`;
+      pill(g, `B #${s.n} ${s.dir > 0 ? "MUA" : "BÁN"} · thiếu ${t.missing} · ${res}`, left, (s.dir > 0 ? Math.max(ye, ys) : Math.min(ye, ys)) + (s.dir > 0 ? 12 : -12), "rgba(120, 123, 134, 0.85)", "#ffffff");
+      g.restore();
+    };
     list.forEach((s) => {
       const newest = s === focus;
       const brief = traded.includes(s);
@@ -1177,6 +1216,7 @@
       }
       g.globalAlpha = 1;
       const t = s.trade;
+      if (!t && s.near && cfg.setupNear) drawNear(s, s.near, color);
       if (!t) return;
       // The CISD that triggered it.
       const xf = X(t.cisd.from), xa = X(t.cisd.at);
@@ -1201,7 +1241,7 @@
       const res = t.why === "open" ? " · đang chạy" : ` · ${t.r >= 0 ? "+" : ""}${t.r.toFixed(1)}R ${t.r > 0 ? "✓" : "✗"}`;
       pill(g, `#${s.n} ${s.dir > 0 ? "MUA" : "BÁN"} ${fmt(t.entry)}${s.score != null ? ` · ${s.score}/${s.list.length}` : ""}${res}`, lx, ye, t.why === "open" ? (s.dir > 0 ? cfg.bull : cfg.bear) : t.r > 0 ? cfg.bull : cfg.bear, "#ffffff");
       const gap = (y) => (Math.abs(y - ye) < 17 ? ye + Math.sign(y - ye || 1) * 17 : y);
-      pill(g, `SL ${fmt(t.stop)}`, lx, gap(ys), "rgba(242, 54, 69, 0.85)", "#ffffff");
+      pill(g, `SL ${fmt(t.stop)} · ${Math.round(t.risk / pipSize(t.entry))} pip`, lx, gap(ys), "rgba(242, 54, 69, 0.85)", "#ffffff");
       pill(g, `TP ${fmt(t.target)}`, lx, gap(yt2), "rgba(8, 153, 129, 0.85)", "#ffffff");
     });
   }
@@ -1252,5 +1292,5 @@
     return t + "…";
   }
 
-  window.MODELS = { defaults, merge, compute, draw, drawPanelOnly, pairOf, aggregate, cisds, breakers, htfStory, HTF_NAMES, entries, setupTimeline, SETUP_STATUS, CHECK_NAMES, CHECK_LABELS, liquidityEntries, dailyBot, botEntries, BOT_MODELS, entryDefaults, entryOptions, stats, SKIPS, nyClock };
+  window.MODELS = { pipSize, defaults, merge, compute, draw, drawPanelOnly, pairOf, aggregate, cisds, breakers, htfStory, HTF_NAMES, entries, setupTimeline, SETUP_STATUS, CHECK_NAMES, CHECK_LABELS, liquidityEntries, dailyBot, botEntries, BOT_MODELS, entryDefaults, entryOptions, stats, SKIPS, nyClock };
 })();
