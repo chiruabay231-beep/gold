@@ -555,6 +555,7 @@
 
     stop() {
       clearInterval(this.timer); this.timer = null;
+      this.tickable = false;
       if (this.feed) { this.feed.close(); this.feed = null; }
       if (this.ws) { this.ws.onmessage = null; this.ws.onclose = null; this.ws.close(); this.ws = null; }
       this.loadedKey = null;
@@ -640,6 +641,7 @@
       } else if (live === "mt5") {
         this.polledAt = Date.now();
         this.timer = setInterval(() => this.poll(token), 2000);
+        this.tickable = true;
       } else {
         const ws = new WebSocket(`${market.futures ? "wss://fstream.binance.com/ws/" : "wss://stream.binance.com:9443/ws/"}${market.name.toLowerCase()}@kline_${binanceKline(tf)[0]}`);
         const fold = klineFolder(tf);
@@ -651,6 +653,13 @@
         };
         this.ws = ws;
       }
+    }
+
+    /** The main chart's MT5 tick (the same symbol) into this chart's forming bar. */
+    tick(t) {
+      if (!this.tickable || !this.bars.length) return;
+      this.term.tickInto(this.bars, TF_SECONDS[this.tf], t, (b) => this.series.update(shown(b)));
+      this.showPrice(t.bid);
     }
 
     put(b) {
@@ -1504,6 +1513,7 @@
         this.updateTab(true);
         clearInterval(this.pollTimer); this.pollTimer = null;
         if (this.socket) { this.socket.close(); this.socket = null; }
+        this.stopTicks();
         (this.panes || []).forEach((p) => p.stop());
       }
     },
@@ -3494,6 +3504,7 @@
       }
       if (this.socket) { this.socket.close(); this.socket = null; }
       clearInterval(this.pollTimer); this.pollTimer = null;
+      this.stopTicks();
       this.noOlder = false;
       this.secFeed = null;
       const token = (this.loadToken = (this.loadToken || 0) + 1);
@@ -3552,6 +3563,7 @@
         this.setQuote(data);
         this.lastPollAt = Date.now();
         this.pollTimer = setInterval(() => this.pollBars(token), 2000);
+        this.startTicks(token);
       } catch (e) {
         if (token !== this.loadToken) return;
         const market = binanceMarket(this.owner ? this.symbol : "XAUUSD");
@@ -3563,6 +3575,79 @@
       this.redraw();
       this.applyBtMarkers();
       if (this.layout !== "1") this.setLayout(this.layout); else if (this.smtWanted()) this.loadCmp();
+    },
+
+    /* ----- MT5 ticks pushed by the VPS (server 3.4+): every bid / ask as it comes, not a poll every 2 s ----- */
+
+    startTicks(token) {
+      this.stopTicks();
+      if (!this.base || !this.secret) return;
+      const ctrl = (this.tickAbort = new AbortController());
+      const path = this.owner ? `/mt5/ticks?symbol=${encodeURIComponent(this.symbol || "")}` : "/member/ticks";
+      (async () => {
+        let wait = 1000;
+        while (!ctrl.signal.aborted && token === this.loadToken) {
+          try {
+            const res = await fetch(this.base + path, { headers: { Authorization: "Bearer " + this.secret }, signal: ctrl.signal, cache: "no-store" });
+            if (res.status === 404 || res.status === 403) return; // an older server, or not for this member: the 2 s poll stays
+            if (!res.ok || !res.body) throw new Error(String(res.status));
+            const reader = res.body.getReader(), dec = new TextDecoder();
+            let buf = "";
+            this.tickLive = true;
+            for (;;) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              buf += dec.decode(value, { stream: true });
+              let i;
+              while ((i = buf.indexOf("\n\n")) >= 0) {
+                const line = buf.slice(0, i).split("\n").find((l) => l.startsWith("data:"));
+                buf = buf.slice(i + 2);
+                if (line) { try { this.onTick(JSON.parse(line.slice(5)), token); } catch { /* a bad line */ } }
+              }
+              wait = 1000;
+            }
+          } catch { if (ctrl.signal.aborted) return; }
+          this.tickLive = false;
+          await new Promise((r) => setTimeout(r, wait));
+          wait = Math.min(15000, wait * 2);
+        }
+      })();
+    },
+
+    stopTicks() {
+      if (this.tickAbort) { this.tickAbort.abort(); this.tickAbort = null; }
+      this.tickLive = false;
+    },
+
+    /** One tick: the quote, the money and the forming bar at once (drawn once per frame at most). */
+    onTick(t, token) {
+      if (token !== this.loadToken || !t || !(t.bid > 0)) return;
+      this.tickNext = t;
+      if (this.tickFrame) return;
+      this.tickFrame = requestAnimationFrame(() => {
+        this.tickFrame = null;
+        const tick = this.tickNext;
+        if (!tick || token !== this.loadToken) return;
+        this.tickInto(this.bars, TF_SECONDS[this.interval], tick, (b) => { if (!this.replay && !this.replayGap) this.series.update(shown(b)); });
+        (this.panes || []).forEach((p) => p.tick(tick));
+        if (!this.replay) this.setQuote({ bid: tick.bid, ask: tick.ask });
+      });
+    },
+
+    /** A tick into the forming bar (or the next one when the bar's time is up); bars of another time are left
+     *  to the poll, so a clock that is off can never add a bar at the wrong time. */
+    tickInto(bars, sec, t, draw) {
+      const last = bars[bars.length - 1];
+      if (!last || !sec || this.replay) return;
+      const start = Math.floor(t.time / sec) * sec;
+      if (start === last.time) {
+        last.high = Math.max(last.high, t.bid); last.low = Math.min(last.low, t.bid); last.close = t.bid;
+        draw(last);
+      } else if (start === last.time + sec) {
+        const b = { time: start, open: t.bid, high: t.bid, low: t.bid, close: t.bid, volume: 0 };
+        bars.push(b);
+        draw(b);
+      }
     },
 
     // The newest bars every 2 seconds (MT5 has no public stream).

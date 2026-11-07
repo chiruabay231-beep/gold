@@ -362,6 +362,46 @@ extension RemoteBotClient {
         return try JSONDecoder().decode(T.self, from: await send(path, method: "POST", body: body, timeout: timeout))
     }
 
+    /// One MT5 tick pushed by the VPS: bid, ask and its time (UTC seconds).
+    struct MT5Tick: Decodable, Sendable {
+        var bid: Double
+        var ask: Double
+        var time: Double
+    }
+
+    /// Every MT5 tick of `symbol` as the VPS reads it (server 3.4+, server-sent events): the price moves on
+    /// the chart and the demo account's SL / TP fire at each tick instead of every 2 seconds. Ends (throws
+    /// with code 404) on an older server.
+    func mt5Ticks(symbol: String) -> AsyncThrowingStream<MT5Tick, Error> {
+        let url = URL(string: baseURL.absoluteString + "/mt5/ticks?symbol=\(Self.queryValue(symbol))")
+        let password = self.password
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    guard let url else { throw ServerError(message: "Địa chỉ không hợp lệ") }
+                    // A ping comes every 10 s: 30 s without anything means the stream is gone.
+                    var request = URLRequest(url: url, timeoutInterval: 30)
+                    request.setValue("Bearer \(password)", forHTTPHeaderField: "Authorization")
+                    request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    guard code == 200 else { throw ServerError(message: "Không mở được luồng giá (lỗi \(code))", code: code) }
+                    let decoder = JSONDecoder()
+                    for try await line in bytes.lines {
+                        guard line.hasPrefix("data:") else { continue }
+                        if let tick = try? decoder.decode(MT5Tick.self, from: Data(line.dropFirst(5).utf8)) {
+                            continuation.yield(tick)
+                        }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
     func mt5Trading(symbol: String? = nil) async throws -> MT5TradingState {
         let path = symbol.map { "/mt5/trading?symbol=\(Self.queryValue($0))" } ?? "/mt5/trading"
         return try JSONDecoder().decode(MT5TradingState.self, from: await send(path, timeout: 15))

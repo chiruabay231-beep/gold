@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "3.3"
+VERSION = "3.4"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -585,6 +585,84 @@ def check_stops(mt5, symbol, info, long, stop, target):
 APP_MAGIC = 20261
 
 
+class TickHub:
+    """The MT5 bid / ask of the symbols someone is watching, read every 50 ms and pushed at once to every
+    open stream (/mt5/ticks, /member/ticks): the app and the website see each tick, not a poll every 2 s."""
+
+    def __init__(self, account):
+        self.account = account
+        self.cond = threading.Condition()
+        self.latest = {}    # symbol -> {"seq", "bid", "ask", "time"}
+        self.watchers = {}  # symbol -> open streams
+        self.seq = 0
+        self.thread = None
+        self.next_connect = 0
+        self.listeners = []
+
+    def add_listener(self, fn):
+        """fn(symbol, bid, ask) on every new tick, called outside the MT5 lock."""
+        self.listeners.append(fn)
+
+    def watch(self, symbol):
+        with self.cond:
+            self.watchers[symbol] = self.watchers.get(symbol, 0) + 1
+            if self.thread is None:
+                self.thread = threading.Thread(target=self._loop, daemon=True)
+                self.thread.start()
+
+    def unwatch(self, symbol):
+        with self.cond:
+            self.watchers[symbol] = max(0, self.watchers.get(symbol, 0) - 1)
+
+    def wait(self, symbol, seq, timeout):
+        """The symbol's newest tick once it is newer than `seq`, or None after `timeout` seconds."""
+        with self.cond:
+            self.cond.wait_for(lambda: (self.latest.get(symbol) or {}).get("seq", 0) > seq, timeout)
+            tick = self.latest.get(symbol)
+            return tick if tick and tick["seq"] > seq else None
+
+    def _loop(self):
+        while True:
+            with self.cond:
+                symbols = [s for s, n in self.watchers.items() if n > 0]
+            if not symbols or (not Mt5.connected and now() < self.next_connect):
+                time.sleep(0.2)
+                continue
+            fresh = {}
+            if Mt5.lock.acquire(timeout=1):
+                try:
+                    mt5 = self.account._mt5()
+                    offset = Mt5.offset_seconds
+                    for symbol in symbols:
+                        t = mt5.symbol_info_tick(symbol)
+                        if t is None:
+                            mt5.symbol_select(symbol, True)
+                            continue
+                        key = (getattr(t, "time_msc", 0) or t.time, t.bid, t.ask)
+                        old = self.latest.get(symbol)
+                        if old is None or old.get("key") != key:
+                            stamp = (getattr(t, "time_msc", 0) or t.time * 1000) / 1000.0
+                            fresh[symbol] = {"key": key, "bid": t.bid, "ask": t.ask, "time": stamp - offset}
+                except Exception:  # MT5 not logged in yet: try again in a few seconds
+                    self.next_connect = now() + 5
+                finally:
+                    Mt5.lock.release()
+            if fresh:
+                with self.cond:
+                    for symbol, tick in fresh.items():
+                        self.seq += 1
+                        tick["seq"] = self.seq
+                        self.latest[symbol] = tick
+                    self.cond.notify_all()
+                for symbol, tick in fresh.items():
+                    for fn in list(self.listeners):
+                        try:
+                            fn(symbol, tick["bid"], tick["ask"])
+                        except Exception:  # a listener must not stop the ticks
+                            pass
+            time.sleep(0.05)
+
+
 class Mt5Account:
     """MT5 login and market data for the app (Live chart source "MT5 (VPS)").
 
@@ -593,6 +671,7 @@ class Mt5Account:
 
     def __init__(self, server):
         self.server = server
+        self.ticks = TickHub(self)
         self.stops = read_json(STOPS_PATH, {})
         if not isinstance(self.stops, dict):
             self.stops = {}
@@ -3010,6 +3089,9 @@ class BotServer:
         self.last_poll = 0
         self.tunnel_url = ""
         self.mt5_account = Mt5Account(self)
+        # The VPS demo account's SL / TP at every MT5 tick, not only at the bot's 2-second poll.
+        self.tick_symbol = None
+        self.mt5_account.ticks.add_listener(self._on_tick)
         self.copier = CopyTrader(self)
         self.members = Members(self)
         self.news = NewsFeed()
@@ -3187,6 +3269,8 @@ class BotServer:
                 return
             symbol = s["symbol"]
             self.prices[symbol] = price
+            self._watch_ticks(symbol if s.get("source") == "mt5" and getattr(self.broker, "name", "") == "paper"
+                              and self.broker.positions(symbol) else None)
             events = self.broker.on_price(symbol, price)
             rules = s.get("rules") or {}
             for p in self.broker.positions(symbol):
@@ -3199,6 +3283,39 @@ class BotServer:
                 self.report(event)
             if events:
                 self.save_state()
+
+    def _watch_ticks(self, symbol):
+        """Keeps the MT5 tick stream on the symbol whose demo positions are open (or none)."""
+        if symbol == self.tick_symbol:
+            return
+        if self.tick_symbol:
+            self.mt5_account.ticks.unwatch(self.tick_symbol)
+        if symbol:
+            self.mt5_account.ticks.watch(symbol)
+        self.tick_symbol = symbol
+
+    def _on_tick(self, symbol, bid, ask):
+        """An MT5 tick: the demo positions on it hit their SL / TP (and trail) at once."""
+        if symbol != self.tick_symbol or getattr(self.broker, "name", "") != "paper":
+            return
+        if not self.lock.acquire(timeout=0.2):
+            return  # the bot's own poll is busy with them right now
+        try:
+            if not self.broker.positions(symbol):
+                return
+            self.prices[symbol] = bid
+            events = self.broker.on_price(symbol, bid)
+            rules = self.settings.get("rules") or {}
+            for p in self.broker.positions(symbol):
+                stop = improved_stop(p, rules)
+                if stop is not None:
+                    events += self.broker.set_stop(p["id"], stop)
+            for event in events:
+                self.report(event)
+            if events:
+                self.save_state()
+        finally:
+            self.lock.release()
 
     def _merge(self, bars):
         """Adds polled bars; True when a new bar closed."""
@@ -3483,6 +3600,42 @@ def make_handler(server):
             self._send(401, {"ok": False, "error": "Sai mật khẩu máy chủ"})
             return False
 
+        def _stream_ticks(self, symbol):
+            """Server-sent events: one "data: {bid, ask, time}" line per MT5 tick of `symbol`, a comment every
+            10 s so the tunnel keeps the stream open. Ends when the client goes."""
+            if not symbol:
+                return self._send(400, {"ok": False, "error": "Thiếu mã"})
+            hub = server.mt5_account.ticks
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Transfer-Encoding", "chunked")
+            self._cors()
+            self.end_headers()
+            self.close_connection = True
+
+            def chunk(text):
+                data = text.encode()
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(data), data))
+
+            hub.watch(symbol)
+            seq = 0
+            try:
+                chunk(": open\n\n")
+                while True:
+                    tick = hub.wait(symbol, seq, 10)
+                    if tick is None:
+                        chunk(": ping\n\n")
+                        continue
+                    seq = tick["seq"]
+                    chunk("data: " + json.dumps({"symbol": symbol, "bid": tick["bid"], "ask": tick["ask"],
+                                                 "time": tick["time"]}) + "\n\n")
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                pass
+            finally:
+                hub.unwatch(symbol)
+
         def _body(self):
             length = int(self.headers.get("Content-Length") or 0)
             if length > 5_000_000:
@@ -3512,6 +3665,8 @@ def make_handler(server):
                         if not server.members.features["news"]:
                             raise PermissionError("Tin tức chưa được mở cho thành viên")
                         return self._send(200, server.news.get())
+                    if path == "/member/ticks":
+                        return self._stream_ticks(server.members.chart_symbol())
                     if path == "/member/candles":
                         # Exness (MT5) bars of the signals' symbol, for the members' web chart.
                         symbol = server.members.chart_symbol()
@@ -3551,6 +3706,8 @@ def make_handler(server):
                     end = float((params.get("to") or [now()])[0])
                     start = float((params.get("from") or [end - 86400])[0])
                     return self._send(200, server.mt5_account.history(start, end))
+                if path == "/mt5/ticks":
+                    return self._stream_ticks((params.get("symbol") or [""])[0])
                 if path == "/mt5/trading":
                     symbol = (params.get("symbol") or [None])[0]
                     return self._send(200, server.mt5_account.trading(symbol))

@@ -100,7 +100,7 @@ final class LiveMarket {
     private func setQuote(bid: Double, ask: Double) {
         rawQuote = (bid, ask, Date())
         // Book updates arrive many times a second; redraw a few times a second at most.
-        if Date().timeIntervalSince(lastQuotePublish) > 0.3 {
+        if Date().timeIntervalSince(lastQuotePublish) > 0.12 {
             lastQuotePublish = Date()
             quote = Quote(bid: bid, ask: ask)
         }
@@ -602,8 +602,56 @@ final class LiveMarket {
         mutating func done() { last = Date() }
     }
 
+    /// MT5 ticks pushed by the VPS while the chart is open: the bid / ask, the forming bar and the demo
+    /// account's SL / TP move with every tick (the bars are still re-read every second below to stay exact).
+    /// An older server has no stream: then only the poll runs.
+    private func followMT5Ticks(_ client: RemoteBotClient) async {
+        let symbol = self.symbol, interval = self.interval
+        var wait: UInt64 = 1
+        while !Task.isCancelled, symbol == self.symbol, interval == self.interval {
+            do {
+                for try await tick in client.mt5Ticks(symbol: symbol) {
+                    guard !Task.isCancelled, symbol == self.symbol, interval == self.interval else { return }
+                    applyMT5Tick(tick)
+                    wait = 1
+                }
+            } catch let error as RemoteBotClient.ServerError where error.code == 404 || error.code == 401 || error.code == 403 {
+                return
+            } catch {
+                if Task.isCancelled { return }
+            }
+            try? await Task.sleep(nanoseconds: wait * 1_000_000_000)
+            wait = min(15, wait * 2)
+        }
+    }
+
+    private func applyMT5Tick(_ tick: RemoteBotClient.MT5Tick) {
+        guard tick.bid > 0, tick.ask >= tick.bid else { return }
+        setQuote(bid: tick.bid, ask: tick.ask)
+        let time = Date(timeIntervalSince1970: tick.time)
+        // Only into the forming bar or the next one: a clock that is off never adds a bar at the wrong time.
+        if let last = buffer.candles.last {
+            let start = CandleAggregator.bucket(time, seconds: interval.seconds)
+            let gap = start.timeIntervalSince(last.time)
+            if gap >= 0, gap <= interval.seconds {
+                var working = pendingBuffer ?? buffer
+                let update = working.apply(trade: TradeTick(time: time, price: tick.bid, quantity: 0), seconds: interval.seconds)
+                if update == .appended || Date().timeIntervalSince(lastPublish) > 0.15 {
+                    publish(working)
+                } else if update != .ignored {
+                    pendingBuffer = working
+                    scheduleFlush()
+                }
+            }
+        }
+        // Every tick to the demo account: its SL / TP and pending orders fill at once.
+        emitPrice(tick.bid, time: time)
+    }
+
     /// MT5 through the VPS: the last bars are re-read every second, like OANDA.
     private func pollMT5(_ client: RemoteBotClient) async throws {
+        let ticks = Task { [weak self] in await self?.followMT5Ticks(client) }
+        defer { ticks.cancel() }
         var catchUp = CatchUp(seconds: interval.seconds)
         var newestClosed = closedCandles.last?.time
         var errors = 0
@@ -638,6 +686,7 @@ final class LiveMarket {
                 if let filled = try? await client.mt5Bars(symbol: symbol, interval: interval, count: need).candles { newest = filled }
                 guard !Task.isCancelled else { throw CancellationError() }
             }
+            if let pending = pendingBuffer { publish(pending) }
             for bar in newest { buffer.apply(bar) }
             lastBarClosed = false
             if let close = newest.last?.close { emitPrice(close) }
