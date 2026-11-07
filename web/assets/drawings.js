@@ -355,6 +355,14 @@
         const spec = TOOLS[this.tool];
         const pt = this.point(x, y, e.shiftKey === false && this.host.magnet());
         if (!pt) return true;
+        if (!this.pending && isPos(this.tool)) {
+          // A position is placed with one tap, sized to the chart on screen (like TradingView); its stop,
+          // target and width are then dragged one at a time.
+          this.pending = this.newDrawing(this.tool);
+          this.pending.pts = this.positionAt(this.pending, pt);
+          this.finish();
+          return true;
+        }
         if (!this.pending) {
           this.pending = this.newDrawing(this.tool);
           this.pending.pts = [pt];
@@ -418,7 +426,15 @@
         if (d.tool === "brush") { if (g.moved) d.pts.push(pt); } else { d.pts[d.pts.length - 1] = pt; this.constrain(d, d.pts.length - 1); }
       } else if (g.kind === "handle") {
         const pt = this.point(x, y, this.host.magnet());
-        if (pt) { g.d.pts[g.handle] = pt; this.constrain(g.d, g.handle); }
+        const d = g.d;
+        if (pt && isPos(d.tool) && d.pts.length >= 3 && g.handle > 0) {
+          // Stop and target handles move only their own price; the one on the entry line only the width.
+          if (g.handle === 3) {
+            const t = Math.max(pt.t, this.logicalToTime(this.timeToLogical(d.pts[0].t) + 2));
+            d.pts[1].t = t; d.pts[2].t = t;
+          } else d.pts[g.handle].p = pt.p;
+          this.constrain(d, g.handle === 3 ? 1 : g.handle);
+        } else if (pt) { d.pts[g.handle] = pt; this.constrain(d, g.handle); }
       } else if (g.kind === "move" && g.anchor) {
         const now = this.point(x, y, false);
         if (!now) return true;
@@ -551,7 +567,7 @@
 
     handles(d, pts) {
       if (d.tool === "brush") return [];
-      if (isPos(d.tool) && pts.length >= 3) return [pts[0], pts[1], [pts[1][0], pts[2][1]]];
+      if (isPos(d.tool) && pts.length >= 3) return [pts[0], pts[1], [pts[1][0], pts[2][1]], [pts[1][0], pts[0][1]]];
       return pts;
     }
 
@@ -598,6 +614,26 @@
           for (let i = 1; i < pts.length; i++) if (seg(pts[i - 1], pts[i])) return true;
           return pts.length === 1 && Math.hypot(p0[0] - x, p0[1] - y) <= tol;
       }
+    }
+
+    /** A new position at `pt` that fits the chart on screen: the stop an eighth of the visible price range
+     *  away, the target at the tool's R:R (kept on screen), the box a fifth of the visible bars wide. */
+    positionAt(d, pt) {
+      const bars = this.host.bars(), ts = this.host.chart.timeScale(), vr = ts.getVisibleLogicalRange();
+      const l0 = this.timeToLogical(pt.t);
+      let hi = -Infinity, lo = Infinity;
+      if (vr && bars.length) {
+        for (let i = Math.max(0, Math.floor(vr.from)); i <= Math.min(bars.length - 1, Math.ceil(vr.to)); i++) { hi = Math.max(hi, bars[i].high); lo = Math.min(lo, bars[i].low); }
+      }
+      const range = isFinite(hi) && hi > lo ? hi - lo : Math.abs(pt.p) * 0.004;
+      const long = d.tool === "longPosition", dir = long ? 1 : -1;
+      const risk = range / 8, rr = d.rr > 0 ? d.rr : 2;
+      // The target stays on screen: at most 3/8 of the range away.
+      const reward = Math.min(risk * rr, range * 0.375);
+      const bars5 = vr ? Math.max(8, Math.round((vr.to - vr.from) / 5)) : 20;
+      const right = this.logicalToTime(l0 + bars5);
+      const dg = this.host.digits();
+      return [{ t: pt.t, p: pt.p }, { t: right, p: +(pt.p - dir * risk).toFixed(dg) }, { t: right, p: +(pt.p + dir * reward).toFixed(dg) }];
     }
 
     target(d) {

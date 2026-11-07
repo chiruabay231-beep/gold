@@ -4717,7 +4717,7 @@
       if (tool === "brush") return "kéo để vẽ";
       if (tool === "path") return "chạm từng điểm, chạm lại điểm cuối để xong";
       if (tool === "curve") return "chạm điểm đầu, điểm giữa (độ cong) rồi điểm cuối";
-      if (n === 1) return "chạm vào chỗ cần đặt";
+      if (n === 1 || tool === "longPosition" || tool === "shortPosition") return tool.endsWith("Position") ? "chạm vào giá vào lệnh: hộp vừa màn hình, kéo SL / TP / mép phải riêng từng cái" : "chạm vào chỗ cần đặt";
       if (n === 2) return "kéo từ điểm đầu tới điểm cuối (hoặc chạm 2 điểm)";
       return `chạm ${n} điểm`;
     },
