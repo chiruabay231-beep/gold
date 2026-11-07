@@ -15,7 +15,7 @@
       // "setup": each swing frozen as a setup with its own levels, trade and status; "full": the live story.
       view: "setup", setupCount: 4, setupSkips: true, setupDead: false,
       // The checklist: "score" = required factors + a minimum count; "filters" = the "Vào lệnh M1" switches.
-      setupMode: "score", setupMust: "kz,profile,cal", setupMinScore: 6, setupMaxSlPips: 50, setupSlMode: "skip", setupNear: true,
+      setupMode: "score", setupMust: "profile,dbias,strong,htf", setupMinScore: 0, setupMaxSlPips: 50, setupSlMode: "skip", setupNear: true,
       htf: "auto", swing: true, eqLines: true, pcl: true, cisd: true, cisdPoiOnly: true, cisdCount: 3,
       projections: true, projLevels: "-1,-2,-2.5,-4", breakers: true, breakerCount: 3, unicorn: true, rules: true, panel: true,
       // M1 entries (the fractal model's 15m → 1m), shown on the 1-minute chart.
@@ -688,6 +688,65 @@
       const x = dir > 0 ? e.lo : e.hi, tol = atrAll[i] * 0.5;
       return bks.some((k) => k.dir === dir && k.broke < i && (k.to == null || k.to > i) && x >= k.bottom - tol && x <= k.top + tol);
     };
+    // Higher timeframe fair value gaps (H1, H4) in the trade's direction: usable once the third candle closes,
+    // until a close through the far side (three days at most).
+    const gaps = [];
+    if (intraday) for (const hs of [3600, 14400]) {
+      const H = aggregate(bars, sec, hs);
+      for (let k = 2; k < H.length; k++) {
+        const a = H[k - 2], c = H[k];
+        if (!c.done) continue;
+        const g = c.low > a.high ? { dir: 1, bottom: a.high, top: c.low } : c.high < a.low ? { dir: -1, bottom: c.high, top: a.low } : null;
+        if (!g) continue;
+        g.born = c.end + 1; g.dead = Infinity;
+        for (let q = g.born; q < Math.min(n, g.born + 4320); q++) if (g.dir > 0 ? bars[q].close < g.bottom : bars[q].close > g.top) { g.dead = q; break; }
+        if (g.dead === Infinity && g.born + 4320 < n) g.dead = g.born + 4320;
+        gaps.push(g);
+      }
+    }
+    const htfAt = (e, d, i) => {
+      const x = d > 0 ? e.lo : e.hi, tol = atrAll[i] * 0.5;
+      return gaps.some((g) => g.dir === d && g.born <= e.extreme && g.dead > i && x >= g.bottom - tol && x <= g.top + tol);
+    };
+    // Equal highs / lows: two 1m swing points within a hair of each other in the two hours before the
+    // manipulation's extreme, both taken by it (the liquidity the sweep ran for).
+    const piv = pivots(bars, 2);
+    const eqAt = (e, d, i) => {
+      const x = d > 0 ? e.lo : e.hi, list = d > 0 ? piv.lows : piv.highs, tol = Math.max(atrAll[i] * 0.35, 0.15);
+      const lv = [];
+      for (let k = lowerBound(list, e.extreme - 120); k < list.length && list[k] + 2 <= e.extreme; k++) {
+        const p = d > 0 ? bars[list[k]].low : bars[list[k]].high;
+        if (d > 0 ? p > x : p < x) lv.push(p);
+      }
+      for (let a = 0; a < lv.length; a++) for (let c = a + 1; c < lv.length; c++) if (Math.abs(lv[a] - lv[c]) <= tol) return true;
+      return false;
+    };
+    // Trendline: through two falling 5m swing highs (rising lows for a buy) of the last day, never closed
+    // through since, which the manipulation's extreme reached.
+    const m5 = sec < 300 && intraday ? aggregate(bars, sec, 300) : null;
+    const m5piv = { highs: [], lows: [] };
+    if (m5) for (let k = 2; k + 2 < m5.length; k++) {
+      const c = m5[k];
+      if (m5[k - 1].high < c.high && m5[k - 2].high < c.high && m5[k + 1].high <= c.high && m5[k + 2].high <= c.high) m5piv.highs.push(k);
+      if (m5[k - 1].low > c.low && m5[k - 2].low > c.low && m5[k + 1].low >= c.low && m5[k + 2].low >= c.low) m5piv.lows.push(k);
+    }
+    const m5atr = m5 ? rangeAvg(m5, 14) : null;
+    const m5Of = (i) => { let lo = 0, hi = m5.length - 1; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (m5[m].start <= i) lo = m; else hi = m - 1; } return lo; };
+    const tlAt = (e, d) => {
+      if (!m5) return false;
+      const kx = m5Of(e.extreme), x = d > 0 ? e.lo : e.hi, list = d > 0 ? m5piv.lows : m5piv.highs;
+      const ps = list.filter((k) => k + 2 < kx && k > kx - 288).slice(-6);
+      const val = (k) => (d > 0 ? m5[k].low : m5[k].high);
+      for (let a = 0; a < ps.length; a++) for (let b = a + 1; b < ps.length; b++) {
+        const ka = ps[a], kb = ps[b];
+        if (d > 0 ? val(kb) <= val(ka) : val(kb) >= val(ka)) continue; // falling highs / rising lows only
+        const slope = (val(kb) - val(ka)) / (kb - ka), line = (k) => val(ka) + slope * (k - ka);
+        let ok = true;
+        for (let k = ka + 1; k < kx && ok; k++) if (d > 0 ? m5[k].close < line(k) - 1e-9 : m5[k].close > line(k) + 1e-9) ok = false;
+        if (ok && Math.abs(x - line(kx)) <= m5atr[kx] * 0.5) return true;
+      }
+      return false;
+    };
     function checklist(su, e, b, ck, entry, risk, waiting) {
       const d = su.dir, i = Math.min(e.at, n - 1), h = ck.hour;
       const list = [
@@ -701,15 +760,20 @@
         { k: "cal", short: "Thứ Hai / giờ tin", label: "Không Thứ Hai, không trong giờ ra tin", ok: ck.weekday !== "Mon" && !NEWS_WINDOWS.some(([a, z]) => h >= a && h < z) },
         { k: "room", short: "không đủ 2R", label: "Còn ≥ 2R tới mục tiêu nến 1", ok: risk > 0 && (su.target - entry) * d >= 2 * risk, later: waiting },
         { k: "strong", short: "CISD yếu", label: "Nến CISD mạnh (thân ≥ biên độ trung bình)", ok: waiting ? false : Math.abs(b.close - b.open) >= atrAll[i], later: waiting },
+        { k: "htf", short: "không tại vùng H1/H4", label: "Chân thao túng chạm FVG H1 / H4 (vùng khung lớn)", ok: waiting ? false : htfAt(e, d, i), later: waiting },
+        { k: "eqhl", short: d > 0 ? "không quét đáy bằng" : "không quét đỉnh bằng", label: "Quét đỉnh / đáy bằng nhau (EQH / EQL)", ok: waiting ? false : eqAt(e, d, i), later: waiting },
+        { k: "tl", short: "không chạm trendline", label: "Chân thao túng chạm trendline (5m)", ok: waiting ? false : tlAt(e, d), later: waiting },
       ];
-      list.forEach((x) => { x.must = cfg.setupMode === "score" ? must.has(x.k) : legacyMust(x.k); });
+      list.forEach((x) => { x.must = cfg.setupMode === "score" ? must.has(x.k) : legacyMust(x.k); if (kzOff && x.k === "kz") x.off = true; });
       return list;
     }
     // The old switches (setupMode "filters"): the ones turned on are required.
     const legacyMust = (k) => (k === "kz" && intraday && opt.killzones) || (k === "profile" && !!days) || (k === "zone" && opt.discount)
       || (k === "dbias" && !!bias) || (k === "h1" && !!align) || (k === "ideal" && opt.idealOnly) || (k === "strong" && !!atr)
       || (k === "cal" && intraday && (opt.skipMonday || opt.newsWindows));
-    const scoreOf = (list) => list.filter((x) => x.ok).length;
+    // Killzone not required: left out altogether (not counted either).
+    const kzOff = cfg.setupMode === "score" && !must.has("kz");
+    const scoreOf = (list) => list.filter((x) => x.ok && !(kzOff && x.k === "kz")).length;
     const nearMiss = (list) => {
       const miss = list.filter((x) => x.must && !x.ok).length, sc = scoreOf(list);
       return (miss === 1 && sc >= minScore - 1) || (miss === 0 && sc === minScore - 1);
@@ -825,12 +889,13 @@
   /** One pip: 0.1 for gold and other prices in the thousands, 0.01 for JPY pairs / silver / oil, 0.0001 for FX. */
   const pipSize = (p) => (p >= 500 ? 0.1 : p >= 20 ? 0.01 : 0.0001);
 
-  const CHECK_NAMES = { kz: "Killzone", profile: "Hồ sơ ngày", zone: "Vùng", dbias: "Bias ngày", h1: "Nến H1", ideal: "Ideal", poi: "Breaker", cal: "Lịch", room: "≥ 2R", strong: "CISD mạnh" };
+  const CHECK_NAMES = { kz: "Killzone", profile: "Hồ sơ ngày", zone: "Vùng", dbias: "Bias ngày", h1: "Nến H1", ideal: "Ideal", poi: "Breaker", cal: "Lịch", room: "≥ 2R", strong: "CISD mạnh", htf: "FVG H1/H4", eqhl: "EQH/EQL", tl: "Trendline" };
   const CHECK_LABELS = {
     kz: "Killzone: London 2–5h / NY 7–10h (giờ New York)", profile: "Hồ sơ ngày: London / NY đảo chiều (không phải London phá hẳn)",
     zone: "Mua ở discount / bán ở premium của nến 1 + 2", dbias: "Bias ngày cùng chiều (PDH / PDL, failure to displace)",
     h1: "Nến H1 trước cùng chiều (next candle model)", ideal: "Ideal formation: râu nến 2 dài (≥ 40%)", poi: "Chân CISD tại breaker / unicorn",
     cal: "Không Thứ Hai, không trong giờ ra tin", room: "Còn ≥ 2R tới mục tiêu nến 1", strong: "Nến CISD mạnh (thân ≥ biên độ trung bình)",
+    htf: "Chân thao túng chạm FVG H1 / H4 (vùng khung lớn)", eqhl: "Quét đỉnh / đáy bằng nhau (EQH / EQL)", tl: "Chân thao túng chạm trendline (5m)",
   };
   const SETUP_STATUS = { wait: "chờ CISD", signal: "CISD vừa xác nhận", open: "đang vào lệnh", win: "thắng", loss: "thua", flat: "đóng hoà", broken: "huỷ", expired: "hết giờ", skipped: "bỏ qua" };
 
@@ -951,8 +1016,8 @@
         const mustMiss = su.list.filter((x) => x.must && !x.ok && !x.later);
         const verdict = t && t.entry != null ? "đã đủ → có lệnh" : su.status === "signal" ? "ĐỦ → vào lệnh ở nến kế tiếp"
           : mustMiss.length ? `thiếu bắt buộc: ${mustMiss.map((x) => CHECK_NAMES[x.k]).join(", ")}` : ok >= min ? "đủ điểm → chờ CISD" : `cần thêm ${min - ok} điểm`;
-        lines.push({ text: `Checklist ${ok}/${su.list.length} (cần ${min}, * bắt buộc): ${verdict}`, dir: t && t.entry != null || su.status === "signal" ? su.dir : 0 });
-        lines.push({ items: su.list.map((x) => ({ text: (x.must ? "*" : "") + CHECK_NAMES[x.k] + (x.k === "zone" ? (su.dir > 0 ? " discount" : " premium") : ""), ok: x.ok, later: x.later && !x.ok })) });
+        lines.push({ text: `Checklist ${ok}/${su.list.filter((x) => !x.off).length} (cần ${min}, * bắt buộc): ${verdict}`, dir: t && t.entry != null || su.status === "signal" ? su.dir : 0 });
+        lines.push({ items: su.list.filter((x) => !x.off).map((x) => ({ text: (x.must ? "*" : "") + CHECK_NAMES[x.k] + (x.k === "zone" ? (su.dir > 0 ? " discount" : " premium") : ""), ok: x.ok, later: x.later && !x.ok })) });
       }
     }
     // The record of these rules on the bars loaded: every setup that traded, wins and losses.
@@ -970,8 +1035,7 @@
     if (!(sec === 60 && htfSec === 900)) out.notes.unshift(`Cặp ${tf}→${out.htfName}: backtest vàng 7 tháng thua lỗ (~40% thắng) — chỉ để tham khảo, nên dùng 1m→15m`);
     else if (cfg.setupMode === "score") {
       const m = String(cfg.setupMust || "").split(",");
-      const off = [!m.includes("kz") && "killzone", !m.includes("profile") && "hồ sơ ngày"].filter(Boolean);
-      if (off.length) out.notes.unshift(`Không bắt buộc ${off.join(", ")}: backtest vàng thua lỗ (~40–46% thắng)`);
+      if (!m.includes("profile")) out.notes.unshift("Không bắt buộc hồ sơ ngày: mọi tổ hợp có lãi khi backtest vàng đều cần nó");
     } else {
       const off = [!cfg.entryKillzones && "killzone", !cfg.entryDailyProfile && "hồ sơ ngày", !cfg.entryDiscount && "discount"].filter(Boolean);
       if (off.length) out.notes.unshift(`Đang tắt bộ lọc ${off.join(", ")}: không có bộ lọc, mô hình chỉ ~40% thắng và lỗ sau phí`);

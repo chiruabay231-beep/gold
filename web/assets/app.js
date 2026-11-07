@@ -6565,12 +6565,14 @@
           + head("Cách hiển thị") + sel("view", "Kiểu", [["setup", "Setup cố định (rõ ràng, không chạy theo nến)"], ["full", "Đầy đủ (câu chuyện nến hiện tại, CISD, breaker)"]])
           + note("Setup cố định: mỗi swing được chốt mức khi nến 2 đóng (huỷ, EQ, mục tiêu), rồi vào lệnh ở CISD đầu tiên hợp lệ. Mức không đổi theo nến mới; mỗi setup có trạng thái riêng.")
           + head("Checklist vào lệnh (theo tài liệu)")
+          + `<div class="row-btns"><button type="button" class="btn btn-small" data-preset="safe">Chắc ăn</button><button type="button" class="btn btn-small" data-preset="many">Nhiều lệnh</button><button type="button" class="btn btn-small" data-preset="kz">Có killzone</button></div>`
+          + note("Mẫu có sẵn (backtest vàng 1m→15m, tháng 4–11/2026, dữ liệu kiểu MT5 và 24/7, SL ≤ 50 pip): <b>Chắc ăn</b> — bắt buộc hồ sơ ngày + bias ngày + CISD mạnh + FVG H1/H4, TP 1R: 59–61% thắng, ~0.5 lệnh/ngày. <b>Nhiều lệnh</b> — bỏ killzone, bắt buộc hồ sơ ngày + bias ngày + lịch + CISD mạnh, cần 6 điểm, TP 1.5R: 47–52% thắng, ~1.7 lệnh/ngày. <b>Có killzone</b> — killzone + hồ sơ ngày + lịch, 7 điểm, TP 1.5R: 49–60% thắng, ~1.1 lệnh/ngày. Cả ba đều dương ở cả 2 giai đoạn; killzone không bắt buộc thì không được tính điểm.")
           + sel("setupMode", "Cách xét", [["score", "Checklist: đủ yếu tố bắt buộc + đủ điểm"], ["filters", "Theo các công tắc ở mục \"Vào lệnh M1\""]])
-          + numf("setupMinScore", "Số yếu tố tối thiểu (trên 10)")
+          + numf("setupMinScore", "Số yếu tố tối thiểu")
           + numf("setupMaxSlPips", "SL tối đa (pip · vàng: 1 pip = 0.1)") + sel("setupSlMode", "SL xa hơn mức tối đa", [["skip", "Bỏ qua lệnh đó"], ["cap", "Kéo SL về mức tối đa"]])
           + sel("entryTarget", "Chốt lời", [["1R", "1R (tỉ lệ thắng cao nhất)"], ["1.2R", "1.2R"], ["1.5R", "1.5R (lãi nhiều hơn)"], ["2R", "2R"], ["c1", "Đáy / đỉnh nến 1"]])
           + tog("setupNear", "Hiện setup gần đủ (B): thiếu 1 yếu tố, không vào — để đối chiếu")
-          + note("Mặc định: killzone + hồ sơ ngày + lịch bắt buộc, cần 6/10, SL tối đa 50 pip, TP 1R — backtest vàng 1m→15m: 61.3% (tháng 4–6) / 60.9% (tháng 7–11) thắng, +6.7R / +6.4R. TP 1.5R: 57.5% / 52.7%, +23.7R / +17.4R. Bỏ bắt buộc killzone hoặc hồ sơ ngày thì backtest thua lỗ.")
+          + note("Yếu tố BẮT BUỘC (bật = bắt buộc):")
           + Object.entries(window.MODELS.CHECK_LABELS).map(([k, label]) => `<label class="toggle"><span>${esc(label)}</span><span class="switch"><input type="checkbox" data-must="${k}" ${String(cfg.setupMust || "").split(",").includes(k) ? "checked" : ""}><span></span></span></label>`).join("")
           + head("Hiển thị setup")
           + numf("setupCount", "Giữ setup đã vào lệnh gần nhất") + tog("setupSkips", "Đánh dấu CISD bị bỏ qua (và lý do)") + tog("setupDead", "Hiện cả setup bị huỷ / hết giờ (mờ)")
@@ -6601,6 +6603,13 @@
         afterDraw: (panel) => {
           const bt = panel.querySelector("[data-bt-m1]");
           if (bt) bt.onclick = () => this.modelBacktestSheet();
+          const PRESETS = { safe: { setupMust: "profile,dbias,strong,htf", setupMinScore: 0, entryTarget: "1R" },
+            many: { setupMust: "profile,dbias,cal,strong", setupMinScore: 6, entryTarget: "1.5R" }, kz: { setupMust: "kz,profile,cal", setupMinScore: 7, entryTarget: "1.5R" } };
+          panel.querySelectorAll("[data-preset]").forEach((b) => (b.onclick = () => {
+            Object.assign(this.modelCfg, PRESETS[b.dataset.preset], { setupMode: "score", setupMaxSlPips: 50, setupSlMode: "skip" });
+            this.saveModels(); open();
+            toast(`Đã chọn mẫu "${b.textContent}"`);
+          }));
           panel.querySelectorAll("[data-must]").forEach((box) => (box.onchange = () => {
             const set = new Set(String(this.modelCfg.setupMust || "").split(",").filter(Boolean));
             if (box.checked) set.add(box.dataset.must); else set.delete(box.dataset.must);
