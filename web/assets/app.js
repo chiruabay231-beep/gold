@@ -6519,6 +6519,7 @@
           + tog("projections", "Mục tiêu Std của chân thao túng (CISD mới nhất)") + text("projLevels", "lb") + note("Các mức, cách nhau dấu phẩy: -1,-2,-2.5,-4.")
           + head("Breaker & Unicorn") + tog("breakers", "Breaker block") + tog("unicorn", "Unicorn (breaker trùng FVG)") + numf("breakerCount", "Giữ breaker gần nhất")
           + head("Vào lệnh M1 (15m → 1m)") + tog("entries", "Hiện điểm vào M1 trên khung 1m (mũi tên, SL / TP, kết quả)")
+          + sel("entryBot", "Bot", [["ttrades", "TTrades M1 (theo cài đặt bên dưới)"], ["daily", "Bot ICT tổng hợp: TTrades + quét thanh khoản (~2 lệnh / ngày)"]])
           + sel("entryTarget", "Chốt lời", [["1R", "1R"], ["1.5R", "1.5R"], ["2R", "2R (tối thiểu theo tài liệu)"], ["3R", "3R"], ["std1", "Mức -1 Std"], ["std2", "Mức -2 Std"], ["std4", "Mức -4 Std"], ["c1", "Đáy / đỉnh nến 1 (mục tiêu swing)"]])
           + sel("entryMode", "Vào lệnh", [["market", "Giá mở nến kế tiếp"], ["limit", "Lệnh limit tại mức CISD (chờ 15 nến)"]])
           + sel("entryStop", "Cắt lỗ", [["leg", "Ngoài chân thao túng M1"], ["c2", "Đỉnh / đáy nến 2 (15m)"]])
@@ -6579,6 +6580,7 @@
       sheet.open(`<h3>Backtest bot M1 · TTrades</h3>
         <p class="muted small">Bot vào lệnh khung 1m theo mô hình fractal: swing nến 2 / nến 3 trên 15m → CISD trên 1m (sau khi quét đỉnh / đáy) theo hướng swing,
         vào ở giá mở nến kế tiếp. Không nhìn trước tương lai; cây nến chạm cả SL và TP tính là thua. Dùng cài đặt ở mục "Vào lệnh M1".</p>
+        <label>Bot<select id="btBot">${[["ttrades", "TTrades M1 (theo cài đặt)"], ["daily", "ICT tổng hợp: TTrades + quét thanh khoản · ~2 lệnh / ngày"]].map(([v, n]) => `<option value="${v}" ${v === cfg.entryBot ? "selected" : ""}>${n}</option>`).join("")}</select></label>
         <div class="fields two"><label>Số ngày<select id="btDays">${[7, 14, 30, 60, 90].map((d) => `<option value="${d}" ${d === days ? "selected" : ""}>${d} ngày</option>`).join("")}</select></label>
         <label>Chốt lời<select id="btTarget">${[["1R", "1R"], ["1.5R", "1.5R"], ["2R", "2R"], ["3R", "3R"], ["std1", "-1 Std"], ["std2", "-2 Std"], ["std4", "-4 Std"], ["c1", "Đáy / đỉnh nến 1"]].map(([v, n]) => `<option value="${v}" ${v === cfg.entryTarget ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
         <div class="toggles bt-filters">${[["entryKillzones", "Killzone London 2–5h, NY 7–10h"], ["entryNyPm", "Thêm NY chiều 13:30–16h"], ["entryAsia", "Thêm phiên Á 20h–0h NY (8–12h VN mùa đông)"], ["entrySkipMonday", "Bỏ Thứ Hai"], ["entryOnePerSwing", "Một lệnh mỗi swing 15m"],
@@ -6593,6 +6595,7 @@
           const d = +el.querySelector("#btDays").value;
           store.set("aurum.btm1days", String(d));
           cfg.entryTarget = el.querySelector("#btTarget").value;
+          cfg.entryBot = el.querySelector("#btBot").value;
           el.querySelectorAll("[data-f]").forEach((x) => { cfg[x.dataset.f] = x.checked; });
           store.set("aurum.modelcfg", JSON.stringify(cfg));
           button.disabled = true;
@@ -6601,7 +6604,7 @@
             const bars = await this.historyM1(d, (n) => { out.innerHTML = `<p class="muted">Đang tải nến M1… ${n.toLocaleString("vi-VN")} cây</p>`; });
             if (bars.length < 500) throw new Error("Chưa đủ nến M1 (máy chủ trả về quá ít)");
             const tally = {};
-            const trades = window.MODELS.entries(bars, Object.assign(window.MODELS.entryOptions(cfg), { tally }));
+            const trades = window.MODELS.botEntries(bars, cfg, { tally });
             this.renderBacktestM1(out, bars, trades, tally);
           } catch (err) {
             out.innerHTML = `<p class="neg">Không chạy được: ${esc(err.message || String(err))}</p>`;
@@ -6632,19 +6635,24 @@
           <div class="kv"><span>Sụt vốn lớn nhất</span><b>${st.maxDD.toFixed(1)}R</b></div>
           <div class="kv"><span>Thua liên tiếp</span><b>${st.worstStreak}</b></div>
           <div class="kv"><span>Lệnh mỗi ngày</span><b>${perDay.toFixed(2)} · nhiều nhất ${maxDay}</b></div>
+          <div class="kv"><span>Ngày có lệnh</span><b>${Object.keys(byDay).length} / ${tradingDays} (${pct(Object.keys(byDay).length / tradingDays)})</b></div>
           <div class="kv"><span>SL / TP trung bình</span><b>${avg((t) => t.risk)} / ${avg((t) => Math.abs(t.target - t.entry))} giá</b></div>
         </div>
+        ${trades.some((t) => t.model && t.model !== "A") ? `<h4>Theo mô hình</h4>
+        <div class="list">${Object.entries(M.BOT_MODELS).filter(([k]) => trades.some((t) => t.model === k)).map(([k, n]) => {
+          const s = M.stats(trades.filter((t) => t.model === k));
+          return `<div class="row"><span class="grow">${k} · ${esc(n)}</span><span>${s.trades} lệnh · ${pct(s.winRate)}</span><b class="${s.totalR >= 0 ? "pos" : "neg"}" style="margin-left:10px">${r(s.totalR)}</b></div>`; }).join("")}</div>` : ""}
         <h4>Theo phiên</h4>
-        <div class="list">${[["london", "London 2–5h NY"], ["ny", "New York 7–10h"], ["pm", "NY chiều 13:30–16h"], ["asia", "Phiên Á 20h–0h"]].filter(([k]) => trades.some((t) => t.session === k)).map(([k, n]) => {
+        <div class="list">${[["london", "London 2–5h NY"], ["ny", "New York 7–11h"], ["pm", "NY chiều 13:30–16h"], ["asia", "Phiên Á 20h–0h"]].filter(([k]) => trades.some((t) => t.session === k)).map(([k, n]) => {
           const s = M.stats(trades.filter((t) => t.session === k));
           return `<div class="row"><span class="grow">${n}</span><span>${s.trades} lệnh · ${pct(s.winRate)}</span><b class="${s.totalR >= 0 ? "pos" : "neg"}" style="margin-left:10px">${r(s.totalR)}</b></div>`; }).join("") || '<div class="empty">Không có lệnh nào</div>'}</div>
         <p class="muted small">Hoà vốn cần thắng khoảng: TP 1R → 50%, 1.5R → 40%, 2R → 34%, 3R → 25% (chưa tính phí). 1R = khoảng cách vào lệnh → cắt lỗ.</p>
-        ${this.skipsHtml(trades, tally, bars)}
+        ${this.skipsHtml(trades.filter((t) => !t.model || t.model === "A"), tally, bars)}
         <h4>Theo tháng</h4>
         <div class="list">${Object.entries(months).map(([k, l]) => { const s = M.stats(l); return `<div class="row"><span class="grow">${k}</span><span>${s.trades} lệnh · ${pct(s.winRate)}</span><b class="${s.totalR >= 0 ? "pos" : "neg"}" style="margin-left:10px">${r(s.totalR)}</b></div>`; }).join("")}</div>
         <h4>Lệnh gần nhất</h4>
         <div class="list">${trades.slice(-40).reverse().map((t) => `<div class="row clickable" data-t="${t.time}"><span class="${t.dir > 0 ? "pos" : "neg"}">${t.dir > 0 ? "MUA" : "BÁN"}</span>
-          <span class="grow" style="margin-left:8px">${fullTime(t.time)} · ${fmt(t.entry, d)} · SL ${fmt(t.stop, d)} · TP ${fmt(t.target, d)}</span>
+          <span class="grow" style="margin-left:8px">${t.model && t.model !== "A" ? `<span class="muted small">${t.model}</span> ` : ""}${fullTime(t.time)} · ${fmt(t.entry, d)} · SL ${fmt(t.stop, d)} · TP ${fmt(t.target, d)}</span>
           <b class="${t.why === "open" ? "" : t.r > 0 ? "pos" : "neg"}">${t.why === "open" ? "đang chạy" : r(t.r)}</b></div>`).join("") || '<div class="empty">Không có lệnh nào</div>'}</div>`;
       out.querySelectorAll("[data-t]").forEach((row) => (row.onclick = () => this.showBacktestTrade(+row.dataset.t)));
     },
@@ -6660,7 +6668,7 @@
       const perWeek = (trades.length / days) * 7;
       const own = rows.filter(([k]) => M.SKIPS[k] && M.SKIPS[k][1]);
       const top = own[0], hint = top && perWeek < 2 ? `<p class="muted small">Ít lệnh chủ yếu do bộ lọc <b>${esc(M.SKIPS[top[0]][0])}</b>: thử tắt nó ở trên rồi chạy lại.</p>` : "";
-      return `<h4>Tín hiệu bị loại</h4>
+      return `<h4>Tín hiệu TTrades bị loại</h4>
         <p class="muted small">${signals.toLocaleString("vi-VN")} tín hiệu CISD M1 → ${trades.length} lệnh (~${perWeek.toFixed(1)} lệnh / tuần). Mỗi tín hiệu chỉ tính ở bộ lọc đầu tiên loại nó.</p>
         <div class="list">${rows.map(([k, n]) => { const d = M.SKIPS[k] || [k, null]; return `<div class="row"><span class="grow">${esc(d[0])}${d[1] ? ' <span class="muted small">· cài đặt</span>' : ""}</span><b>${n.toLocaleString("vi-VN")}</b></div>`; }).join("")}</div>${hint}`;
     },

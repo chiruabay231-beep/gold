@@ -15,7 +15,7 @@
       htf: "auto", swing: true, eqLines: true, pcl: true, cisd: true, cisdPoiOnly: true, cisdCount: 3,
       projections: true, projLevels: "-1,-2,-2.5,-4", breakers: true, breakerCount: 3, unicorn: true, rules: true, panel: true,
       // M1 entries (the fractal model's 15m → 1m), shown on the 1-minute chart.
-      entries: true, entryTarget: "1.5R", entrySpread: 0.3, entryKillzones: true, entryNyPm: false, entryAsia: false, entrySkipMonday: false, entryOnePerSwing: true,
+      entries: true, entryTarget: "1.5R", entrySpread: 0.3, entryBot: "ttrades", entryKillzones: true, entryNyPm: false, entryAsia: false, entrySkipMonday: false, entryOnePerSwing: true,
       entryStop: "leg", entryIdeal: false, entryDailyProfile: true, entryDailyBias: false, entryNews: false,
       entryDiscount: true, entryAlignH1: false, entryStrong: false, entryPartial: false, entryMode: "market",
       bull: "#089981", bear: "#f23645", eqColor: "#f2c14e", projColor: "#9c6bff", breakerColor: "#787b86", unicornColor: "#e91e63",
@@ -519,6 +519,137 @@
     return out;
   }
 
+  /* ----- ICT liquidity model (2022 model / Silver Bullet style) ----- */
+
+  /** Entries after a liquidity sweep: price trades through a pool (Asia high / low, previous day high / low,
+   *  London high / low, 1h or 15m swing points), then within `sweepWin` bars closes through the last 1m swing
+   *  on the other side (the market structure shift) with a fair value gap in the move. Entry at the next bar's
+   *  open, stop beyond the sweep's extreme, target `targetR`. Only bars up to the signal are read. */
+  function liquidityEntries(bars, opt) {
+    const o = Object.assign({ pools: { asia: true, pd: true, london: true, h1: true, h15: false }, windows: [[2, 5], [7, 11], [13.5, 16]],
+      targetR: 1, minRisk: 0.8, maxRisk: 10, spread: 0.3, maxHold: 240, sweepWin: 30, mssLook: 20 }, opt || {});
+    const n = bars.length, out = [];
+    // 15m / 1h swing points, live once the candles after them have closed.
+    const swings = [];
+    for (const [sec, kind] of [[900, "h15"], [3600, "h1"]]) {
+      if (!o.pools[kind]) continue;
+      const h = aggregate(bars, 60, sec);
+      for (let k = 2; k + 2 < h.length; k++) {
+        const hi = h[k - 1].high < h[k].high && h[k - 2].high < h[k].high && h[k + 1].high <= h[k].high && h[k + 2].high <= h[k].high;
+        const lo = h[k - 1].low > h[k].low && h[k - 2].low > h[k].low && h[k + 1].low >= h[k].low && h[k + 2].low >= h[k].low;
+        const born = h[k + 2].end + 1;
+        if (hi) swings.push({ price: h[k].high, side: 1, kind, born });
+        if (lo) swings.push({ price: h[k].low, side: -1, kind, born });
+      }
+    }
+    swings.sort((a, b) => a.born - b.born);
+    let sp = 0, key = null, day = null, prev = null, busy = -1;
+    const pools = [], swingHi = [], swingLo = [], sweep = { 1: null, "-1": null };
+    const add = (price, side, kind, i) => { if (isFinite(price)) pools.push({ price, side, kind, born: i }); };
+    for (let i = 0; i < n; i++) {
+      const b = bars[i], ck = nyClock(b.time);
+      // The trading day starts at 18:00 New York.
+      const k = ck.hour >= 18 ? ck.day + 1 : ck.day;
+      if (k !== key) {
+        prev = day; key = k;
+        day = { hi: -Infinity, lo: Infinity, asiaHi: -Infinity, asiaLo: Infinity, lonHi: -Infinity, lonLo: Infinity, asiaDone: false, lonDone: false };
+        if (prev && o.pools.pd) { add(prev.hi, 1, "pd", i); add(prev.lo, -1, "pd", i); }
+      }
+      if (ck.hour < 18 && !day.asiaDone && isFinite(day.asiaHi)) { day.asiaDone = true; if (o.pools.asia) { add(day.asiaHi, 1, "asia", i); add(day.asiaLo, -1, "asia", i); } }
+      if (ck.hour >= 5 && ck.hour < 18 && !day.lonDone && isFinite(day.lonHi)) { day.lonDone = true; if (o.pools.london) { add(day.lonHi, 1, "london", i); add(day.lonLo, -1, "london", i); } }
+      if (ck.hour >= 20) { day.asiaHi = Math.max(day.asiaHi, b.high); day.asiaLo = Math.min(day.asiaLo, b.low); }
+      if (ck.hour >= 2 && ck.hour < 5) { day.lonHi = Math.max(day.lonHi, b.high); day.lonLo = Math.min(day.lonLo, b.low); }
+      day.hi = Math.max(day.hi, b.high); day.lo = Math.min(day.lo, b.low);
+      while (sp < swings.length && swings[sp].born <= i) { const w = swings[sp++]; pools.push({ price: w.price, side: w.side, kind: w.kind, born: i - 1 }); }
+      // 1m swing points (two bars each side) for the structure shift.
+      const q = i - 2;
+      if (q >= 2) {
+        if (bars[q - 1].high < bars[q].high && bars[q - 2].high < bars[q].high && bars[q + 1].high <= bars[q].high && bars[q + 2].high <= bars[q].high) swingHi.push(q);
+        if (bars[q - 1].low > bars[q].low && bars[q - 2].low > bars[q].low && bars[q + 1].low >= bars[q].low && bars[q + 2].low >= bars[q].low) swingLo.push(q);
+      }
+      // Sweeps: a high pool taken → look for a sell; a low pool taken → a buy.
+      for (const p of pools) {
+        if (p.dead || p.born >= i) continue;
+        if (p.side > 0 && b.high > p.price) { p.dead = true; const s = sweep[-1]; if (!s || b.high > s.ext || i - s.at > o.sweepWin) sweep[-1] = { ext: b.high, extAt: i, at: i, kind: p.kind }; }
+        if (p.side < 0 && b.low < p.price) { p.dead = true; const s = sweep[1]; if (!s || b.low < s.ext || i - s.at > o.sweepWin) sweep[1] = { ext: b.low, extAt: i, at: i, kind: p.kind }; }
+      }
+      for (const d of [1, -1]) {
+        const s = sweep[d];
+        if (!s) continue;
+        if (i - s.extAt > o.sweepWin) { sweep[d] = null; continue; }
+        if (d < 0 && b.high > s.ext) { s.ext = b.high; s.extAt = i; }
+        if (d > 0 && b.low < s.ext) { s.ext = b.low; s.extAt = i; }
+      }
+      if (i % 1440 === 0) { const keep = pools.filter((p) => !p.dead && i - p.born < 2880); pools.length = 0; pools.push(...keep); }
+      // The structure shift: a close through the last 1m swing before the sweep's extreme.
+      for (const d of [1, -1]) {
+        const s = sweep[d];
+        if (!s || s.done || i <= s.extAt) continue;
+        const list = d > 0 ? swingHi : swingLo;
+        let ref = null;
+        for (let x = list.length - 1; x >= 0; x--) { if (list[x] >= s.extAt) continue; if (s.extAt - list[x] <= o.mssLook) ref = list[x]; break; }
+        if (ref == null) continue;
+        if (!(d > 0 ? b.close > bars[ref].high : b.close < bars[ref].low)) continue;
+        s.done = true;
+        // Displacement: a fair value gap in the move away from the extreme.
+        let fvg = false;
+        for (let x = i; x >= s.extAt + 2 && !fvg; x--) fvg = d > 0 ? bars[x].low > bars[x - 2].high : bars[x].high < bars[x - 2].low;
+        if (!fvg || i + 1 >= n || i <= busy) continue;
+        const ckn = nyClock(bars[i + 1].time);
+        if (!o.windows.some(([a, z]) => ckn.hour >= a && ckn.hour < z)) continue;
+        const entry = bars[i + 1].open, stop = s.ext, risk = (entry - stop) * d;
+        if (risk < o.minRisk || risk > o.maxRisk) continue;
+        const target = entry + d * risk * o.targetR;
+        let exit = null, exitAt = null, why = "time";
+        for (let x = i + 1; x < n && x <= i + 1 + o.maxHold; x++) {
+          const c = bars[x];
+          if (d > 0 ? c.low <= stop : c.high >= stop) { exit = stop; exitAt = x; why = "stop"; break; }
+          if (d > 0 ? c.high >= target : c.low <= target) { exit = target; exitAt = x; why = "target"; break; }
+        }
+        if (exit == null) { exitAt = Math.min(n - 1, i + 1 + o.maxHold); exit = bars[exitAt].close; if (exitAt === n - 1) why = "open"; }
+        const r = ((exit - entry) * d) / risk - o.spread / risk;
+        const h = ckn.hour, session = h >= 20 ? "asia" : h >= 2 && h < 5 ? "london" : h >= 7 && h < 11 ? "ny" : h >= 13.5 && h < 16 ? "pm" : "other";
+        out.push({ dir: d, at: i + 1, signalAt: i, time: bars[i + 1].time, entry, stop, target, risk, exit, exitAt, exitTime: bars[exitAt].time, why, r, kind: s.kind, session, dayKey: key });
+        busy = exitAt;
+      }
+    }
+    return out;
+  }
+
+  /** The daily bot: the TTrades M1 entries first, then the liquidity model's setups, one trade at a time.
+   *  Tested on gold 1m (April to November 2026, MT5-like gaps, 0.3 spread) at about 58% wins in both halves,
+   *  with a trade on about nine days in ten:
+   *   A  TTrades M1 (the indicator's own settings),
+   *   B  sweep of Asia / London / previous day / 1h liquidity + MSS in the killzones, target 1R,
+   *   C  sweep of any of those or a 15m swing + MSS, New York 7–11h, target 0.8R,
+   *   D  as C in the New York afternoon (13:30–16h), only on a day without a trade yet. */
+  const BOT_MODELS = { A: "TTrades M1", B: "Quét thanh khoản phiên / H1", C: "Quét đỉnh đáy 15m · NY sáng", D: "Quét 15m · NY chiều (dự phòng)" };
+  function dailyBot(bars, opt, spread) {
+    const sp = spread != null ? spread : opt.spread;
+    const all = [
+      entries(bars, opt).map((t) => Object.assign(t, { model: "A" })),
+      liquidityEntries(bars, { spread: sp }).map((t) => Object.assign(t, { model: "B" })),
+      liquidityEntries(bars, { spread: sp, pools: { asia: true, pd: true, london: true, h1: true, h15: true }, windows: [[7, 11]], targetR: 0.8 }).map((t) => Object.assign(t, { model: "C" })),
+      liquidityEntries(bars, { spread: sp, pools: { asia: true, pd: true, london: true, h1: true, h15: true }, windows: [[13.5, 16]], targetR: 0.8 }).map((t) => Object.assign(t, { model: "D" })),
+    ].flat().sort((a, b) => a.at - b.at || a.model.localeCompare(b.model));
+    const out = [], perDay = new Map();
+    let busy = -1;
+    for (const t of all) {
+      if (t.at <= busy) continue;
+      if (t.dayKey == null) { const c = nyClock(t.time); t.dayKey = c.hour >= 18 ? c.day + 1 : c.day; }
+      const n = perDay.get(t.dayKey) || 0;
+      if (t.model === "D" && n > 0) continue;
+      out.push(t); busy = t.exitAt; perDay.set(t.dayKey, n + 1);
+    }
+    return out;
+  }
+
+  /** The entries of the chosen bot. */
+  function botEntries(bars, cfg, extra) {
+    const opt = Object.assign(entryOptions(cfg), extra || {});
+    return cfg.entryBot === "daily" ? dailyBot(bars, opt) : entries(bars, opt).map((t) => Object.assign(t, { model: "A" }));
+  }
+
   /** The entry options from the indicator's settings. */
   function entryOptions(cfg) {
     const rTarget = /^[\d.]+R$/.test(String(cfg.entryTarget)) ? parseFloat(cfg.entryTarget) : null;
@@ -575,7 +706,7 @@
     if (cfg.breakers) out.breakers = breakers(bars, cfg.unicorn).slice(-Math.max(1, cfg.breakerCount));
     if (cfg.rules) out.notes = rules(bars[bars.length - 1].time, ctx.events);
     if (cfg.entries && sec === 60) {
-      try { out.entries = entries(bars, entryOptions(cfg)).slice(-40); } catch { out.entries = []; }
+      try { out.entries = botEntries(bars, cfg).slice(-40); } catch { out.entries = []; }
     }
     // The lines of the panel.
     const lines = [];
@@ -594,7 +725,7 @@
       lines.push({ text: `CISD ${last.dir > 0 ? "TĂNG" : "GIẢM"} ${fmt(last.level)}${last.poi ? " (tại POI)" : ""} → mục tiêu ${t}`, dir: last.dir });
     }
     const live = (out.entries || []).filter((t) => t.why === "open").pop();
-    if (live) lines.push({ text: `TÍN HIỆU ${live.dir > 0 ? "MUA" : "BÁN"} M1 · vào ${fmt(live.entry)} · SL ${fmt(live.stop)} · TP ${fmt(live.target)}`, dir: live.dir });
+    if (live) lines.push({ text: `TÍN HIỆU ${live.dir > 0 ? "MUA" : "BÁN"} M1${live.model && live.model !== "A" ? " (" + BOT_MODELS[live.model] + ")" : ""} · vào ${fmt(live.entry)} · SL ${fmt(live.stop)} · TP ${fmt(live.target)}`, dir: live.dir });
     out.notes.forEach((t) => lines.push({ text: "⚠ " + t, dir: 0, warn: true }));
     out.lines = lines;
     return out;
@@ -759,5 +890,5 @@
     return t + "…";
   }
 
-  window.MODELS = { defaults, merge, compute, draw, pairOf, aggregate, cisds, breakers, htfStory, HTF_NAMES, entries, entryDefaults, entryOptions, stats, SKIPS, nyClock };
+  window.MODELS = { defaults, merge, compute, draw, pairOf, aggregate, cisds, breakers, htfStory, HTF_NAMES, entries, liquidityEntries, dailyBot, botEntries, BOT_MODELS, entryDefaults, entryOptions, stats, SKIPS, nyClock };
 })();
