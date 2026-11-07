@@ -236,6 +236,7 @@
     ["flow", "Dòng tiền cá mập"],
     ["zones", "Vùng cung / cầu cá mập (chờ mua / chờ bán, ghi giá)"],
     ["smt", "SMT (khi mở 2 biểu đồ: so đỉnh/đáy với mã thứ 2)"],
+    ["liq", "Vùng thanh khoản mạnh / vừa (BSL / SSL: đỉnh đáy bằng, PDH / PDL, tuần, phiên, H1 / H4)"],
     ["plan", "Kế hoạch giao dịch (ngày → H4 → H1, trend 3 đỉnh / 3 đáy, breakout thật / giả, nến rút râu)"],
   ];
   const showInd = (() => {
@@ -514,7 +515,7 @@
       Object.defineProperties(v, { bars: own(() => pane.bars), interval: own(() => pane.tf), digits: own(() => (pane.digits != null ? pane.digits : term.digits)) });
       Object.assign(v, {
         chart: this.chart, series: this.series, viewBars: () => pane.bars, replay: null, requestICT: null, isPane: true,
-        ict: null, models: null, plan: null, smt: null, sharks: null, sharkZones: null, newsDots: null, seriesPriceOn: null, studySeries: new Map(), studySig: "",
+        ict: null, models: null, plan: null, liq: null, smt: null, sharks: null, sharkZones: null, newsDots: null, seriesPriceOn: null, studySeries: new Map(), studySig: "",
       });
       Object.assign(v, v.axisViews());
       this.series.attachPrimitive(v.layer());
@@ -727,6 +728,7 @@
       }
       v.models = term.modelsFor(bars, TF_SECONDS[this.tf], v.digits);
       v.plan = term.planFor(bars, TF_SECONDS[this.tf], v.digits);
+      v.liq = term.liqFor(bars, TF_SECONDS[this.tf], v.digits);
       // Indicators added, removed or changed on the main chart: built again here.
       const sig = JSON.stringify(term.studies || []);
       if (sig !== v.studySig) { [...v.studySeries.keys()].forEach((id) => v.dropStudySeries(id)); v.studySig = sig; }
@@ -3235,6 +3237,7 @@
           },
         });
         this.ictCfg = (() => { try { return window.ICT.merge(JSON.parse(store.get("aurum.ictcfg") || "null")); } catch { return window.ICT.defaults(); } })();
+        this.liqCfg = window.LIQ ? (() => { try { return window.LIQ.merge(JSON.parse(store.get("aurum.liqcfg") || "null")); } catch { return window.LIQ.defaults(); } })() : null;
         this.planCfg = window.PLAN ? (() => { try { return window.PLAN.merge(JSON.parse(store.get("aurum.plancfg") || "null")); } catch { return window.PLAN.defaults(); } })() : null;
         this.modelCfg = window.MODELS ? (() => { try { return window.MODELS.merge(JSON.parse(store.get("aurum.modelcfg") || "null")); } catch { return window.MODELS.defaults(); } })() : null;
         // Off unless turned on (TradingView's default): points go where the mouse / finger is, not onto the candle.
@@ -3333,13 +3336,15 @@
       sheet.open(`<h3>Chỉ báo</h3>
         <div class="toggles">${IND.filter(([k]) => (k === "flow" || k === "zones" ? flowAllowed : allowed)).map(([k, n]) => `<label class="toggle"><span>${n}</span>
           <span class="switch"><input type="checkbox" data-k="${k}" ${showInd[k] ? "checked" : ""}><span></span></span></label>`).join("")}</div>
-        ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button><button class="btn btn-ghost wide" id="planMore">⚙ Kế hoạch giao dịch (trend, breakout, vùng H1/H4, tín hiệu)</button>' : ""}
+        ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button><button class="btn btn-ghost wide" id="liqMore">⚙ Vùng thanh khoản (mạnh / vừa)</button><button class="btn btn-ghost wide" id="planMore">⚙ Kế hoạch giao dịch (trend, breakout, vùng H1/H4, tín hiệu)</button>' : ""}
         <h4>Chỉ báo kỹ thuật</h4>
         <div class="list" id="studyList"></div>
         <select id="addStudy" class="add-study"><option value="">＋ Thêm chỉ báo…</option>${Object.entries(window.TA ? window.TA.STUDIES : {}).map(([k, d]) => `<option value="${k}">${esc(d.name)}</option>`).join("")}</select>
         <p class="muted small">Giờ theo New York như bản TradingView. Chuột phải (hoặc giữ lâu) trên biểu đồ để mở menu.</p>`, (el) => {
         const more = el.querySelector("#ictMore");
         if (more) more.onclick = () => { sheet.close(); this.ictSettingsSheet(); };
+        const liqB = el.querySelector("#liqMore");
+        if (liqB) liqB.onclick = () => { sheet.close(); this.liqSettingsSheet(); };
         const plan = el.querySelector("#planMore");
         if (plan) plan.onclick = () => { sheet.close(); this.planSettingsSheet(); };
         const listStudies = () => {
@@ -4569,7 +4574,7 @@
       items.push(["tools", "✎ Công cụ vẽ…"]);
       if (this.drawings && this.drawings.list.length) items.push(["clear", `🗑 Xoá tất cả bản vẽ (${this.drawings.list.length})`]);
       if (this.drawings && this.drawings.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"], ["drawDel", "🗑 Xoá bản vẽ này"]);
-      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["planSettings", "⚙ Kế hoạch giao dịch…"], ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
+      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["liqSettings", "⚙ Vùng thanh khoản…"], ["planSettings", "⚙ Kế hoạch giao dịch…"], ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
       const menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
       menu.hidden = false;
@@ -4592,6 +4597,7 @@
         if (k === "ind") this.indicatorSheet();
         if (k === "ictSettings") this.ictSettingsSheet();
         if (k === "planSettings") this.planSettingsSheet();
+        if (k === "liqSettings") this.liqSettingsSheet();
         if (k === "setups") this.setupListSheet();
         if (k === "drawSettings") this.drawingSettings(this.drawings.current);
         if (k === "drawDel" && this.drawings.current) this.drawings.remove(this.drawings.current.id);
@@ -6527,13 +6533,60 @@
 
     planFor(bars, sec, digits) {
       if (!showInd.plan || !window.PLAN || !this.planCfg || !bars.length || !sec || sec >= 86400) return null;
+      try {
+        // The day / H4 / H1 candles as known at the last bar (a replay must not see later ones).
+        return window.PLAN.compute(bars, sec, this.planCfg, { ...this.htfCtx(bars, sec), fmt: (v) => fmt(v, digits) });
+      } catch { return null; }
+    },
+
+    /** The day / H4 / H1 candles for the plan and the liquidity zones, as known at the last bar. */
+    htfCtx(bars, sec) {
       if (this.source === "exness" && (!this.htfData || this.htfData.key !== this.symbolKey() || Date.now() - this.htfData.at > 60000)) this.loadHtf();
       const h = this.htfData && this.htfData.key === this.symbolKey() ? this.htfData : {};
-      // The day / H4 / H1 candles as known at the last bar (a replay must not see later ones).
       const upTo = bars[bars.length - 1].time + sec, cut = (list) => (list || []).filter((c) => c.time < upTo);
-      try {
-        return window.PLAN.compute(bars, sec, this.planCfg, { d1: cut(h.d1), h4: cut(h.h4), h1: cut(h.h1), fmt: (v) => fmt(v, digits) });
-      } catch { return null; }
+      return { d1: cut(h.d1), h4: cut(h.h4), h1: cut(h.h1) };
+    },
+
+    liqFor(bars, sec, digits) {
+      if (!showInd.liq || !window.LIQ || !this.liqCfg || !bars.length || !sec || sec >= 86400) return null;
+      try { return window.LIQ.compute(bars, sec, this.liqCfg, { ...this.htfCtx(bars, sec), fmt: (v) => fmt(v, digits) }); } catch { return null; }
+    },
+
+    saveLiq() {
+      store.set("aurum.liqcfg", JSON.stringify(this.liqCfg));
+      this.computeICT();
+      this.redraw();
+    },
+
+    liqSettingsSheet() {
+      if (!window.LIQ) return;
+      sheet.close();
+      const render = (tab) => {
+        const cfg = this.liqCfg;
+        const { tog, numf, color, head, note } = fieldKit(cfg);
+        if (tab === "style") return head("Màu") + color("bsl", "Thanh khoản trên (BSL)") + color("ssl", "Thanh khoản dưới (SSL)");
+        return `<label class="toggle"><span>Bật Vùng thanh khoản</span><span class="switch"><input type="checkbox" data-liq ${showInd.liq ? "checked" : ""}><span></span></span></label>`
+          + note("Vùng thanh khoản = nơi stop nằm chờ: trên các đỉnh (BSL) và dưới các đáy (SSL). Các mức gần nhau (trong khoảng dung sai theo ATR) gộp thành một vùng rồi được chấm điểm: đỉnh / đáy bằng nhau +2 (3 lần +3), swing H1 +1 / H4 +2, đỉnh / đáy ngày trước +2, tuần trước +3, đỉnh / đáy phiên Á / London / New York +1 (2 phiên +2), nến khối lượng lớn +1, hơn 1 ngày chưa bị quét +1, số tròn +1. Từ 5 điểm là MẠNH, 3–4 là vừa.")
+          + head("Phân loại") + numf("strong", "Điểm tối thiểu vùng MẠNH") + numf("medium", "Điểm tối thiểu vùng vừa") + tog("showMedium", "Hiện vùng vừa")
+          + numf("swingLen", "Độ dài swing (nến mỗi bên)") + numf("tolAtr", "Dung sai gộp mức (× ATR)", 0.05) + numf("range", "Chỉ hiện vùng cách giá trong (× biên độ ngày)", 0.5) + numf("showTaken", "Giữ vùng vừa bị lấy gần nhất")
+          + head("Yếu tố tính điểm") + tog("equal", "Đỉnh / đáy bằng nhau") + tog("htf", "Swing H1 / H4") + tog("days", "Đỉnh / đáy ngày trước") + tog("weeks", "Đỉnh / đáy tuần trước")
+          + tog("sessions", "Đỉnh / đáy phiên Á / London / New York") + tog("volume", "Nến khối lượng lớn") + tog("age", "Lâu chưa bị quét (> 1 ngày)") + tog("round", "Số tròn")
+          + note("Kiểm tra trên vàng khung 5m (tháng 4–6 | 7–11/2026): vùng MẠNH không bị giá chạm tới nhiều hơn vùng vừa hay yếu ở cùng khoảng cách, nhưng khi bị quét thì đóng lại ngay nhiều hơn (39% | 40%, so với vừa 32% | 33%, yếu 36% | 30%). Đây là bản đồ nơi stop nằm, không phải tín hiệu vào lệnh.")
+          + head("Khác") + tog("labels", "Nhãn ở mép phải") + tog("panel", "Bảng vùng gần nhất (góc trái trên)");
+      };
+      const open = () => this.openPanel("Vùng thanh khoản", [["inputs", "Các đầu vào"], ["style", "Định dạng"]], render, {
+        root: this.liqCfg,
+        onChange: () => this.saveLiq(),
+        afterDraw: (panel) => {
+          const on = panel.querySelector("[data-liq]");
+          if (on) on.onchange = () => { showInd.liq = on.checked; store.set("aurum.ind", JSON.stringify(showInd)); this.computeICT(); this.redraw(); };
+        },
+        onReset: () => {
+          if (!confirm("Đặt lại cài đặt Vùng thanh khoản về mặc định?")) return;
+          this.liqCfg = window.LIQ.defaults(); this.saveLiq(); open();
+        },
+      });
+      open();
     },
 
     savePlan() {
@@ -6873,6 +6926,7 @@
       } catch { this.ict = null; }
       this.models = this.modelsFor(bars, TF_SECONDS[this.interval], this.digits);
       this.plan = this.planFor(bars, TF_SECONDS[this.interval], this.digits);
+      this.liq = this.liqFor(bars, TF_SECONDS[this.interval], this.digits);
       if (this.cmpBars && this.cmpBars.length) this.showCmp(false); else this.computeSMT();
       this.applyStudies();
       this.redraw();
@@ -7079,6 +7133,7 @@
                 const X = (i) => ts.logicalToCoordinate(i), Y = (v) => term.series.priceToCoordinate(v);
                 if (term.ict) window.ICT.draw(context, term.ict, term.ictCfg, X, Y, mediaSize.width, mediaSize.height);
                 if (term.models && window.MODELS) window.MODELS.draw(context, term.models, term.modelCfg, X, Y, mediaSize.width, mediaSize.height, (v) => fmt(v, term.digits));
+                if (term.liq && window.LIQ) window.LIQ.draw(context, term.liq, term.liqCfg, (t) => term.timeX(t), Y, mediaSize.width, mediaSize.height, (v) => fmt(v, term.digits));
                 if (term.plan && window.PLAN) window.PLAN.draw(context, term.plan, term.planCfg, (t) => term.timeX(t), X, Y, mediaSize.width, mediaSize.height, (v) => fmt(v, term.digits));
                 if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
                 term.drawSharkZones(context, mediaSize.width, false);
@@ -7096,6 +7151,7 @@
                 term.drawSharkZones(context, mediaSize.width, true);
                 // The TTrades panel over the candles, so they never cross its text.
                 if (term.models && window.MODELS && window.MODELS.drawPanelOnly) window.MODELS.drawPanelOnly(context, term.models, term.modelCfg, mediaSize.width, mediaSize.height);
+                if (term.liq && window.LIQ) window.LIQ.drawPanel(context, term.liq, term.liqCfg, mediaSize.width, mediaSize.height);
                 if (term.plan && window.PLAN) window.PLAN.drawPanel(context, term.plan, term.planCfg, mediaSize.width, mediaSize.height);
                 if (!term.sharks) return;
                 const ts = term.chart.timeScale();
