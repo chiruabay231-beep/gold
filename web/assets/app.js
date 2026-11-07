@@ -6522,7 +6522,7 @@
           + sel("entryTarget", "Chốt lời", [["1R", "1R"], ["1.5R", "1.5R"], ["2R", "2R (tối thiểu theo tài liệu)"], ["3R", "3R"], ["std2", "Mức -2 Std"], ["std4", "Mức -4 Std"]])
           + sel("entryMode", "Vào lệnh", [["market", "Giá mở nến kế tiếp"], ["limit", "Lệnh limit tại mức CISD (chờ 15 nến)"]])
           + sel("entryStop", "Cắt lỗ", [["leg", "Ngoài chân thao túng M1"], ["c2", "Đỉnh / đáy nến 2 (15m)"]])
-          + tog("entryKillzones", "Chỉ trong killzone London 2–5h, NY 7–10h (giờ New York)") + tog("entrySkipMonday", "Bỏ Thứ Hai")
+          + tog("entryKillzones", "Chỉ trong killzone London 2–5h, NY 7–10h (giờ New York)") + tog("entryNyPm", "Thêm killzone NY chiều 13:30–16h (giờ New York)") + tog("entrySkipMonday", "Bỏ Thứ Hai")
           + tog("entryOnePerSwing", "Một lệnh mỗi swing 15m") + tog("entryIdeal", "Chỉ ideal formation (nến 2 râu dài)") + numf("entrySpread", "Spread + phí mỗi lệnh (giá)", 0.05)
           + tog("entryDailyProfile", "Hồ sơ ngày: London đảo chiều → NY theo; London phá hẳn → bỏ NY; London đi ngang → NY đảo chiều")
           + tog("entryDailyBias", "Bias ngày (PDH / PDL, failure to displace) cùng chiều") + tog("entryNews", "Tránh giờ ra tin 8:25–8:45 và 9:55–10:15 (NY)")
@@ -6581,7 +6581,7 @@
         vào ở giá mở nến kế tiếp. Không nhìn trước tương lai; cây nến chạm cả SL và TP tính là thua. Dùng cài đặt ở mục "Vào lệnh M1".</p>
         <div class="fields two"><label>Số ngày<select id="btDays">${[7, 14, 30, 60, 90].map((d) => `<option value="${d}" ${d === days ? "selected" : ""}>${d} ngày</option>`).join("")}</select></label>
         <label>Chốt lời<select id="btTarget">${[["1R", "1R"], ["1.5R", "1.5R"], ["2R", "2R"], ["3R", "3R"], ["std2", "-2 Std"], ["std4", "-4 Std"]].map(([v, n]) => `<option value="${v}" ${v === cfg.entryTarget ? "selected" : ""}>${n}</option>`).join("")}</select></label></div>
-        <div class="toggles bt-filters">${[["entryKillzones", "Killzone London 2–5h, NY 7–10h"], ["entrySkipMonday", "Bỏ Thứ Hai"], ["entryOnePerSwing", "Một lệnh mỗi swing 15m"],
+        <div class="toggles bt-filters">${[["entryKillzones", "Killzone London 2–5h, NY 7–10h"], ["entryNyPm", "Thêm NY chiều 13:30–16h"], ["entrySkipMonday", "Bỏ Thứ Hai"], ["entryOnePerSwing", "Một lệnh mỗi swing 15m"],
           ["entryDailyProfile", "Hồ sơ ngày (London / NY reversal)"], ["entryDiscount", "Mua discount / bán premium của swing"], ["entryDailyBias", "Bias ngày (PDH / PDL) cùng chiều"],
           ["entryAlignH1", "Đồng thuận bias nến H1"], ["entryStrong", "Nến CISD mạnh"], ["entryPartial", "Chốt 50% ở 1R + dời SL hoà vốn"], ["entryNews", "Tránh giờ ra tin 8:30 / 10:00"], ["entryIdeal", "Chỉ ideal formation"]]
           .map(([k, n]) => `<label class="toggle"><span>${n}</span><span class="switch"><input type="checkbox" data-f="${k}" ${cfg[k] ? "checked" : ""}><span></span></span></label>`).join("")}</div>
@@ -6600,8 +6600,9 @@
           try {
             const bars = await this.historyM1(d, (n) => { out.innerHTML = `<p class="muted">Đang tải nến M1… ${n.toLocaleString("vi-VN")} cây</p>`; });
             if (bars.length < 500) throw new Error("Chưa đủ nến M1 (máy chủ trả về quá ít)");
-            const trades = window.MODELS.entries(bars, window.MODELS.entryOptions(cfg));
-            this.renderBacktestM1(out, bars, trades);
+            const tally = {};
+            const trades = window.MODELS.entries(bars, Object.assign(window.MODELS.entryOptions(cfg), { tally }));
+            this.renderBacktestM1(out, bars, trades, tally);
           } catch (err) {
             out.innerHTML = `<p class="neg">Không chạy được: ${esc(err.message || String(err))}</p>`;
           } finally { button.disabled = false; }
@@ -6609,7 +6610,7 @@
       });
     },
 
-    renderBacktestM1(out, bars, trades) {
+    renderBacktestM1(out, bars, trades, tally) {
       const M = window.MODELS, st = M.stats(trades), d = this.digits;
       const pct = (v) => (v * 100).toFixed(1) + "%", r = (v) => (v >= 0 ? "+" : "") + v.toFixed(1) + "R";
       const months = {};
@@ -6626,6 +6627,7 @@
           <div class="kv"><span>Thua liên tiếp</span><b>${st.worstStreak}</b></div>
         </div>
         <p class="muted small">Hoà vốn cần thắng khoảng: TP 1R → 50%, 1.5R → 40%, 2R → 34%, 3R → 25% (chưa tính phí). 1R = khoảng cách vào lệnh → cắt lỗ.</p>
+        ${this.skipsHtml(trades, tally, bars)}
         <h4>Theo tháng</h4>
         <div class="list">${Object.entries(months).map(([k, l]) => { const s = M.stats(l); return `<div class="row"><span class="grow">${k}</span><span>${s.trades} lệnh · ${pct(s.winRate)}</span><b class="${s.totalR >= 0 ? "pos" : "neg"}" style="margin-left:10px">${r(s.totalR)}</b></div>`; }).join("")}</div>
         <h4>Lệnh gần nhất</h4>
@@ -6633,6 +6635,22 @@
           <span class="grow" style="margin-left:8px">${fullTime(t.time)} · ${fmt(t.entry, d)} · SL ${fmt(t.stop, d)} · TP ${fmt(t.target, d)}</span>
           <b class="${t.why === "open" ? "" : t.r > 0 ? "pos" : "neg"}">${t.why === "open" ? "đang chạy" : r(t.r)}</b></div>`).join("") || '<div class="empty">Không có lệnh nào</div>'}</div>`;
       out.querySelectorAll("[data-t]").forEach((row) => (row.onclick = () => this.showBacktestTrade(+row.dataset.t)));
+    },
+
+    /** Where the CISD signals went: the filters that dropped the most first, so a setting that blocks nearly
+     *  everything is plain to see. Each signal counts once, at the first check it fails. */
+    skipsHtml(trades, tally, bars) {
+      const M = window.MODELS;
+      if (!tally || !M.SKIPS) return "";
+      const rows = Object.entries(tally).filter(([, n]) => n > 0).sort((a, b) => b[1] - a[1]);
+      const signals = rows.reduce((a, [, n]) => a + n, 0) + trades.length;
+      const days = Math.max(1, (bars[bars.length - 1].time - bars[0].time) / 86400);
+      const perWeek = (trades.length / days) * 7;
+      const own = rows.filter(([k]) => M.SKIPS[k] && M.SKIPS[k][1]);
+      const top = own[0], hint = top && perWeek < 2 ? `<p class="muted small">Ít lệnh chủ yếu do bộ lọc <b>${esc(M.SKIPS[top[0]][0])}</b>: thử tắt nó ở trên rồi chạy lại.</p>` : "";
+      return `<h4>Tín hiệu bị loại</h4>
+        <p class="muted small">${signals.toLocaleString("vi-VN")} tín hiệu CISD M1 → ${trades.length} lệnh (~${perWeek.toFixed(1)} lệnh / tuần). Mỗi tín hiệu chỉ tính ở bộ lọc đầu tiên loại nó.</p>
+        <div class="list">${rows.map(([k, n]) => { const d = M.SKIPS[k] || [k, null]; return `<div class="row"><span class="grow">${esc(d[0])}${d[1] ? ' <span class="muted small">· cài đặt</span>' : ""}</span><b>${n.toLocaleString("vi-VN")}</b></div>`; }).join("")}</div>${hint}`;
     },
 
     /** A backtest trade on the 1-minute chart. */

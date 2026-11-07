@@ -15,7 +15,7 @@
       htf: "auto", swing: true, eqLines: true, pcl: true, cisd: true, cisdPoiOnly: true, cisdCount: 3,
       projections: true, projLevels: "-1,-2,-2.5,-4", breakers: true, breakerCount: 3, unicorn: true, rules: true, panel: true,
       // M1 entries (the fractal model's 15m → 1m), shown on the 1-minute chart.
-      entries: true, entryTarget: "1.5R", entrySpread: 0.3, entryKillzones: true, entrySkipMonday: true, entryOnePerSwing: true,
+      entries: true, entryTarget: "1.5R", entrySpread: 0.3, entryKillzones: true, entryNyPm: false, entrySkipMonday: false, entryOnePerSwing: true,
       entryStop: "leg", entryIdeal: false, entryDailyProfile: true, entryDailyBias: false, entryNews: false,
       entryDiscount: true, entryAlignH1: false, entryStrong: false, entryPartial: false, entryMode: "market",
       bull: "#089981", bear: "#f23645", eqColor: "#f2c14e", projColor: "#9c6bff", breakerColor: "#787b86", unicornColor: "#e91e63",
@@ -436,31 +436,37 @@
     const atr = opt.strongCisd > 0 ? rangeAvg(bars, 14) : null;
     const events = cisds(bars, [1, 2, 2.5, 4], [], opt.poiOnly);
     const out = [], used = new Map();
+    // Why the CISDs were skipped: the backtest shows it, so a filter that blocks everything is plain to see.
+    const skip = opt.tally || {};
+    const no = (why) => { skip[why] = (skip[why] || 0) + 1; return true; };
     let busyUntil = -1;
     for (const e of events) {
       const i = e.at, s = setupAt[i];
-      if (!s || s.dir !== e.dir || i + 1 >= bars.length || i <= busyUntil) continue;
-      if (opt.idealOnly && !s.ideal) continue;
+      if (i + 1 >= bars.length) continue;
+      if (!s && no("noSwing")) continue;
+      if (s.dir !== e.dir && no("against")) continue;
+      if (i <= busyUntil && no("busy")) continue;
+      if (opt.idealOnly && !s.ideal && no("ideal")) continue;
       const b = bars[i];
       // The swing still holds: no close beyond candle 2's extreme, and the close respects the equilibrium.
-      if (s.dir > 0 ? b.close < s.eq : b.close > s.eq) continue;
+      if ((s.dir > 0 ? b.close < s.eq : b.close > s.eq) && no("eq")) continue;
       let broken = false;
       for (let k = s.from; k <= i; k++) if (s.dir > 0 ? bars[k].close < s.stop : bars[k].close > s.stop) { broken = true; break; }
-      if (broken) continue;
+      if (broken && no("broken")) continue;
       const ck = nyClock(bars[i + 1].time);
-      if (opt.skipMonday && ck.weekday === "Mon") continue;
-      if (opt.killzones && !opt.kz.some(([a, z]) => ck.hour >= a && ck.hour < z)) continue;
-      if (days && !profileAllows(days, ck, i, s.dir)) continue;
-      if (bias && bias[i] !== s.dir) continue;
-      if (align && align[i] !== s.dir) continue;
+      if (opt.skipMonday && ck.weekday === "Mon" && no("monday")) continue;
+      if (opt.killzones && !opt.kz.some(([a, z]) => ck.hour >= a && ck.hour < z) && no("killzone")) continue;
+      if (days && !profileAllows(days, ck, i, s.dir) && no("profile")) continue;
+      if (bias && bias[i] !== s.dir && no("bias")) continue;
+      if (align && align[i] !== s.dir && no("h1")) continue;
       // Buy in discount / sell in premium of candle 1 + candle 2's range (the swing's dealing range).
       if (opt.discount) {
         const hi = Math.max(s.c1h, s.c2.high), lo = Math.min(s.c1l, s.c2.low), mid = (hi + lo) / 2;
-        if (s.dir > 0 ? b.close > mid : b.close < mid) continue;
+        if ((s.dir > 0 ? b.close > mid : b.close < mid) && no("discount")) continue;
       }
-      if (atr && Math.abs(b.close - b.open) < atr[i] * opt.strongCisd) continue;
-      if (opt.newsWindows && NEWS_WINDOWS.some(([a, z]) => ck.hour >= a && ck.hour < z)) continue;
-      if ((used.get(s.id) || 0) >= opt.maxPerSetup) continue;
+      if (atr && Math.abs(b.close - b.open) < atr[i] * opt.strongCisd && no("strong")) continue;
+      if (opt.newsWindows && NEWS_WINDOWS.some(([a, z]) => ck.hour >= a && ck.hour < z) && no("news")) continue;
+      if ((used.get(s.id) || 0) >= opt.maxPerSetup && no("perSwing")) continue;
       // Stop beyond the 1-minute manipulation leg, or (the model's rule) beyond the higher timeframe candle 2.
       const stop = opt.stopMode === "c2" ? s.stop : s.dir > 0 ? e.lo : e.hi;
       // Entry: market at the next bar's open, or (the model's other way) a limit back at the CISD level, the
@@ -473,15 +479,15 @@
           if (s.dir > 0 ? x.low <= stop : x.high >= stop) break; // the stop went first: no trade
           if (s.dir > 0 ? x.low <= entry : x.high >= entry) { start = k; break; }
         }
-        if (start < 0) continue;
+        if (start < 0 && no("unfilled")) continue;
       }
       const risk = Math.abs(entry - stop);
-      if ((s.dir > 0 ? entry <= stop : entry >= stop) || risk < opt.minRisk || risk > opt.maxRisk) continue;
+      if (((s.dir > 0 ? entry <= stop : entry >= stop) || risk < opt.minRisk || risk > opt.maxRisk) && no("risk")) continue;
       let target = entry + s.dir * risk * (opt.targetR || 2);
       if (opt.target === "std2" || opt.target === "std4") {
         const p = e.proj.find((x) => Math.abs(x.k) === (opt.target === "std2" ? 2 : 4));
         target = p ? p.price : target;
-        if ((target - entry) * s.dir < risk) continue; // less than 1R to the target: not worth it
+        if ((target - entry) * s.dir < risk && no("risk")) continue; // less than 1R to the target: not worth it
       }
       // Partial: take `partialFrac` at `partialR` and move the stop to the entry (break-even).
       const partialAt = opt.partialFrac > 0 ? entry + s.dir * risk * opt.partialR : null;
@@ -514,9 +520,20 @@
     return { target: rTarget ? "R" : cfg.entryTarget, targetR: rTarget || 2, spread: +cfg.entrySpread || 0,
       discount: cfg.entryDiscount, htfAlign: cfg.entryAlignH1, strongCisd: cfg.entryStrong ? 1 : 0,
       partialFrac: cfg.entryPartial ? 0.5 : 0, partialR: 1, entryMode: cfg.entryMode, killzones: cfg.entryKillzones, skipMonday: cfg.entrySkipMonday,
+      kz: cfg.entryNyPm ? [[2, 5], [7, 10], [13.5, 16]] : [[2, 5], [7, 10]],
       maxPerSetup: cfg.entryOnePerSwing ? 1 : 2, stopMode: cfg.entryStop, idealOnly: cfg.entryIdeal, maxRisk: cfg.entryStop === "c2" ? 40 : 15,
       dailyProfile: cfg.entryDailyProfile, dailyBias: cfg.entryDailyBias, newsWindows: cfg.entryNews };
   }
+
+  /** What each skip reason of `entries` means, and the setting that causes it (null: the model itself). */
+  const SKIPS = {
+    noSwing: ["Không có swing 15m đang chạy (ngoài nến 3 / nến 4)", null], against: ["Ngược hướng swing 15m", null],
+    eq: ["Giá đóng sai phía EQ nến 2", null], broken: ["Swing đã hỏng (đóng qua đỉnh / đáy nến 2)", null], busy: ["Đang có lệnh khác", null],
+    ideal: ["Không phải ideal formation", "entryIdeal"], monday: ["Thứ Hai", "entrySkipMonday"], killzone: ["Ngoài killzone", "entryKillzones"],
+    profile: ["Hồ sơ ngày không cho phép", "entryDailyProfile"], bias: ["Ngược bias ngày", "entryDailyBias"], h1: ["Ngược bias nến H1", "entryAlignH1"],
+    discount: ["Không ở discount / premium", "entryDiscount"], strong: ["Nến CISD yếu", "entryStrong"], news: ["Giờ ra tin", "entryNews"],
+    perSwing: ["Swing đã có lệnh", "entryOnePerSwing"], unfilled: ["Limit không khớp", "entryMode"], risk: ["SL quá gần (< 0.8) hoặc quá xa", null],
+  };
 
   /** Win rate, R and drawdown of a list of trades. */
   function stats(trades) {
@@ -737,5 +754,5 @@
     return t + "…";
   }
 
-  window.MODELS = { defaults, merge, compute, draw, pairOf, aggregate, cisds, breakers, htfStory, HTF_NAMES, entries, entryDefaults, entryOptions, stats, nyClock };
+  window.MODELS = { defaults, merge, compute, draw, pairOf, aggregate, cisds, breakers, htfStory, HTF_NAMES, entries, entryDefaults, entryOptions, stats, SKIPS, nyClock };
 })();
