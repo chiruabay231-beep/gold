@@ -15,8 +15,9 @@
       htf: "auto", swing: true, eqLines: true, pcl: true, cisd: true, cisdPoiOnly: true, cisdCount: 3,
       projections: true, projLevels: "-1,-2,-2.5,-4", breakers: true, breakerCount: 3, unicorn: true, rules: true, panel: true,
       // M1 entries (the fractal model's 15m → 1m), shown on the 1-minute chart.
-      entries: true, entryTarget: "2R", entrySpread: 0.3, entryKillzones: true, entrySkipMonday: true, entryOnePerSwing: true,
+      entries: true, entryTarget: "1.5R", entrySpread: 0.3, entryKillzones: true, entrySkipMonday: true, entryOnePerSwing: true,
       entryStop: "leg", entryIdeal: false, entryDailyProfile: true, entryDailyBias: false, entryNews: false,
+      entryDiscount: true, entryAlignH1: false, entryStrong: false, entryPartial: false, entryMode: "market",
       bull: "#089981", bear: "#f23645", eqColor: "#f2c14e", projColor: "#9c6bff", breakerColor: "#787b86", unicornColor: "#e91e63",
     };
   }
@@ -294,7 +295,9 @@
   function entryDefaults() {
     return { htf: 900, killzones: true, skipMonday: true, target: "2R", minRisk: 0.8, maxRisk: 15, spread: 0.3, maxHold: 240,
       maxPerSetup: 2, poiOnly: true, kz: [[2, 5], [7, 10]], stopMode: "leg", idealOnly: false,
-      dailyProfile: false, dailyBias: false, newsWindows: false };
+      dailyProfile: false, dailyBias: false, newsWindows: false,
+      targetR: 2, entryMode: "market", limitBars: 15, partialFrac: 0, partialR: 1,
+      htfAlign: false, discount: false, strongCisd: 0 };
   }
 
   /** The day's profile so far, as the model reads it (New York time): Asia = 20:00-24:00 the evening before,
@@ -361,6 +364,34 @@
     return bias;
   }
 
+  /** For each bar, the bias of the candle of `sec` before the one it is in: +1, -1 or 0. */
+  function candleBiasAt(bars, sec) {
+    const c = aggregate(bars, 60, sec);
+    const out = new Array(bars.length).fill(0);
+    for (let k = 2; k < c.length; k++) {
+      const a = c[k - 2], b = c[k - 1];
+      let dir = 0;
+      if (b.close > a.high) dir = 1;
+      else if (b.close < a.low) dir = -1;
+      else if (b.high > a.high && b.close < a.high) dir = -1;
+      else if (b.low < a.low && b.close > a.low) dir = 1;
+      for (let i = c[k].start; i <= c[k].end; i++) out[i] = dir;
+    }
+    return out;
+  }
+
+  /** The average high-low range of the last `n` bars, at each bar. */
+  function rangeAvg(bars, n) {
+    const out = new Array(bars.length).fill(0);
+    let sum = 0;
+    bars.forEach((b, i) => {
+      sum += b.high - b.low;
+      if (i >= n) sum -= bars[i - n].high - bars[i - n].low;
+      out[i] = sum / Math.min(i + 1, n);
+    });
+    return out;
+  }
+
   /** New York 08:25-08:45 and 09:55-10:15: the usual release times of red USD news. */
   const NEWS_WINDOWS = [[8 + 25 / 60, 8.75], [9 + 55 / 60, 10.25]];
 
@@ -385,7 +416,7 @@
       if (from == null) continue;
       // The ideal formation: candle 2 back inside candle 1 with a large wick.
       const ideal = kind === "c2" && wick >= range * 0.4;
-      const setup = { id: j, dir, kind, eq, ideal, stop: dir > 0 ? c2.low : c2.high, target: dir > 0 ? c1.high : c1.low, from, to, c2 };
+      const setup = { id: j, dir, kind, eq, ideal, stop: dir > 0 ? c2.low : c2.high, target: dir > 0 ? c1.high : c1.low, from, to, c2, c1h: c1.high, c1l: c1.low };
       for (let i = from; i <= to; i++) at[i] = setup;
     }
     return at;
@@ -399,6 +430,10 @@
     const setupAt = setupsOf(bars, opt.htf);
     const days = opt.dailyProfile ? dayProfiles(bars) : null;
     const bias = opt.dailyBias ? dailyBiasAt(bars) : null;
+    // Timeframe alignment: the 15m swing in the direction of the H1 candle's bias (the next candle model).
+    const align = opt.htfAlign ? candleBiasAt(bars, 3600) : null;
+    // Average 1m range (14 bars) for a "strong" CISD candle.
+    const atr = opt.strongCisd > 0 ? rangeAvg(bars, 14) : null;
     const events = cisds(bars, [1, 2, 2.5, 4], [], opt.poiOnly);
     const out = [], used = new Map();
     let busyUntil = -1;
@@ -417,27 +452,56 @@
       if (opt.killzones && !opt.kz.some(([a, z]) => ck.hour >= a && ck.hour < z)) continue;
       if (days && !profileAllows(days, ck, i, s.dir)) continue;
       if (bias && bias[i] !== s.dir) continue;
+      if (align && align[i] !== s.dir) continue;
+      // Buy in discount / sell in premium of candle 1 + candle 2's range (the swing's dealing range).
+      if (opt.discount) {
+        const hi = Math.max(s.c1h, s.c2.high), lo = Math.min(s.c1l, s.c2.low), mid = (hi + lo) / 2;
+        if (s.dir > 0 ? b.close > mid : b.close < mid) continue;
+      }
+      if (atr && Math.abs(b.close - b.open) < atr[i] * opt.strongCisd) continue;
       if (opt.newsWindows && NEWS_WINDOWS.some(([a, z]) => ck.hour >= a && ck.hour < z)) continue;
       if ((used.get(s.id) || 0) >= opt.maxPerSetup) continue;
       // Stop beyond the 1-minute manipulation leg, or (the model's rule) beyond the higher timeframe candle 2.
-      const entry = bars[i + 1].open, stop = opt.stopMode === "c2" ? s.stop : s.dir > 0 ? e.lo : e.hi, risk = Math.abs(entry - stop);
+      const stop = opt.stopMode === "c2" ? s.stop : s.dir > 0 ? e.lo : e.hi;
+      // Entry: market at the next bar's open, or (the model's other way) a limit back at the CISD level, the
+      // opposing candle's open, waiting `limitBars` bars.
+      let entry = bars[i + 1].open, start = i + 1;
+      if (opt.entryMode === "limit") {
+        entry = e.level; start = -1;
+        for (let k = i + 1; k < bars.length && k <= i + opt.limitBars; k++) {
+          const x = bars[k];
+          if (s.dir > 0 ? x.low <= stop : x.high >= stop) break; // the stop went first: no trade
+          if (s.dir > 0 ? x.low <= entry : x.high >= entry) { start = k; break; }
+        }
+        if (start < 0) continue;
+      }
+      const risk = Math.abs(entry - stop);
       if ((s.dir > 0 ? entry <= stop : entry >= stop) || risk < opt.minRisk || risk > opt.maxRisk) continue;
-      let target = entry + s.dir * risk * 2;
+      let target = entry + s.dir * risk * (opt.targetR || 2);
       if (opt.target === "std2" || opt.target === "std4") {
         const p = e.proj.find((x) => Math.abs(x.k) === (opt.target === "std2" ? 2 : 4));
         target = p ? p.price : target;
         if ((target - entry) * s.dir < risk) continue; // less than 1R to the target: not worth it
       }
-      // Walk forward: stop first when both are inside one bar.
+      // Partial: take `partialFrac` at `partialR` and move the stop to the entry (break-even).
+      const partialAt = opt.partialFrac > 0 ? entry + s.dir * risk * opt.partialR : null;
+      let banked = 0, left = 1, sl = stop;
+      // Walk forward: the stop first when both are inside one bar.
       let exit = null, exitAt = null, why = "time";
-      for (let k = i + 1; k < bars.length && k <= i + opt.maxHold; k++) {
+      for (let k = start; k < bars.length && k <= start + opt.maxHold; k++) {
         const x = bars[k];
-        if (s.dir > 0 ? x.low <= stop : x.high >= stop) { exit = stop; exitAt = k; why = "stop"; break; }
+        // On the entry bar of a limit only what comes after the fill counts: its stop is still checked.
+        if (s.dir > 0 ? x.low <= sl : x.high >= sl) { exit = sl; exitAt = k; why = left < 1 ? "breakeven" : "stop"; break; }
+        if (partialAt != null && left === 1 && k > start - (opt.entryMode === "limit" ? 0 : 1) && (s.dir > 0 ? x.high >= partialAt : x.low <= partialAt)) {
+          banked = opt.partialFrac * opt.partialR; left = 1 - opt.partialFrac; sl = entry;
+          if (s.dir > 0 ? x.high >= target : x.low <= target) { exit = target; exitAt = k; why = "target"; break; }
+          continue;
+        }
         if (s.dir > 0 ? x.high >= target : x.low <= target) { exit = target; exitAt = k; why = "target"; break; }
       }
-      if (exit == null) { exitAt = Math.min(bars.length - 1, i + opt.maxHold); exit = bars[exitAt].close; if (exitAt === bars.length - 1) why = "open"; }
-      const r = ((exit - entry) * s.dir - opt.spread) / risk;
-      out.push({ dir: s.dir, at: i + 1, time: bars[i + 1].time, entry, stop, target, risk, exit, exitAt, exitTime: bars[exitAt].time, why, r, kind: s.kind });
+      if (exit == null) { exitAt = Math.min(bars.length - 1, start + opt.maxHold); exit = bars[exitAt].close; if (exitAt === bars.length - 1) why = "open"; }
+      const r = banked + left * ((exit - entry) * s.dir) / risk - opt.spread / risk;
+      out.push({ dir: s.dir, at: start, signalAt: i, time: bars[start].time, entry, stop, target, risk, exit, exitAt, exitTime: bars[exitAt].time, why, r, kind: s.kind, partial: banked > 0 });
       used.set(s.id, (used.get(s.id) || 0) + 1);
       busyUntil = exitAt;
     }
@@ -446,7 +510,10 @@
 
   /** The entry options from the indicator's settings. */
   function entryOptions(cfg) {
-    return { target: cfg.entryTarget, spread: +cfg.entrySpread || 0, killzones: cfg.entryKillzones, skipMonday: cfg.entrySkipMonday,
+    const rTarget = /^[\d.]+R$/.test(String(cfg.entryTarget)) ? parseFloat(cfg.entryTarget) : null;
+    return { target: rTarget ? "R" : cfg.entryTarget, targetR: rTarget || 2, spread: +cfg.entrySpread || 0,
+      discount: cfg.entryDiscount, htfAlign: cfg.entryAlignH1, strongCisd: cfg.entryStrong ? 1 : 0,
+      partialFrac: cfg.entryPartial ? 0.5 : 0, partialR: 1, entryMode: cfg.entryMode, killzones: cfg.entryKillzones, skipMonday: cfg.entrySkipMonday,
       maxPerSetup: cfg.entryOnePerSwing ? 1 : 2, stopMode: cfg.entryStop, idealOnly: cfg.entryIdeal, maxRisk: cfg.entryStop === "c2" ? 40 : 15,
       dailyProfile: cfg.entryDailyProfile, dailyBias: cfg.entryDailyBias, newsWindows: cfg.entryNews };
   }
