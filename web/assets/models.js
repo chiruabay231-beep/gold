@@ -747,6 +747,15 @@
         break;
       }
       if (!su.trade) su.status = su.brokenAt != null ? "broken" : su.active ? "wait" : "expired";
+      // Still waiting: may a trade be taken right now? (The time, the day's profile, where price is.)
+      if (su.status === "wait") {
+        const ck = nyClock(last.time + sec);
+        if (intraday && opt.skipMonday && ck.weekday === "Mon") su.blocked = "Thứ Hai";
+        else if (intraday && opt.killzones && !opt.kz.some(([a, z]) => ck.hour >= a && ck.hour < z)) su.blocked = "ngoài killzone";
+        else if (days && !profileAllows(days, ck, n - 1, dir)) su.blocked = "hồ sơ ngày không cho phép";
+        else if (opt.discount && (dir > 0 ? last.close > mid : last.close < mid)) su.blocked = dir > 0 ? "giá chưa về discount" : "giá chưa lên premium";
+        su.mid = mid;
+      }
     }
     return out;
   }
@@ -855,7 +864,8 @@
       const how = su.kind === "c2" ? `nến 2 quét ${su.dir > 0 ? "đáy" : "đỉnh"} nến 1 (${fmt(su.swept)}) rồi đóng lại` : `nến 3 đóng mạnh qua nến 2`;
       lines.push({ text: `Setup #${su.n} ${side(su.dir)} · ${out.htfName}: ${how}`, dir: su.dir });
       const t = su.trade;
-      if (su.status === "wait") lines.push({ text: `Chờ CISD ${su.dir > 0 ? "tăng" : "giảm"} trên ${tf} đến ${hhmm(su.endTime)} · giữ ${su.dir > 0 ? "trên" : "dưới"} EQ ${fmt(su.eq)} · huỷ nếu đóng ${su.dir > 0 ? "dưới" : "trên"} ${fmt(su.invalid)}`, dir: 0 });
+      if (su.status === "wait" && su.blocked) lines.push({ text: `Chưa được vào lệnh: ${su.blocked}${su.blocked === "ngoài killzone" ? " (killzone 2–5h, 7–10h giờ New York)" : ""} · chỉ vào khi có CISD ${su.dir > 0 ? "tăng" : "giảm"} hợp lệ`, dir: 0 });
+      else if (su.status === "wait") lines.push({ text: `Chờ CISD ${su.dir > 0 ? "tăng" : "giảm"} trên ${tf} đến ${hhmm(su.endTime)} · giữ ${su.dir > 0 ? "trên" : "dưới"} EQ ${fmt(su.eq)} · huỷ nếu đóng ${su.dir > 0 ? "dưới" : "trên"} ${fmt(su.invalid)}`, dir: 0 });
       else if (su.status === "signal") lines.push({ text: `CISD vừa xác nhận → ${side(su.dir)} ở giá mở nến kế tiếp · SL ${fmt(t.stop)}`, dir: su.dir });
       else if (su.status === "open") lines.push({ text: `ĐANG ${side(su.dir)} ${fmt(t.entry)} · SL ${fmt(t.stop)} · TP ${fmt(t.target)}`, dir: su.dir });
       else if (t) lines.push({ text: `Đã xong: ${side(su.dir)} ${fmt(t.entry)} → ${t.r >= 0 ? "+" : ""}${t.r.toFixed(1)}R (${SETUP_STATUS[su.status]})`, dir: t.r > 0 ? 1 : -1 });
@@ -864,10 +874,17 @@
       const sk = su.skips[su.skips.length - 1];
       if (sk && !t) lines.push({ text: `CISD ${hhmm(bars[Math.min(sk.at, bars.length - 1)].time)} bị bỏ: ${sk.why}`, dir: 0 });
     }
-    const done = out.setups.slice(-20).filter((x) => x.trade && x.trade.r != null && x.status !== "open");
+    // The record of these rules on the bars loaded: every setup that traded, wins and losses.
+    const done = out.setups.filter((x) => x.trade && x.trade.r != null && x.status !== "open");
     if (done.length) {
       const w = done.filter((x) => x.trade.r > 0).length, R = done.reduce((a, x) => a + x.trade.r, 0);
-      lines.push({ text: `20 setup gần nhất: ${done.length} lệnh · ${w} thắng / ${done.length - w} thua · ${R >= 0 ? "+" : ""}${R.toFixed(1)}R`, dir: 0 });
+      lines.push({ text: `Trên chart (${out.setups.length} setup): ${done.length} lệnh · ${w} thắng / ${done.length - w} thua (${Math.round((w / done.length) * 100)}%) · ${R >= 0 ? "+" : ""}${R.toFixed(1)}R`, dir: R > 0 ? 1 : R < 0 ? -1 : 0 });
+    }
+    // Honest notes from the backtests (gold, April to November 2026): the model alone has no edge.
+    if (!(sec === 60 && htfSec === 900)) out.notes.unshift(`Cặp ${tf}→${out.htfName}: backtest vàng 7 tháng thua lỗ (~40% thắng) — chỉ để tham khảo, nên dùng 1m→15m`);
+    else {
+      const off = [!cfg.entryKillzones && "killzone", !cfg.entryDailyProfile && "hồ sơ ngày", !cfg.entryDiscount && "discount"].filter(Boolean);
+      if (off.length) out.notes.unshift(`Đang tắt bộ lọc ${off.join(", ")}: không có bộ lọc, mô hình chỉ ~40% thắng và lỗ sau phí`);
     }
     out.notes.forEach((t) => lines.push({ text: "⚠ " + t, dir: 0, warn: true }));
     out.lines = lines;
@@ -1077,7 +1094,8 @@
       hline(s.target, x0, x1, rgba(color, 0.9), [], newest ? `Mục tiêu nến 1 ${fmt(s.target)}` : "", "left");
       // The header: number, side, status.
       const yh = Y(s.dir > 0 ? Math.min(s.invalid, s.target) : Math.max(s.invalid, s.target));
-      if (yh != null) pill(g, `#${s.n} ${s.dir > 0 ? "MUA" : "BÁN"} · ${SETUP_STATUS[s.status]}`, xl, yh + (s.dir > 0 ? 14 : -24), rgba(STATUS_COLOR[s.status], 0.9), "#ffffff");
+      const label = s.status === "wait" && s.blocked ? `chưa vào: ${s.blocked}` : SETUP_STATUS[s.status];
+      if (yh != null) pill(g, `#${s.n} ${s.dir > 0 ? "MUA" : "BÁN"} · ${label}`, xl, yh + (s.dir > 0 ? 14 : -24), rgba(s.status === "wait" && s.blocked ? "#787b86" : STATUS_COLOR[s.status], 0.9), "#ffffff");
       // The CISD that was skipped (newest setup only): a small cross with the reason.
       if (cfg.setupSkips && newest && !s.trade) s.skips.slice(-3).forEach((k) => {
         const xx = X(k.at), yy = Y(k.level);
