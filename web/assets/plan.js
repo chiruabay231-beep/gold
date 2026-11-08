@@ -218,6 +218,7 @@
     out.trends = shownLines(allLines.filter((l) => l.lastTouch >= now - 3 * DAY), out.trendSec, tr[tr.length - 1] * 0.5, 2);
     out.lastTime = last.time;
     out.signals = signalsOf(bars, sec, cfg, { d1, h4, zones, trends: allLines, fmt });
+    out.h4c = h4; out.h1c = h1;
     out.lines = panelLines(out, cfg, fmt, last);
     return out;
   }
@@ -286,40 +287,43 @@
     return out;
   }
 
+  /** Market structure of completed candles `c` (of `sec`): swings two candles each side; a close beyond
+   *  the last swing high / low is a BOS (with the trend) or an MSS (against it). The last break and trend. */
+  function structure(c, sec, now) {
+    const done = c.filter((x) => x.time + sec <= now);
+    let hi = null, lo = null, trend = 0, last = null;
+    for (let i = 2; i < done.length; i++) {
+      const k = i - 2;
+      if (k >= 2 && done[k - 1].high < done[k].high && done[k - 2].high < done[k].high && done[k + 1].high <= done[k].high && done[k + 2].high <= done[k].high) hi = { p: done[k].high, used: false };
+      if (k >= 2 && done[k - 1].low > done[k].low && done[k - 2].low > done[k].low && done[k + 1].low >= done[k].low && done[k + 2].low >= done[k].low) lo = { p: done[k].low, used: false };
+      const b = done[i];
+      if (hi && !hi.used && b.close > hi.p) { hi.used = true; last = { dir: 1, type: trend < 0 ? "MSS" : "BOS", level: hi.p, time: b.time }; trend = 1; }
+      if (lo && !lo.used && b.close < lo.p) { lo.used = true; last = { dir: -1, type: trend > 0 ? "MSS" : "BOS", level: lo.p, time: b.time }; trend = -1; }
+    }
+    return { trend, last, hi, lo };
+  }
+
+  /** The panel, five lines: the day's bias, H4 structure, yesterday's high / low swept or not, H1, target. */
   function panelLines(o, cfg, fmt, last) {
-    const L = [], p = o.plan;
-    if (p) {
-      L.push({ text: `NGÀY: ${p.bias > 0 ? "TĂNG" : p.bias < 0 ? "GIẢM" : "ĐI NGANG"} — ${p.why}`, dir: p.bias });
-      const swH = p.today && p.today.high > p.pdh, swL = p.today && p.today.low < p.pdl;
-      const plan = p.bias > 0 ? (swL ? `đã quét PDL ${fmt(p.pdl)} → tìm mua, mục tiêu PDH ${fmt(p.pdh)}` : `chờ giá về vùng mua (hoặc quét PDL ${fmt(p.pdl)}) → mục tiêu PDH ${fmt(p.pdh)}`)
-        : p.bias < 0 ? (swH ? `đã quét PDH ${fmt(p.pdh)} → tìm bán, mục tiêu PDL ${fmt(p.pdl)}` : `chờ giá lên vùng bán (hoặc quét PDH ${fmt(p.pdh)}) → mục tiêu PDL ${fmt(p.pdl)}`)
-          : `chờ quét PDH ${fmt(p.pdh)} để bán hoặc PDL ${fmt(p.pdl)} để mua`;
-      L.push({ text: `Kế hoạch: ${plan}`, dir: 0 });
-    } else L.push({ text: "NGÀY: chưa đủ nến ngày để lập kế hoạch", dir: 0 });
-    if (cfg.h4 && o.h4 && o.h4.length && p && p.dayOpen != null) {
-      const s = o.h4.map((c) => `${new Date(c.time * 1000).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" })} ${c.side > 0 ? "▲" : c.side < 0 ? "▼" : "="}`).join(" · ");
-      const lastSide = o.h4[o.h4.length - 1].side;
-      L.push({ text: `H4 so với giá mở ngày ${fmt(p.dayOpen)}: ${s} → ${lastSide > 0 ? "nghiêng TĂNG" : lastSide < 0 ? "nghiêng GIẢM" : "chưa rõ"}`, dir: lastSide });
-    }
-    if (cfg.zones && o.zones && o.zones.length) {
-      const buy = o.zones.find((z) => z.dir > 0 && z.top < last.close), sell = o.zones.find((z) => z.dir < 0 && z.bottom > last.close);
-      L.push({ text: `H1/H4: ${buy ? `mua ở ${buy.kind} ${buy.tf} ${fmt(buy.bottom)}–${fmt(buy.top)}` : "chưa có vùng mua bên dưới"} · ${sell ? `bán ở ${sell.kind} ${sell.tf} ${fmt(sell.bottom)}–${fmt(sell.top)}` : "chưa có vùng bán bên trên"}`, dir: 0 });
-    }
-    if (cfg.trend) {
-      const tf = TF_NAME(o.trendSec), act = o.trends.filter((l) => l.breakAt == null), lastBo = o.trends.filter((l) => l.breakAt != null).sort((a, b) => b.breakAt - a.breakAt)[0];
-      const s = act.length ? act.slice(0, 2).map((l) => `${l.dir < 0 ? "giảm" : "tăng"} (${l.pts.length} ${l.dir < 0 ? "đỉnh" : "đáy"}) ở ${fmt(l.price(last.time))}`).join(", ") : "chưa có trend 3 chạm";
-      L.push({ text: `Trend ${tf}: ${s}${lastBo ? ` · breakout gần nhất: ${lastBo.breakType === "fake" ? "GIẢ" : lastBo.breakType === "real" ? "THẬT" : "đang xét"}` : ""}`, dir: act.length ? act[0].dir : 0 });
-    }
-    const sig = o.signals || [], cur = sig[sig.length - 1];
-    if (cur) {
-      const side = cur.dir > 0 ? "MUA" : "BÁN";
-      L.push({ text: `${cur.res === "open" ? "ĐANG" : "Tín hiệu gần nhất:"} ${side} ${fmt(cur.entry)} (${KIND[cur.kind]}, ${cur.bias} bias) · SL ${fmt(cur.stop)} (${cur.pips} pip) · TP ${fmt(cur.target)} ${cur.tpWhy}${cur.res !== "open" ? ` → ${cur.r >= 0 ? "+" : ""}${cur.r.toFixed(1)}R` : ""}`, dir: cur.dir });
-    }
-    const done = sig.filter((s) => s.res !== "open");
-    if (done.length) {
-      const w = done.filter((s) => s.r > 0).length, R = done.reduce((a, s) => a + s.r, 0);
-      L.push({ text: `Trên chart: ${done.length} lệnh · ${w} thắng / ${done.length - w} thua (${Math.round((w / done.length) * 100)}%) · ${R >= 0 ? "+" : ""}${R.toFixed(1)}R`, dir: R > 0 ? 1 : R < 0 ? -1 : 0 });
-    }
+    const L = [], p = o.plan, now = last.time + o.sec;
+    const hm = (t) => { const d = new Date(t * 1000), tm = d.toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" }); return now - t > 20 * 3600 ? `${tm} ${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}` : tm; };
+    const msText = (m) => (m.last ? `${m.last.type} ${m.last.dir > 0 ? "tăng" : "giảm"} (phá ${m.last.dir > 0 ? "đỉnh" : "đáy"} ${fmt(m.last.level)} lúc ${hm(m.last.time)})` : "chưa có phá cấu trúc");
+    if (!p) return [{ text: "Bias ngày: chưa đủ nến ngày", dir: 0 }];
+    L.push({ text: `Bias ngày: ${p.bias > 0 ? "TĂNG" : p.bias < 0 ? "GIẢM" : "ĐI NGANG"} — ${p.why}`, dir: p.bias });
+    const h4 = structure(o.h4c || [], 14400, now), h1 = structure(o.h1c || [], 3600, now);
+    L.push({ text: `H4: ${msText(h4)}`, dir: h4.last ? h4.last.dir : 0 });
+    const swH = p.today && p.today.high > p.pdh, swL = p.today && p.today.low < p.pdl;
+    L.push({ text: `Quét: PDH ${fmt(p.pdh)} ${swH ? "✓ đã quét" : "✗ chưa"} · PDL ${fmt(p.pdl)} ${swL ? "✓ đã quét" : "✗ chưa"}`, dir: 0 });
+    // H1: its structure and the zone where an entry would come (in the day's direction, else the nearest).
+    const want = p.bias || (h4.last ? h4.last.dir : 0);
+    const zone = (o.zones || []).find((z) => z.tf === "H1" && (want ? z.dir === want && (want > 0 ? z.top < last.close : z.bottom > last.close) : true));
+    L.push({ text: `H1: ${msText(h1)}${zone ? ` · vùng ${zone.dir > 0 ? "mua" : "bán"} ${zone.kind} ${fmt(zone.bottom)}–${fmt(zone.top)}` : ""}`, dir: h1.last ? h1.last.dir : 0 });
+    // Target: yesterday's high / low in the bias's direction while still there, then the next H4 swing.
+    let target;
+    if (want > 0) target = !swH && p.pdh > last.close ? `PDH ${fmt(p.pdh)}` : h4.hi && !h4.hi.used && h4.hi.p > last.close ? `đỉnh H4 ${fmt(h4.hi.p)}` : `đỉnh hôm nay ${fmt(p.today ? p.today.high : p.pdh)}`;
+    else if (want < 0) target = !swL && p.pdl < last.close ? `PDL ${fmt(p.pdl)}` : h4.lo && !h4.lo.used && h4.lo.p < last.close ? `đáy H4 ${fmt(h4.lo.p)}` : `đáy hôm nay ${fmt(p.today ? p.today.low : p.pdl)}`;
+    else target = `chờ quét PDH ${fmt(p.pdh)} (bán) hoặc PDL ${fmt(p.pdl)} (mua)`;
+    L.push({ text: `Mục tiêu: ${want > 0 ? "MUA → " : want < 0 ? "BÁN → " : ""}${target}`, dir: want });
     return L;
   }
 

@@ -236,6 +236,9 @@
     ["flow", "Dòng tiền cá mập"],
     ["zones", "Vùng cung / cầu cá mập (chờ mua / chờ bán, ghi giá)"],
     ["smt", "SMT (khi mở 2 biểu đồ: so đỉnh/đáy với mã thứ 2)"],
+    ["macro", "Macro: giờ vàng biến động mạnh (giờ VN, tự đổi mùa đông / hè, đếm ngược)"],
+    ["unicorn", "Unicorn model (breaker + FVG chồng nhau)"],
+    ["bbob", "BB / OB / CISD mạnh"],
     ["liq", "Vùng thanh khoản mạnh / vừa (BSL / SSL: đỉnh đáy bằng, PDH / PDL, tuần, phiên, H1 / H4)"],
     ["plan", "Kế hoạch giao dịch (ngày → H4 → H1, trend 3 đỉnh / 3 đáy, breakout thật / giả, nến rút râu)"],
   ];
@@ -515,7 +518,7 @@
       Object.defineProperties(v, { bars: own(() => pane.bars), interval: own(() => pane.tf), digits: own(() => (pane.digits != null ? pane.digits : term.digits)) });
       Object.assign(v, {
         chart: this.chart, series: this.series, viewBars: () => pane.bars, replay: null, requestICT: null, isPane: true,
-        ict: null, models: null, plan: null, liq: null, smt: null, sharks: null, sharkZones: null, newsDots: null, seriesPriceOn: null, studySeries: new Map(), studySig: "",
+        ict: null, models: null, plan: null, liq: null, macro: null, unicorn: null, bbob: null, smt: null, sharks: null, sharkZones: null, newsDots: null, seriesPriceOn: null, studySeries: new Map(), studySig: "",
       });
       Object.assign(v, v.axisViews());
       this.series.attachPrimitive(v.layer());
@@ -729,6 +732,7 @@
       v.models = term.modelsFor(bars, TF_SECONDS[this.tf], v.digits);
       v.plan = term.planFor(bars, TF_SECONDS[this.tf], v.digits);
       v.liq = term.liqFor(bars, TF_SECONDS[this.tf], v.digits);
+      Object.assign(v, term.smcFor(bars, TF_SECONDS[this.tf]));
       // Indicators added, removed or changed on the main chart: built again here.
       const sig = JSON.stringify(term.studies || []);
       if (sig !== v.studySig) { [...v.studySeries.keys()].forEach((id) => v.dropStudySeries(id)); v.studySig = sig; }
@@ -3237,6 +3241,10 @@
           },
         });
         this.ictCfg = (() => { try { return window.ICT.merge(JSON.parse(store.get("aurum.ictcfg") || "null")); } catch { return window.ICT.defaults(); } })();
+        const loadCfg = (lib, key) => (lib ? (() => { try { return lib.merge(JSON.parse(store.get(key) || "null")); } catch { return lib.defaults(); } })() : null);
+        this.macroCfg = loadCfg(window.MACRO, "aurum.macrocfg");
+        this.uniCfg = loadCfg(window.UNICORN, "aurum.unicfg");
+        this.bbobCfg = loadCfg(window.BBOB, "aurum.bbobcfg");
         this.liqCfg = window.LIQ ? (() => { try { return window.LIQ.merge(JSON.parse(store.get("aurum.liqcfg") || "null")); } catch { return window.LIQ.defaults(); } })() : null;
         this.planCfg = window.PLAN ? (() => { try { return window.PLAN.merge(JSON.parse(store.get("aurum.plancfg") || "null")); } catch { return window.PLAN.defaults(); } })() : null;
         this.modelCfg = window.MODELS ? (() => { try { return window.MODELS.merge(JSON.parse(store.get("aurum.modelcfg") || "null")); } catch { return window.MODELS.defaults(); } })() : null;
@@ -3336,13 +3344,15 @@
       sheet.open(`<h3>Chỉ báo</h3>
         <div class="toggles">${IND.filter(([k]) => (k === "flow" || k === "zones" ? flowAllowed : allowed)).map(([k, n]) => `<label class="toggle"><span>${n}</span>
           <span class="switch"><input type="checkbox" data-k="${k}" ${showInd[k] ? "checked" : ""}><span></span></span></label>`).join("")}</div>
-        ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button><button class="btn btn-ghost wide" id="liqMore">⚙ Vùng thanh khoản (mạnh / vừa)</button><button class="btn btn-ghost wide" id="planMore">⚙ Kế hoạch giao dịch (trend, breakout, vùng H1/H4, tín hiệu)</button>' : ""}
+        ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button><button class="btn btn-ghost wide" id="smcMore">⚙ Macro · Unicorn · BB / OB / CISD</button><button class="btn btn-ghost wide" id="liqMore">⚙ Vùng thanh khoản (mạnh / vừa)</button><button class="btn btn-ghost wide" id="planMore">⚙ Kế hoạch giao dịch (trend, breakout, vùng H1/H4, tín hiệu)</button>' : ""}
         <h4>Chỉ báo kỹ thuật</h4>
         <div class="list" id="studyList"></div>
         <select id="addStudy" class="add-study"><option value="">＋ Thêm chỉ báo…</option>${Object.entries(window.TA ? window.TA.STUDIES : {}).map(([k, d]) => `<option value="${k}">${esc(d.name)}</option>`).join("")}</select>
         <p class="muted small">Giờ theo New York như bản TradingView. Chuột phải (hoặc giữ lâu) trên biểu đồ để mở menu.</p>`, (el) => {
         const more = el.querySelector("#ictMore");
         if (more) more.onclick = () => { sheet.close(); this.ictSettingsSheet(); };
+        const smcB = el.querySelector("#smcMore");
+        if (smcB) smcB.onclick = () => { sheet.close(); this.smcSettingsSheet(); };
         const liqB = el.querySelector("#liqMore");
         if (liqB) liqB.onclick = () => { sheet.close(); this.liqSettingsSheet(); };
         const plan = el.querySelector("#planMore");
@@ -4574,7 +4584,7 @@
       items.push(["tools", "✎ Công cụ vẽ…"]);
       if (this.drawings && this.drawings.list.length) items.push(["clear", `🗑 Xoá tất cả bản vẽ (${this.drawings.list.length})`]);
       if (this.drawings && this.drawings.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"], ["drawDel", "🗑 Xoá bản vẽ này"]);
-      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["liqSettings", "⚙ Vùng thanh khoản…"], ["planSettings", "⚙ Kế hoạch giao dịch…"], ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
+      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["smcSettings", "⚙ Macro · Unicorn · BB / OB / CISD…"], ["liqSettings", "⚙ Vùng thanh khoản…"], ["planSettings", "⚙ Kế hoạch giao dịch…"], ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
       const menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
       menu.hidden = false;
@@ -4598,6 +4608,7 @@
         if (k === "ictSettings") this.ictSettingsSheet();
         if (k === "planSettings") this.planSettingsSheet();
         if (k === "liqSettings") this.liqSettingsSheet();
+        if (k === "smcSettings") this.smcSettingsSheet();
         if (k === "setups") this.setupListSheet();
         if (k === "drawSettings") this.drawingSettings(this.drawings.current);
         if (k === "drawDel" && this.drawings.current) this.drawings.remove(this.drawings.current.id);
@@ -6552,6 +6563,61 @@
       try { return window.LIQ.compute(bars, sec, this.liqCfg, { ...this.htfCtx(bars, sec), fmt: (v) => fmt(v, digits) }); } catch { return null; }
     },
 
+    /** Macro windows, Unicorn and BB / OB / CISD for these bars. */
+    smcFor(bars, sec) {
+      const out = { macro: null, unicorn: null, bbob: null };
+      if (!bars.length || !sec) return out;
+      try { if (showInd.macro && window.MACRO && this.macroCfg) out.macro = window.MACRO.compute(bars, sec, this.macroCfg); } catch { /* none */ }
+      try { if (showInd.unicorn && window.UNICORN && this.uniCfg && sec < 86400) out.unicorn = window.UNICORN.compute(bars, sec, this.uniCfg); } catch { /* none */ }
+      try { if (showInd.bbob && window.BBOB && this.bbobCfg && sec < 86400) out.bbob = window.BBOB.compute(bars, sec, this.bbobCfg); } catch { /* none */ }
+      return out;
+    },
+
+    smcSettingsSheet() {
+      sheet.close();
+      const libs = { macro: [window.MACRO, "macroCfg", "aurum.macrocfg"], unicorn: [window.UNICORN, "uniCfg", "aurum.unicfg"], bbob: [window.BBOB, "bbobCfg", "aurum.bbobcfg"] };
+      const render = (tab) => {
+        const on = (k) => `<label class="toggle"><span>Bật chỉ báo này</span><span class="switch"><input type="checkbox" data-on="${k}" ${showInd[k] ? "checked" : ""}><span></span></span></label>`;
+        if (tab === "macro") {
+          const { tog, color, head, note } = fieldKit(this.macroCfg);
+          return on("macro") + note("Khung giờ vàng biến động mạnh nhất, đo trên nến 1m từ 28/1 đến 6/11/2026 (biên độ nến 5 phút so với trung vị của ngày, % ngày có nến ≥ 2×). Mỗi khung tính theo giờ của sàn tạo ra nó nên tự đổi 1 tiếng khi Mỹ / Anh đổi giờ. Giờ hiện trên chart là giờ VN. Đếm ngược ở giữa trên.")
+            + `<div class="list">${window.MACRO.WINDOWS.map((w) => `<div class="row"><span class="grow">${esc(w.name)} <span class="muted small">(${w.from}–${w.to} ${w.tz === "Asia/Ho_Chi_Minh" ? "giờ VN" : w.tz === "Europe/London" ? "giờ London" : "giờ New York"})</span></span><span class="small">${esc(w.stat)}</span></div>`).join("")}</div>`
+            + head("Hiện") + tog("asia", "Phiên Á") + tog("london", "Phiên London") + tog("ny", "Phiên New York") + tog("weak", "Cả khung yếu (London mở, sau tin)") + tog("labels", "Nhãn giờ") + tog("countdown", "Đếm ngược macro tiếp theo")
+            + head("Màu") + color("colAsia", "Phiên Á") + color("colLondon", "Phiên London") + color("colNy", "Phiên New York");
+        }
+        if (tab === "unicorn") {
+          const { tog, numf, color, head, note } = fieldKit(this.uniCfg);
+          return on("unicorn") + note("Unicorn: breaker block (đỉnh / đáy bị quét rồi bị phá ngược lại) chồng lên FVG của cú phá. Vùng chồng (hồng) là điểm vào: limit ở mép gần, SL ngoài đáy / đỉnh bị quét, TP theo R. Kiểm tra trên vàng (tháng 4–6 | 7–11/2026): 5m TP 2R +7.9R | −120R (35% | 32% thắng), 15m TP 2R +0.6R | −28.8R, 1m đều âm — vào máy móc ở mọi unicorn không có lời; dùng làm vùng tham khảo kèm xác nhận khác. Bảng góc phải trên ghi thống kê trên chart.")
+            + head("Cài đặt") + numf("swingLen", "Độ dài swing (nến mỗi bên)") + numf("count", "Số unicorn gần nhất") + numf("rr", "TP (R)", 0.5) + numf("maxWait", "Chờ giá về tối đa (nến)") + numf("spread", "Spread + phí (giá)", 0.05) + tog("panel", "Thống kê trên chart")
+            + head("Màu") + color("uni", "Vùng unicorn") + color("bull", "Tăng") + color("bear", "Giảm");
+        }
+        const { tog, numf, color, head, note } = fieldKit(this.bbobCfg);
+        return on("bbob") + note("OB: nến ngược chiều cuối cùng trước cú đẩy phá swing (OB mạnh = cú đẩy ≥ 1.5× biên độ TB và để lại FVG). BB (breaker block): OB bị đóng cửa xuyên qua thì đổi vai (OB tăng hỏng → BB giảm, làm kháng cự). CISD mạnh: nến đóng qua giá mở của chuỗi nến ngược chiều vừa quét swing, thân nến ≥ biên độ TB.")
+          + head("Order block") + tog("ob", "Hiện OB") + tog("obStrongOnly", "Chỉ OB mạnh") + numf("dispAtr", "Cú đẩy tối thiểu (× biên độ TB)", 0.1)
+          + head("Breaker block") + tog("bb", "Hiện BB")
+          + head("CISD mạnh") + tog("cisd", "Hiện CISD mạnh") + numf("cisdAtr", "Thân nến CISD tối thiểu (× biên độ TB)", 0.1)
+          + head("Chung") + numf("swingLen", "Độ dài swing (nến mỗi bên)") + numf("count", "Số mục gần nhất mỗi loại")
+          + head("Màu") + color("bull", "Tăng") + color("bear", "Giảm") + color("bbColor", "BB") + color("cisdColor", "CISD");
+      };
+      // Each tab edits its own settings object: switching tab opens the panel again on that object.
+      const open = (tab) => {
+        const [lib, key, storeKey] = libs[tab];
+        this.openPanel("Macro · Unicorn · BB / OB / CISD", [["macro", "Macro"], ["unicorn", "Unicorn"], ["bbob", "BB / OB / CISD"]], render, {
+          tab, root: this[key],
+          onChange: () => { store.set(storeKey, JSON.stringify(this[key])); this.computeICT(); this.redraw(); },
+          afterDraw: (panel, t) => {
+            if (t !== tab) { open(t); return; }
+            panel.querySelectorAll("[data-on]").forEach((b) => (b.onchange = () => { showInd[b.dataset.on] = b.checked; store.set("aurum.ind", JSON.stringify(showInd)); this.computeICT(); this.redraw(); }));
+          },
+          onReset: () => {
+            if (!confirm("Đặt lại cài đặt của tab này về mặc định?")) return;
+            this[key] = lib.defaults(); store.set(storeKey, JSON.stringify(this[key])); this.computeICT(); this.redraw(); open(tab);
+          },
+        });
+      };
+      open("macro");
+    },
+
     saveLiq() {
       store.set("aurum.liqcfg", JSON.stringify(this.liqCfg));
       this.computeICT();
@@ -6927,6 +6993,7 @@
       this.models = this.modelsFor(bars, TF_SECONDS[this.interval], this.digits);
       this.plan = this.planFor(bars, TF_SECONDS[this.interval], this.digits);
       this.liq = this.liqFor(bars, TF_SECONDS[this.interval], this.digits);
+      Object.assign(this, this.smcFor(bars, TF_SECONDS[this.interval]));
       if (this.cmpBars && this.cmpBars.length) this.showCmp(false); else this.computeSMT();
       this.applyStudies();
       this.redraw();
@@ -7133,6 +7200,10 @@
                 const X = (i) => ts.logicalToCoordinate(i), Y = (v) => term.series.priceToCoordinate(v);
                 if (term.ict) window.ICT.draw(context, term.ict, term.ictCfg, X, Y, mediaSize.width, mediaSize.height);
                 if (term.models && window.MODELS) window.MODELS.draw(context, term.models, term.modelCfg, X, Y, mediaSize.width, mediaSize.height, (v) => fmt(v, term.digits));
+                const W = mediaSize.width, H = mediaSize.height, F = (v) => fmt(v, term.digits);
+                if (term.macro && window.MACRO) window.MACRO.draw(context, term.macro, term.macroCfg, (t) => term.timeX(t), W, H);
+                if (term.bbob && window.BBOB) window.BBOB.draw(context, term.bbob, term.bbobCfg, X, Y, W, H, F);
+                if (term.unicorn && window.UNICORN) window.UNICORN.draw(context, term.unicorn, term.uniCfg, X, Y, W, H, F);
                 if (term.liq && window.LIQ) window.LIQ.draw(context, term.liq, term.liqCfg, (t) => term.timeX(t), Y, mediaSize.width, mediaSize.height, (v) => fmt(v, term.digits));
                 if (term.plan && window.PLAN) window.PLAN.draw(context, term.plan, term.planCfg, (t) => term.timeX(t), X, Y, mediaSize.width, mediaSize.height, (v) => fmt(v, term.digits));
                 if (term.smt) window.ICT.drawSMT(context, term.smt, X, Y, mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
@@ -7151,6 +7222,13 @@
                 term.drawSharkZones(context, mediaSize.width, true);
                 // The TTrades panel over the candles, so they never cross its text.
                 if (term.models && window.MODELS && window.MODELS.drawPanelOnly) window.MODELS.drawPanelOnly(context, term.models, term.modelCfg, mediaSize.width, mediaSize.height);
+                if (term.macro && window.MACRO) window.MACRO.drawStatus(context, term.macro, term.macroCfg, mediaSize.width);
+                if (term.unicorn && term.uniCfg.panel) {
+                  context.save(); context.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif"; context.textBaseline = "middle";
+                  const tx = term.unicorn.stats, tw = context.measureText(tx).width + 16, x = mediaSize.width - tw - 70, y = 58;
+                  context.fillStyle = "rgba(15, 20, 30, 0.85)"; context.beginPath(); context.roundRect(x, y - 10, tw, 20, 10); context.fill();
+                  context.fillStyle = "#ffffff"; context.textAlign = "left"; context.fillText(tx, x + 8, y + 0.5); context.restore();
+                }
                 if (term.liq && window.LIQ) window.LIQ.drawPanel(context, term.liq, term.liqCfg, mediaSize.width, mediaSize.height);
                 if (term.plan && window.PLAN) window.PLAN.drawPanel(context, term.plan, term.planCfg, mediaSize.width, mediaSize.height);
                 if (!term.sharks) return;
