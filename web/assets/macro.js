@@ -6,20 +6,15 @@
 (() => {
   "use strict";
 
+  // The strongest window of each session (the others were dropped: one macro per session).
   const WINDOWS = [
-    { name: "CME mở lại", tz: "America/New_York", from: "18:00", to: "18:25", ses: "asia", stat: "2.1× · 81% ngày (đông)", note: "spread giãn, có gap" },
-    { name: "Tokyo mở", tz: "Asia/Ho_Chi_Minh", from: "07:00", to: "07:10", ses: "asia", stat: "1.6–1.75× · ~40% ngày" },
-    { name: "Thượng Hải mở", tz: "Asia/Ho_Chi_Minh", from: "08:00", to: "08:45", ses: "asia", stat: "1.8× · 88% ngày", strong: true },
-    { name: "Thượng Hải chiều", tz: "Asia/Ho_Chi_Minh", from: "12:30", to: "12:40", ses: "asia", stat: "1.4–1.7× · 16–55% ngày" },
-    { name: "London mở", tz: "Europe/London", from: "08:00", to: "08:15", ses: "london", stat: "1.1–1.25× (yếu)", weak: true },
-    { name: "COMEX + tin 8:30", tz: "America/New_York", from: "08:20", to: "08:45", ses: "ny", stat: "2× · 62–72% ngày" },
-    { name: "Mỹ mở cửa", tz: "America/New_York", from: "09:30", to: "09:45", ses: "ny", stat: "2.3–2.6× · 83–94% ngày", strong: true },
-    { name: "Tin 10:00", tz: "America/New_York", from: "09:50", to: "10:10", ses: "ny", stat: "2.2× · 78–87% ngày", strong: true },
-    { name: "Sau tin", tz: "America/New_York", from: "10:10", to: "11:10", ses: "ny", stat: "1.8×", weak: true },
+    { name: "Thượng Hải mở", tz: "Asia/Ho_Chi_Minh", from: "08:00", to: "08:45", ses: "asia", stat: "1.8× · 88% ngày" },
+    { name: "London mở", tz: "Europe/London", from: "08:00", to: "08:15", ses: "london", stat: "1.1–1.25× · phiên yếu nhất" },
+    { name: "Mỹ mở cửa", tz: "America/New_York", from: "09:30", to: "09:45", ses: "ny", stat: "2.3–2.6× · 83–94% ngày" },
   ];
 
   function defaults() {
-    return { asia: true, london: true, ny: true, weak: true, labels: true, countdown: true, maxTf: 3600, colAsia: "#f2c14e", colLondon: "#2962ff", colNy: "#e91e63" };
+    return { asia: true, london: true, ny: true, labels: true, countdown: true, maxTf: 3600, colAsia: "#f2c14e", colLondon: "#2962ff", colNy: "#e91e63" };
   }
   function merge(saved) {
     const d = defaults();
@@ -52,14 +47,13 @@
   /** The windows that overlap [t0, t1] (UTC seconds), on weekdays only. */
   function windows(t0, t1, cfg) {
     const out = [];
-    const on = (w) => cfg[w.ses] && (cfg.weak || !w.weak);
+    const on = (w) => cfg[w.ses];
     for (let t = t0 - 86400; t <= t1 + 86400; t += 86400) {
       WINDOWS.filter(on).forEach((w) => {
         const [y, m, d] = dayIn(w.tz, t);
         const a = at(w.tz, y, m, d, w.from), b = at(w.tz, y, m, d, w.to);
         const wd = new Date((a + offset(w.tz, a)) * 1000).getUTCDay();
-        // Trading days: the CME reopen is Sunday to Thursday evening in New York, the rest Monday to Friday.
-        const ok = w.name === "CME mở lại" ? wd >= 0 && wd <= 4 : wd >= 1 && wd <= 5;
+        const ok = wd >= 1 && wd <= 5;
         if (ok && b >= t0 && a <= t1 && !out.some((x) => x.w === w && x.a === a)) out.push({ w, a, b });
       });
     }
@@ -90,7 +84,7 @@
       const xa = T(a), xb = T(b);
       if (xa == null || xb == null || xb < 0 || xa > w) return;
       const c = colorOf(m, cfg), x0 = Math.max(0, xa), x1 = Math.min(w, xb);
-      g.fillStyle = rgba(c, m.strong ? 0.16 : m.weak ? 0.06 : 0.1);
+      g.fillStyle = rgba(c, 0.14);
       g.fillRect(x0, 0, Math.max(1, x1 - x0), h);
       g.strokeStyle = rgba(c, 0.55); g.lineWidth = 1;
       g.beginPath(); g.moveTo(Math.round(xa) + 0.5, 0); g.lineTo(Math.round(xa) + 0.5, h); g.stroke();
