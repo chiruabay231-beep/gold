@@ -3245,7 +3245,8 @@
         if (r) this.renderMt5Login();
       }));
       $("mtIn").onclick = async (e) => {
-        const server = $("mtServer").value.trim(), login = $("mtLogin").value.trim(), password = $("mtPass").value;
+        // MT5 server names have no spaces: "EZSquare Server" → "EZSquare-Server".
+        const server = $("mtServer").value.trim().replace(/\s+/g, "-"), login = $("mtLogin").value.replace(/\D/g, ""), password = $("mtPass").value;
         if (!server || !login || !password) return toast("Cần server, số tài khoản và mật khẩu", true);
         const r = await act(e.currentTarget, () => this.call("/mt5/login", { server, login, password, remember: $("mtRemember").checked }));
         $("mtPass").value = "";

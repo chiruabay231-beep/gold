@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "3.7"
+VERSION = "3.8"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -840,10 +840,19 @@ class Mt5Account:
             if body.get("path"):
                 cfg["path"] = str(body["path"])
             mt5 = None
+            hint = (" Server phải viết đúng như trong MT5 (vd EZSquare-Server, Exness-MT5Trial7: có gạch nối, không có dấu cách)."
+                    " Sàn khác Exness: MT5 trên VPS phải tìm được server đó trước (Tệp → Mở tài khoản → tìm tên sàn).")
             if Mt5.module is not None and Mt5.connected and Mt5.module.terminal_info() is not None:
                 mt5 = Mt5.module
-                if not mt5.login(login, password=password, server=server):
-                    raise ValueError(f"Đăng nhập thất bại ({mt5.last_error()}). Kiểm tra số tài khoản, mật khẩu, server.")
+                ok = mt5.login(login, password=password, server=server)
+                # "EZSquare Server" typed for "EZSquare-Server": MT5 server names have no spaces.
+                if not ok and re.search(r"\s", server):
+                    dashed = re.sub(r"\s+", "-", server)
+                    if mt5.login(login, password=password, server=dashed):
+                        ok, server = True, dashed
+                        cfg["server"] = server
+                if not ok:
+                    raise ValueError(f"Đăng nhập thất bại ({mt5.last_error()}). Kiểm tra số tài khoản, mật khẩu (mật khẩu chính), server.{hint}")
             else:
                 Mt5.connected = False
                 try:
@@ -851,7 +860,7 @@ class Mt5Account:
                 except RuntimeError as e:
                     raise ValueError(str(e))
                 if mt5.account_info() is None or mt5.account_info().login != login:
-                    raise ValueError(f"Đăng nhập thất bại ({mt5.last_error()}). Kiểm tra số tài khoản, mật khẩu, server.")
+                    raise ValueError(f"Đăng nhập thất bại ({mt5.last_error()}). Kiểm tra số tài khoản, mật khẩu (mật khẩu chính), server.{hint}")
             if body.get("remember", True):
                 self.cfg.update(login=login, password=password, server=server)
                 a = mt5.account_info()
