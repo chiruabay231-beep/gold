@@ -3190,49 +3190,70 @@
       }
     },
 
-    /** Logging the VPS's MT5 into an account (Exness or another MT5 broker / prop firm), like the app's
-     *  "Đăng nhập sàn". The password goes to the owner's own server only and is never kept in the browser;
-     *  the browser remembers the recent accounts' numbers and servers to fill the form. */
-    renderMt5Login() {
+    /** The MT5 accounts, like the app's "Đăng nhập sàn": the saved accounts kept on the VPS (shared with the
+     *  app: an account logged in from the app is here too) with one tap to switch, and a form to add one.
+     *  Passwords stay on the owner's server; the browser keeps none. */
+    async renderMt5Login() {
       const box = $("mt5Login");
       if (!box) return;
       const t = this.account || {};
-      let recent = [];
-      try { recent = JSON.parse(store.get("aurum.mt5recent") || "[]"); } catch { recent = []; }
+      let list = null;
+      try { list = (await this.call("/mt5/accounts")).accounts || []; } catch { list = null; }
+      const cur = (a) => a.current || (t.login && +a.login === +t.login && a.server === t.server);
+      if (list && t.login && !list.some(cur)) list.unshift({ login: t.login, server: t.server, broker: t.company || "", hasPassword: false, current: true });
+      const isReal = (a) => (cur(a) ? t.mode === "real" : a.mode ? a.mode === "real" : /real/i.test(a.server) || !/(trial|demo)/i.test(a.server));
+      const rows = (list || []).map((a, i) => `<div class="row acct-row${cur(a) ? " on" : ""}" data-i="${i}">
+          <span class="acct-seal ${isReal(a) ? "real" : ""}">✦</span>
+          <span class="grow"><b>#${esc(String(a.login))}</b><br><span class="muted small">${esc(a.broker || "MT5")} · ${esc(a.server)}${isReal(a) ? " · thật" : " · demo"}</span></span>
+          ${cur(a) ? `<span class="tag-on">Đang dùng</span>${t.balance != null ? `<span class="muted small" style="margin-left:8px">${fmt(t.balance, 2)} ${esc(t.currency || "")}</span>` : ""}`
+            : `<button type="button" class="btn btn-small" data-sw="${i}">Chuyển</button><button type="button" class="btn btn-small btn-ghost" data-del="${i}" title="Xoá khỏi danh sách">✕</button>`}
+        </div>`).join("");
       box.innerHTML = `<div class="panel-head"><h3>Tài khoản MT5</h3>${t.login ? '<button class="btn btn-ghost btn-small" id="mtOut" type="button">Đăng xuất</button>' : ""}</div>
-        ${t.login ? `<div class="kvs"><div class="kv"><span>Tài khoản</span><b>#${t.login} · ${t.mode === "real" ? '<span class="neg">THẬT</span>' : "demo"}</b></div>
-          <div class="kv"><span>Server</span><b>${esc(t.server || "")}</b></div>
-          <div class="kv"><span>Số dư / vốn</span><b>${t.balance != null ? fmt(t.balance, 2) : "–"} / ${t.equity != null ? fmt(t.equity, 2) : "–"} ${esc(t.currency || "")}</b></div></div>` : '<p class="muted small">MT5 trên VPS chưa đăng nhập tài khoản nào.</p>'}
-        ${recent.length ? `<p class="muted small" style="margin-top:10px">Tài khoản gần đây (chạm để điền):</p><div class="chips">${recent.map((r, i) => `<button type="button" class="btn btn-small btn-ghost" data-recent="${i}">#${esc(String(r.login))} · ${esc(r.server)}</button>`).join(" ")}</div>` : ""}
-        <h4 style="margin-top:12px">${t.login ? "Đổi sang tài khoản khác" : "Đăng nhập"}</h4>
+        ${list == null ? '<p class="muted small">Máy chủ chưa có danh sách tài khoản chung (cần cập nhật máy chủ lên bản 3.7). Vẫn đăng nhập được ở dưới.</p>' : ""}
+        ${rows ? `<div class="list">${rows}</div>` : list ? '<p class="muted small">Chưa có tài khoản nào. Thêm ở dưới (tài khoản đã đăng nhập trên app cũng hiện ở đây sau khi mở app một lần).</p>' : ""}
+        <details class="acct-add" ${list && list.length ? "" : "open"}><summary>＋ Thêm tài khoản Exness / MT5</summary>
         <div class="fields"><label>Server<input id="mtServer" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="vd Exness-MT5Trial7, EZSquare-Server"></label></div>
         <div class="row-btns"><button type="button" class="btn btn-small btn-ghost" data-srv="Exness-MT5Trial">Exness demo…</button><button type="button" class="btn btn-small btn-ghost" data-srv="Exness-MT5Real">Exness thật…</button></div>
         <div class="fields two">
           <label>Số tài khoản<input id="mtLogin" inputmode="numeric" autocomplete="username"></label>
           <label>Mật khẩu chính (không phải investor)<input id="mtPass" type="password" autocomplete="current-password"></label>
         </div>
-        <label class="toggle"><span>Máy chủ nhớ mật khẩu (tự đăng nhập lại khi VPS khởi động lại)</span><span class="switch"><input type="checkbox" id="mtRemember" checked><span></span></span></label>
-        <button class="btn btn-gold wide" id="mtIn" type="button">Đăng nhập MT5</button>
-        <p class="muted small">Sàn khác Exness (vd quỹ EZSquare): MT5 trên VPS phải tìm được server đó trước — trong MT5: Tệp → Mở tài khoản → tìm tên sàn → đăng nhập một lần. Đổi tài khoản thì tài khoản cũ trên VPS tự thoát.</p>`;
-      box.querySelectorAll("[data-srv]").forEach((b) => (b.onclick = () => { $("mtServer").value = b.dataset.srv; $("mtServer").focus(); }));
-      box.querySelectorAll("[data-recent]").forEach((b) => (b.onclick = () => { const r = recent[+b.dataset.recent]; $("mtServer").value = r.server; $("mtLogin").value = r.login; $("mtPass").focus(); }));
-      $("mtIn").onclick = async (e) => {
-        const server = $("mtServer").value.trim(), login = $("mtLogin").value.trim(), password = $("mtPass").value;
-        if (!server || !login || !password) return toast("Cần server, số tài khoản và mật khẩu", true);
-        const r = await act(e.currentTarget, () => this.call("/mt5/login", { server, login, password, remember: $("mtRemember").checked }), `Đã đăng nhập #${login}`);
-        $("mtPass").value = "";
+        <label class="toggle"><span>Lưu để chuyển nhanh (máy chủ giữ mật khẩu, dùng chung với app)</span><span class="switch"><input type="checkbox" id="mtRemember" checked><span></span></span></label>
+        <button class="btn btn-gold wide" id="mtIn" type="button">Đăng nhập</button>
+        <p class="muted small">Sàn khác Exness (vd EZSquare): MT5 trên VPS phải tìm được server đó trước — trong MT5: Tệp → Mở tài khoản → tìm tên sàn → đăng nhập một lần.</p></details>`;
+      const after = async (r, what) => {
         if (!r) return;
-        const list = [{ login, server }, ...recent.filter((x) => !(String(x.login) === login && x.server === server))].slice(0, 6);
-        store.set("aurum.mt5recent", JSON.stringify(list));
-        // Another account: its own symbols, candles and day / H4 / H1 history.
         this.htfData = null;
         try { await this.refreshOwner(); } catch { /* shown by the next refresh */ }
         this.loadCandles();
         this.renderMt5Login();
+        toast(what);
+      };
+      box.querySelectorAll("[data-srv]").forEach((b) => (b.onclick = () => { $("mtServer").value = b.dataset.srv; $("mtServer").focus(); }));
+      box.querySelectorAll("[data-sw]").forEach((b) => (b.onclick = async () => {
+        const a = list[+b.dataset.sw];
+        if (!confirm(`Chuyển sang tài khoản #${a.login} (${a.server})?${t.login ? `\nĐang dùng #${t.login} sẽ được thay.` : ""}`)) return;
+        let password = null;
+        if (!a.hasPassword) { password = prompt(`Mật khẩu chính của #${a.login} (${a.server})`); if (!password) return; }
+        const r = await act(b, () => this.call("/mt5/switch", password ? { login: a.login, server: a.server, password } : { login: a.login, server: a.server }));
+        after(r, `Đã chuyển sang #${a.login}`);
+      }));
+      box.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
+        const a = list[+b.dataset.del];
+        if (!confirm(`Xoá #${a.login} (${a.server}) khỏi danh sách đã lưu (cả trên app)?`)) return;
+        const r = await act(b, () => this.call("/mt5/forget", { login: a.login, server: a.server }), "Đã xoá");
+        if (r) this.renderMt5Login();
+      }));
+      $("mtIn").onclick = async (e) => {
+        const server = $("mtServer").value.trim(), login = $("mtLogin").value.trim(), password = $("mtPass").value;
+        if (!server || !login || !password) return toast("Cần server, số tài khoản và mật khẩu", true);
+        const r = await act(e.currentTarget, () => this.call("/mt5/login", { server, login, password, remember: $("mtRemember").checked }));
+        $("mtPass").value = "";
+        after(r, `Đã đăng nhập #${login}`);
       };
       const out = $("mtOut");
       if (out) out.onclick = async (e) => {
-        if (!confirm("Đăng xuất tài khoản MT5 trên VPS? Bot đang dùng MT5 phải dừng trước.")) return;
+        if (!confirm("Đăng xuất tài khoản MT5 trên VPS? Danh sách đã lưu vẫn giữ. Bot đang dùng MT5 phải dừng trước.")) return;
         const r = await act(e.currentTarget, () => this.call("/mt5/logout", {}), "Đã đăng xuất MT5");
         if (r) { this.account = Object.assign({}, this.account, { login: 0 }); this.renderMt5Login(); }
       };

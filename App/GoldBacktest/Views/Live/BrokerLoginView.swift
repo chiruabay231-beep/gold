@@ -208,6 +208,8 @@ struct BrokerLoginView: View {
     @State private var showAddForm: Bool?
     /// The account being logged in, for its spinner.
     @State private var switchingLogin: String?
+    /// Accounts saved on the VPS (shared with the web), by id.
+    @State private var onServer: [String: MT5SavedAccount] = [:]
 
     private var hasVPS: Bool { RemoteBotSettings.client() != nil }
 
@@ -217,10 +219,15 @@ struct BrokerLoginView: View {
         return SavedBrokerAccount(broker: status.company ?? "MT5", login: String(number), server: status.server ?? "")
     }
 
-    /// Saved accounts with the logged-in one first (added if it isn't saved).
+    /// Saved accounts (this phone's and the VPS's, which the web shares) with the logged-in one first.
     private var accounts: [SavedBrokerAccount] {
-        guard let current else { return saved }
-        return [saved.first { $0.id == current.id } ?? current] + saved.filter { $0.id != current.id }
+        var list = saved
+        for a in onServer.values.sorted(by: { $0.login < $1.login }) {
+            let account = SavedBrokerAccount(broker: (a.broker?.isEmpty == false ? a.broker : nil) ?? "MT5", login: String(a.login), server: a.server)
+            if !list.contains(where: { $0.id == account.id }) { list.append(account) }
+        }
+        guard let current else { return list }
+        return [list.first { $0.id == current.id } ?? current] + list.filter { $0.id != current.id }
     }
 
     var body: some View {
@@ -276,7 +283,7 @@ struct BrokerLoginView: View {
         .confirmationDialog("Đăng xuất MT5 trên VPS?", isPresented: $confirmLogout, titleVisibility: .visible) {
             Button("Đăng xuất", role: .destructive) { Task { await logout() } }
         } message: {
-            Text("Mật khẩu đã lưu trên VPS sẽ bị xoá.")
+            Text("MT5 trên VPS thoát tài khoản này. Danh sách tài khoản đã lưu vẫn giữ để chuyển lại.")
         }
     }
 
@@ -294,7 +301,8 @@ struct BrokerLoginView: View {
             }
             ForEach(accounts) { account in
                 let isCurrent = account.id == current?.id
-                let real = isCurrent ? status?.mode == "real" : Self.isReal(account)
+                let known = onServer[account.id]?.mode
+                let real = isCurrent ? status?.mode == "real" : (known.map { $0 == "real" } ?? Self.isReal(account))
                 Button { tap(account, isCurrent: isCurrent) } label: {
                     HStack(spacing: 12) {
                         Image(systemName: "checkmark.seal.fill")
@@ -335,6 +343,8 @@ struct BrokerLoginView: View {
                         Button("Xoá", role: .destructive) {
                             SavedBrokerAccount.forget(account)
                             saved = SavedBrokerAccount.all
+                            onServer[account.id] = nil
+                            Task { try? await RemoteBotSettings.client()?.mt5Forget(login: account.login, server: account.server) }
                         }
                     }
                 }
@@ -466,6 +476,9 @@ struct BrokerLoginView: View {
     private func signIn(saved account: SavedBrokerAccount) {
         if let password = account.savedPassword {
             Task { await signIn(login: account.login, password: password, server: account.server, brokerName: account.broker) }
+        } else if onServer[account.id]?.hasPassword == true {
+            // Saved from the web (or another phone): the VPS has its password.
+            Task { await switchOnServer(account) }
         } else {
             promptPassword = ""
             askPassword = account
@@ -481,6 +494,40 @@ struct BrokerLoginView: View {
             statusError = nil
         } catch {
             status = nil
+            statusError = error.localizedDescription
+        }
+        await syncAccounts(client)
+    }
+
+    /// The VPS's saved accounts (shared with the web); this phone's saved accounts that the VPS does not
+    /// have yet (or has without a password) are handed to it, so the web can switch to them too.
+    /// Servers before 3.7 have no list: nothing happens.
+    private func syncAccounts(_ client: RemoteBotClient) async {
+        guard let list = try? await client.mt5Accounts() else { return }
+        var byId: [String: MT5SavedAccount] = [:]
+        for a in list { byId["\(a.login)@\(a.server)"] = a }
+        for account in saved where byId[account.id]?.hasPassword != true {
+            guard let password = account.savedPassword else { continue }
+            try? await client.mt5Remember(login: account.login, server: account.server, password: password, broker: account.broker)
+            byId[account.id] = MT5SavedAccount(login: Int(account.login) ?? 0, server: account.server, broker: account.broker,
+                                               name: nil, mode: byId[account.id]?.mode, hasPassword: true, current: false)
+        }
+        onServer = byId
+    }
+
+    private func switchOnServer(_ account: SavedBrokerAccount) async {
+        guard let client = RemoteBotSettings.client() else { return }
+        busy = true
+        switchingLogin = account.login
+        defer {
+            busy = false
+            switchingLogin = nil
+        }
+        do {
+            status = try await client.mt5Switch(login: account.login, server: account.server)
+            statusError = nil
+            await mt5.refresh()
+        } catch {
             statusError = error.localizedDescription
         }
     }

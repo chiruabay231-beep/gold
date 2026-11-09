@@ -321,6 +321,32 @@ struct RemoteBotClient {
         _ = try await request("/mt5/logout", method: "POST", body: Data("{}".utf8))
     }
 
+    // Saved accounts kept on the VPS, shared with the web (passwords stay on the VPS).
+
+    func mt5Accounts() async throws -> [MT5SavedAccount] {
+        struct Response: Decodable { var accounts: [MT5SavedAccount] }
+        return try JSONDecoder().decode(Response.self, from: await request("/mt5/accounts")).accounts
+    }
+
+    /// Logs into a saved account with the password kept on the VPS (or `password` when given).
+    func mt5Switch(login: String, server: String, password: String? = nil) async throws -> MT5AccountStatus {
+        var object: [String: Any] = ["login": login, "server": server]
+        if let password { object["password"] = password }
+        let body = try JSONSerialization.data(withJSONObject: object)
+        return try JSONDecoder().decode(MT5AccountStatus.self, from: await request("/mt5/switch", method: "POST", body: body, timeout: 90))
+    }
+
+    /// Keeps an account (and its password) on the VPS without logging into it.
+    func mt5Remember(login: String, server: String, password: String, broker: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["login": login, "server": server, "password": password, "broker": broker])
+        _ = try await request("/mt5/remember", method: "POST", body: body)
+    }
+
+    func mt5Forget(login: String, server: String) async throws {
+        let body = try JSONSerialization.data(withJSONObject: ["login": login, "server": server])
+        _ = try await request("/mt5/forget", method: "POST", body: body)
+    }
+
     func mt5Symbols(query: String) async throws -> [MT5Symbol] {
         struct Response: Decodable { var symbols: [MT5Symbol] }
         let q = Self.queryValue(query)
@@ -546,6 +572,17 @@ struct MT5AccountStatus: Decodable {
     var tradeAllowed: Bool?
     var terminal: String?
     var remembered: Bool?
+}
+
+/// An account saved on the VPS (no password in it).
+struct MT5SavedAccount: Decodable, Hashable {
+    var login: Int
+    var server: String
+    var broker: String?
+    var name: String?
+    var mode: String?
+    var hasPassword: Bool
+    var current: Bool
 }
 
 struct MT5Symbol: Decodable, Identifiable, Hashable {

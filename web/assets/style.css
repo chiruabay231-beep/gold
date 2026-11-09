@@ -944,3 +944,13 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .bt-out .row.clickable { cursor: pointer; }
 .bt-out .row.clickable:hover { background: var(--hover); }
 .bt-out h4 { margin: 14px 0 4px; }
+
+/* MT5 accounts (Máy chủ tab) */
+.acct-row { gap: 10px; align-items: center; }
+.acct-row.on { background: color-mix(in srgb, var(--gold, #f2c14e) 8%, transparent); border-radius: 8px; }
+.acct-seal { font-size: 18px; color: var(--muted); }
+.acct-seal.real { color: #f2c14e; }
+.tag-on { background: #089981; color: #fff; font: 600 11px/1 var(--font); padding: 4px 8px; border-radius: 999px; }
+.acct-row .btn-small + .btn-small { margin-left: 6px; }
+.acct-add { margin-top: 12px; }
+.acct-add summary { cursor: pointer; font-weight: 600; padding: 8px 0; color: var(--gold, #f2c14e); }

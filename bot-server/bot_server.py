@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "3.6"
+VERSION = "3.7"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -854,6 +854,9 @@ class Mt5Account:
                     raise ValueError(f"Đăng nhập thất bại ({mt5.last_error()}). Kiểm tra số tài khoản, mật khẩu, server.")
             if body.get("remember", True):
                 self.cfg.update(login=login, password=password, server=server)
+                a = mt5.account_info()
+                mode = ({mt5.ACCOUNT_TRADE_MODE_DEMO: "demo", mt5.ACCOUNT_TRADE_MODE_REAL: "real"}.get(a.trade_mode, "contest")) if a else ""
+                self._keep_account(login, server, password, body.get("broker") or (a.company if a else ""), a.name if a else "", mode)
                 if body.get("path"):
                     self.cfg["path"] = str(body["path"])
             else:
@@ -863,6 +866,58 @@ class Mt5Account:
                 self.server.log("⚠️ Algo Trading trong MT5 đang tắt: bật nút Algo Trading trên VPS để đặt lệnh")
         self.server.log(f"🔑 Đăng nhập MT5 #{login} ({server})")
         return self.status()
+
+    # ----- Saved accounts, shared by the app and the web (passwords stay on this VPS) -----
+
+    def _accounts(self):
+        acc = self.cfg.get("accounts")
+        if not isinstance(acc, list):
+            acc = self.cfg["accounts"] = []
+        return acc
+
+    def _keep_account(self, login, server, password, broker="", name="", mode=""):
+        acc = [a for a in self._accounts() if not (int(a.get("login") or 0) == int(login) and a.get("server") == server)]
+        old = next((a for a in self._accounts() if int(a.get("login") or 0) == int(login) and a.get("server") == server), {})
+        acc.insert(0, {"login": int(login), "server": server, "password": password or old.get("password", ""),
+                       "broker": broker or old.get("broker", ""), "name": name or old.get("name", ""), "mode": mode or old.get("mode", "")})
+        self.cfg["accounts"] = acc[:20]
+        self.server.save_config()
+
+    def accounts(self):
+        """The saved accounts (no passwords), the one logged in first."""
+        cur = (int(self.cfg.get("login") or 0), self.cfg.get("server") or "")
+        rows = [{"login": int(a.get("login") or 0), "server": a.get("server", ""), "broker": a.get("broker", ""), "name": a.get("name", ""), "mode": a.get("mode", ""),
+                 "hasPassword": bool(a.get("password")), "current": (int(a.get("login") or 0), a.get("server", "")) == cur}
+                for a in self._accounts()]
+        rows.sort(key=lambda r: not r["current"])
+        return {"ok": True, "accounts": rows}
+
+    def remember(self, body):
+        """Keep an account (from the app's own list) without logging into it."""
+        try:
+            login = int(str(body.get("login", "")).strip())
+        except ValueError:
+            raise ValueError("Số tài khoản MT5 phải là số")
+        server = str(body.get("server", "")).strip()
+        if not server:
+            raise ValueError("Cần tên máy chủ (server) MT5")
+        self._keep_account(login, server, str(body.get("password", "")), str(body.get("broker", "")))
+        return self.accounts()
+
+    def switch(self, body):
+        """Log into a saved account with its saved password (or the one given)."""
+        login, server = int(str(body.get("login", "0")).strip() or 0), str(body.get("server", "")).strip()
+        a = next((x for x in self._accounts() if int(x.get("login") or 0) == login and x.get("server") == server), None)
+        password = str(body.get("password") or (a or {}).get("password") or "")
+        if not password:
+            raise ValueError("Tài khoản này chưa lưu mật khẩu trên VPS: nhập mật khẩu")
+        return self.login({"login": login, "server": server, "password": password, "remember": True, "broker": (a or {}).get("broker", "")})
+
+    def forget(self, body):
+        login, server = int(str(body.get("login", "0")).strip() or 0), str(body.get("server", "")).strip()
+        self.cfg["accounts"] = [a for a in self._accounts() if not (int(a.get("login") or 0) == login and a.get("server") == server)]
+        self.server.save_config()
+        return self.accounts()
 
     def logout(self):
         s = self.server.settings
@@ -3770,6 +3825,8 @@ def make_handler(server):
                     return self._send(200, run_botkit(server.config, {"command": "samples"}))
                 if path == "/mt5/status":
                     return self._send(200, server.mt5_account.status())
+                if path == "/mt5/accounts":
+                    return self._send(200, server.mt5_account.accounts())
                 if path == "/mt5/symbols":
                     return self._send(200, server.mt5_account.symbols((params.get("q") or [""])[0], limit))
                 if path == "/copy/status":
@@ -3842,6 +3899,12 @@ def make_handler(server):
                     return self._send(200, server.mt5_account.login(body))
                 if path == "/mt5/logout":
                     return self._send(200, server.mt5_account.logout())
+                if path == "/mt5/switch":
+                    return self._send(200, server.mt5_account.switch(body))
+                if path == "/mt5/remember":
+                    return self._send(200, server.mt5_account.remember(body))
+                if path == "/mt5/forget":
+                    return self._send(200, server.mt5_account.forget(body))
                 if path == "/mt5/settings":
                     return self._send(200, server.mt5_account.settings(body))
                 if path == "/mt5/order":
