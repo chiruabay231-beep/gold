@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "3.5"
+VERSION = "3.6"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -600,8 +600,38 @@ def mt5_send(mt5, request):
         if result.retcode == getattr(mt5, "TRADE_RETCODE_INVALID_STOPS", 10016):
             return None, ("SL/TP không hợp lệ (10016): lệnh MUA cần SL dưới giá hiện tại và TP trên giá; "
                           "lệnh BÁN ngược lại, và cách giá đủ xa theo sàn")
-        return None, f"MT5 từ chối ({result.retcode}): {result.comment}"
+        hint = RETCODE_HINTS.get(result.retcode)
+        return None, f"MT5 từ chối ({result.retcode}): {hint or result.comment}"
     return result, None
+
+
+# What MT5's refusals mean and what to do (other brokers and prop accounts hit these more than Exness).
+RETCODE_HINTS = {
+    10004: "giá đã đổi (requote), bấm lại",
+    10006: "sàn từ chối lệnh",
+    10013: "lệnh không hợp lệ",
+    10014: "khối lượng không hợp lệ: kiểm tra lot tối thiểu / bước lot của mã này",
+    10015: "giá không hợp lệ",
+    10017: "mã này đang bị khoá giao dịch trên tài khoản (sàn tắt giao dịch mã này)",
+    10018: "thị trường đang đóng cửa",
+    10019: "không đủ tiền ký quỹ (margin): giảm lot",
+    10020: "giá thay đổi, bấm lại",
+    10021: "chưa có giá để khớp, thử lại",
+    10024: "gửi lệnh quá nhanh, đợi một chút",
+    10026: "SÀN tắt giao dịch tự động (EA / API) trên tài khoản này: không đặt lệnh qua app / web được, chỉ đặt tay trong MT5 — hỏi sàn / quỹ có cho EA không",
+    10027: "nút Algo Trading trong MT5 trên VPS đang TẮT: mở MT5 trên VPS, bật Algo Trading (nút trên thanh công cụ) rồi đặt lại",
+    10028: "lệnh đang bị khoá để xử lý",
+    10029: "lệnh hoặc vị thế bị khoá",
+    10031: "MT5 mất kết nối tới máy chủ sàn",
+    10033: "đã đạt số lệnh chờ tối đa của tài khoản",
+    10034: "đã đạt khối lượng tối đa cho mã này",
+    10040: "đã đạt số lệnh mở tối đa của tài khoản",
+    10042: "mã này chỉ cho MUA",
+    10043: "mã này chỉ cho BÁN",
+    10044: "mã này chỉ cho đóng lệnh đang có, không cho mở lệnh mới",
+    10045: "sàn bắt đóng lệnh theo thứ tự FIFO",
+    10046: "tài khoản không cho mở lệnh ngược chiều (hedge)",
+}
 
 
 def check_stops(mt5, symbol, info, long, stop, target):
@@ -871,6 +901,9 @@ class Mt5Account:
             raise ValueError("Đây là tài khoản THẬT: bật \"Cho phép tài khoản thật\" ở Giao dịch → Đăng nhập sàn")
         if not a.trade_allowed:
             raise ValueError("Tài khoản không cho giao dịch (đang dùng mật khẩu investor? cần mật khẩu chính)")
+        if hasattr(a, "trade_expert") and not a.trade_expert:
+            raise ValueError("Sàn / quỹ tắt giao dịch tự động (EA / API) trên tài khoản này: app / web không đặt lệnh được, "
+                             "chỉ đặt tay trong MT5. Hỏi sàn / quỹ có cho EA không.")
         t = mt5.terminal_info()
         if t is not None and not t.trade_allowed:
             if not ensure_algo_trading(mt5, self.cfg, self.server.log):
