@@ -1590,6 +1590,9 @@
       this.watchTrades(t);
       if (this.selected && !this.findSelected()) this.selected = null;
       $("whoName").textContent = "Chủ máy chủ";
+      $("whoRole").style.cursor = "pointer";
+      $("whoRole").title = "Đổi / đăng nhập tài khoản MT5";
+      $("whoRole").onclick = () => { this.setTab("bot"); const b = $("mt5Login"); if (b) { if (!b.innerHTML) this.renderMt5Login(); b.scrollIntoView({ behavior: "smooth" }); } };
       $("whoRole").innerHTML = t.login
         ? `#${t.login} · ${esc(t.server || "")} <span class="acct ${t.mode === "real" ? "real" : ""}" title="${t.mode === "real" ? "Tài khoản thật" : "Tài khoản demo"}">✦</span>`
         : "MT5 chưa đăng nhập";
@@ -3174,6 +3177,7 @@
             <div class="kv"><span>MT5</span><b>${s.mt5 && s.mt5.connected ? "Đã kết nối" : esc((s.mt5 && s.mt5.error) || "Chưa kết nối")}</b></div></div>
           <button class="btn btn-ghost wide" id="srvUpdate">Cập nhật máy chủ lên bản mới nhất</button>`;
         $("toBot").onclick = () => this.setTab("autobot");
+        if ($("mt5Login") && !$("mt5Login").innerHTML) this.renderMt5Login();
         $("srvUpdate").onclick = async (e) => {
           if (!confirm("Cập nhật máy chủ? Máy chủ tự khởi động lại trong khoảng 1 phút.")) return;
           const r = await act(e.currentTarget, () => this.call("/update", {}));
@@ -3186,8 +3190,57 @@
       }
     },
 
+    /** Logging the VPS's MT5 into an account (Exness or another MT5 broker / prop firm), like the app's
+     *  "Đăng nhập sàn". The password goes to the owner's own server only and is never kept in the browser;
+     *  the browser remembers the recent accounts' numbers and servers to fill the form. */
+    renderMt5Login() {
+      const box = $("mt5Login");
+      if (!box) return;
+      const t = this.account || {};
+      let recent = [];
+      try { recent = JSON.parse(store.get("aurum.mt5recent") || "[]"); } catch { recent = []; }
+      box.innerHTML = `<div class="panel-head"><h3>Tài khoản MT5</h3>${t.login ? '<button class="btn btn-ghost btn-small" id="mtOut" type="button">Đăng xuất</button>' : ""}</div>
+        ${t.login ? `<div class="kvs"><div class="kv"><span>Tài khoản</span><b>#${t.login} · ${t.mode === "real" ? '<span class="neg">THẬT</span>' : "demo"}</b></div>
+          <div class="kv"><span>Server</span><b>${esc(t.server || "")}</b></div>
+          <div class="kv"><span>Số dư / vốn</span><b>${t.balance != null ? fmt(t.balance, 2) : "–"} / ${t.equity != null ? fmt(t.equity, 2) : "–"} ${esc(t.currency || "")}</b></div></div>` : '<p class="muted small">MT5 trên VPS chưa đăng nhập tài khoản nào.</p>'}
+        ${recent.length ? `<p class="muted small" style="margin-top:10px">Tài khoản gần đây (chạm để điền):</p><div class="chips">${recent.map((r, i) => `<button type="button" class="btn btn-small btn-ghost" data-recent="${i}">#${esc(String(r.login))} · ${esc(r.server)}</button>`).join(" ")}</div>` : ""}
+        <h4 style="margin-top:12px">${t.login ? "Đổi sang tài khoản khác" : "Đăng nhập"}</h4>
+        <div class="fields"><label>Server<input id="mtServer" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="vd Exness-MT5Trial7, EZSquare-Server"></label></div>
+        <div class="row-btns"><button type="button" class="btn btn-small btn-ghost" data-srv="Exness-MT5Trial">Exness demo…</button><button type="button" class="btn btn-small btn-ghost" data-srv="Exness-MT5Real">Exness thật…</button></div>
+        <div class="fields two">
+          <label>Số tài khoản<input id="mtLogin" inputmode="numeric" autocomplete="username"></label>
+          <label>Mật khẩu chính (không phải investor)<input id="mtPass" type="password" autocomplete="current-password"></label>
+        </div>
+        <label class="toggle"><span>Máy chủ nhớ mật khẩu (tự đăng nhập lại khi VPS khởi động lại)</span><span class="switch"><input type="checkbox" id="mtRemember" checked><span></span></span></label>
+        <button class="btn btn-gold wide" id="mtIn" type="button">Đăng nhập MT5</button>
+        <p class="muted small">Sàn khác Exness (vd quỹ EZSquare): MT5 trên VPS phải tìm được server đó trước — trong MT5: Tệp → Mở tài khoản → tìm tên sàn → đăng nhập một lần. Đổi tài khoản thì tài khoản cũ trên VPS tự thoát.</p>`;
+      box.querySelectorAll("[data-srv]").forEach((b) => (b.onclick = () => { $("mtServer").value = b.dataset.srv; $("mtServer").focus(); }));
+      box.querySelectorAll("[data-recent]").forEach((b) => (b.onclick = () => { const r = recent[+b.dataset.recent]; $("mtServer").value = r.server; $("mtLogin").value = r.login; $("mtPass").focus(); }));
+      $("mtIn").onclick = async (e) => {
+        const server = $("mtServer").value.trim(), login = $("mtLogin").value.trim(), password = $("mtPass").value;
+        if (!server || !login || !password) return toast("Cần server, số tài khoản và mật khẩu", true);
+        const r = await act(e.currentTarget, () => this.call("/mt5/login", { server, login, password, remember: $("mtRemember").checked }), `Đã đăng nhập #${login}`);
+        $("mtPass").value = "";
+        if (!r) return;
+        const list = [{ login, server }, ...recent.filter((x) => !(String(x.login) === login && x.server === server))].slice(0, 6);
+        store.set("aurum.mt5recent", JSON.stringify(list));
+        // Another account: its own symbols, candles and day / H4 / H1 history.
+        this.htfData = null;
+        try { await this.refreshOwner(); } catch { /* shown by the next refresh */ }
+        this.loadCandles();
+        this.renderMt5Login();
+      };
+      const out = $("mtOut");
+      if (out) out.onclick = async (e) => {
+        if (!confirm("Đăng xuất tài khoản MT5 trên VPS? Bot đang dùng MT5 phải dừng trước.")) return;
+        const r = await act(e.currentTarget, () => this.call("/mt5/logout", {}), "Đã đăng xuất MT5");
+        if (r) { this.account = Object.assign({}, this.account, { login: 0 }); this.renderMt5Login(); }
+      };
+    },
+
     renderMt5Settings() {
       const t = this.account || {};
+      this.renderMt5Login();
       $("mt5Panel").innerHTML = `<h3>Đặt lệnh MT5</h3>
         <label class="toggle"><span>Cho phép đặt lệnh từ app / web</span><span class="switch"><input type="checkbox" id="tOn" ${t.tradingEnabled ? "checked" : ""}><span></span></span></label>
         <label class="toggle"><span>Cho phép tài khoản THẬT</span><span class="switch"><input type="checkbox" id="tReal" ${t.allowReal ? "checked" : ""}><span></span></span></label>
