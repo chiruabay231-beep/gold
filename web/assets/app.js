@@ -3212,12 +3212,12 @@
         ${list == null ? '<p class="muted small">Máy chủ chưa có danh sách tài khoản chung (cần cập nhật máy chủ lên bản 3.7). Vẫn đăng nhập được ở dưới.</p>' : ""}
         ${rows ? `<div class="list">${rows}</div>` : list ? '<p class="muted small">Chưa có tài khoản nào. Thêm ở dưới (tài khoản đã đăng nhập trên app cũng hiện ở đây sau khi mở app một lần).</p>' : ""}
         <details class="acct-add" ${list && list.length ? "" : "open"}><summary>＋ Thêm tài khoản Exness / MT5</summary>
-        <div class="fields"><label>Server<input id="mtServer" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="vd Exness-MT5Trial7, EZSquare-Server"></label></div>
-        <div class="row-btns"><button type="button" class="btn btn-small btn-ghost" data-srv="Exness-MT5Trial">Exness demo…</button><button type="button" class="btn btn-small btn-ghost" data-srv="Exness-MT5Real">Exness thật…</button></div>
         <div class="fields two">
           <label>Số tài khoản<input id="mtLogin" inputmode="numeric" autocomplete="username"></label>
           <label>Mật khẩu chính (không phải investor)<input id="mtPass" type="password" autocomplete="current-password"></label>
         </div>
+        <div class="fields"><label>Server <span class="muted small">(để trống = tự tìm)</span><input id="mtServer" list="mtServers" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Tự động: server đã dùng, EZSquare-Server…"></label></div>
+        <datalist id="mtServers">${[...new Set([...(list || []).map((a) => a.server), "EZSquare-Server", "Exness-MT5Trial", "Exness-MT5Real"])].map((v) => `<option value="${esc(v)}">`).join("")}</datalist>
         <label class="toggle"><span>Lưu để chuyển nhanh (máy chủ giữ mật khẩu, dùng chung với app)</span><span class="switch"><input type="checkbox" id="mtRemember" checked><span></span></span></label>
         <button class="btn btn-gold wide" id="mtIn" type="button">Đăng nhập</button>
         <p class="muted small">Sàn khác Exness (vd EZSquare): MT5 trên VPS phải tìm được server đó trước — trong MT5: Tệp → Mở tài khoản → tìm tên sàn → đăng nhập một lần.</p></details>`;
@@ -3229,7 +3229,11 @@
         this.renderMt5Login();
         toast(what);
       };
-      box.querySelectorAll("[data-srv]").forEach((b) => (b.onclick = () => { $("mtServer").value = b.dataset.srv; $("mtServer").focus(); }));
+      // A saved account's number typed: its server filled in.
+      $("mtLogin").oninput = () => {
+        const n = $("mtLogin").value.replace(/\D/g, ""), hit = (list || []).find((a) => String(a.login) === n);
+        if (hit && !$("mtServer").value) $("mtServer").value = hit.server;
+      };
       box.querySelectorAll("[data-sw]").forEach((b) => (b.onclick = async () => {
         const a = list[+b.dataset.sw];
         if (!confirm(`Chuyển sang tài khoản #${a.login} (${a.server})?${t.login ? `\nĐang dùng #${t.login} sẽ được thay.` : ""}`)) return;
@@ -3247,8 +3251,9 @@
       $("mtIn").onclick = async (e) => {
         // MT5 server names have no spaces: "EZSquare Server" → "EZSquare-Server".
         const server = $("mtServer").value.trim().replace(/\s+/g, "-"), login = $("mtLogin").value.replace(/\D/g, ""), password = $("mtPass").value;
-        if (!server || !login || !password) return toast("Cần server, số tài khoản và mật khẩu", true);
+        if (!login || !password) return toast("Cần số tài khoản và mật khẩu", true);
         const r = await act(e.currentTarget, () => this.call("/mt5/login", { server, login, password, remember: $("mtRemember").checked }));
+        if (r && r.server) toast(`Server: ${r.server}`);
         $("mtPass").value = "";
         after(r, `Đã đăng nhập #${login}`);
       };

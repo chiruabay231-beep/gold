@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "3.8"
+VERSION = "3.9"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -830,37 +830,42 @@ class Mt5Account:
             raise ValueError("Số tài khoản MT5 phải là số")
         password = str(body.get("password", ""))
         server = str(body.get("server", "")).strip()
-        if not password or not server:
-            raise ValueError("Cần mật khẩu và tên máy chủ (server) MT5")
+        if not password:
+            raise ValueError("Cần mật khẩu MT5 (mật khẩu chính)")
+        # The servers to try: the one typed (and without its spaces: "EZSquare Server" → "EZSquare-Server"),
+        # or, left empty, the ones this account / the saved accounts used, the current one and the known ones.
+        if server:
+            candidates = [server] + ([re.sub(r"\s+", "-", server)] if re.search(r"\s", server) else [])
+        else:
+            candidates = self._server_candidates(login)
         s = self.server.settings
         if s.get("running") and s.get("broker") == "mt5" and int(self.cfg.get("login") or 0) != login:
             raise ValueError("Bot đang đặt lệnh trên tài khoản MT5 hiện tại: dừng bot trước khi đổi tài khoản")
         with Mt5.lock:
-            cfg = dict(self.cfg, login=login, password=password, server=server)
             if body.get("path"):
-                cfg["path"] = str(body["path"])
-            mt5 = None
+                self.cfg["path"] = str(body["path"])
             hint = (" Server phải viết đúng như trong MT5 (vd EZSquare-Server, Exness-MT5Trial7: có gạch nối, không có dấu cách)."
                     " Sàn khác Exness: MT5 trên VPS phải tìm được server đó trước (Tệp → Mở tài khoản → tìm tên sàn).")
-            if Mt5.module is not None and Mt5.connected and Mt5.module.terminal_info() is not None:
-                mt5 = Mt5.module
-                ok = mt5.login(login, password=password, server=server)
-                # "EZSquare Server" typed for "EZSquare-Server": MT5 server names have no spaces.
-                if not ok and re.search(r"\s", server):
-                    dashed = re.sub(r"\s+", "-", server)
-                    if mt5.login(login, password=password, server=dashed):
-                        ok, server = True, dashed
-                        cfg["server"] = server
-                if not ok:
-                    raise ValueError(f"Đăng nhập thất bại ({mt5.last_error()}). Kiểm tra số tài khoản, mật khẩu (mật khẩu chính), server.{hint}")
-            else:
+            if not (Mt5.module is not None and Mt5.connected and Mt5.module.terminal_info() is not None):
+                # Start the terminal (with the remembered account, else as it is), then log in below.
                 Mt5.connected = False
                 try:
-                    mt5 = Mt5.connect(cfg)
-                except RuntimeError as e:
-                    raise ValueError(str(e))
-                if mt5.account_info() is None or mt5.account_info().login != login:
-                    raise ValueError(f"Đăng nhập thất bại ({mt5.last_error()}). Kiểm tra số tài khoản, mật khẩu (mật khẩu chính), server.{hint}")
+                    Mt5.connect(self.cfg)
+                except RuntimeError:
+                    try:
+                        Mt5.connect({"path": self.cfg.get("path", "")})
+                    except RuntimeError as e:
+                        raise ValueError(str(e))
+            mt5 = Mt5.module
+            ok = False
+            for srv in candidates:
+                if mt5.login(login, password=password, server=srv):
+                    ok, server = True, srv
+                    break
+            if not ok:
+                tried = f" (đã thử: {', '.join(candidates)})" if not str(body.get("server", "")).strip() else ""
+                raise ValueError(f"Đăng nhập thất bại ({mt5.last_error()}){tried}. Kiểm tra số tài khoản, mật khẩu (mật khẩu chính), server.{hint}")
+            cfg = dict(self.cfg, login=login, password=password, server=server)
             if body.get("remember", True):
                 self.cfg.update(login=login, password=password, server=server)
                 a = mt5.account_info()
@@ -875,6 +880,19 @@ class Mt5Account:
                 self.server.log("⚠️ Algo Trading trong MT5 đang tắt: bật nút Algo Trading trên VPS để đặt lệnh")
         self.server.log(f"🔑 Đăng nhập MT5 #{login} ({server})")
         return self.status()
+
+    # Servers worth trying when none is typed (the MT5 on the VPS must know them).
+    KNOWN_SERVERS = ("EZSquare-Server",)
+
+    def _server_candidates(self, login):
+        acc = self._accounts()
+        out = [a.get("server") for a in acc if int(a.get("login") or 0) == int(login)]
+        out += [self.cfg.get("server")] + [a.get("server") for a in acc] + list(self.KNOWN_SERVERS)
+        seen, uniq = set(), []
+        for x in out:
+            if x and x not in seen:
+                seen.add(x); uniq.append(x)
+        return uniq[:8]
 
     # ----- Saved accounts, shared by the app and the web (passwords stay on this VPS) -----
 

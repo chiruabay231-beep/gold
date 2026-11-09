@@ -381,7 +381,7 @@ struct BrokerLoginView: View {
                 }
                 .pickerStyle(.segmented)
                 HStack {
-                    TextField(broker == .exness ? "Server, vd Exness-MT5Trial7" : "Server của sàn", text: $server)
+                    TextField(broker == .exness ? "Server (để trống = tự tìm), vd Exness-MT5Trial7" : "Server (để trống = tự tìm)", text: $server)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     if broker == .exness {
@@ -409,7 +409,7 @@ struct BrokerLoginView: View {
                     .padding(.vertical, 4)
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(busy || login.isEmpty || password.isEmpty || server.isEmpty)
+                .disabled(busy || login.isEmpty || password.isEmpty)
             }
         } footer: {
             if formOpen {
@@ -546,7 +546,9 @@ struct BrokerLoginView: View {
             status = try await client.mt5Login(login: cleanLogin, password: password, server: cleanServer, remember: remember)
             statusError = nil
             if remember {
-                SavedBrokerAccount.remember(SavedBrokerAccount(broker: brokerName, login: cleanLogin, server: cleanServer),
+                // Left empty, the VPS found the server: keep the one it logged into.
+                let found = status?.server ?? cleanServer
+                SavedBrokerAccount.remember(SavedBrokerAccount(broker: brokerName, login: cleanLogin, server: found),
                                             password: password)
                 saved = SavedBrokerAccount.all
             }
