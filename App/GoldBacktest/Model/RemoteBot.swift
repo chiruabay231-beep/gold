@@ -335,10 +335,19 @@ struct RemoteBotClient {
     /// Bars plus the current bid and ask.
     func mt5Bars(symbol: String, interval: BinanceClient.Interval, count: Int,
                  before: Date? = nil) async throws -> (candles: [Candle], bid: Double?, ask: Double?) {
+        let r = try await mt5History(symbol: symbol, interval: interval, count: count, before: before)
+        return (r.candles, r.bid, r.ask)
+    }
+
+    /// Bars, quote and the account's own name for the symbol: the server answers for the same market under
+    /// the broker's name when the one asked for does not exist (XAUUSD → XAUUSDm at Exness, GOLD…).
+    func mt5History(symbol: String, interval: BinanceClient.Interval, count: Int,
+                    before: Date? = nil) async throws -> (candles: [Candle], bid: Double?, ask: Double?, symbol: String) {
         struct Response: Decodable {
             var candles: [[Double]]
             var bid: Double?
             var ask: Double?
+            var symbol: String?
         }
         let s = Self.queryValue(symbol)
         var path = "/mt5/candles?symbol=\(s)&interval=\(interval.rawValue)&count=\(count)"
@@ -349,7 +358,7 @@ struct RemoteBotClient {
             return Candle(time: Date(timeIntervalSince1970: r[0]), open: r[1], high: r[2], low: r[3], close: r[4],
                           volume: r.count > 5 ? r[5] : 0)
         }
-        return (candles, response.bid, response.ask)
+        return (candles, response.bid, response.ask, response.symbol ?? symbol)
     }
 }
 

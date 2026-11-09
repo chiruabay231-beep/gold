@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "3.4"
+VERSION = "3.5"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -354,6 +354,48 @@ class Mt5:
     # Brokers stamp bars in their server time (Exness: UTC, many others UTC+2/+3).
     offset_seconds = 0
 
+    # Other names of the same market at other brokers.
+    ALIASES = {"XAUUSD": ("GOLD", "XAUUSD"), "XAGUSD": ("SILVER", "XAGUSD"), "USTEC": ("NAS100", "US100", "NDX100", "USTEC"),
+               "US30": ("DJ30", "WS30", "DOW30", "US30"), "US500": ("SPX500", "SP500", "US500"), "USOIL": ("WTI", "XTIUSD", "USOIL"),
+               "UKOIL": ("BRENT", "XBRUSD", "UKOIL"), "BTCUSD": ("BTCUSD", "BITCOIN")}
+    _names = {}
+
+    @classmethod
+    def find_symbol(cls, mt5, symbol):
+        """The account's own name for `symbol`: as asked when it has it, else the same market with the
+        broker's suffix / prefix (XAUUSD ↔ XAUUSDm, XAUUSD.r, #XAUUSD…) or another usual name (GOLD).
+        None when the account has nothing like it. Kept per account (forgotten at a login)."""
+        a = mt5.account_info()
+        key = (a.login if a else 0, a.server if a else "", symbol)
+        if key in cls._names:
+            return cls._names[key]
+        found = symbol if mt5.symbol_info(symbol) is not None else None
+        if found is None:
+            base = base_symbol(symbol)
+            wanted = {base}
+            for k, names in cls.ALIASES.items():
+                if base == k or base in names:
+                    wanted.update(names); wanted.add(k)
+            rows = mt5.symbols_get() or ()
+            hits = [r for r in rows if base_symbol(r.name) in wanted]
+            # Market Watch first, the base name itself, then the shortest.
+            hits.sort(key=lambda r: (not r.visible, base_symbol(r.name) != base, len(r.name), r.name))
+            found = hits[0].name if hits else None
+        if found is not None:
+            mt5.symbol_select(found, True)
+            cls._names[key] = found
+        return found
+
+    @classmethod
+    def need_symbol(cls, mt5, symbol):
+        """`find_symbol`, or an error naming the closest symbols of the account."""
+        found = cls.find_symbol(mt5, symbol)
+        if found is None or not mt5.symbol_select(found, True):
+            base = base_symbol(symbol)[:3]
+            near = [r.name for r in (mt5.symbols_get() or ()) if r.name.upper().startswith(base)][:6]
+            raise ValueError(f"MT5 không có mã {symbol}" + (f" — tài khoản này có: {', '.join(near)}" if near else ""))
+        return found
+
     @classmethod
     def detect_offset(cls, symbol):
         """Server-time offset from a fresh tick; kept while the market is closed."""
@@ -383,8 +425,10 @@ class Mt5Feed:
         self.symbol = symbol
         mt5 = Mt5.connect(cfg)
         self.timeframe = getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[interval])
-        if not mt5.symbol_select(symbol, True):
-            raise RuntimeError(f"MT5 không có mã {symbol} (Exness thường là XAUUSDm hoặc XAUUSD)")
+        try:
+            self.symbol = Mt5.need_symbol(mt5, symbol)
+        except ValueError as e:
+            raise RuntimeError(str(e))
 
     def _rates(self, count):
         mt5 = Mt5.connect(self.cfg)
@@ -634,9 +678,10 @@ class TickHub:
                     mt5 = self.account._mt5()
                     offset = Mt5.offset_seconds
                     for symbol in symbols:
-                        t = mt5.symbol_info_tick(symbol)
+                        own = Mt5.find_symbol(mt5, symbol) or symbol
+                        t = mt5.symbol_info_tick(own)
                         if t is None:
-                            mt5.symbol_select(symbol, True)
+                            mt5.symbol_select(own, True)
                             continue
                         key = (getattr(t, "time_msc", 0) or t.time, t.bid, t.ask)
                         old = self.latest.get(symbol)
@@ -909,9 +954,8 @@ class Mt5Account:
         with Mt5.lock:
             mt5 = self._mt5()
             self._check_trading(mt5)
+            symbol = Mt5.need_symbol(mt5, symbol)
             info = mt5.symbol_info(symbol)
-            if info is None or not mt5.symbol_select(symbol, True):
-                raise ValueError(f"MT5 không có mã {symbol}")
             tick = mt5.symbol_info_tick(symbol)
             volume = self._volume(mt5, info, float(body.get("lots", 0.01)))
             buy = side == "long"
@@ -1163,8 +1207,7 @@ class Mt5Account:
         count = max(1, min(int(count), 5000))
         with Mt5.lock:
             mt5 = self._mt5()
-            if not mt5.symbol_select(symbol, True):
-                raise ValueError(f"MT5 không có mã {symbol}")
+            symbol = Mt5.need_symbol(mt5, symbol)
             timeframe = getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[interval])
             offset = Mt5.detect_offset(symbol)
             if before:
@@ -2355,10 +2398,8 @@ class StopBot:
         c = self.cfg
         mt5 = Mt5.connect(self.server.config["mt5"])
         self.server.mt5_account._check_trading(mt5)
-        symbol = c["symbol"]
+        symbol = Mt5.need_symbol(mt5, c["symbol"])
         info = mt5.symbol_info(symbol)
-        if info is None or not mt5.symbol_select(symbol, True):
-            raise ValueError(f"MT5 không có mã {symbol}")
         positions = self._mine(mt5.positions_get(symbol=symbol))
         orders = self._mine(mt5.orders_get(symbol=symbol))
         # A side filled: note it and cancel the other side (OCO).
@@ -2635,10 +2676,8 @@ class SRBot:
         c = self.cfg
         mt5 = Mt5.connect(self.server.config["mt5"])
         self.server.mt5_account._check_trading(mt5)
-        symbol = c["symbol"]
+        symbol = Mt5.need_symbol(mt5, c["symbol"])
         info = mt5.symbol_info(symbol)
-        if info is None or not mt5.symbol_select(symbol, True):
-            raise ValueError(f"MT5 không có mã {symbol}")
         positions = self._mine(mt5.positions_get(symbol=symbol))
         tickets = {int(p.ticket) for p in positions}
         for gone in self.known - tickets:

@@ -3563,7 +3563,8 @@
         }
         if (failure) throw failure;
         this.source = "exness";
-        if (data.symbol) this.symbol = this.owner ? this.symbol : data.symbol;
+        // The account may call the market by another name (XAUUSD ↔ XAUUSDm, GOLD…): the server answers with it.
+        if (data.symbol && data.symbol !== this.symbol) { this.symbol = data.symbol; if (this.owner) store.set("aurum.sym", this.symbol); }
         this.digits = data.digits != null ? data.digits : 2;
         if (data.contractSize) (this.contracts = this.contracts || {})[data.symbol || this.symbol] = data.contractSize;
         this.applySeriesFormat();

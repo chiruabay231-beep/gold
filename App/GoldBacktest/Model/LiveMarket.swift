@@ -373,7 +373,14 @@ final class LiveMarket {
                         try await stream()
                         continue
                     }
-                    var history = try await client.mt5Candles(symbol: symbol, interval: interval, count: 1000)
+                    let first = try await client.mt5History(symbol: symbol, interval: interval, count: 1000)
+                    // This account calls the market by another name (XAUUSD ↔ XAUUSDm, GOLD…): switch to it,
+                    // so prices, orders and position lines all use the account's own symbol.
+                    if first.symbol != symbol, !first.symbol.isEmpty {
+                        select(symbol: first.symbol)
+                        return
+                    }
+                    var history = first.candles
                     // A stretch missing in the middle: MT5 hands a symbol just opened its old cached bars
                     // while it fetches the rest; ask again shortly (up to 3 times).
                     var tries = 0
