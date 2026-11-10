@@ -6301,7 +6301,7 @@
             + numf("dmCount", "Số đường DM gần nhất") + tog("dmUntilBroken", "Dừng đường ở nến cắt qua (tắt = kéo tới nến hiện tại)")
             + head("SMT") + `<label class="fr"><input type="checkbox" data-smt ${showInd.smt ? "checked" : ""}><span>Hiện SMT khi mở 2 biểu đồ (nút ▥)</span></label>`
             + (this.owner ? `<div class="fr"><span class="grow">Mã so sánh</span>${text("smtSymbol", "lb")}<span class="muted small">trống = tự động (${esc(this.cmpSymbol())})</span></div>` : "")
-            + tog("smtInverse", "Mã so sánh chạy ngược chiều (DXY)") + numf("smtSwing", "Swing: số nến mỗi bên (lớn hơn = ít SMT, chỉ đỉnh/đáy chính)") + numf("smtLookback", "Tìm đỉnh/đáy thanh khoản trong (nến)") + numf("smtCount", "Giữ SMT gần nhất")
+            + tog("smtInverse", "Mã so sánh chạy ngược chiều (DXY)") + numf("smtSwing", "Swing: số nến mỗi bên (lớn hơn = ít SMT, chỉ đỉnh/đáy chính)") + numf("smtLookback", "Hai đỉnh/đáy cách tối đa (nến)") + numf("smtCount", "Giữ SMT gần nhất")
             + head("Macros") + tog("macros", "Hiện macros")
             + cfg.macroList.map((m, i) => `<div class="fr">${chk(`macroList.${i}.on`)}${text(`macroList.${i}.name`)}${time(`macroList.${i}.start`)}<span class="to">—</span>${time(`macroList.${i}.end`)}</div>`).join("");
         }

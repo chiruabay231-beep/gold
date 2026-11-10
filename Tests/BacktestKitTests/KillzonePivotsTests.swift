@@ -119,24 +119,21 @@ final class KillzonePivotsTests: XCTestCase {
         XCTAssertEqual(bullish.first?.bullish, true)
         XCTAssertEqual(bullish.first?.end, 20)
 
-        // Silver sweeps its high while gold comes back to its own and fails: bearish SMT too.
-        let failed = KillzonePivots.smtDivergences(bars([10: 105, 20: 104.6]), bars([10: 105, 20: 106]),
-                                                   config: KillzonePivots.Config())
-        XCTAssertEqual(failed.count, 1)
-        XCTAssertEqual(failed.first?.chartSwept, false)
-        XCTAssertEqual(failed.first?.otherEndPrice, 106)
-        // A far lower high is not a retest of the level: no SMT.
-        XCTAssertTrue(KillzonePivots.smtDivergences(bars([10: 105, 20: 101]), bars([10: 105, 20: 106]),
-                                                    config: KillzonePivots.Config()).isEmpty)
-        // Compared with the liquidity (the highest earlier swing), not with the swing just before it.
-        let level = KillzonePivots.smtDivergences(bars([5: 105, 15: 104.5, 25: 106]), bars([5: 105, 15: 104.8, 25: 104.9]),
+        // Gold a lower high, silver a higher high on the same candles: bearish SMT too.
+        let lower = KillzonePivots.smtDivergences(bars([10: 105, 20: 104.6]), bars([10: 105, 20: 106]),
                                                   config: KillzonePivots.Config())
-        XCTAssertEqual(level.map(\.start), [5])
-        XCTAssertEqual(level.map(\.end), [25])
-        // One SMT per high: a second failed retest of the same high adds no other line.
-        let once = KillzonePivots.smtDivergences(bars([5: 105, 15: 104.8, 25: 104.9]), bars([5: 105, 15: 105.5, 25: 105.2]),
-                                                 config: KillzonePivots.Config())
-        XCTAssertEqual(once.map(\.end), [15])
+        XCTAssertEqual(lower.count, 1)
+        XCTAssertEqual(lower.first?.chartHigher, false)
+        XCTAssertEqual(lower.first?.otherEndPrice, 106)
+        // Silver's high a bar later still pairs with gold's.
+        let shifted = KillzonePivots.smtDivergences(gold, bars([11: 105, 21: 104]), config: KillzonePivots.Config())
+        XCTAssertEqual(shifted.first?.otherEnd, 21)
+        // Silver made no high there: nothing to compare.
+        XCTAssertTrue(KillzonePivots.smtDivergences(gold, bars([:]), config: KillzonePivots.Config()).isEmpty)
+        // Two highs in a row only: 5→15 and 15→25 move the same way in both markets, and 5→25 is not compared
+        // across the bigger high at 15.
+        XCTAssertTrue(KillzonePivots.smtDivergences(bars([5: 105, 15: 108, 25: 106]), bars([5: 105, 15: 108, 25: 104]),
+                                                    config: KillzonePivots.Config()).isEmpty)
     }
 
     func testSMTSettingsMigrate() throws {
@@ -148,7 +145,7 @@ final class KillzonePivotsTests: XCTestCase {
         json.removeValue(forKey: "smtVersion")
         let loaded = try JSONDecoder().decode(KillzonePivots.Config.self, from: JSONSerialization.data(withJSONObject: json))
         XCTAssertEqual(loaded.smtSwingLength, 5)
-        XCTAssertEqual(loaded.smtCount, 3)
+        XCTAssertEqual(loaded.smtCount, 5)
         // Chosen after v2: kept.
         let kept = try JSONDecoder().decode(KillzonePivots.Config.self, from: JSONEncoder().encode(old))
         XCTAssertEqual(kept.smtSwingLength, 3)

@@ -185,13 +185,13 @@ public enum KillzonePivots {
         public var smtInverse = false
         /// Bars left and right of a swing used for SMT (bigger = only the main highs / lows).
         public var smtSwingLength = 5
-        /// The high / low that is swept is looked for this many bars back.
+        /// The two swings compared are at most this many bars apart.
         public var smtLookback = 60
         /// Most recent divergences kept.
-        public var smtCount = 3
-        /// 2 = SMT at liquidity (v2). Settings saved before it had 3-bar swings and
-        /// kept 10, which drew a line on nearly every swing; they are moved up on load.
-        public var smtVersion = 2
+        public var smtCount = 5
+        /// 3 = paired swings of both markets. Settings saved before had 3-bar swings and
+        /// kept 10 (or 3 in v2); they are moved to the new defaults on load.
+        public var smtVersion = 3
 
         public init() {}
 
@@ -255,9 +255,12 @@ public enum KillzonePivots {
             smtSwingLength = try c.decodeIfPresent(Int.self, forKey: .smtSwingLength) ?? d.smtSwingLength
             smtLookback = try c.decodeIfPresent(Int.self, forKey: .smtLookback) ?? d.smtLookback
             smtCount = try c.decodeIfPresent(Int.self, forKey: .smtCount) ?? d.smtCount
-            if try c.decodeIfPresent(Int.self, forKey: .smtVersion) == nil {
+            let savedVersion = try c.decodeIfPresent(Int.self, forKey: .smtVersion)
+            if savedVersion == nil {
                 if smtSwingLength == 3 { smtSwingLength = d.smtSwingLength }
                 if smtCount == 10 { smtCount = d.smtCount }
+            } else if savedVersion == 2, smtCount == 3 {
+                smtCount = d.smtCount
             }
             smtVersion = d.smtVersion
         }
@@ -368,8 +371,8 @@ public enum KillzonePivots {
         public var otherEnd: Int = 0
         public var otherStartPrice: Double = 0
         public var otherEndPrice: Double = 0
-        /// True when this chart took the old high / low and the other market failed; false the other way round.
-        public var chartSwept: Bool = true
+        /// True when this chart made the higher high (lower low) and the other market the lower one.
+        public var chartHigher: Bool = true
 
         public init(bullish: Bool, start: Int, end: Int, startPrice: Double, endPrice: Double) {
             self.bullish = bullish
@@ -628,85 +631,63 @@ public enum KillzonePivots {
         return (from..<c.count).first { isHigh ? c[$0].high > price : c[$0].low < price }
     }
 
-    /// SMT divergence at liquidity, `a` the chart and `b` the comparison market matched bar by bar on time.
-    /// A new swing high (low) is checked against the highest (lowest) swing of the last `smtLookback` bars,
-    /// if no bar took it in between. One market takes that level and the other does not:
-    ///  - the chart sweeps it while the other market stays under its own high there, or
-    ///  - the other market sweeps while the chart comes back to it (within one average range) and fails.
-    /// The failing market must also come within one average range, so a far lower high is not an SMT.
-    /// Each old swing gives at most one SMT a side. Swings are confirmed `smtSwingLength` bars later;
-    /// the other market's extreme is taken over the same window so swings a few bars apart still match.
-    /// With `smtInverse` (DXY) the other market is read at its lows for our highs.
+    /// SMT divergence: two swing highs (or two swing lows) in a row, on the same stretch of candles in
+    /// `a` (the chart) and `b` (the comparison market, matched on time), where one market's second high is
+    /// higher and the other's is lower (lows: one lower, one higher).
+    ///  - Swings are `smtSwingLength` bars each side, in each market on its own; the other market's swing
+    ///    must be within 2 bars of ours.
+    ///  - The two swings are the top (bottom) of the stretch between them in both markets, so a line never
+    ///    crosses a bigger high, and they are at most `smtLookback` bars apart.
+    /// With `smtInverse` (DXY) our highs pair with its lows. Confirmed `smtSwingLength` bars later.
     public static func smtDivergences(_ a: [Candle], _ b: [Candle], config: Config) -> [SMTDivergence] {
-        let length = max(config.smtSwingLength, 2)
+        let length = max(config.smtSwingLength, 1)
+        let near = 2
         let n = a.count
         guard n > length * 2 + 2, !b.isEmpty else { return [] }
         let other = Dictionary(b.map { ($0.time, $0) }, uniquingKeysWith: { _, new in new })
         let matched = a.map { other[$0.time] }
-        // Average range of the last 14 bars, per market.
-        func averageRange(_ range: (Int) -> Double?) -> [Double] {
-            var out = [Double](repeating: 0, count: n), window: [Double] = [], sum = 0.0
-            for i in 0..<n {
-                if let v = range(i) {
-                    window.append(v); sum += v
-                    if window.count > 14 { sum -= window.removeFirst() }
+        // Swings: `length` bars each side less extreme (`more`: higher for highs, lower for lows).
+        func pivots(_ value: (Int) -> Double?, _ more: (Double, Double) -> Bool) -> [Int] {
+            (length..<(n - length)).filter { p in
+                guard let v = value(p) else { return false }
+                return ((p - length)...(p + length)).allSatisfy { j in
+                    guard j != p, let w = value(j) else { return true }
+                    return more(v, w)
                 }
-                out[i] = window.isEmpty ? 0 : sum / Double(window.count)
             }
-            return out
-        }
-        let rangeA = averageRange { a[$0].high - a[$0].low }
-        let rangeB = averageRange { i in matched[i].map { $0.high - $0.low } }
-        // The other market's high / low around a swing, and its bar.
-        func otherExtreme(_ p: Int, high: Bool) -> (price: Double, index: Int)? {
-            var best: (price: Double, index: Int)?
-            for i in max(0, p - length)...min(n - 1, p + length) {
-                guard let o = matched[i] else { continue }
-                let v = high ? o.high : o.low
-                if best == nil || (high ? v > best!.price : v < best!.price) { best = (v, i) }
-            }
-            return best
-        }
-        var highs: [Int] = [], lows: [Int] = []
-        for p in length..<(n - length) {
-            let window = (p - length)...(p + length)
-            if window.allSatisfy({ $0 == p || a[$0].high < a[p].high }) { highs.append(p) }
-            if window.allSatisfy({ $0 == p || a[$0].low > a[p].low }) { lows.append(p) }
         }
         var result: [SMTDivergence] = []
-        for isHigh in [true, false] {
-            let pivots = isHigh ? highs : lows
-            let price: (Int) -> Double = { isHigh ? a[$0].high : a[$0].low }
-            let beyond: (Double, Double) -> Bool = { isHigh ? $0 > $1 : $0 < $1 }
-            // The other market at our highs: its highs (its lows when it moves the other way).
-            let otherHigh = isHigh != config.smtInverse
-            let otherBeyond: (Double, Double) -> Bool = { otherHigh ? $0 > $1 : $0 < $1 }
-            var used = Set<Int>()
-            for k in pivots.indices.dropFirst() {
-                let i2 = pivots[k]
-                // The liquidity: the most extreme earlier swing within the lookback.
-                var i1: Int?
-                var q = k - 1
-                while q >= 0, i2 - pivots[q] <= config.smtLookback {
-                    if i1 == nil || beyond(price(pivots[q]), price(i1!)) { i1 = pivots[q] }
-                    q -= 1
+        for high in [true, false] {
+            let otherHigh = high != config.smtInverse
+            let valueA: (Int) -> Double? = { high ? a[$0].high : a[$0].low }
+            let valueB: (Int) -> Double? = { i in matched[i].map { otherHigh ? $0.high : $0.low } }
+            let moreA: (Double, Double) -> Bool = { high ? $0 > $1 : $0 < $1 }
+            let moreB: (Double, Double) -> Bool = { otherHigh ? $0 > $1 : $0 < $1 }
+            let swingsB = pivots(valueB, moreB)
+            // Our swings that the other market also made (its nearest swing within `near` bars).
+            let pairs: [(Int, Int)] = pivots(valueA, moreA).compactMap { i in
+                swingsB.filter { abs($0 - i) <= near }.min { abs($0 - i) < abs($1 - i) }.map { (i, $0) }
+            }
+            for ((i1, j1), (i2, j2)) in zip(pairs, pairs.dropFirst()) where i2 - i1 <= config.smtLookback && j2 > j1 {
+                guard let a1 = valueA(i1), let a2 = valueA(i2), let b1 = valueB(j1), let b2 = valueB(j2),
+                      a1 != a2, b1 != b2 else { continue }
+                let chartHigher = moreA(a2, a1)
+                guard chartHigher != moreB(b2, b1) else { continue }
+                // Nothing between the two swings beyond them, in either market.
+                let topA = moreA(a1, a2) ? a1 : a2, topB = moreB(b1, b2) ? b1 : b2
+                let between = (min(i1, j1) + 1)..<max(i2, j2)
+                let clean = between.allSatisfy { j in
+                    if j != i1, j != i2, let v = valueA(j), moreA(v, topA) { return false }
+                    if j != j1, j != j2, let v = valueB(j), moreB(v, topB) { return false }
+                    return true
                 }
-                guard let i1, !used.contains(i1) else { continue }
-                // Taken already between the two: no longer the liquidity.
-                if i1 + 1 < i2 - length, (i1 + 1..<(i2 - length)).contains(where: { beyond(price($0), price(i1)) }) { continue }
-                guard let b1 = otherExtreme(i1, high: otherHigh), let b2 = otherExtreme(i2, high: otherHigh) else { continue }
-                let chartSweeps = beyond(price(i2), price(i1))
-                let otherSweeps = otherBeyond(b2.price, b1.price)
-                guard chartSweeps != otherSweeps else { continue }
-                if !chartSweeps, abs(price(i1) - price(i2)) > rangeA[i2] { continue }
-                if !otherSweeps, rangeB[i2] > 0, abs(b1.price - b2.price) > rangeB[i2] { continue }
-                used.insert(i1)
-                var div = SMTDivergence(bullish: !isHigh, start: i1, end: i2, startPrice: price(i1), endPrice: price(i2))
-                div.otherStart = b1.index
-                div.otherEnd = b2.index
-                div.otherStartPrice = b1.price
-                div.otherEndPrice = b2.price
-                div.chartSwept = chartSweeps
+                guard clean else { continue }
+                var div = SMTDivergence(bullish: !high, start: i1, end: i2, startPrice: a1, endPrice: a2)
+                div.otherStart = j1
+                div.otherEnd = j2
+                div.otherStartPrice = b1
+                div.otherEndPrice = b2
+                div.chartHigher = chartHigher
                 result.append(div)
             }
         }
