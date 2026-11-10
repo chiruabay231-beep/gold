@@ -1,5 +1,6 @@
 import SwiftUI
 import BacktestKit
+import UserNotifications
 
 /// Settings of the "ICT Killzones + Pivots [TFO]" layer: the calculation
 /// settings plus colours and line styles. Saved as JSON in AppStorage.
@@ -24,7 +25,12 @@ struct KillzonePivotsSettings: Codable, Hashable {
     var openStyle = LineStyle.dashed
     var timestampColor = RGBAColor(red: 0.471, green: 0.482, blue: 0.525)
     var timestampStyle = LineStyle.dotted
-    var periodColor = RGBAColor(red: 0.075, green: 0.090, blue: 0.133)
+    /// D/W/M lines: one colour per period, one style and width for all.
+    var dayLinesColor = RGBAColor(red: 0.471, green: 0.482, blue: 0.525)
+    var weekLinesColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
+    var monthLinesColor = RGBAColor(red: 0.612, green: 0.153, blue: 0.69)
+    var periodStyle = LineStyle.solid
+    var periodWidth = 1.0
     var labelColor = RGBAColor(red: 0.471, green: 0.482, blue: 0.525)
     var macroColor = RGBAColor(red: 0.471, green: 0.482, blue: 0.525)
     var fvgBullColor = RGBAColor(red: 0.031, green: 0.6, blue: 0.506)
@@ -66,7 +72,11 @@ struct KillzonePivotsSettings: Codable, Hashable {
         openStyle = try c.decodeIfPresent(LineStyle.self, forKey: .openStyle) ?? d.openStyle
         timestampColor = try c.decodeIfPresent(RGBAColor.self, forKey: .timestampColor) ?? d.timestampColor
         timestampStyle = try c.decodeIfPresent(LineStyle.self, forKey: .timestampStyle) ?? d.timestampStyle
-        periodColor = try c.decodeIfPresent(RGBAColor.self, forKey: .periodColor) ?? d.periodColor
+        dayLinesColor = try c.decodeIfPresent(RGBAColor.self, forKey: .dayLinesColor) ?? d.dayLinesColor
+        weekLinesColor = try c.decodeIfPresent(RGBAColor.self, forKey: .weekLinesColor) ?? d.weekLinesColor
+        monthLinesColor = try c.decodeIfPresent(RGBAColor.self, forKey: .monthLinesColor) ?? d.monthLinesColor
+        periodStyle = try c.decodeIfPresent(LineStyle.self, forKey: .periodStyle) ?? d.periodStyle
+        periodWidth = try c.decodeIfPresent(Double.self, forKey: .periodWidth) ?? d.periodWidth
         labelColor = try c.decodeIfPresent(RGBAColor.self, forKey: .labelColor) ?? d.labelColor
         macroColor = try c.decodeIfPresent(RGBAColor.self, forKey: .macroColor) ?? d.macroColor
         fvgBullColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgBullColor) ?? d.fvgBullColor
@@ -98,6 +108,14 @@ struct KillzonePivotsSettings: Codable, Hashable {
 
     func sessionColor(_ index: Int) -> Color {
         sessionColors.indices.contains(index) ? sessionColors[index].color : .gray
+    }
+
+    func linesColor(_ period: KillzonePivots.Period) -> Color {
+        switch period {
+        case .day: return dayLinesColor.color
+        case .week: return weekLinesColor.color
+        case .month: return monthLinesColor.color
+        }
     }
 
     func openColor(_ index: Int) -> Color {
@@ -202,9 +220,11 @@ struct KillzonePivotsLayer {
             case .open(let m):
                 segment.color = settings.openColor(m)
                 segment.dash = settings.openStyle.dash
-            case .previousDay, .previousWeek, .previousMonth:
-                segment.color = settings.periodColor.color
-                segment.dash = LineStyle.dashed.dash
+            case .period(let period, let part):
+                // Open, last period's high / low (fainter once crossed) and its middle, dotted.
+                segment.color = settings.linesColor(period).opacity(level.mitigated ? 0.6 : part == .middle ? 0.75 : 1)
+                segment.width = CGFloat(settings.periodWidth)
+                segment.dash = part == .middle ? LineStyle.dotted.dash : settings.periodStyle.dash
             case .dayHigh(let weekday), .dayLow(let weekday):
                 // "Đỉnh T3" / "Đáy T3": which day of the week made it.
                 let isHigh: Bool
@@ -223,14 +243,28 @@ struct KillzonePivotsLayer {
                                                    dash: settings.timestampStyle.dash.isEmpty ? [] : settings.timestampStyle.dash,
                                                    width: scale))
         }
+        for divider in output.dividers {
+            verticalLines.append(ChartVerticalLine(index: divider.index, color: settings.linesColor(divider.period).opacity(0.6),
+                                                   dash: settings.periodStyle.dash, width: CGFloat(settings.periodWidth)))
+        }
         for label in output.dayLabels {
-            notes.append(ChartNote(index: label.index, text: Self.weekdays[label.weekday], color: settings.labelColor.color))
+            notes.append(ChartNote(index: label.index, text: Self.weekdays[label.weekday], color: settings.labelColor.color,
+                                   top: config.dayOfWeekOnTop))
         }
     }
 }
 
 /// Rebuilds the layer only when the bars or settings change, not on every price tick.
 final class KillzonePivotsCache {
+    /// The main chart's cache tells the user when price crosses PDH / PDL / PWH… ("Báo khi giá phá High/Low").
+    private let announces: Bool
+    private var announced = Set<String>()
+    private var announcedChart: String?
+
+    init(announces: Bool = false) {
+        self.announces = announces
+    }
+
     private var key: String?
     private var cached = KillzonePivotsLayer()
     private var settingsJSON: String?
@@ -249,7 +283,7 @@ final class KillzonePivotsCache {
     /// follow the bars being looked at. It only changes the key every few hours of bars,
     /// so scrolling doesn't recompute on every frame.
     func layer(candles: [Candle], barInterval: TimeInterval, settings: KillzonePivotsSettings, enabled: Bool,
-               comparison: [Candle] = [], focusIndex: Int? = nil) -> KillzonePivotsLayer {
+               comparison: [Candle] = [], focusIndex: Int? = nil, live: Bool = true, symbol: String = "") -> KillzonePivotsLayer {
         guard enabled else { return KillzonePivotsLayer() }
         let focus = focusIndex.flatMap { candles.indices.contains($0) ? $0 : nil }
         let focusBucket = focus.map { Int(candles[$0].time.timeIntervalSince1970 / 21_600) } ?? -1
@@ -262,8 +296,29 @@ final class KillzonePivotsCache {
             key = newKey
             cached = KillzonePivotsLayer(candles: candles, barInterval: barInterval, settings: settings, comparison: comparison,
                                          focusIndex: focus)
+            if announces, live, settings.config.alertPeriodBreaks { announce(cached.output.periodBreaks, chart: "\(symbol)-\(barInterval)") }
         }
         return cached
+    }
+
+    /// Once per level; on a new symbol or timeframe the first pass only notes what is already crossed.
+    private func announce(_ breaks: [KillzonePivots.PeriodBreak], chart: String) {
+        let first = chart != announcedChart
+        if first {
+            announcedChart = chart
+            announced = []
+        }
+        for item in breaks {
+            let id = "\(item.label)|\(item.price)"
+            guard announced.insert(id).inserted, !first else { continue }
+            let text = "Giá \(item.high ? "vượt lên trên" : "xuống dưới") \(item.label) \(String(format: "%.2f", item.price))"
+            VoiceAnnouncer.shared.speak("\(item.label) \(item.high ? "bị phá lên" : "bị phá xuống")")
+            let content = UNMutableNotificationContent()
+            content.title = "Phá \(item.label)"
+            content.body = text
+            content.sound = .default
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "period-\(id)", content: content, trigger: nil))
+        }
     }
 }
 

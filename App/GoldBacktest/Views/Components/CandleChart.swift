@@ -204,6 +204,8 @@ struct ChartNote {
     var index: Int
     var text: String
     var color: Color
+    /// At the top of the plot instead of the bottom.
+    var top = false
 }
 
 /// Candlestick chart in the style of Binance / TradingView: MA overlays,
@@ -874,7 +876,7 @@ struct CandleChart: View {
         }
         for note in notes where range.contains(note.index) {
             plotContext.draw(Text(note.text).font(.system(size: 10, weight: .medium)).foregroundColor(note.color),
-                             at: CGPoint(x: s.x(note.index), y: layout.plot.maxY - 8), anchor: .center)
+                             at: CGPoint(x: s.x(note.index), y: note.top ? layout.plot.minY + 8 : layout.plot.maxY - 8), anchor: .center)
         }
 
         // Volume.

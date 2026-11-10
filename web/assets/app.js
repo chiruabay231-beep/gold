@@ -6289,7 +6289,12 @@
             + head("Mốc thời gian (đường dọc)") + cfg.stamps.map((m, i) => `<div class="fr">${chk(`stamps.${i}.on`)}${time(`stamps.${i}.hour`)}</div>`).join("")
             + head("Giờ cắt") + `<div class="fr">${chk("cutoff")}<span class="grow">Dừng các đường lúc</span>${time("cutoffHour")}</div>`
             + head("Đỉnh / đáy ngày") + tog("daily", "Đỉnh / đáy từng ngày") + numf("dailyDays", "Số ngày gần nhất") + tog("dailyKeepTouched", "Giá chạm: dừng lại, nét chấm ……")
-            + tog("prevDay", "PDH / PDL (ngày trước)") + tog("prevWeek", "PWH / PWL (tuần trước)") + tog("prevMonth", "PMH / PML (tháng trước)")
+            + head("Ngày / Tuần / Tháng") + tog("dwmAlert", "Báo khi giá phá High/Low (PDH/PDL, PWH/PWL, PMH/PML)")
+            + cfg.dwm.map((p, i) => `<div class="fr dwm-row">${[["open", `${p.key} Open`], ["hl", "High/Low"], ["mid", "Midline"], ["divider", "Divider"]].map(([f, n]) => `<label class="dwm-c">${chk(`dwm.${i}.${f}`)}<span>${n}</span></label>`).join("")}${sw(`dwm.${i}.color`)}</div>`).join("")
+            + `<div class="fr"><span class="grow">Kiểu nét</span>${selI("dwmStyle", styles)}${selI("dwmWidth", [[1, "1"], [2, "2"], [3, "3"]])}</div>`
+            + `<div class="fr">${chk("dayOfWeek")}<span class="grow">Nhãn thứ trong tuần</span>${selI("dowPos", [["bottom", "Dưới"], ["top", "Trên"]])}${selI("dowAt", [["midnight", "Nửa đêm"], ["midday", "Giữa trưa"]])}</div>`
+            + tog("dowHideWeekend", "Ẩn nhãn T7 / CN")
+            + note("Open: giá mở ngày (DO) / tuần (WO) / tháng (MO) hiện tại. High/Low: đỉnh – đáy của ngày / tuần / tháng trước (PDH–PDL, PWH–PWL, PMH–PML). Midline: giữa của chúng (PDM, PWM, PMM). Divider: vạch dọc nơi mỗi ngày / tuần / tháng bắt đầu. Ngày tính theo múi giờ ở tab Hiển thị (ICT: 0h New York). Hiện ở mọi khung nhỏ hơn kỳ đó.")
             + head("FVG & VI") + tog("fvg", "Hiện FVG") + tog("fvgStrong", "Chỉ FVG mạnh (lọc FVG yếu)") + numf("fvgDisplacement", "Nến tạo FVG ≥ × thân TB", 0.1)
             + tog("fvgConfluence", "Tô nền khi trùng FVG khung lớn") + tog("fvgMid", "Đường giữa 50%") + tog("fvgHideFilled", "Ẩn FVG đã bị chạm")
             + numf("gapKeep", "Chạm rồi bật ngược: giữ (phút)") + numf("fvgMinSize", "Lọc FVG nhỏ (× biên độ nến)", 0.1) + numf("fvgCount", "Giữ FVG gần nhất")
@@ -6310,7 +6315,7 @@
             + head("Đường") + sel("lineScale", "Độ dày chung", [[0.5, "0.5px"], [0.75, "Mảnh"], [1, "Vừa"], [1.5, "Dày"], [2, "Rất dày"]]) + numf("pivotWidth", "Độ dày pivot", 0.5)
             + sel("pivotStyle", "Nét pivot", styles) + sel("mitigatedStyle", "Nét pivot đã bị phá", styles) + sel("openStyle", "Nét giá mở cửa", styles)
             + color("stampColor", "Màu mốc thời gian") + sel("stampStyle", "Nét mốc thời gian", styles)
-            + head("Đỉnh / đáy ngày") + color("dayHighColor", "Màu đỉnh ngày") + color("dayLowColor", "Màu đáy ngày") + sel("dailyStyle", "Nét", styles) + sel("dailyLabelAlign", "Vị trí chữ đỉnh/đáy thứ", [["left", "Trái"], ["center", "Giữa"], ["right", "Phải"]]) + color("periodColor", "Màu PDH/PWH/PMH")
+            + head("Đỉnh / đáy ngày") + color("dayHighColor", "Màu đỉnh ngày") + color("dayLowColor", "Màu đáy ngày") + sel("dailyStyle", "Nét", styles) + sel("dailyLabelAlign", "Vị trí chữ đỉnh/đáy thứ", [["left", "Trái"], ["center", "Giữa"], ["right", "Phải"]])
             + head("FVG & VI") + color("fvgBull", "FVG tăng") + color("fvgBear", "FVG giảm") + color("fvgZone", "Nền FVG trùng khung") + color("fvgZoneMid", "Đường giữa FVG trùng khung") + color("viColor", "VI")
             + head("SMT") + color("smtBull", "SMT tăng") + color("smtBear", "SMT giảm")
             + head("Khác") + color("mssBull", "MSS tăng") + color("mssBear", "MSS giảm") + color("sweepColor", "Quét thanh khoản") + color("macroColor", "Macros")
@@ -6322,7 +6327,7 @@
           + note("Giờ các phiên theo múi giờ ở trên (ICT dùng giờ New York).")
           + head("FVG") + `<div class="fr"><span class="grow">Từ khung</span>${selI("fvgFrom", tfOpts)}<span class="to">→</span>${selI("fvgTo", tfOpts)}</div>`
           + head("Macros") + sel("macroTfLimit", "Trên khung ≤", tfOpts.slice(0, 4)) + sel("macroTimeLabels", "Nhãn hộp", [[true, "Giờ"], [false, "Tên"]])
-          + head("Khác") + tog("dayOfWeek", "Nhãn thứ trong tuần") + tog("rangeTable", "Bảng biên độ phiên") + numf("rangeAvg", "Trung bình số phiên");
+          + head("Khác") + tog("rangeTable", "Bảng biên độ phiên") + numf("rangeAvg", "Trung bình số phiên");
       };
       const open = () => this.openPanel("ICT Killzones + Pivots", [["inputs", "Các đầu vào"], ["style", "Định dạng"], ["view", "Hiển thị"]], render, {
         root: this.ictCfg,
@@ -7044,6 +7049,7 @@
       try {
         this.ict = window.ICT.compute(bars, TF_SECONDS[this.interval], this.ictCfg, showInd);
       } catch { this.ict = null; }
+      this.alertPeriodBreaks();
       this.models = this.modelsFor(bars, TF_SECONDS[this.interval], this.digits);
       this.plan = this.planFor(bars, TF_SECONDS[this.interval], this.digits);
       this.liq = this.liqFor(bars, TF_SECONDS[this.interval], this.digits);
@@ -7053,6 +7059,24 @@
       this.redraw();
       // Indicator settings changed here reach the extra timeframes too (at most every 1.5 s).
       (this.panes || []).forEach((p) => p.analyseSoon());
+    },
+
+    /** "Báo khi giá phá High/Low": the newest candle crossed PDH / PDL / PWH… (once per level, live only). */
+    alertPeriodBreaks() {
+      if (!this.ictCfg.dwmAlert || this.replay || !this.ict) return;
+      const list = this.ict.periodBreaks || [];
+      // A new symbol or timeframe: the first pass only remembers what is already broken.
+      const chart = `${$("chartSymbol").textContent}|${this.interval}`;
+      if (chart !== this.periodAlertChart) { this.periodAlertChart = chart; this.periodAlerted = new Set(); this.periodAlertReady = false; }
+      list.forEach((b) => {
+        const key = `${b.label}|${b.price}`;
+        if (this.periodAlerted.has(key)) return;
+        this.periodAlerted.add(key);
+        if (!this.periodAlertReady) return;
+        const p = fmt(b.price, this.digits);
+        Voice.alert(`${b.label} ${b.high ? "bị phá lên" : "bị phá xuống"}`, `Phá ${b.label}`, `Giá ${b.high ? "vượt lên trên" : "xuống dưới"} ${b.label} ${p}`, b.high);
+      });
+      this.periodAlertReady = true;
     },
 
     /** "mm:ss" (or "h:mm:ss") until the current bar closes. */

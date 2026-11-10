@@ -151,12 +151,48 @@ final class KillzonePivotsTests: XCTestCase {
         XCTAssertEqual(kept.smtSwingLength, 3)
     }
 
+    func testDayWeekMonthLines() throws {
+        // Monday 00:00 New York, 15-minute bars for three days; Tuesday opens at 105.
+        let data = candles { c in
+            c[96].open = 105
+            c[30].high = 110   // Monday's high
+            c[40].low = 90     // Monday's low
+            c[150].high = 111  // Tuesday crosses PDH
+        }
+        var config = KillzonePivots.Config()
+        config.dayLines = .init(open: true, highLow: true, midline: true, divider: true)
+        config.showDayOfWeek = true
+        config.hideWeekendLabels = true
+        let output = KillzonePivots.compute(candles: Array(data.prefix(192)), barInterval: 900, config: config)
+        let day = output.levels.filter { if case .period(.day, _) = $0.kind { return true } else { return false } }
+        XCTAssertEqual(day.map(\.label), ["DO", "PDH", "PDL", "PDM"])
+        XCTAssertEqual(day[0].price, 105)
+        XCTAssertEqual(day[0].start, 96)
+        XCTAssertEqual(day[1].price, 110)
+        XCTAssertEqual(day[1].end, 150)         // ends at the candle that crossed it
+        XCTAssertTrue(day[1].mitigated)
+        XCTAssertEqual(day[2].price, 90)
+        XCTAssertNil(day[2].end)
+        XCTAssertEqual(day[3].price, 100)
+        XCTAssertEqual(output.dividers.map(\.index), [96])
+        XCTAssertEqual(output.dayLabels.map(\.weekday), [2, 3])
+        // Shown on 4h bars too (smaller than a day), not on daily ones.
+        XCTAssertFalse(KillzonePivots.compute(candles: data, barInterval: 14_400, config: config).levels.isEmpty)
+        // The newest candle crossing PDH is reported for the alert.
+        let crossing = KillzonePivots.compute(candles: Array(data.prefix(151)), barInterval: 900, config: config)
+        XCTAssertEqual(crossing.periodBreaks.map(\.label), ["PDH"])
+
+        // Settings saved with the old PWH switch keep it on.
+        let legacy = try JSONDecoder().decode(KillzonePivots.Config.self, from: Data(#"{"showPreviousWeek": true}"#.utf8))
+        XCTAssertTrue(legacy.weekLines.highLow)
+        XCTAssertFalse(legacy.monthLines.highLow)
+    }
+
     func testOpensCutoffStampsAndLimit() {
         let data = candles { c in c[96].open = 105 }   // Tuesday 00:00
         var config = KillzonePivots.Config()
         config.cutoffEnabled = true
         config.cutoffHour = 15
-        config.showPreviousDay = true
         config.showDayOfWeek = true
         let output = KillzonePivots.compute(candles: data, barInterval: 900, config: config)
         let dailyOpens = output.levels.filter { $0.kind == .open(mark: 0) }
@@ -165,16 +201,17 @@ final class KillzonePivotsTests: XCTestCase {
         XCTAssertEqual(dailyOpens.first?.end, 96 + 60)      // cut off at 15:00
         XCTAssertEqual(output.levels.first { $0.kind == .open(mark: 2) }?.start, 38)  // 09:30
         XCTAssertEqual(output.stamps.map(\.index), [96, 192])
-        XCTAssertEqual(output.levels.filter { $0.kind == .previousDay }.map(\.label), ["PDH", "PDL"])
+        XCTAssertEqual(output.levels.filter { $0.kind == .period(.day, part: .high) || $0.kind == .period(.day, part: .low) }.map(\.label),
+                       ["PDH", "PDL"])
         XCTAssertEqual(output.dayLabels.map(\.weekday), [2, 3, 4])   // Mon, Tue, Wed
         XCTAssertEqual(output.ranges.count, 5)
 
         let hourly = KillzonePivots.compute(candles: data, barInterval: 3600, config: config)
         XCTAssertTrue(hourly.hiddenByTimeframe)
-        // Only the day highs/lows stay above the killzone timeframe limit.
+        // Only the day highs/lows and D/W/M lines stay above the killzone timeframe limit.
         XCTAssertTrue(hourly.levels.allSatisfy {
             switch $0.kind {
-            case .dayHigh, .dayLow: return true
+            case .dayHigh, .dayLow, .period: return true
             default: return false
             }
         })

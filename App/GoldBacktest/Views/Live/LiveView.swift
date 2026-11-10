@@ -117,7 +117,7 @@ struct LiveView: View {
     /// "bottom" (under the chart) or "top" (above it).
     @AppStorage("live.tradeBarPosition") private var tradeBarPosition = "bottom"
     @State private var confirmClear = false
-    @State private var killzoneCache = KillzonePivotsCache()
+    @State private var killzoneCache = KillzonePivotsCache(announces: true)
     /// Custom indicators (tab Chỉ báo) ticked for the Live chart.
     @AppStorage(LiveIndicators.storageKey) private var liveIndicatorIDs = ""
     @State private var indicatorCache = LiveIndicatorCache()
@@ -833,7 +833,7 @@ struct LiveView: View {
     private var killzoneLayer: KillzonePivotsLayer {
         killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
                             settings: killzoneSettings, enabled: showKillzonePivots, comparison: smtComparison,
-                            focusIndex: focusIndex)
+                            focusIndex: focusIndex, live: !replay.isActive, symbol: market.symbol)
     }
 
     /// One chart, or in compare mode the two markets stacked (side by side in landscape).
@@ -933,7 +933,7 @@ struct LiveView: View {
         let settings = killzoneSettings
         let layer = killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
                                         settings: settings, enabled: showKillzonePivots, comparison: smtComparison,
-                                        focusIndex: focusIndex)
+                                        focusIndex: focusIndex, live: !replay.isActive, symbol: market.symbol)
         return ZStack(alignment: .trailing) {
             CandleChart(candles: chartCandles,
                         overlays: overlays,

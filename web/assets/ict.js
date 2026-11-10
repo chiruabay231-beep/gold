@@ -36,8 +36,16 @@
       stampColor: "#787b86", stampStyle: "dotted",
       cutoff: false, cutoffHour: 15,
       daily: true, dailyDays: 5, dailyKeepTouched: true, dayHighColor: "#089981", dayLowColor: "#f23645", dailyStyle: "solid",
-      prevDay: false, prevWeek: false, prevMonth: false, periodColor: "#787b86",
-      dayOfWeek: false, rangeTable: false, rangeAvg: 5,
+      // Day / week / month: this period's open, the last period's high / low and middle, a line where each starts.
+      dwm: [
+        { key: "D", open: true, hl: true, mid: true, divider: false, color: "#787b86" },
+        { key: "W", open: false, hl: true, mid: true, divider: false, color: "#f23645" },
+        { key: "M", open: false, hl: false, mid: false, divider: false, color: "#9c27b0" },
+      ],
+      dwmStyle: "solid", dwmWidth: 1, dwmAlert: false,
+      // Weekday names under (or over) each day, at its midnight or midday; weekends can be left out.
+      dayOfWeek: false, dowPos: "bottom", dowAt: "midnight", dowHideWeekend: false,
+      rangeTable: false, rangeAvg: 5,
       macros: true, macroTfLimit: 15, macroTimeLabels: true, macroColor: "#787b86",
       macroList: [
         { on: true, name: "London 1", start: 2 + 33 / 60, end: 3 },
@@ -82,6 +90,11 @@
       d.smtVersion = 3;
     }
     if (saved.smtVersion === 2) { if (d.smtCount === 3) d.smtCount = 5; d.smtVersion = 3; }
+    // D/W/M replaces the three PDH / PWH / PMH switches and their one colour.
+    if (!Array.isArray(saved.dwm)) {
+      if (saved.prevWeek) d.dwm[1].hl = true;
+      if (saved.prevMonth) d.dwm[2].hl = true;
+    }
     if (saved.keepVersion !== 2) {
       d.keepMitigated = true; d.pivotUntilMitigated = true; d.dailyKeepTouched = true; d.periodUntilBroken = true;
       d.keepVersion = 2;
@@ -318,6 +331,68 @@
 
   const WEEKDAYS = ["CN", "T2", "T3", "T4", "T5", "T6", "T7"];
 
+  /** The period before the newest bar's one (`id` per bar: day, week or month number): its high, low and bars. */
+  function previousPeriod(c, id) {
+    const n = c.length, cur = id[n - 1];
+    let start = n - 1;
+    while (start > 0 && id[start - 1] === cur) start--;
+    if (start === 0) return null;
+    const prev = id[start - 1];
+    let high = -Infinity, low = Infinity, hiI = start - 1, loI = start - 1;
+    for (let i = start - 1; i >= 0 && id[i] === prev; i--) {
+      if (c[i].high > high) { high = c[i].high; hiI = i; }
+      if (c[i].low < low) { low = c[i].low; loI = i; }
+    }
+    return { start, high, low, hiI, loI };
+  }
+
+  const DWM = {
+    D: { id: "day", size: 86400, open: "DO", hi: "PDH", lo: "PDL", mid: "PDM", name: "ngày" },
+    W: { id: "week", size: 7 * 86400, open: "WO", hi: "PWH", lo: "PWL", mid: "PWM", name: "tuần" },
+    M: { id: "month", size: 28 * 86400, open: "MO", hi: "PMH", lo: "PML", mid: "PMM", name: "tháng" },
+  };
+
+  /** Day / week / month levels (on charts below that period): the open of the current one, the last one's
+   *  high / low (until a candle crosses it, with periodUntilBroken) and middle, and a divider at each start.
+   *  Weekday labels too. `out.periodBreaks` lists the highs / lows the newest bar crossed (for the alert). */
+  function periodLevels(c, ck, sec, cfg, out) {
+    const n = c.length;
+    out.dividers = [];
+    out.periodBreaks = [];
+    (cfg.dwm || []).forEach((p) => {
+      const def = DWM[p.key];
+      if (!def || sec >= def.size || !(p.open || p.hl || p.mid || p.divider)) return;
+      const id = ck[def.id];
+      const color = p.color || "#787b86";
+      if (p.divider) for (let i = 1; i < n; i++) if (id[i] !== id[i - 1]) out.dividers.push({ index: i, color });
+      if (p.open) {
+        let st = n - 1;
+        while (st > 0 && id[st - 1] === id[n - 1]) st--;
+        if (st > 0) out.levels.push({ kind: "dwm", price: c[st].open, start: st, end: null, label: def.open, color });
+      }
+      const r = previousPeriod(c, id);
+      if (!r) return;
+      if (p.hl) {
+        [[true, r.high, def.hi], [false, r.low, def.lo]].forEach(([isHigh, price, name]) => {
+          const j = firstBreak(c, price, isHigh, r.start);
+          if (j === n - 1) out.periodBreaks.push({ label: name, price, high: isHigh, time: c[j].time });
+          out.levels.push({ kind: "dwm", price, start: r.start, end: cfg.periodUntilBroken ? j : null, label: name, color, mitigated: j !== null });
+        });
+      }
+      if (p.mid) out.levels.push({ kind: "dwm", price: (r.high + r.low) / 2, start: r.start, end: null, label: def.mid, color, mid: true });
+    });
+    if (cfg.dayOfWeek && sec < 86400) {
+      const hour = cfg.dowAt === "midday" ? 12 : 0;
+      for (let i = 0; i < n; i++) {
+        if (i > 0 && ck.day[i] === ck.day[i - 1] && !(ck.hour[i - 1] < hour && ck.hour[i] >= hour)) continue;
+        if (ck.hour[i] < hour && (i === n - 1 || ck.day[i + 1] === ck.day[i])) continue;
+        const wd = ck.weekday[i];
+        if (cfg.dowHideWeekend && (wd === 0 || wd === 6)) continue;
+        out.days.push({ index: i, label: WEEKDAYS[wd] });
+      }
+    }
+  }
+
   /* ---------- everything ---------- */
 
   function compute(c, sec, cfg, show) {
@@ -334,6 +409,7 @@
     const ck = clock(c, cfg.timeZone);
     if (show.daily && cfg.daily && sec < 86400) out.levels.push(...dailyLevels(c, ck, cfg));
     if (!show.killzones) return out;
+    periodLevels(c, ck, sec, cfg, out);
     if (sec > cfg.tfLimit * 60) { out.hidden = true; return out; }
     const firstDay = ck.day[n - 1] - Math.max(cfg.maxDays, 1) + 1;
     const cutoffs = cfg.cutoff ? cutoffIndexes(ck, cfg.cutoffHour) : [];
@@ -406,38 +482,13 @@
     });
     cfg.stamps.forEach((m) => { if (m.on) out.stamps.push(...markIndexes(ck, m.hour, firstDay)); });
 
-    // Previous day / week / month highs and lows across the current period.
-    const previous = (id) => {
-      const cur = id[n - 1];
-      let start = n - 1;
-      while (start > 0 && id[start - 1] === cur) start--;
-      if (start === 0) return null;
-      const prev = id[start - 1];
-      let high = -Infinity, low = Infinity, hiI = start - 1, loI = start - 1;
-      for (let i = start - 1; i >= 0 && id[i] === prev; i--) {
-        if (c[i].high > high) { high = c[i].high; hiI = i; }
-        if (c[i].low < low) { low = c[i].low; loI = i; }
-      }
-      return { start, high, low, hiI, loI };
-    };
-    const pd = previous(ck.day);
+    const pd = previousPeriod(c, ck.day);
     if (cfg.sweeps && pd) {
       [[true, pd.high, "PDH", pd.hiI], [false, pd.low, "PDL", pd.loI]].forEach(([isHigh, price, label, from]) => {
         const j = firstBreak(c, price, isHigh, pd.start);
         if (j !== null && (isHigh ? c[j].close < price : c[j].close > price)) out.sweeps.push({ bull: !isHigh, price, index: j, from, label });
       });
     }
-    [[cfg.prevDay, ck.day, "PDH", "PDL"], [cfg.prevWeek, ck.week, "PWH", "PWL"], [cfg.prevMonth, ck.month, "PMH", "PML"]].forEach(([on, id, h, l]) => {
-      if (!on) return;
-      const r = previous(id);
-      if (!r) return;
-      // A candle crossing the level ends it there (it stays on the chart to be seen).
-      [[true, r.high, h], [false, r.low, l]].forEach(([isHigh, price, name]) => {
-        const j = cfg.periodUntilBroken ? firstBreak(c, price, isHigh, r.start) : null;
-        out.levels.push({ kind: "period", price, start: r.start, end: j, label: name, color: cfg.periodColor, mitigated: j !== null });
-      });
-    });
-    if (cfg.dayOfWeek) markIndexes(ck, 12, firstDay).forEach((i) => out.days.push({ index: i, label: WEEKDAYS[ck.weekday[i]] }));
     out.sweeps = out.sweeps.sort((a, b) => a.index - b.index).slice(-Math.max(cfg.sweepCount, 1));
     if (!cfg.sweeps) out.sweeps = [];
     if (!cfg.rangeTable) out.ranges = [];
@@ -568,7 +619,12 @@
         return;
       }
       if (l.kind === "open") { line(a, b, y, alpha(l.color, 0.75), 1, DASH[cfg.openStyle]); levelLabel(l.label, a, b, y, l.color); return; }
-      if (l.kind === "period") { line(a, b, y, alpha(l.color, l.mitigated ? 0.7 : 1), 1, DASH.dashed); levelLabel(l.label, a, b, y, alpha(l.color, l.mitigated ? 0.75 : 1)); return; }
+      if (l.kind === "dwm") {
+        const c7 = (l.color || "#787b86").slice(0, 7);
+        line(a, b, y, alpha(c7, l.mitigated ? 0.6 : l.mid ? 0.75 : 1), cfg.dwmWidth || 1, l.mid ? DASH.dotted : DASH[cfg.dwmStyle] || []);
+        levelLabel(l.label, a, b, y, alpha(c7, l.mitigated ? 0.7 : 1));
+        return;
+      }
       if (l.kind === "mid") { line(a, b, y, alpha(l.color, 0.6), 1, DASH.dotted); return; }
       const pc = (cfg.pivotColorMode === "custom" ? (l.high ? cfg.pivotHighColor : cfg.pivotLowColor) : l.color || "#787b86").slice(0, 7);
       line(a, b, y, alpha(pc, l.mitigated ? 0.55 : 0.95), cfg.pivotWidth, DASH[l.mitigated ? cfg.mitigatedStyle : cfg.pivotStyle]);
@@ -632,10 +688,18 @@
       g.restore();
     });
 
+    (o.dividers || []).forEach((d) => {
+      const x = X(d.index);
+      if (x == null || x < 0 || x > w) return;
+      g.strokeStyle = alpha(d.color.slice(0, 7), 0.6); g.lineWidth = 1; g.setLineDash(DASH[cfg.dwmStyle] || []);
+      g.beginPath(); g.moveTo(Math.round(x - half) + 0.5, 0); g.lineTo(Math.round(x - half) + 0.5, h); g.stroke();
+    });
+    g.setLineDash([]);
     o.days.forEach((d) => {
       const x = X(d.index);
       if (x == null || x < 0 || x > w) return;
-      g.fillStyle = "#8b95a7"; g.textAlign = "center"; g.fillText(d.label, x, h - 4);
+      g.fillStyle = "#8b95a7"; g.textAlign = "center";
+      if (cfg.dowPos === "top") { g.textBaseline = "top"; g.fillText(d.label, x, 4); g.textBaseline = "bottom"; } else g.fillText(d.label, x, h - 4);
     });
 
     if (o.ranges.length) {
@@ -765,6 +829,7 @@
    *    `near` bars of ours (same candles, a bar or two apart at most).
    *  - The two swings are the top (bottom) of the stretch between them in both markets, so a line never
    *    crosses a bigger high, and they are at most `lookback` bars apart.
+   *  - Two SMTs that share a swing (a chain) keep only the newer.
    * `inverse` (DXY): our highs pair with its lows. Confirmed `swing` bars after the second swing. The newest `count`.
    */
   function smt(a, b, opts = {}) {
@@ -816,6 +881,10 @@
           if (clean && v != null && j !== j1 && j !== j2 && (bHigh ? v > bTop : v < bTop)) clean = false;
         }
         if (!clean) continue;
+        // Chained with the one before (its second swing is this one's first): keep only the newer, so the
+        // lines never zigzag from swing to swing.
+        const prev = out[out.length - 1];
+        if (prev && prev.bull === !high && prev.end === i1) out.pop();
         out.push({ bull: !high, start: i1, end: i2, p1: a1, p2: a2, t1: a[i1].time, t2: a[i2].time,
           b1, b2, bt1: a[j1].time, bt2: a[j2].time, chartHigher: aUp, confirmed: a[Math.min(n - 1, Math.max(i2, j2) + L)].time });
       }

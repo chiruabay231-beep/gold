@@ -452,17 +452,62 @@ struct KillzonePivotsSettingsView: View {
         } footer: {
             Text("Đỉnh và đáy của mỗi ngày đã đóng, ghi rõ thứ (vd: Đỉnh T3, Đáy T5), kéo sang phải tới khi có nến chạm vào: đường dừng ngay ở cây nến đó và chuyển sang nét chấm …… (tắt “Giá chạm” thì đường bị chạm biến mất). Ngày tính theo múi giờ của chỉ báo (mặc định New York, giống ICT).")
         }
-        Section("Ngày / Tuần / Tháng trước") {
-            Toggle("PDH / PDL (ngày trước)", isOn: $settings.config.showPreviousDay)
-            Toggle("PWH / PWL (tuần trước)", isOn: $settings.config.showPreviousWeek)
-            Toggle("PMH / PML (tháng trước)", isOn: $settings.config.showPreviousMonth)
-            colorRow("Màu", color: $settings.periodColor)
+        Section {
+            Toggle("Báo khi giá phá High/Low", isOn: $settings.config.alertPeriodBreaks)
+            periodRow("D", lines: $settings.config.dayLines, color: $settings.dayLinesColor)
+            periodRow("W", lines: $settings.config.weekLines, color: $settings.weekLinesColor)
+            periodRow("M", lines: $settings.config.monthLines, color: $settings.monthLinesColor)
+            stylePicker("Kiểu nét", selection: $settings.periodStyle)
+            Stepper("Độ dày \(Int(settings.periodWidth))", value: $settings.periodWidth, in: 1...3)
+            Toggle("High/Low dừng tại nến cắt qua", isOn: $settings.config.periodUntilBroken)
+            Toggle("Nhãn thứ trong tuần", isOn: $settings.config.showDayOfWeek)
+            if settings.config.showDayOfWeek {
+                Picker("Vị trí", selection: $settings.config.dayOfWeekOnTop) {
+                    Text("Dưới").tag(false)
+                    Text("Trên").tag(true)
+                }
+                Picker("Lúc", selection: $settings.config.dayOfWeekAtMidday) {
+                    Text("Nửa đêm").tag(false)
+                    Text("Giữa trưa").tag(true)
+                }
+                Toggle("Ẩn nhãn T7 / CN", isOn: $settings.config.hideWeekendLabels)
+            }
+        } header: {
+            Text("Ngày / Tuần / Tháng")
+        } footer: {
+            Text("Open: giá mở ngày (DO) / tuần (WO) / tháng (MO) hiện tại. High/Low: đỉnh – đáy của ngày / tuần / tháng trước (PDH–PDL, PWH–PWL, PMH–PML). Midline: giữa của chúng (PDM, PWM, PMM), nét chấm. Divider: vạch dọc nơi mỗi ngày / tuần / tháng bắt đầu. Ngày tính theo múi giờ của chỉ báo (ICT: 0h New York); hiện ở mọi khung nhỏ hơn kỳ đó.")
         }
+    }
+
+    /// One D / W / M row: the four switches as tick boxes, and the colour.
+    private func periodRow(_ key: String, lines: Binding<KillzonePivots.PeriodLines>, color: Binding<RGBAColor>) -> some View {
+        HStack(spacing: 8) {
+            tick("\(key) Open", isOn: lines.open)
+            tick("High/Low", isOn: lines.highLow)
+            tick("Midline", isOn: lines.midline)
+            tick("Divider", isOn: lines.divider)
+            Spacer(minLength: 0)
+            ColorPicker("", selection: Binding(get: { color.wrappedValue.color }, set: { color.wrappedValue = RGBAColor($0) }))
+                .labelsHidden()
+        }
+    }
+
+    private func tick(_ title: String, isOn: Binding<Bool>) -> some View {
+        Button {
+            isOn.wrappedValue.toggle()
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: isOn.wrappedValue ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(isOn.wrappedValue ? Color.accentColor : Color.secondary)
+                Text(title).font(.caption).lineLimit(1).minimumScaleFactor(0.8).foregroundStyle(.primary)
+            }
+        }
+        // Borderless: in a Form row each box takes its own tap.
+        .buttonStyle(.borderless)
     }
 
     private var other: some View {
         Section("Khác") {
-            Toggle("Nhãn thứ trong tuần", isOn: $settings.config.showDayOfWeek)
             Toggle("Bảng biên độ phiên", isOn: $settings.config.showRangeTable)
             if settings.config.showRangeTable {
                 Stepper("Trung bình \(settings.config.rangeAverageCount) phiên", value: $settings.config.rangeAverageCount, in: 1...30)

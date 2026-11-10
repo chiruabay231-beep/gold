@@ -7,6 +7,48 @@ import Foundation
 /// labels, session range statistics and ICT macro windows. All times are
 /// in `timeZoneID`.
 public enum KillzonePivots {
+    /// Day, week or month of the D/W/M lines.
+    public enum Period: Int, CaseIterable, Codable, Hashable, Sendable {
+        case day, week, month
+
+        /// Names on the chart: open, high, low, middle ("DO", "PDH", "PDL", "PDM").
+        public var labels: (open: String, high: String, low: String, middle: String) {
+            switch self {
+            case .day: return ("DO", "PDH", "PDL", "PDM")
+            case .week: return ("WO", "PWH", "PWL", "PWM")
+            case .month: return ("MO", "PMH", "PML", "PMM")
+            }
+        }
+
+        /// Shortest length; the lines show on charts with smaller bars.
+        public var seconds: TimeInterval {
+            switch self {
+            case .day: return 86_400
+            case .week: return 7 * 86_400
+            case .month: return 28 * 86_400
+            }
+        }
+    }
+
+    /// What is drawn for one of day / week / month.
+    public struct PeriodLines: Codable, Hashable, Sendable {
+        /// Open of the current period.
+        public var open: Bool
+        /// High and low of the period before.
+        public var highLow: Bool
+        /// Middle of that high and low.
+        public var midline: Bool
+        /// A vertical line where each period starts.
+        public var divider: Bool
+
+        public init(open: Bool, highLow: Bool, midline: Bool, divider: Bool) {
+            self.open = open
+            self.highLow = highLow
+            self.midline = midline
+            self.divider = divider
+        }
+    }
+
     public struct Session: Codable, Hashable, Sendable {
         public var enabled: Bool
         public var name: String
@@ -101,7 +143,14 @@ public enum KillzonePivots {
         public var cutoffEnabled = false
         public var cutoffHour = 15.0
 
-        public var showPreviousDay = false
+        /// Day / week / month: this period's open, the last period's high / low and middle, a line at each start.
+        public var dayLines = PeriodLines(open: true, highLow: true, midline: true, divider: false)
+        public var weekLines = PeriodLines(open: false, highLow: true, midline: true, divider: false)
+        public var monthLines = PeriodLines(open: false, highLow: false, midline: false, divider: false)
+        /// PDH / PWL… end at the candle that crosses them (off: carried to the right edge).
+        public var periodUntilBroken = true
+        /// Tell the user when the newest candle crosses PDH / PDL / PWH… (the app sends the notice).
+        public var alertPeriodBreaks = false
         /// High and low of each of the last days, drawn until a candle reaches them.
         public var showDailyLevels = true
         public var dailyLevelDays = 5
@@ -111,9 +160,12 @@ public enum KillzonePivots {
         /// Days of the daily highs/lows as Exness counts them (its server runs on UTC, a day from 00:00 UTC),
         /// like the D1 candles there; off, days in the indicator's time zone.
         public var dailyLevelsExnessDay = true
-        public var showPreviousWeek = false
-        public var showPreviousMonth = false
         public var showDayOfWeek = false
+        /// Weekday names over the chart instead of under it.
+        public var dayOfWeekOnTop = false
+        /// At each day's midday instead of its start (midnight).
+        public var dayOfWeekAtMidday = false
+        public var hideWeekendLabels = false
         public var showRangeTable = false
         /// Sessions averaged in the range table.
         public var rangeAverageCount = 5
@@ -195,6 +247,17 @@ public enum KillzonePivots {
 
         public init() {}
 
+        public func lines(_ period: Period) -> PeriodLines {
+            switch period {
+            case .day: return dayLines
+            case .week: return weekLines
+            case .month: return monthLines
+            }
+        }
+
+        /// Keys of settings saved before D/W/M replaced them.
+        private enum LegacyKeys: String, CodingKey { case showPreviousDay, showPreviousWeek, showPreviousMonth }
+
         // Missing keys keep their defaults, so settings saved by an older
         // version still load after new options are added.
         public init(from decoder: Decoder) throws {
@@ -216,14 +279,25 @@ public enum KillzonePivots {
             timestamps = try c.decodeIfPresent([TimeMark].self, forKey: .timestamps) ?? d.timestamps
             cutoffEnabled = try c.decodeIfPresent(Bool.self, forKey: .cutoffEnabled) ?? d.cutoffEnabled
             cutoffHour = try c.decodeIfPresent(Double.self, forKey: .cutoffHour) ?? d.cutoffHour
-            showPreviousDay = try c.decodeIfPresent(Bool.self, forKey: .showPreviousDay) ?? d.showPreviousDay
+            dayLines = try c.decodeIfPresent(PeriodLines.self, forKey: .dayLines) ?? d.dayLines
+            weekLines = try c.decodeIfPresent(PeriodLines.self, forKey: .weekLines) ?? d.weekLines
+            monthLines = try c.decodeIfPresent(PeriodLines.self, forKey: .monthLines) ?? d.monthLines
+            if try !c.contains(.weekLines) {
+                // Saved with the old PWH / PMH switches: keep what was turned on.
+                let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+                if try legacy.decodeIfPresent(Bool.self, forKey: .showPreviousWeek) == true { weekLines.highLow = true }
+                if try legacy.decodeIfPresent(Bool.self, forKey: .showPreviousMonth) == true { monthLines.highLow = true }
+            }
+            periodUntilBroken = try c.decodeIfPresent(Bool.self, forKey: .periodUntilBroken) ?? d.periodUntilBroken
+            alertPeriodBreaks = try c.decodeIfPresent(Bool.self, forKey: .alertPeriodBreaks) ?? d.alertPeriodBreaks
             showDailyLevels = try c.decodeIfPresent(Bool.self, forKey: .showDailyLevels) ?? d.showDailyLevels
             dailyLevelDays = try c.decodeIfPresent(Int.self, forKey: .dailyLevelDays) ?? d.dailyLevelDays
             dailyLevelsKeepTouched = try c.decodeIfPresent(Bool.self, forKey: .dailyLevelsKeepTouched) ?? d.dailyLevelsKeepTouched
             dailyLevelsExnessDay = try c.decodeIfPresent(Bool.self, forKey: .dailyLevelsExnessDay) ?? d.dailyLevelsExnessDay
-            showPreviousWeek = try c.decodeIfPresent(Bool.self, forKey: .showPreviousWeek) ?? d.showPreviousWeek
-            showPreviousMonth = try c.decodeIfPresent(Bool.self, forKey: .showPreviousMonth) ?? d.showPreviousMonth
             showDayOfWeek = try c.decodeIfPresent(Bool.self, forKey: .showDayOfWeek) ?? d.showDayOfWeek
+            dayOfWeekOnTop = try c.decodeIfPresent(Bool.self, forKey: .dayOfWeekOnTop) ?? d.dayOfWeekOnTop
+            dayOfWeekAtMidday = try c.decodeIfPresent(Bool.self, forKey: .dayOfWeekAtMidday) ?? d.dayOfWeekAtMidday
+            hideWeekendLabels = try c.decodeIfPresent(Bool.self, forKey: .hideWeekendLabels) ?? d.hideWeekendLabels
             showRangeTable = try c.decodeIfPresent(Bool.self, forKey: .showRangeTable) ?? d.showRangeTable
             rangeAverageCount = try c.decodeIfPresent(Int.self, forKey: .rangeAverageCount) ?? d.rangeAverageCount
             showMacros = try c.decodeIfPresent(Bool.self, forKey: .showMacros) ?? d.showMacros
@@ -281,7 +355,8 @@ public enum KillzonePivots {
             case pivotLow(session: Int)
             case midpoint(session: Int)
             case open(mark: Int)
-            case previousDay, previousWeek, previousMonth
+            /// D/W/M: the current period's open, the last one's high / low / middle.
+            case period(Period, part: PeriodPart)
             /// High / low of one finished day; weekday 1 = Sunday … 7 = Saturday.
             case dayHigh(weekday: Int), dayLow(weekday: Int)
         }
@@ -292,6 +367,21 @@ public enum KillzonePivots {
         public var end: Int?
         public var label: String
         public var mitigated: Bool
+    }
+
+    public enum PeriodPart: Hashable, Sendable { case open, high, low, middle }
+
+    /// Where a day / week / month starts.
+    public struct Divider: Hashable, Sendable {
+        public var period: Period
+        public var index: Int
+    }
+
+    /// The newest candle crossed a D/W/M high / low ("Báo khi giá phá High/Low").
+    public struct PeriodBreak: Hashable, Sendable {
+        public var label: String
+        public var price: Double
+        public var high: Bool
     }
 
     public struct MacroBox: Hashable, Sendable {
@@ -394,6 +484,8 @@ public enum KillzonePivots {
         public var levels: [Level] = []
         public var stamps: [Stamp] = []
         public var dayLabels: [DayLabel] = []
+        public var dividers: [Divider] = []
+        public var periodBreaks: [PeriodBreak] = []
         public var ranges: [RangeStat] = []
         /// True when the chart timeframe is above the limit and the killzones are not drawn.
         public var hiddenByTimeframe = false
@@ -423,12 +515,13 @@ public enum KillzonePivots {
         if config.showDailyLevels, barInterval < 86_400 {
             output.levels += dailyLevels(candles, config: config)
         }
+        let zone = TimeZone(identifier: config.timeZoneID) ?? TimeZone(identifier: "America/New_York")!
+        let clock = ICT.NewYorkClock(time: candles.map(\.time), zone: zone)
+        periodLevels(candles, clock: clock, zone: zone, barInterval: barInterval, config: config, into: &output)
         guard barInterval <= config.timeframeLimitMinutes * 60 else {
             output.hiddenByTimeframe = true
             return output
         }
-        let zone = TimeZone(identifier: config.timeZoneID) ?? TimeZone(identifier: "America/New_York")!
-        let clock = ICT.NewYorkClock(time: candles.map(\.time), zone: zone)
         let n = candles.count
         let lastDay = clock.day[min(max(focusIndex ?? n - 1, 0), n - 1)]
         let firstDay = lastDay - max(config.maxDays, 1) + 1
@@ -528,30 +621,8 @@ public enum KillzonePivots {
             }
         }
 
-        // Previous day / week / month highs and lows, drawn across the current period.
-        /// High/low of the period before the current one and the first bar of the current period.
-        func previousRange(_ id: (Int) -> Int) -> (start: Int, high: Double, highIndex: Int, low: Double, lowIndex: Int)? {
-            let current = id(n - 1)
-            guard let start = (0..<n).first(where: { id($0) == current }), start > 0 else { return nil }
-            let previous = id(start - 1)
-            var high = -Double.infinity, low = Double.infinity
-            var highIndex = start - 1, lowIndex = start - 1
-            var i = start - 1
-            while i >= 0, id(i) == previous {
-                if candles[i].high > high { high = candles[i].high; highIndex = i }
-                if candles[i].low < low { low = candles[i].low; lowIndex = i }
-                i -= 1
-            }
-            guard high.isFinite, low.isFinite else { return nil }
-            return (start, high, highIndex, low, lowIndex)
-        }
-        func previousPeriod(_ id: (Int) -> Int, kind: Level.Kind, labels: (String, String)) {
-            guard let range = previousRange(id) else { return }
-            output.levels.append(Level(kind: kind, price: range.high, start: range.start, end: nil, label: labels.0, mitigated: false))
-            output.levels.append(Level(kind: kind, price: range.low, start: range.start, end: nil, label: labels.1, mitigated: false))
-        }
         // Sweeps of the previous day's high/low (the classic ICT liquidity), shown with or without its lines.
-        if config.showSweeps, let range = previousRange({ clock.day[$0] }) {
+        if config.showSweeps, let range = previousPeriod(candles, id: { clock.day[$0] }) {
             for isHigh in [true, false] {
                 let price = isHigh ? range.high : range.low
                 if let j = firstBreak(candles, price: price, isHigh: isHigh, from: range.start),
@@ -561,27 +632,91 @@ public enum KillzonePivots {
                 }
             }
         }
-        if config.showPreviousDay { previousPeriod({ clock.day[$0] }, kind: .previousDay, labels: ("PDH", "PDL")) }
-        if config.showPreviousWeek { previousPeriod({ clock.week[$0] }, kind: .previousWeek, labels: ("PWH", "PWL")) }
-        if config.showPreviousMonth {
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = zone
-            let months = candles.map { c -> Int in
-                let parts = calendar.dateComponents([.year, .month], from: c.time)
-                return (parts.year ?? 0) * 12 + (parts.month ?? 0)
-            }
-            previousPeriod({ months[$0] }, kind: .previousMonth, labels: ("PMH", "PML"))
-        }
-
-        if config.showDayOfWeek {
-            var calendar = Calendar(identifier: .gregorian)
-            calendar.timeZone = zone
-            for index in markIndexes(clock: clock, hour: 12, firstDay: firstDay) {
-                output.dayLabels.append(DayLabel(index: index, weekday: calendar.component(.weekday, from: candles[index].time)))
-            }
-        }
         output.sweeps = Array(output.sweeps.sorted { $0.index < $1.index }.suffix(max(config.sweepCount, 1)))
         return output
+    }
+
+    /// High/low of the period before the newest bar's one (`id` per bar) and the first bar of the current one.
+    static func previousPeriod(_ c: [Candle], id: (Int) -> Int)
+        -> (start: Int, high: Double, highIndex: Int, low: Double, lowIndex: Int)? {
+        let n = c.count
+        guard n > 1 else { return nil }
+        let current = id(n - 1)
+        var start = n - 1
+        while start > 0, id(start - 1) == current { start -= 1 }
+        guard start > 0 else { return nil }
+        let previous = id(start - 1)
+        var high = -Double.infinity, low = Double.infinity
+        var highIndex = start - 1, lowIndex = start - 1
+        var i = start - 1
+        while i >= 0, id(i) == previous {
+            if c[i].high > high { high = c[i].high; highIndex = i }
+            if c[i].low < low { low = c[i].low; lowIndex = i }
+            i -= 1
+        }
+        return (start, high, highIndex, low, lowIndex)
+    }
+
+    /// Day / week / month lines on charts with bars shorter than the period: the current period's open,
+    /// the last one's high / low (ending at the candle that crosses it, with `periodUntilBroken`) and middle,
+    /// a divider at each start; and the weekday labels.
+    static func periodLevels(_ c: [Candle], clock: ICT.NewYorkClock, zone: TimeZone, barInterval: TimeInterval,
+                             config: Config, into output: inout Output) {
+        let n = c.count
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        for period in Period.allCases {
+            let lines = config.lines(period)
+            guard barInterval < period.seconds, lines.open || lines.highLow || lines.midline || lines.divider else { continue }
+            let ids: [Int]
+            switch period {
+            case .day: ids = clock.day
+            case .week: ids = clock.week
+            case .month:
+                ids = c.map { bar in
+                    let parts = calendar.dateComponents([.year, .month], from: bar.time)
+                    return (parts.year ?? 0) * 12 + (parts.month ?? 0)
+                }
+            }
+            let names = period.labels
+            if lines.divider {
+                for i in 1..<n where ids[i] != ids[i - 1] { output.dividers.append(Divider(period: period, index: i)) }
+            }
+            if lines.open {
+                var start = n - 1
+                while start > 0, ids[start - 1] == ids[n - 1] { start -= 1 }
+                if start > 0 {
+                    output.levels.append(Level(kind: .period(period, part: .open), price: c[start].open, start: start, end: nil,
+                                               label: names.open, mitigated: false))
+                }
+            }
+            guard let range = previousPeriod(c, id: { ids[$0] }) else { continue }
+            if lines.highLow {
+                for isHigh in [true, false] {
+                    let price = isHigh ? range.high : range.low
+                    let j = firstBreak(c, price: price, isHigh: isHigh, from: range.start)
+                    if j == n - 1 { output.periodBreaks.append(PeriodBreak(label: isHigh ? names.high : names.low, price: price, high: isHigh)) }
+                    output.levels.append(Level(kind: .period(period, part: isHigh ? .high : .low), price: price, start: range.start,
+                                               end: config.periodUntilBroken ? j : nil, label: isHigh ? names.high : names.low,
+                                               mitigated: j != nil))
+                }
+            }
+            if lines.midline {
+                output.levels.append(Level(kind: .period(period, part: .middle), price: (range.high + range.low) / 2,
+                                           start: range.start, end: nil, label: names.middle, mitigated: false))
+            }
+        }
+        // Weekday names at each day's start (or midday), weekends left out on request.
+        guard config.showDayOfWeek, barInterval < 86_400 else { return }
+        let hour = config.dayOfWeekAtMidday ? 12.0 : 0
+        for i in 0..<n {
+            let newDay = i == 0 || clock.day[i] != clock.day[i - 1]
+            let crossed = !newDay && clock.hour[i - 1] < hour && clock.hour[i] >= hour
+            guard crossed || (newDay && clock.hour[i] >= hour) else { continue }
+            let weekday = calendar.component(.weekday, from: c[i].time)
+            if config.hideWeekendLabels, weekday == 1 || weekday == 7 { continue }
+            output.dayLabels.append(DayLabel(index: i, weekday: weekday))
+        }
     }
 
     /// The high and low of each of the last `dailyLevelDays` finished days (Exness days, from
@@ -638,6 +773,7 @@ public enum KillzonePivots {
     ///    must be within 2 bars of ours.
     ///  - The two swings are the top (bottom) of the stretch between them in both markets, so a line never
     ///    crosses a bigger high, and they are at most `smtLookback` bars apart.
+    ///  - Two SMTs that share a swing (a chain) keep only the newer.
     /// With `smtInverse` (DXY) our highs pair with its lows. Confirmed `smtSwingLength` bars later.
     public static func smtDivergences(_ a: [Candle], _ b: [Candle], config: Config) -> [SMTDivergence] {
         let length = max(config.smtSwingLength, 1)
@@ -682,6 +818,9 @@ public enum KillzonePivots {
                     return true
                 }
                 guard clean else { continue }
+                // Chained with the one before (its second swing is this one's first): keep only the newer,
+                // so the lines never zigzag from swing to swing.
+                if let last = result.last, last.bullish == !high, last.end == i1 { result.removeLast() }
                 var div = SMTDivergence(bullish: !high, start: i1, end: i2, startPrice: a1, endPrice: a2)
                 div.otherStart = j1
                 div.otherEnd = j2
