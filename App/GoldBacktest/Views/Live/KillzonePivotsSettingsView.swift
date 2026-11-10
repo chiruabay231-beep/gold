@@ -307,10 +307,10 @@ struct KillzonePivotsSettingsView: View {
                         .autocorrectionDisabled()
                 }
                 Toggle("Mã so sánh chạy ngược chiều (DXY)", isOn: $settings.config.smtInverse)
-                Stepper("Swing: \(settings.config.smtSwingLength) nến mỗi bên", value: $settings.config.smtSwingLength, in: 1...10)
-                Stepper("Hai đỉnh/đáy cách tối đa \(settings.config.smtLookback) nến", value: $settings.config.smtLookback,
+                Stepper("Swing: \(settings.config.smtSwingLength) nến mỗi bên", value: $settings.config.smtSwingLength, in: 2...10)
+                Stepper("Tìm đỉnh/đáy thanh khoản trong \(settings.config.smtLookback) nến", value: $settings.config.smtLookback,
                         in: 10...300, step: 10)
-                Stepper("Giữ \(settings.config.smtCount) SMT gần nhất", value: $settings.config.smtCount, in: 2...50, step: 2)
+                Stepper("Giữ \(settings.config.smtCount) SMT gần nhất", value: $settings.config.smtCount, in: 1...20)
                 colorRow("Màu SMT tăng", color: $settings.smtBullColor)
                 colorRow("Màu SMT giảm", color: $settings.smtBearColor)
             }

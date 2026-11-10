@@ -6301,7 +6301,7 @@
             + numf("dmCount", "Số đường DM gần nhất") + tog("dmUntilBroken", "Dừng đường ở nến cắt qua (tắt = kéo tới nến hiện tại)")
             + head("SMT") + `<label class="fr"><input type="checkbox" data-smt ${showInd.smt ? "checked" : ""}><span>Hiện SMT khi mở 2 biểu đồ (nút ▥)</span></label>`
             + (this.owner ? `<div class="fr"><span class="grow">Mã so sánh</span>${text("smtSymbol", "lb")}<span class="muted small">trống = tự động (${esc(this.cmpSymbol())})</span></div>` : "")
-            + tog("smtInverse", "Mã so sánh chạy ngược chiều (DXY)") + numf("smtSwing", "Swing: số nến mỗi bên") + numf("smtLookback", "Hai đỉnh/đáy cách tối đa (nến)") + numf("smtCount", "Giữ SMT gần nhất")
+            + tog("smtInverse", "Mã so sánh chạy ngược chiều (DXY)") + numf("smtSwing", "Swing: số nến mỗi bên (lớn hơn = ít SMT, chỉ đỉnh/đáy chính)") + numf("smtLookback", "Tìm đỉnh/đáy thanh khoản trong (nến)") + numf("smtCount", "Giữ SMT gần nhất")
             + head("Macros") + tog("macros", "Hiện macros")
             + cfg.macroList.map((m, i) => `<div class="fr">${chk(`macroList.${i}.on`)}${text(`macroList.${i}.name`)}${time(`macroList.${i}.start`)}<span class="to">—</span>${time(`macroList.${i}.end`)}</div>`).join("");
         }
@@ -7567,11 +7567,12 @@
             const c = term.smt2Cache;
             if (!c || c.smt !== term.smt || c.view !== term.cmpView) {
               const index = new Map(term.cmpView.map((b, i) => [b.time, i]));
+              // The other market's own high / low of each SMT (found around the chart's swing).
               term.smt2Cache = { smt: term.smt, view: term.cmpView, list: term.smt.map((d) => {
-                const i1 = index.get(d.t1), i2 = index.get(d.t2);
+                const i1 = index.get(d.bt1 != null ? d.bt1 : d.t1), i2 = index.get(d.bt2 != null ? d.bt2 : d.t2);
                 if (i1 == null || i2 == null) return null;
                 const a = term.cmpView[i1], b = term.cmpView[i2];
-                return { bull: d.bull, start: i1, end: i2, p1: d.bull ? a.low : a.high, p2: d.bull ? b.low : b.high };
+                return { bull: d.bull, start: i1, end: i2, p1: d.b1 != null ? d.b1 : d.bull ? a.low : a.high, p2: d.b2 != null ? d.b2 : d.bull ? b.low : b.high };
               }).filter(Boolean) };
             }
             const list = term.smt2Cache.list;

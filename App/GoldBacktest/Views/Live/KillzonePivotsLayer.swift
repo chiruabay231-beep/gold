@@ -176,7 +176,7 @@ struct KillzonePivotsLayer {
         for div in output.smt {
             let color = (div.bullish ? settings.smtBullColor : settings.smtBearColor).color
             segments.append(ChartSegment(start: Double(div.start), end: Double(div.end), price: div.startPrice, color: color,
-                                         width: 1.4 * scale, label: "SMT", endPrice: div.endPrice))
+                                         width: 1.4 * scale, label: div.bullish ? "SMT tăng" : "SMT giảm", endPrice: div.endPrice))
         }
         for box in output.macroBoxes {
             let macro = config.macros[box.macro]

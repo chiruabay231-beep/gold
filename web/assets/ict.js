@@ -61,7 +61,7 @@
       dailyLabelAlign: "center",
       lineScale: 1,
       // SMT against a related market (silver for gold): empty symbol = automatic.
-      smtSymbol: "", smtInverse: false, smtSwing: 3, smtLookback: 60, smtCount: 10, smtBull: "#089981", smtBear: "#f23645",
+      smtSymbol: "", smtInverse: false, smtSwing: 5, smtLookback: 60, smtCount: 3, smtBull: "#089981", smtBear: "#f23645",
     };
   }
 
@@ -74,6 +74,12 @@
       if (Array.isArray(d[k])) {
         if (Array.isArray(saved[k])) d[k] = d[k].map((item, i) => Object.assign({}, item, saved[k][i] || {}));
       } else if (typeof saved[k] === typeof d[k]) d[k] = saved[k];
+    }
+    // SMT v2: the old defaults (3-bar swings, 10 kept) gave a line on nearly every swing.
+    if (saved.smtVersion !== 2) {
+      if (d.smtSwing === 3) d.smtSwing = 5;
+      if (d.smtCount === 10) d.smtCount = 3;
+      d.smtVersion = 2;
     }
     if (saved.keepVersion !== 2) {
       d.keepMitigated = true; d.pivotUntilMitigated = true; d.dailyKeepTouched = true; d.periodUntilBroken = true;
@@ -751,20 +757,37 @@
    * Two swing highs (lows) in a row where one market makes a higher high (lower low)
    * and the other does not — the app's rule. Bars of `b` are matched to `a` by time.
    */
+  /**
+   * SMT divergence at liquidity: a new swing high (low) of the chart against the highest (lowest) swing of the
+   * last `lookback` bars. One market takes that high and the other does not:
+   *  - the chart sweeps it while the other market stays under its own high there, or
+   *  - the other market sweeps while the chart only comes back to it (within one average range) and fails.
+   * Each old swing gives at most one SMT a side; swings of `swing` bars each side (confirmed that many bars
+   * later); the other market's extreme is taken over the same window, so swings a few bars apart still match.
+   * `inverse`: a market that moves the other way (DXY) is read at its lows for our highs. The newest `count`.
+   */
   function smt(a, b, opts = {}) {
-    const length = Math.max(opts.swing || 3, 1), lookback = opts.lookback || 60, count = opts.count || 10, inverse = !!opts.inverse;
+    const L = Math.max(opts.swing || 5, 2), lookback = opts.lookback || 60, count = opts.count || 3, inverse = !!opts.inverse;
     const n = a.length;
-    if (n <= length * 2 + 2 || !b.length) return [];
+    if (n <= L * 2 + 2 || !b.length) return [];
     const other = new Map(b.map((x) => [x.time, x]));
-    const extreme = (p, high) => {
-      const values = [];
-      for (let i = Math.max(0, p - 1); i <= Math.min(n - 1, p + 1); i++) { const o = other.get(a[i].time); if (o) values.push(high ? o.high : o.low); }
-      return values.length ? (high ? Math.max(...values) : Math.min(...values)) : null;
+    const bh = a.map((x) => { const o = other.get(x.time); return o ? o.high : null; });
+    const bl = a.map((x) => { const o = other.get(x.time); return o ? o.low : null; });
+    const range = (get) => { const out = new Array(n).fill(0); let s = 0, k = 0; const q = []; for (let i = 0; i < n; i++) { const v = get(i); if (v != null) { q.push(v); s += v; k++; if (q.length > 14) { s -= q.shift(); k--; } } out[i] = k ? s / k : 0; } return out; };
+    const ra = range((i) => a[i].high - a[i].low), rb = range((i) => (bh[i] != null ? bh[i] - bl[i] : null));
+    // The other market's high / low around a swing (and the bar it is on).
+    const win = (p, high) => {
+      let best = null, at = null;
+      for (let i = Math.max(0, p - L); i <= Math.min(n - 1, p + L); i++) {
+        const v = high ? bh[i] : bl[i];
+        if (v != null && (best == null || (high ? v > best : v < best))) { best = v; at = i; }
+      }
+      return best == null ? null : { v: best, at };
     };
     const highs = [], lows = [];
-    for (let p = length; p < n - length; p++) {
+    for (let p = L; p < n - L; p++) {
       let hi = true, lo = true;
-      for (let j = p - length; j <= p + length; j++) {
+      for (let j = p - L; j <= p + L; j++) {
         if (j === p) continue;
         if (a[j].high >= a[p].high) hi = false;
         if (a[j].low <= a[p].low) lo = false;
@@ -773,19 +796,34 @@
       if (lo) lows.push(p);
     }
     const out = [];
-    for (let k = 1; k < highs.length; k++) {
-      const i1 = highs[k - 1], i2 = highs[k];
-      if (i2 - i1 > lookback) continue;
-      const b1 = extreme(i1, !inverse), b2 = extreme(i2, !inverse);
-      if (b1 == null || b2 == null) continue;
-      if ((a[i2].high > a[i1].high) !== (inverse ? b2 < b1 : b2 > b1)) out.push({ bull: false, start: i1, end: i2, p1: a[i1].high, p2: a[i2].high, t1: a[i1].time, t2: a[i2].time });
-    }
-    for (let k = 1; k < lows.length; k++) {
-      const i1 = lows[k - 1], i2 = lows[k];
-      if (i2 - i1 > lookback) continue;
-      const b1 = extreme(i1, inverse), b2 = extreme(i2, inverse);
-      if (b1 == null || b2 == null) continue;
-      if ((a[i2].low < a[i1].low) !== (inverse ? b2 > b1 : b2 < b1)) out.push({ bull: true, start: i1, end: i2, p1: a[i1].low, p2: a[i2].low, t1: a[i1].time, t2: a[i2].time });
+    for (const side of [1, -1]) {
+      const piv = side > 0 ? highs : lows, used = new Set();
+      const A = (i) => (side > 0 ? a[i].high : a[i].low);
+      // The other market at our highs: its highs (its lows when it moves the other way).
+      const bHigh = side > 0 ? !inverse : inverse;
+      const beyond = (x, y) => (side > 0 ? x > y : x < y);
+      const bBeyond = (x, y) => (bHigh ? x > y : x < y);
+      for (let k = 1; k < piv.length; k++) {
+        const i2 = piv[k];
+        // The liquidity: the most extreme earlier swing within the lookback.
+        let i1 = null;
+        for (let q = k - 1; q >= 0 && i2 - piv[q] <= lookback; q--) if (i1 == null || beyond(A(piv[q]), A(i1))) i1 = piv[q];
+        if (i1 == null || used.has(i1)) continue;
+        // Not taken already between the two (that swing is no longer the liquidity).
+        let taken = false;
+        for (let j = i1 + 1; j < i2 - L && !taken; j++) if (beyond(A(j), A(i1))) taken = true;
+        if (taken) continue;
+        const b1 = win(i1, bHigh), b2 = win(i2, bHigh);
+        if (!b1 || !b2) continue;
+        const aSweeps = beyond(A(i2), A(i1)), bSweeps = bBeyond(b2.v, b1.v);
+        if (aSweeps === bSweeps) continue;
+        // The market that fails must still come back to its old high / low (within one average range).
+        if (!aSweeps && Math.abs(A(i1) - A(i2)) > ra[i2]) continue;
+        if (!bSweeps && Math.abs(b1.v - b2.v) > (rb[i2] || Infinity)) continue;
+        used.add(i1);
+        out.push({ bull: side < 0, start: i1, end: i2, p1: A(i1), p2: A(i2), t1: a[i1].time, t2: a[i2].time,
+          b1: b1.v, b2: b2.v, bt1: a[b1.at].time, bt2: a[b2.at].time, swept: aSweeps ? "chart" : "other", confirmed: a[Math.min(n - 1, i2 + L)].time });
+      }
     }
     return out.sort((m, k) => m.end - k.end).slice(-count);
   }
@@ -801,8 +839,9 @@
       const c = d.bull ? colors.bull || "#089981" : colors.bear || "#f23645";
       g.strokeStyle = c; g.lineWidth = 1.2; g.setLineDash([]);
       g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+      [[x1, y1], [x2, y2]].forEach(([x, y]) => { g.fillStyle = c; g.beginPath(); g.arc(x, y, 2.5, 0, Math.PI * 2); g.fill(); });
       g.fillStyle = c; g.textAlign = "center"; g.textBaseline = d.bull ? "top" : "bottom";
-      g.fillText("SMT", (x1 + x2) / 2, (d.bull ? Math.max(y1, y2) + 3 : Math.min(y1, y2) - 3));
+      g.fillText(`SMT ${d.bull ? "tăng" : "giảm"}`, (x1 + x2) / 2, (d.bull ? Math.max(y1, y2) + 4 : Math.min(y1, y2) - 4));
     });
     g.restore();
   }
