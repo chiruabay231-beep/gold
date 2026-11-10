@@ -312,7 +312,8 @@ final class KillzonePivotsCache {
             let id = "\(item.label)|\(item.price)"
             guard announced.insert(id).inserted, !first else { continue }
             let text = "Giá \(item.high ? "vượt lên trên" : "xuống dưới") \(item.label) \(String(format: "%.2f", item.price))"
-            VoiceAnnouncer.shared.speak("\(item.label) \(item.high ? "bị phá lên" : "bị phá xuống")")
+            let spoken = "\(item.label) \(item.high ? "bị phá lên" : "bị phá xuống")"
+            Task { @MainActor in VoiceAnnouncer.shared.speak(spoken) }
             let content = UNMutableNotificationContent()
             content.title = "Phá \(item.label)"
             content.body = text

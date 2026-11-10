@@ -282,7 +282,7 @@ public enum KillzonePivots {
             dayLines = try c.decodeIfPresent(PeriodLines.self, forKey: .dayLines) ?? d.dayLines
             weekLines = try c.decodeIfPresent(PeriodLines.self, forKey: .weekLines) ?? d.weekLines
             monthLines = try c.decodeIfPresent(PeriodLines.self, forKey: .monthLines) ?? d.monthLines
-            if try !c.contains(.weekLines) {
+            if !c.contains(.weekLines) {
                 // Saved with the old PWH / PMH switches: keep what was turned on.
                 let legacy = try decoder.container(keyedBy: LegacyKeys.self)
                 if try legacy.decodeIfPresent(Bool.self, forKey: .showPreviousWeek) == true { weekLines.highLow = true }
