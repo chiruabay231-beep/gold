@@ -980,10 +980,49 @@ body.chart-full .dash { position: fixed; inset: 0; z-index: 30; max-width: none;
 body.chart-full .chart-panel { border: 0; border-radius: 0; padding: 4px 6px 0; height: 100dvh; display: flex; flex-direction: column; }
 body.chart-full .chart-body { flex: 1 1 auto; min-height: 0; }
 body.chart-full .charts { height: 100%; }
-body.chart-full .chart-wrap { height: calc(100dvh - var(--fs-top, 70px) - var(--rb, 0px)); }
-body.chart-full .charts.col .chart-wrap { height: calc((100dvh - var(--fs-top, 70px) - var(--rb, 0px)) / 2 - 3px); }
-body.chart-full .charts.mtf { height: calc(100dvh - var(--fs-top, 70px) - var(--rb, 0px)); }
+body.chart-full .chart-wrap { height: calc(100dvh - var(--fs-top, 70px) - var(--fs-bot, 0px) - var(--rb, 0px)); }
+body.chart-full .charts.col .chart-wrap { height: calc((100dvh - var(--fs-top, 70px) - var(--fs-bot, 0px) - var(--rb, 0px)) / 2 - 3px); }
+body.chart-full .charts.mtf { height: calc(100dvh - var(--fs-top, 70px) - var(--fs-bot, 0px) - var(--rb, 0px)); }
 @media (max-width: 600px) {
   .chart-grip { display: none; }
   body.chart-full .charts.row .chart-wrap { height: calc((100dvh - var(--fs-top, 90px) - var(--rb, 0px)) / 2 - 3px); }
+}
+
+/* Full screen, TradingView style: a column of the other sections at the right (opening beside the chart),
+   the range buttons and clock under the chart, the OHLC line over it; nothing else around. */
+.side-rail, .range-bar, .tv-legend { display: none; }
+body.chart-full .chart-sub { display: none; }
+body.chart-full .chart-top { margin-bottom: 4px; }
+body.chart-full .chart-panel { margin-right: 46px; transition: margin-right .15s; }
+body.chart-full.side-open .chart-panel { margin-right: calc(46px + var(--side-w, 400px)); }
+body.chart-full .side-rail { display: flex; flex-direction: column; align-items: center; gap: 2px; position: fixed; top: 0; right: 0; bottom: 0; width: 46px; z-index: 41;
+  padding: 6px 0; background: var(--card); border-left: 1px solid var(--line); }
+.side-rail button { width: 38px; height: 38px; border-radius: 8px; background: none; border: 0; color: var(--muted); cursor: pointer; display: grid; place-items: center; position: relative; }
+.side-rail button:hover { background: var(--chip); color: var(--text); }
+.side-rail button.on { background: var(--chip); color: var(--gold); }
+.side-rail button.on::before { content: ""; position: absolute; left: -4px; top: 8px; bottom: 8px; width: 3px; border-radius: 2px; background: var(--gold); }
+.side-rail .sep { width: 26px; height: 1px; background: var(--line); margin: 4px 0; }
+.side-rail .grow { flex: 1 1 auto; }
+body.chart-full .tab.side-tab { position: fixed; top: 0; bottom: 0; right: 46px; width: var(--side-w, 400px); max-width: calc(100vw - 46px); z-index: 40; overflow-y: auto;
+  background: var(--bg); border-left: 1px solid var(--line); padding: 8px; align-content: start; }
+body.chart-full .tab.side-tab .panel { padding: 10px; }
+body.chart-full .range-bar { display: flex; align-items: center; gap: 2px; height: 28px; padding: 0 4px; border-top: 1px solid var(--line); font-size: 12.5px; }
+.range-bar button { background: none; border: 0; color: var(--muted); border-radius: 6px; height: 24px; padding: 0 8px; cursor: pointer; font: 500 12.5px/1 var(--font); }
+.range-bar button:hover { background: var(--chip); color: var(--text); }
+.range-bar .clock { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; padding-right: 6px; }
+body.chart-full .tv-legend { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; position: absolute; top: 4px; left: 8px; right: 90px; z-index: 3; pointer-events: none;
+  font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--muted); text-shadow: 0 0 3px var(--bg); }
+.tv-legend b { color: var(--text); font-weight: 700; }
+.tv-legend .v { color: var(--text); }
+.tv-legend .up { color: var(--up); }
+.tv-legend .dn { color: var(--down); }
+body.chart-full #ticket { top: 26px; }
+@media (max-width: 600px) {
+  body.chart-full .chart-panel, body.chart-full.side-open .chart-panel { margin-right: 0; padding-bottom: 46px; }
+  body.chart-full .side-rail { top: auto; left: 0; width: auto; height: 46px; flex-direction: row; justify-content: space-around; border-left: 0; border-top: 1px solid var(--line); padding: 0 4px; }
+  body.chart-full .side-rail .grow, body.chart-full .side-rail .sep { display: none; }
+  body.chart-full .tab.side-tab { left: 0; right: 0; top: 30vh; bottom: 46px; width: auto; border-left: 0; border-top: 1px solid var(--line); border-radius: 14px 14px 0 0; }
+  body.chart-full .range-bar { overflow-x: auto; scrollbar-width: none; }
+  body.chart-full .range-bar .clock { display: none; }
+  body.chart-full .tv-legend { flex-wrap: nowrap; white-space: nowrap; overflow: hidden; right: 64px; font-size: 11.5px; gap: 6px; }
 }

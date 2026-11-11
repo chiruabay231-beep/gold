@@ -1227,7 +1227,7 @@
   /* ---------------- chart look and light / dark theme ---------------- */
 
   function defaultChartStyle() {
-    return { theme: "dark", up: "#14b88a", down: "#f0455a", wickUp: "#14b88a", wickDown: "#f0455a", border: false, borderUp: "#14b88a", borderDown: "#f0455a",
+    return { theme: "dark", up: "#14b88a", down: "#f0455a", wickUp: "#14b88a", wickDown: "#f0455a", border: true, borderV: 2, borderUp: "#14b88a", borderDown: "#f0455a",
       customBg: false, bg: "#151c2a", vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
       askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3" };
   }
@@ -1235,6 +1235,8 @@
     try {
       const st = Object.assign(defaultChartStyle(), JSON.parse(store.get("aurum.chartStyle") || "{}"));
       if (st.askColor === "#f5a524") st.askColor = defaultChartStyle().askColor; // the first, single-line look
+      // Candle edges on (TradingView's look: sharp bodies even when thin), once for styles saved before.
+      if (st.borderV !== 2) { st.border = true; st.borderUp = st.up; st.borderDown = st.down; st.borderV = 2; }
       return st;
     } catch { return defaultChartStyle(); }
   }
@@ -1448,7 +1450,11 @@
       if (!list.some(([k]) => k === this.tab)) this.tab = "chart";
       $("tabs").innerHTML = list.map(([k, name]) => `<button type="button" data-tab="${k}" class="${k === this.tab ? "on" : ""}">${name}</button>`).join("");
       $("tabs").querySelectorAll("button").forEach((b) => (b.onclick = () => this.setTab(b.dataset.tab)));
-      document.querySelectorAll("#dashView .tab").forEach((el) => { el.hidden = el.dataset.tab !== this.tab; });
+      document.querySelectorAll("#dashView .tab").forEach((el) => {
+        el.hidden = el.dataset.tab !== this.tab && el.dataset.tab !== this.sideTab;
+        el.classList.toggle("side-tab", el.dataset.tab === this.sideTab);
+      });
+      document.body.classList.toggle("side-open", !!this.sideTab);
       document.body.classList.toggle("on-chart", this.tab === "chart");
       if (this.tab === "chart" && this.fitReady) requestAnimationFrame(() => this.fitChart());
       if (this.tab !== "chart" && document.body.classList.contains("chart-full")) this.setFull(false);
@@ -1485,7 +1491,7 @@
       this.loadNews();
       this.stop(false);
       this.timers.push(setInterval(() => this.refresh(), this.owner ? 2000 : 5000));
-      this.timers.push(setInterval(() => this.loadTab(false), 5000));
+      this.timers.push(setInterval(() => { this.loadTab(false); if (this.sideTab) this.loadTab(false, this.sideTab); }, 5000));
       this.timers.push(setInterval(() => this.updateTab(), 1000));
       if (!this.owner) this.timers.push(setInterval(() => this.refreshMe().catch((e) => this.handleAuth(e)), 30000));
       this.timers.push(setInterval(() => this.loadNews(), 5 * 60 * 1000));
@@ -1604,7 +1610,7 @@
       this.renderPill(floating);
       this.renderSelBar();
       this.syncLines2();
-      if (this.tab === "trade") this.renderTrade();
+      if (this.shown("trade")) this.renderTrade();
     },
 
     renderPill(floating) {
@@ -2069,7 +2075,7 @@
       const list = await this.call("/member/signals?limit=80");
       this.signals = list.signals || [];
       this.watchSignals(this.signals);
-      if (this.tab === "signals") this.renderSignals();
+      if (this.shown("signals")) this.renderSignals();
     },
 
     /* ----- voice alerts ----- */
@@ -2221,9 +2227,11 @@
 
     /* ----- tabs that load on their own ----- */
 
-    loadTab(first) {
+    /** A section is on screen: the current tab, or the one open beside the full-screen chart. */
+    shown(t) { return this.tab === t || this.sideTab === t; },
+
+    loadTab(first, t = this.tab) {
       if (!this.secret) return;
-      const t = this.tab;
       if (t === "trade" && first) this.renderTrade();
       if (t === "signals" && first) this.renderSignals();
       if (t === "history" && first) this.loadHistory();
@@ -2412,12 +2420,12 @@
       try {
         this.news = await this.call(this.owner ? "/news" : "/member/news");
         this.newsTime = Date.now();
-        if (this.tab === "news") this.renderNews();
+        if (this.shown("news")) this.renderNews();
         // The release times on the chart and the next one's countdown.
         this.renderNewsStrip();
         if (this.requestICT) this.requestICT();
       } catch (e) {
-        if (this.tab === "news") $("newsList").innerHTML = `<div class="empty">${esc(plain(ServerTooOld(e) ? "Cập nhật máy chủ lên bản mới để xem tin tức" : e.message))}</div>`;
+        if (this.shown("news")) $("newsList").innerHTML = `<div class="empty">${esc(plain(ServerTooOld(e) ? "Cập nhật máy chủ lên bản mới để xem tin tức" : e.message))}</div>`;
       }
     },
 
@@ -3333,7 +3341,13 @@
         this.loadStudies();
         this.series.attachPrimitive(this.layer());
         Object.assign(this, this.axisViews());
-        setInterval(() => { if (this.tab === "chart") this.repaint(); }, 1000);
+        setInterval(() => { if (this.tab === "chart") { this.repaint(); if (document.body.classList.contains("chart-full")) { this.updateLegend(); this.updateClock(); } } }, 1000);
+        this.chart.subscribeCrosshairMove((param) => {
+          if (!document.body.classList.contains("chart-full")) return;
+          const d = param && param.point && param.seriesData ? param.seriesData.get(this.series) : null;
+          this.legendBar = d && d.open != null ? d : null;
+          this.updateLegend();
+        });
         setInterval(() => { if (this.tab === "chart") this.updateMascotMoods(); }, 1500);
         this.drawings = this.drawingsMain = new window.AurumDrawings({
           chart: this.chart, series: this.series, store,
@@ -7132,6 +7146,8 @@
      *  one (not iPhone Safari: there the panel still fills the page). */
     setFull(on) {
       document.body.classList.toggle("chart-full", on);
+      if (on) { this.renderSideRail(); this.renderRangeBar(); this.updateLegend(); this.updateClock(); }
+      else if (this.sideTab) { this.sideTab = null; this.renderTabs(); }
       $("fullBtn").title = on ? "Thoát toàn màn hình (F / Esc)" : "Toàn màn hình (F, thoát: Esc)";
       const el = document.documentElement;
       if (on) {
@@ -7153,10 +7169,94 @@
         if (document.body.classList.contains("chart-full") && charts) {
           const top = Math.max(0, Math.round(charts.getBoundingClientRect().top)) + 6;
           document.body.style.setProperty("--fs-top", top + "px");
+          // Under the charts: the grip's place, the range bar, and on phones the section bar at the bottom.
+          const rail = $("sideRail"), phone = window.innerWidth <= 600;
+          const bot = $("rangeBar").offsetHeight + (phone && rail ? rail.offsetHeight : 0) + 4;
+          document.body.style.setProperty("--fs-bot", bot + "px");
         }
         this.redraw();
         if (this.placeSplits) this.placeSplits();
       });
+    },
+
+    /** Full screen's right column: the other sections (opening beside the chart), the theme, leaving. */
+    renderSideRail() {
+      const rail = $("sideRail");
+      if (!rail) return;
+      const icon = (d) => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+      const ICONS = {
+        trade: '<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M8 9h8M8 13h8M8 17h5"/>',
+        signals: '<path d="M4 18 9 12l4 3 7-9"/><path d="M15 6h5v5"/>',
+        history: '<circle cx="12" cy="12" r="8"/><path d="M12 8v4l3 2"/>',
+        news: '<path d="M5 5h11v14H6a1 1 0 0 1-1-1z"/><path d="M16 9h3v9a1 1 0 0 1-1 1h-2M8 9h5M8 13h5M8 16h3"/>',
+        autobot: '<rect x="5" y="8" width="14" height="11" rx="2"/><path d="M12 4v4M9 13h.01M15 13h.01M9 16h6"/>',
+        copy: '<rect x="8" y="8" width="11" height="11" rx="2"/><path d="M5 15V6a1 1 0 0 1 1-1h9"/>',
+        members: '<circle cx="9" cy="9" r="3"/><path d="M3.5 19a5.5 5.5 0 0 1 11 0M16 7a3 3 0 0 1 0 6M17.5 14.5A5 5 0 0 1 20.5 19"/>',
+        bot: '<rect x="4" y="5" width="16" height="6" rx="1.5"/><rect x="4" y="13" width="16" height="6" rx="1.5"/><path d="M8 8h.01M8 16h.01"/>',
+      };
+      const items = this.tabList().filter(([k]) => k !== "chart");
+      rail.innerHTML = items.map(([k, name]) => `<button type="button" data-side="${k}" class="${this.sideTab === k ? "on" : ""}" title="${esc(name)}">${icon(ICONS[k] || ICONS.trade)}</button>`).join("")
+        + `<span class="grow"></span><span class="sep"></span>`
+        + `<button type="button" data-side-act="theme" title="Sáng / tối">${icon('<path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/>')}</button>`
+        + `<button type="button" data-side-act="exit" title="Thoát toàn màn hình (Esc)">${icon('<path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/>')}</button>`;
+      rail.querySelectorAll("[data-side]").forEach((b) => (b.onclick = () => this.openSide(b.dataset.side)));
+      rail.querySelector('[data-side-act="theme"]').onclick = () => $("themeBtn").click();
+      rail.querySelector('[data-side-act="exit"]').onclick = () => this.setFull(false);
+    },
+
+    /** One section beside the full-screen chart (the same section again closes it). */
+    openSide(k) {
+      this.sideTab = this.sideTab === k ? null : k;
+      this.renderTabs();
+      this.renderSideRail();
+      if (this.sideTab) this.loadTab(true, this.sideTab);
+      this.fitFull();
+    },
+
+    /** Under the full-screen chart: how far back to show, and the clock. */
+    renderRangeBar() {
+      const bar = $("rangeBar");
+      if (!bar || bar.dataset.ready) return;
+      bar.dataset.ready = "1";
+      const RANGES = [["1Ngày", 1], ["5Ngày", 5], ["1Tháng", 30], ["3Tháng", 91], ["6Tháng", 182], ["YTD", "ytd"], ["1Năm", 365], ["Tất cả", "all"]];
+      bar.innerHTML = RANGES.map(([n, d]) => `<button type="button" data-days="${d}">${n}</button>`).join("") + `<span class="clock" id="tvClock"></span>`;
+      bar.querySelectorAll("[data-days]").forEach((b) => (b.onclick = () => this.showRange(b.dataset.days)));
+    },
+
+    /** The last `days` days of the loaded bars on screen (all of them when fewer are loaded). */
+    showRange(days) {
+      const bars = this.viewBars();
+      if (!bars.length || !this.chart) return;
+      const sec = TF_SECONDS[this.interval], last = bars[bars.length - 1].time;
+      let from;
+      if (days === "all") from = bars[0].time;
+      else if (days === "ytd") from = Date.UTC(new Date(last * 1000).getUTCFullYear(), 0, 1) / 1000;
+      else from = last - +days * 86400;
+      let a = timeToIndex(bars, Math.max(from, bars[0].time), sec);
+      if (from < bars[0].time) toast(`Đang có dữ liệu từ ${this.timeLabel(bars[0].time)}: hiện tất cả nến đã tải`);
+      a = Math.max(0, Math.floor(a));
+      this.chart.timeScale().setVisibleLogicalRange({ from: a, to: bars.length - 1 + 5 });
+    },
+
+    /** TradingView's line over the chart: symbol, timeframe, and the bar under the cursor (or the last one). */
+    updateLegend() {
+      const el = $("tvLegend");
+      if (!el || !document.body.classList.contains("chart-full")) return;
+      const bars = this.viewBars();
+      const b = this.legendBar || bars[bars.length - 1];
+      if (!b) { el.innerHTML = ""; return; }
+      const d = this.digits, chg = b.close - b.open, pct = b.open ? (chg / b.open) * 100 : 0, cls = chg >= 0 ? "up" : "dn";
+      el.innerHTML = `<b>${esc($("chartSymbol").textContent)} · ${esc(this.interval)}</b>`
+        + `<span>O <span class="${cls}">${fmt(b.open, d)}</span></span><span>H <span class="${cls}">${fmt(b.high, d)}</span></span>`
+        + `<span>L <span class="${cls}">${fmt(b.low, d)}</span></span><span>C <span class="${cls}">${fmt(b.close, d)}</span></span>`
+        + `<span class="${cls}">${chg >= 0 ? "+" : "−"}${fmt(Math.abs(chg), d)} (${chg >= 0 ? "+" : "−"}${Math.abs(pct).toFixed(2)}%)</span>`;
+    },
+
+    updateClock() {
+      const el = $("tvClock");
+      if (!el) return;
+      const now = new Date(), off = -now.getTimezoneOffset() / 60, p = (n) => String(n).padStart(2, "0");
+      el.textContent = `${p(now.getHours())}:${p(now.getMinutes())}:${p(now.getSeconds())} UTC${off >= 0 ? "+" : "−"}${Math.abs(off)}`;
     },
 
     /** "Báo khi giá phá High/Low": the newest candle crossed PDH / PDL / PWH… (once per level, live only). */

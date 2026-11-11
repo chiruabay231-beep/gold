@@ -172,6 +172,7 @@
             <div class="charts" id="charts">
             <div class="chart-wrap" id="chartWrap">
               <div id="chart"></div>
+              <div class="tv-legend" id="tvLegend"></div>
               <div class="quick-trade" id="ticket" hidden>
                 <div class="qt-row">
                 <button class="qt sell" id="sellBtn" type="button"><b id="bidText">—</b><span>BÁN</span></button>
@@ -223,6 +224,7 @@
             </div>
           </div>
           <div class="chart-grip" id="chartGrip" title="Kéo lên / xuống để đổi chiều cao chart (bấm đúp: vừa màn hình)"><span></span></div>
+          <div class="range-bar" id="rangeBar"></div>
           <div class="replay-bar" id="replayBar" hidden></div>
           <p class="muted small chart-note" id="chartNote"></p>
 
@@ -243,6 +245,8 @@
       </div>
 
       <!-- Open trades (owner) -->
+      <nav class="side-rail" id="sideRail" aria-label="Mục"></nav>
+
       <div class="tab" data-tab="trade" hidden>
         <div class="panel">
           <h3>Tài khoản</h3>
