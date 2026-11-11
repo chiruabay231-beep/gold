@@ -766,6 +766,22 @@ public enum KillzonePivots {
         return (from..<c.count).first { isHigh ? c[$0].high > price : c[$0].low < price }
     }
 
+    /// `other` laid on `main`'s bars: one bar per main bar, at the same time, so two charts scrolled by bar
+    /// number show the same candles. A main bar the other market has no bar for gets a flat bar at its last
+    /// close (at the first open before it starts); other bars with no main bar are left out.
+    public static func aligned(_ other: [Candle], to main: [Candle]) -> [Candle] {
+        guard let first = other.first else { return [] }
+        let byTime = Dictionary(other.map { ($0.time, $0) }, uniquingKeysWith: { _, new in new })
+        var last: Double = first.open
+        return main.map { bar in
+            if let o = byTime[bar.time] {
+                last = o.close
+                return o
+            }
+            return Candle(time: bar.time, open: last, high: last, low: last, close: last)
+        }
+    }
+
     /// SMT divergence: two swing highs (or two swing lows) in a row, on the same stretch of candles in
     /// `a` (the chart) and `b` (the comparison market, matched on time), where one market's second high is
     /// higher and the other's is lower (lows: one lower, one higher).

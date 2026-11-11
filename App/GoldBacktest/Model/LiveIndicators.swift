@@ -62,6 +62,21 @@ final class LiveFrameCache {
         return ema
     }
 
+    private var alignKey = ""
+    private var alignedBars: [Candle] = []
+
+    /// The comparison market on the main chart's bars (KillzonePivots.aligned), rebuilt when either changes.
+    func aligned(_ other: [Candle], to main: [Candle]) -> [Candle] {
+        let key = "\(main.count)|\(main.first?.time.timeIntervalSince1970 ?? 0)|\(main.last?.time.timeIntervalSince1970 ?? 0)|"
+            + "\(other.count)|\(other.first?.time.timeIntervalSince1970 ?? 0)|\(other.last?.time.timeIntervalSince1970 ?? 0)|"
+            + "\(other.last?.high ?? 0)|\(other.last?.low ?? 0)|\(other.last?.close ?? 0)"
+        if key != alignKey {
+            alignKey = key
+            alignedBars = KillzonePivots.aligned(other, to: main)
+        }
+        return alignedBars
+    }
+
     private var sharkKey = ""
     private var shark = SharkFlow.Output()
 

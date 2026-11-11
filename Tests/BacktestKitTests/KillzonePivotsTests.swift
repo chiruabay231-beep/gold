@@ -136,6 +136,18 @@ final class KillzonePivotsTests: XCTestCase {
                                                     config: KillzonePivots.Config()).isEmpty)
     }
 
+    func testAlignedComparisonBars() {
+        let t0 = Date(timeIntervalSince1970: 1_790_000_000)
+        let main = (0..<5).map { Candle(time: t0.addingTimeInterval(Double($0) * 60), open: 1, high: 2, low: 0, close: 1) }
+        // Silver starts a bar late, misses bar 3, and has a bar gold does not.
+        let other: [Candle] = [1.0, 2, 4, 9].map { k in
+            Candle(time: t0.addingTimeInterval(k * 60), open: k * 10, high: k * 10 + 1, low: k * 10 - 1, close: k * 10 + 0.5)
+        }
+        let aligned = KillzonePivots.aligned(other, to: main)
+        XCTAssertEqual(aligned.map(\.time), main.map(\.time))
+        XCTAssertEqual(aligned.map(\.high), [10, 11, 21, 20.5, 41])
+    }
+
     func testSMTSettingsMigrate() throws {
         // Settings saved before SMT v2 (3-bar swings, 10 kept) load with the new defaults.
         var old = KillzonePivots.Config()

@@ -873,10 +873,21 @@ struct LiveView: View {
     }
 
     private var comparisonPanel: some View {
-        let candles = comparisonChartCandles
-        let layer = comparisonCache.layer(candles: candles, barInterval: market.interval.seconds, settings: killzoneSettings,
-                                          enabled: showKillzonePivots, comparison: chartCandles,
+        // Bar for bar with the main chart (same times), so both scroll together candle for candle.
+        let candles = comparisonChartCandles.isEmpty ? [] : frameCache.aligned(comparisonChartCandles, to: chartCandles)
+        var layer = comparisonCache.layer(candles: candles, barInterval: market.interval.seconds, settings: killzoneSettings,
+                                          enabled: showKillzonePivots,
                                           focusIndex: viewport.rightOffset > 1 ? viewport.range(total: candles.count).upperBound - 1 : nil)
+        // The main chart's SMT, at this market's own two highs (lows) on the same candles.
+        if showKillzonePivots {
+            let settings = killzoneSettings
+            for div in killzoneLayer.output.smt where candles.indices.contains(div.otherStart) && candles.indices.contains(div.otherEnd) {
+                layer.segments.append(ChartSegment(start: Double(div.otherStart), end: Double(div.otherEnd), price: div.otherStartPrice,
+                                                   color: (div.bullish ? settings.smtBullColor : settings.smtBearColor).color,
+                                                   width: 1.4 * CGFloat(settings.lineScale), label: div.bullish ? "SMT tăng" : "SMT giảm",
+                                                   endPrice: div.otherEndPrice))
+            }
+        }
         let name = market.comparisonSymbol.map { Self.displayName($0) } ?? "—"
         return ZStack(alignment: .topTrailing) {
             if candles.count > 2 {
