@@ -970,7 +970,7 @@
   /** Shark bubbles like the app: a big buyer under its candle, a big seller above it. */
   /** Shark supply / demand: a band from the zone's first bar to the right (`labels` false, under the candles),
    *  or its "CẦU 4012.50 – 4015.00 · 12%" at the right (`labels` true, over them). */
-  function drawZones(g, zones, X, Y, w, up, down, digits, bg = "rgba(21,28,42,.88)", labels = false, avoid = []) {
+  function drawZones(g, zones, X, Y, w, up, down, digits, bg = "rgba(21,28,42,.88)", labels = false, avoid = [], fill = 0.13) {
     if (!zones || !zones.length) return;
     const placed = [];
     const x0 = X(0), x1 = X(1), half = x0 != null && x1 != null ? Math.max(0.5, (x1 - x0) / 2) : 2;
@@ -999,7 +999,7 @@
         g.fillText(text, right - 5, ym + 0.5);
         return;
       }
-      g.globalAlpha = 0.13; g.fillStyle = color;
+      g.globalAlpha = fill; g.fillStyle = color;
       g.fillRect(left, yt, w - left, Math.max(2, yb - yt));
       g.globalAlpha = 0.6; g.strokeStyle = color; g.lineWidth = 0.8; g.setLineDash([4, 3]);
       [yt, yb].forEach((y) => { g.beginPath(); g.moveTo(left, Math.round(y) + 0.5); g.lineTo(w, Math.round(y) + 0.5); g.stroke(); });
@@ -1008,7 +1008,7 @@
     g.restore();
   }
 
-  function drawSharks(g, list, bars, X, Y, w, up, down) {
+  function drawSharks(g, list, bars, X, Y, w, up, down, fill = 0.35) {
     if (!list || !list.length) return;
     g.save();
     g.textAlign = "center"; g.textBaseline = "middle";
@@ -1021,7 +1021,7 @@
       const y = s.buying ? yy + r + 3 : yy - r - 3;
       const color = s.buying ? up : down;
       g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2);
-      g.fillStyle = color + "59"; g.fill();
+      g.fillStyle = color + Math.round(Math.max(0, Math.min(1, fill)) * 255).toString(16).padStart(2, "0"); g.fill();
       g.lineWidth = 1; g.strokeStyle = color; g.stroke();
       if (r >= 9) { g.font = `${Math.round(r)}px system-ui, sans-serif`; g.fillText("🦈", x, y + 1); }
     });

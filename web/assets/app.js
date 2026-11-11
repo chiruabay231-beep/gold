@@ -3455,11 +3455,14 @@
       sheet.open(`<h3>Chỉ báo</h3>
         <div class="toggles">${IND.filter(([k]) => (k === "flow" || k === "zones" ? flowAllowed : allowed)).map(([k, n]) => `<label class="toggle"><span>${n}</span>
           <span class="switch"><input type="checkbox" data-k="${k}" ${showInd[k] ? "checked" : ""}><span></span></span></label>`).join("")}</div>
+        ${flowAllowed ? '<button class="btn btn-ghost wide" id="sharkMore">⚙ Dòng tiền cá mập (màu bong bóng, vùng cung / cầu)</button>' : ""}
         ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button><button class="btn btn-ghost wide" id="smcMore">⚙ Macro (giờ biến động mạnh)</button><button class="btn btn-ghost wide" id="liqMore">⚙ Vùng thanh khoản (mạnh / vừa)</button><button class="btn btn-ghost wide" id="planMore">⚙ Kế hoạch giao dịch (trend, breakout, vùng H1/H4, tín hiệu)</button>' : ""}
         <h4>Chỉ báo kỹ thuật</h4>
         <div class="list" id="studyList"></div>
         <select id="addStudy" class="add-study"><option value="">＋ Thêm chỉ báo…</option>${Object.entries(window.TA ? window.TA.STUDIES : {}).map(([k, d]) => `<option value="${k}">${esc(d.name)}</option>`).join("")}</select>
         <p class="muted small">Giờ theo New York như bản TradingView. Chuột phải (hoặc giữ lâu) trên biểu đồ để mở menu.</p>`, (el) => {
+        const sharkB = el.querySelector("#sharkMore");
+        if (sharkB) sharkB.onclick = () => { sheet.close(); this.sharkSettingsSheet(); };
         const more = el.querySelector("#ictMore");
         if (more) more.onclick = () => { sheet.close(); this.ictSettingsSheet(); };
         const smcB = el.querySelector("#smcMore");
@@ -7553,8 +7556,9 @@
                 if (term.plan && window.PLAN) window.PLAN.drawPanel(context, term.plan, term.planCfg, mediaSize.width, mediaSize.height);
                 if (!term.sharks) return;
                 const ts = term.chart.timeScale();
+                const sc = term.sharkColors();
                 window.ICT.drawSharks(context, term.sharks, term.viewBars(), (i) => ts.logicalToCoordinate(i), (v) => term.series.priceToCoordinate(v),
-                  mediaSize.width, (term.chartStyle.up || "#14b88a").slice(0, 7), (term.chartStyle.down || "#f0455a").slice(0, 7));
+                  mediaSize.width, sc.buy, sc.sell, sc.bubble);
               }),
             }),
           }, {
@@ -8222,9 +8226,51 @@
       const ts = this.chart.timeScale();
       // Heights of the trade labels at the right, for the names to keep clear of.
       const avoid = labels ? this.tradeLines().map((w) => this.series.priceToCoordinate(w.price)).filter((y) => y != null) : [];
+      const sc = this.sharkColors();
       window.ICT.drawZones(g, this.sharkZones, (i) => ts.logicalToCoordinate(i), (v) => this.series.priceToCoordinate(v), width,
-        (this.chartStyle.up || "#14b88a").slice(0, 7), (this.chartStyle.down || "#f0455a").slice(0, 7), this.digits,
-        document.documentElement.dataset.theme === "light" ? "rgba(255,255,255,.9)" : "rgba(21,28,42,.88)", labels, avoid);
+        sc.demand, sc.supply, this.digits,
+        document.documentElement.dataset.theme === "light" ? "rgba(255,255,255,.9)" : "rgba(21,28,42,.88)", labels, avoid, sc.zone);
+    },
+
+    /** "Dòng tiền cá mập" colours: the candles' own by default, or the ones picked in its settings. */
+    sharkDefaults() {
+      return { follow: true, buy: "#14b88a", sell: "#f0455a", demand: "#14b88a", supply: "#f0455a", bubbleOpacity: 35, zoneOpacity: 13 };
+    },
+    sharkCfgGet() {
+      if (!this.sharkCfg) {
+        try { this.sharkCfg = Object.assign(this.sharkDefaults(), JSON.parse(store.get("aurum.sharkcfg") || "{}")); } catch { this.sharkCfg = this.sharkDefaults(); }
+      }
+      return this.sharkCfg;
+    },
+    sharkColors() {
+      const c = this.sharkCfgGet(), st = this.chartStyle || {};
+      const up = (st.up || "#14b88a").slice(0, 7), down = (st.down || "#f0455a").slice(0, 7);
+      const pct = (v, d) => Math.max(0, Math.min(100, isFinite(+v) ? +v : d)) / 100;
+      return c.follow
+        ? { buy: up, sell: down, demand: up, supply: down, bubble: pct(c.bubbleOpacity, 35), zone: pct(c.zoneOpacity, 13) }
+        : { buy: c.buy.slice(0, 7), sell: c.sell.slice(0, 7), demand: c.demand.slice(0, 7), supply: c.supply.slice(0, 7), bubble: pct(c.bubbleOpacity, 35), zone: pct(c.zoneOpacity, 13) };
+    },
+
+    sharkSettingsSheet() {
+      sheet.close();
+      const cfg = this.sharkCfgGet();
+      const render = () => {
+        const { tog, color, numf, head, note } = fieldKit(cfg);
+        return head("Màu") + tog("follow", "Theo màu nến (tắt để chọn màu riêng bên dưới)")
+          + color("buy", "Bong bóng cá mập MUA 🦈") + color("sell", "Bong bóng cá mập BÁN 🦈")
+          + color("demand", "Vùng CẦU (chờ mua)") + color("supply", "Vùng CUNG (chờ bán)")
+          + head("Độ đậm") + numf("bubbleOpacity", "Nền bong bóng (%)") + numf("zoneOpacity", "Nền vùng cung / cầu (%)")
+          + note("Bong bóng: lệnh lớn bất thường (cá mập) — dưới nến là mua, trên nến là bán. Vùng CẦU / CUNG: nơi cá mập đã mua / bán mạnh, chờ giá quay lại để vào lệnh.");
+      };
+      const open = () => this.openPanel("Dòng tiền cá mập", [["style", "Định dạng"]], render, {
+        root: cfg,
+        onChange: () => { store.set("aurum.sharkcfg", JSON.stringify(cfg)); this.redraw(); },
+        onReset: () => {
+          if (!confirm("Đặt lại màu dòng tiền cá mập về mặc định?")) return;
+          Object.assign(cfg, this.sharkDefaults()); store.set("aurum.sharkcfg", JSON.stringify(cfg)); this.redraw(); open();
+        },
+      });
+      open();
     },
 
     /** The strongest demand under the price and supply above it: where to look for an entry. */
