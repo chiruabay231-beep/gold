@@ -30,6 +30,8 @@ struct KillzonePivotsSettings: Codable, Hashable {
     var weekLinesColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
     var monthLinesColor = RGBAColor(red: 0.612, green: 0.153, blue: 0.69)
     var periodStyle = LineStyle.solid
+    /// Monday's first FVG after 09:30 (VN).
+    var weekFVGColor = RGBAColor(red: 0.161, green: 0.384, blue: 1.0)
     var periodWidth = 1.0
     var labelColor = RGBAColor(red: 0.471, green: 0.482, blue: 0.525)
     var macroColor = RGBAColor(red: 0.471, green: 0.482, blue: 0.525)
@@ -76,6 +78,7 @@ struct KillzonePivotsSettings: Codable, Hashable {
         weekLinesColor = try c.decodeIfPresent(RGBAColor.self, forKey: .weekLinesColor) ?? d.weekLinesColor
         monthLinesColor = try c.decodeIfPresent(RGBAColor.self, forKey: .monthLinesColor) ?? d.monthLinesColor
         periodStyle = try c.decodeIfPresent(LineStyle.self, forKey: .periodStyle) ?? d.periodStyle
+        weekFVGColor = try c.decodeIfPresent(RGBAColor.self, forKey: .weekFVGColor) ?? d.weekFVGColor
         periodWidth = try c.decodeIfPresent(Double.self, forKey: .periodWidth) ?? d.periodWidth
         labelColor = try c.decodeIfPresent(RGBAColor.self, forKey: .labelColor) ?? d.labelColor
         macroColor = try c.decodeIfPresent(RGBAColor.self, forKey: .macroColor) ?? d.macroColor
@@ -168,6 +171,20 @@ struct KillzonePivotsLayer {
                                              width: scale, dash: gap.confluence ? [5, 4] : [1.5, 3],
                                              label: "FVG", centerLabel: true))
             }
+        }
+        for gap in output.weekFVGs {
+            // A band to the end of the week (the right edge while it runs), its 50% line and its name.
+            let color = settings.weekFVGColor.color
+            let last = gap.end ?? max(gap.start, candles.count - 1)
+            boxes.append(SessionBox(id: "wfvg-\(gap.start)", range: gap.start...max(gap.start, last), high: gap.top, low: gap.bottom,
+                                    label: "", color: color, style: .filled, fillOpacity: 0.12))
+            let start = Double(gap.start) - 0.5
+            let end = gap.end.map { Double($0) + 0.5 }
+            segments.append(ChartSegment(start: start, end: end, price: gap.top, color: color, width: scale,
+                                         label: "FVG T2 \(gap.bullish ? "tăng" : "giảm")"))
+            segments.append(ChartSegment(start: start, end: end, price: gap.bottom, color: color, width: scale))
+            segments.append(ChartSegment(start: start, end: end, price: (gap.top + gap.bottom) / 2, color: color.opacity(0.7),
+                                         width: 0.8 * scale, dash: [4, 3]))
         }
         for gap in output.volumeImbalances {
             // VI: two thin dashed edges and the name in the middle, until a candle touches it.

@@ -46,6 +46,8 @@
       // Weekday names under (or over) each day, at its midnight or midday; weekends can be left out.
       dayOfWeek: false, dowPos: "bottom", dowAt: "midnight", dowHideWeekend: false,
       rangeTable: false, rangeAvg: 5,
+      // The first FVG of each Monday after 09:30 Vietnam time, carried to the end of that week.
+      weekFvg: true, weekFvgWeeks: 4, weekFvgColor: "#2962ff",
       macros: true, macroTfLimit: 15, macroTimeLabels: true, macroColor: "#787b86",
       macroList: [
         { on: true, name: "London 1", start: 2 + 33 / 60, end: 3 },
@@ -346,6 +348,32 @@
     return { start, high, low, hiI, loI };
   }
 
+  /** Each week's first fair value gap made on Monday after 09:30 Vietnam time (UTC+7): the three candles
+   *  of the gap from 09:30 on, all on that Monday. From its middle candle to the week's last bar (the right
+   *  edge for the running week). `touched`: a later candle of the week came back into it. Newest `weekFvgWeeks`. */
+  function mondayFvgs(c, cfg) {
+    const n = c.length, VN = 7 * 3600;
+    const vnDay = (t) => Math.floor((t + VN) / 86400);
+    const week = (t) => Math.floor((vnDay(t) + 3) / 7); // changes on Mondays (1970-01-01 was a Thursday)
+    const mondayAfter = (t) => { const d = vnDay(t); return (d + 4) % 7 === 1 && (t + VN) - d * 86400 >= 9.5 * 3600; };
+    const out = [], done = new Set();
+    for (let i = 2; i < n; i++) {
+      const wk = week(c[i].time);
+      if (done.has(wk)) continue;
+      if (!mondayAfter(c[i - 2].time) || vnDay(c[i].time) !== vnDay(c[i - 2].time)) continue;
+      const bull = c[i].low > c[i - 2].high, bear = c[i].high < c[i - 2].low;
+      if (!bull && !bear) continue;
+      done.add(wk);
+      let end = i;
+      while (end + 1 < n && week(c[end + 1].time) === wk) end++;
+      const top = bull ? c[i].low : c[i - 2].low, bottom = bull ? c[i - 2].high : c[i].high;
+      let touched = false;
+      for (let j = i + 1; j <= end && !touched; j++) if (c[j].low <= top && c[j].high >= bottom) touched = true;
+      out.push({ bull, top, bottom, start: i - 1, end: end === n - 1 ? null : end, touched });
+    }
+    return out.slice(-Math.max(1, cfg.weekFvgWeeks || 1));
+  }
+
   const DWM = {
     D: { id: "day", size: 86400, open: "DO", hi: "PDH", lo: "PDL", mid: "PDM", name: "ngày" },
     W: { id: "week", size: 7 * 86400, open: "WO", hi: "PWH", lo: "PWL", mid: "PWM", name: "tuần" },
@@ -396,7 +424,7 @@
   /* ---------- everything ---------- */
 
   function compute(c, sec, cfg, show) {
-    const out = { boxes: [], levels: [], stamps: [], macros: [], fvgs: [], vis: [], breaks: [], sweeps: [], days: [], ranges: [], hidden: false };
+    const out = { boxes: [], levels: [], stamps: [], macros: [], fvgs: [], vis: [], breaks: [], sweeps: [], days: [], ranges: [], weekFvgs: [], hidden: false };
     if (c.length < 3) return out;
     const n = c.length;
     // Second charts count as the smallest minute setting.
@@ -410,6 +438,7 @@
     if (show.daily && cfg.daily && sec < 86400) out.levels.push(...dailyLevels(c, ck, cfg));
     if (!show.killzones) return out;
     periodLevels(c, ck, sec, cfg, out);
+    if (cfg.weekFvg && sec < 86400) out.weekFvgs = mondayFvgs(c, cfg);
     if (sec > cfg.tfLimit * 60) { out.hidden = true; return out; }
     const firstDay = ck.day[n - 1] - Math.max(cfg.maxDays, 1) + 1;
     const cutoffs = cfg.cutoff ? cutoffIndexes(ck, cfg.cutoffHour) : [];
@@ -640,6 +669,19 @@
       if (f.confluence) { g.fillStyle = alpha(cfg.fvgZone, 0.15); g.fillRect(l, yt, r - l, yb - yt); }
       line(l, r, yt, color, 1.2); line(l, r, yb, color, 1.2);
       if (cfg.fvgMid) line(l, r, (yt + yb) / 2, f.confluence ? cfg.fvgZoneMid : color, 0.8, [3, 3]);
+    });
+    // Monday's first FVG after 09:30 (VN): a band to the end of its week, its middle and its name.
+    (o.weekFvgs || []).forEach((f) => {
+      const a = X(f.start), e = f.end == null ? w : X(f.end) + half, yt = Y(f.top), yb = Y(f.bottom);
+      if (a == null || e == null || yt == null || yb == null) return;
+      const l = a - half;
+      if (e < 0 || l > w) return;
+      const c7 = (cfg.weekFvgColor || "#2962ff").slice(0, 7);
+      g.fillStyle = alpha(c7, 0.12); g.fillRect(l, yt, e - l, yb - yt);
+      line(l, e, yt, alpha(c7, 0.9), 1); line(l, e, yb, alpha(c7, 0.9), 1);
+      line(l, e, (yt + yb) / 2, alpha(c7, 0.7), 0.8, [4, 3]);
+      g.fillStyle = c7; g.textAlign = "left";
+      g.fillText(`FVG T2 ${f.bull ? "tăng" : "giảm"}`, Math.max(l, 0) + 3, yt - 2);
     });
     o.vis.forEach((f) => {
       const a = X(f.start), e = X(f.end);

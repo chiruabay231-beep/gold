@@ -143,6 +143,31 @@ final class KillzonePivotsTests: XCTestCase {
                                                     config: KillzonePivots.Config()).isEmpty)
     }
 
+    func testMondayFirstFVGAfter0930Vietnam() {
+        // Monday 2 Nov 2026 09:00 VN = 02:00 UTC, 5-minute bars for a week.
+        let t0 = Date(timeIntervalSince1970: 1_793_584_800)
+        var c = (0..<(6 * 288)).map { i in
+            Candle(time: t0.addingTimeInterval(Double(i) * 300), open: 100, high: 100.5, low: 99.5, close: 100)
+        }
+        // A gap at 09:10 (before 09:30): ignored.
+        c[2].low = 101; c[2].high = 102
+        // The first one after 09:30: bars 7-9 (09:35-09:45), bullish 100.5 → 101.2.
+        c[9].low = 101.2; c[9].high = 102
+        // A later one the same Monday: not taken.
+        c[20].low = 103; c[20].high = 104
+        // Price comes back into it on Wednesday.
+        c[600].low = 100.8
+        let gaps = KillzonePivots.mondayFVGs(c, weeks: 4)
+        XCTAssertEqual(gaps.count, 1)
+        XCTAssertEqual(gaps.first?.bullish, true)
+        XCTAssertEqual(gaps.first?.start, 8)
+        XCTAssertEqual(gaps.first?.bottom, 100.5)
+        XCTAssertEqual(gaps.first?.top, 101.2)
+        XCTAssertEqual(gaps.first?.touched, true)
+        // The week runs to the last bar of the data: carried to the right edge.
+        XCTAssertNil(gaps.first?.end)
+    }
+
     func testAlignedComparisonBars() {
         let t0 = Date(timeIntervalSince1970: 1_790_000_000)
         let main = (0..<5).map { Candle(time: t0.addingTimeInterval(Double($0) * 60), open: 1, high: 2, low: 0, close: 1) }

@@ -186,6 +186,11 @@ public enum KillzonePivots {
             Macro(name: "Last Hour", start: 15.25, end: 15.75),
         ]
 
+        /// Each week's first FVG made on Monday after 09:30 Vietnam time, carried to the end of the week.
+        public var showWeekFVG = true
+        /// Newest weeks shown.
+        public var weekFVGWeeks = 4
+
         /// Fair value gaps (3-candle imbalances): two edge lines and a 50% line,
         /// running from the gap until a candle touches it (or to the last bar).
         public var showFVG = true
@@ -305,6 +310,8 @@ public enum KillzonePivots {
             macroTimeLabels = try c.decodeIfPresent(Bool.self, forKey: .macroTimeLabels) ?? d.macroTimeLabels
             macros = try c.decodeIfPresent([Macro].self, forKey: .macros) ?? d.macros
             showFVG = try c.decodeIfPresent(Bool.self, forKey: .showFVG) ?? d.showFVG
+            showWeekFVG = try c.decodeIfPresent(Bool.self, forKey: .showWeekFVG) ?? d.showWeekFVG
+            weekFVGWeeks = try c.decodeIfPresent(Int.self, forKey: .weekFVGWeeks) ?? d.weekFVGWeeks
             fvgFromMinutes = try c.decodeIfPresent(Double.self, forKey: .fvgFromMinutes) ?? d.fvgFromMinutes
             fvgToMinutes = try c.decodeIfPresent(Double.self, forKey: .fvgToMinutes) ?? d.fvgToMinutes
             fvgConfluence = try c.decodeIfPresent(Bool.self, forKey: .fvgConfluence) ?? d.fvgConfluence
@@ -370,6 +377,19 @@ public enum KillzonePivots {
     }
 
     public enum PeriodPart: Hashable, Sendable { case open, high, low, middle }
+
+    /// The first fair value gap of a week's Monday after 09:30 Vietnam time.
+    public struct WeekFVG: Hashable, Sendable {
+        public var bullish: Bool
+        public var top: Double
+        public var bottom: Double
+        /// The gap's middle candle.
+        public var start: Int
+        /// The week's last bar; nil while the week is running (to the right edge).
+        public var end: Int?
+        /// A later candle of the week came back into it.
+        public var touched: Bool
+    }
 
     /// Where a day / week / month starts.
     public struct Divider: Hashable, Sendable {
@@ -486,6 +506,8 @@ public enum KillzonePivots {
         public var dayLabels: [DayLabel] = []
         public var dividers: [Divider] = []
         public var periodBreaks: [PeriodBreak] = []
+        /// Monday's first FVG after 09:30 (VN) of the newest weeks.
+        public var weekFVGs: [WeekFVG] = []
         public var ranges: [RangeStat] = []
         /// True when the chart timeframe is above the limit and the killzones are not drawn.
         public var hiddenByTimeframe = false
@@ -518,6 +540,9 @@ public enum KillzonePivots {
         let zone = TimeZone(identifier: config.timeZoneID) ?? TimeZone(identifier: "America/New_York")!
         let clock = ICT.NewYorkClock(time: candles.map(\.time), zone: zone)
         periodLevels(candles, clock: clock, zone: zone, barInterval: barInterval, config: config, into: &output)
+        if config.showWeekFVG, barInterval < 86_400 {
+            output.weekFVGs = mondayFVGs(candles, weeks: config.weekFVGWeeks)
+        }
         guard barInterval <= config.timeframeLimitMinutes * 60 else {
             output.hiddenByTimeframe = true
             return output
@@ -634,6 +659,40 @@ public enum KillzonePivots {
         }
         output.sweeps = Array(output.sweeps.sorted { $0.index < $1.index }.suffix(max(config.sweepCount, 1)))
         return output
+    }
+
+    /// Each week's first FVG made on Monday after 09:30 Vietnam time (UTC+7): the gap's three candles from
+    /// 09:30 on, all on that Monday. Runs from its middle candle to the week's last bar. The newest `weeks`.
+    static func mondayFVGs(_ c: [Candle], weeks: Int) -> [WeekFVG] {
+        let n = c.count
+        guard n > 2 else { return [] }
+        let vn = 7.0 * 3600
+        func day(_ i: Int) -> Int { Int(floor((c[i].time.timeIntervalSince1970 + vn) / 86_400)) }
+        // Weeks from Monday (1970-01-01 was a Thursday).
+        func week(_ i: Int) -> Int { Int(floor(Double(day(i) + 3) / 7)) }
+        func mondayAfterOpen(_ i: Int) -> Bool {
+            let d = day(i)
+            let seconds = c[i].time.timeIntervalSince1970 + vn - Double(d) * 86_400
+            return (d + 4) % 7 == 1 && seconds >= 9.5 * 3600
+        }
+        var result: [WeekFVG] = []
+        var done = Set<Int>()
+        for i in 2..<n {
+            let wk = week(i)
+            guard !done.contains(wk), mondayAfterOpen(i - 2), day(i) == day(i - 2) else { continue }
+            let bullish = c[i].low > c[i - 2].high
+            let bearish = c[i].high < c[i - 2].low
+            guard bullish || bearish else { continue }
+            done.insert(wk)
+            var end = i
+            while end + 1 < n, week(end + 1) == wk { end += 1 }
+            let top = bullish ? c[i].low : c[i - 2].low
+            let bottom = bullish ? c[i - 2].high : c[i].high
+            let touched = end > i && (i + 1...end).contains { c[$0].low <= top && c[$0].high >= bottom }
+            result.append(WeekFVG(bullish: bullish, top: top, bottom: bottom, start: i - 1,
+                                  end: end == n - 1 ? nil : end, touched: touched))
+        }
+        return Array(result.suffix(max(weeks, 1)))
     }
 
     /// High/low of the period before the newest bar's one (`id` per bar) and the first bar of the current one.

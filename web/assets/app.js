@@ -6330,6 +6330,8 @@
             + `<div class="fr">${chk("dayOfWeek")}<span class="grow">Nhãn thứ trong tuần</span>${selI("dowPos", [["bottom", "Dưới"], ["top", "Trên"]])}${selI("dowAt", [["midnight", "Nửa đêm"], ["midday", "Giữa trưa"]])}</div>`
             + tog("dowHideWeekend", "Ẩn nhãn T7 / CN")
             + note("Open: giá mở ngày (DO) / tuần (WO) / tháng (MO) hiện tại. High/Low: đỉnh – đáy của ngày / tuần / tháng trước (PDH–PDL, PWH–PWL, PMH–PML). Midline: giữa của chúng (PDM, PWM, PMM). Divider: vạch dọc nơi mỗi ngày / tuần / tháng bắt đầu. Ngày tính theo múi giờ ở tab Hiển thị (ICT: 0h New York). Hiện ở mọi khung nhỏ hơn kỳ đó.")
+            + head("FVG đầu tuần (thứ 2 sau 9:30 VN)") + tog("weekFvg", "FVG đầu tiên của thứ 2 sau 9:30 sáng (giờ VN), kẻ tới hết tuần") + numf("weekFvgWeeks", "Số tuần gần nhất")
+            + note("Mỗi tuần lấy FVG đầu tiên hình thành trong ngày thứ 2 từ 9:30 sáng giờ Việt Nam (3 cây nến tạo FVG đều từ 9:30, cùng ngày thứ 2), theo khung đang xem; vùng kéo ngang tới hết tuần để xem giá phản ứng. Đường giữa là 50% của FVG.")
             + head("FVG & VI") + tog("fvg", "Hiện FVG") + tog("fvgStrong", "Chỉ FVG mạnh (lọc FVG yếu)") + numf("fvgDisplacement", "Nến tạo FVG ≥ × thân TB", 0.1)
             + tog("fvgConfluence", "Tô nền khi trùng FVG khung lớn") + tog("fvgMid", "Đường giữa 50%") + tog("fvgHideFilled", "Ẩn FVG đã bị chạm")
             + numf("gapKeep", "Chạm rồi bật ngược: giữ (phút)") + numf("fvgMinSize", "Lọc FVG nhỏ (× biên độ nến)", 0.1) + numf("fvgCount", "Giữ FVG gần nhất")
@@ -6353,6 +6355,7 @@
             + head("Đỉnh / đáy ngày") + color("dayHighColor", "Màu đỉnh ngày") + color("dayLowColor", "Màu đáy ngày") + sel("dailyStyle", "Nét", styles) + sel("dailyLabelAlign", "Vị trí chữ đỉnh/đáy thứ", [["left", "Trái"], ["center", "Giữa"], ["right", "Phải"]])
             + head("FVG & VI") + color("fvgBull", "FVG tăng") + color("fvgBear", "FVG giảm") + color("fvgZone", "Nền FVG trùng khung") + color("fvgZoneMid", "Đường giữa FVG trùng khung") + color("viColor", "VI")
             + head("SMT") + color("smtBull", "SMT tăng") + color("smtBear", "SMT giảm")
+            + head("FVG đầu tuần") + color("weekFvgColor", "Màu vùng FVG thứ 2")
             + head("Khác") + color("mssBull", "MSS tăng") + color("mssBear", "MSS giảm") + color("sweepColor", "Quét thanh khoản") + color("macroColor", "Macros")
             + head("DM") + color("dmLineColor", "Màu đường") + color("dmTextColor", "Màu chữ") + sel("dmStyle", "Nét", styles)
             + sel("dmWidth", "Độ dày", [[1, "1px"], [2, "2px"], [3, "3px"]]);

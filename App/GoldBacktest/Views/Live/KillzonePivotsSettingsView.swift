@@ -30,6 +30,7 @@ struct KillzonePivotsSettingsView: View {
                 presetsSection
                 general
                 killzones
+                weekFVGSection
                 fvgSection
                 structureSection
                 liquiditySection
@@ -219,6 +220,20 @@ struct KillzonePivotsSettingsView: View {
 
     static func timeframeName(_ minutes: Double) -> String {
         minutes >= 1440 ? "D1" : (minutes >= 60 ? "H\(Int(minutes / 60))" : "M\(Int(minutes))")
+    }
+
+    private var weekFVGSection: some View {
+        Section {
+            Toggle("FVG đầu tiên thứ 2 sau 9:30 (VN)", isOn: $settings.config.showWeekFVG)
+            if settings.config.showWeekFVG {
+                Stepper("\(settings.config.weekFVGWeeks) tuần gần nhất", value: $settings.config.weekFVGWeeks, in: 1...12)
+                colorRow("Màu", color: $settings.weekFVGColor)
+            }
+        } header: {
+            Text("FVG đầu tuần")
+        } footer: {
+            Text("Mỗi tuần lấy FVG đầu tiên hình thành trong ngày thứ 2 từ 9:30 sáng giờ Việt Nam (3 cây nến tạo FVG đều từ 9:30, cùng ngày thứ 2), theo khung đang xem; vùng kéo ngang tới hết tuần để xem giá phản ứng. Đường đứt ở giữa là 50% của FVG.")
+        }
     }
 
     private var fvgSection: some View {
