@@ -786,14 +786,15 @@ public enum KillzonePivots {
     /// `a` (the chart) and `b` (the comparison market, matched on time), where one market's second high is
     /// higher and the other's is lower (lows: one lower, one higher).
     ///  - Swings are `smtSwingLength` bars each side, in each market on its own; the other market's swing
-    ///    must be within 2 bars of ours.
+    ///    must be within `smtSwingLength` bars of ours (the nearest one).
     ///  - The two swings are the top (bottom) of the stretch between them in both markets, so a line never
     ///    crosses a bigger high, and they are at most `smtLookback` bars apart.
     ///  - Two SMTs that share a swing (a chain) keep only the newer.
     /// With `smtInverse` (DXY) our highs pair with its lows. Confirmed `smtSwingLength` bars later.
     public static func smtDivergences(_ a: [Candle], _ b: [Candle], config: Config) -> [SMTDivergence] {
         let length = max(config.smtSwingLength, 1)
-        let near = 2
+        // The other market's swing may come a few bars before or after ours (up to one swing length).
+        let near = length
         let n = a.count
         guard n > length * 2 + 2, !b.isEmpty else { return [] }
         let other = Dictionary(b.map { ($0.time, $0) }, uniquingKeysWith: { _, new in new })

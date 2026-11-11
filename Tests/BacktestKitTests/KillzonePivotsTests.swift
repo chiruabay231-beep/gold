@@ -128,6 +128,13 @@ final class KillzonePivotsTests: XCTestCase {
         // Silver's high a bar later still pairs with gold's.
         let shifted = KillzonePivots.smtDivergences(gold, bars([11: 105, 21: 104]), config: KillzonePivots.Config())
         XCTAssertEqual(shifted.first?.otherEnd, 21)
+        // Lows a few bars apart (the user's drawing): gold 10 → 20 lower low, silver's lows 1 bar early and
+        // 3 bars late, the second higher: bullish SMT from silver's own lows.
+        let late = KillzonePivots.smtDivergences(bars([:], lows: [10: 95, 20: 93]), bars([:], lows: [9: 95, 23: 95.5]),
+                                                 config: KillzonePivots.Config())
+        XCTAssertEqual(late.first?.bullish, true)
+        XCTAssertEqual(late.first?.otherStart, 9)
+        XCTAssertEqual(late.first?.otherEnd, 23)
         // Silver made no high there: nothing to compare.
         XCTAssertTrue(KillzonePivots.smtDivergences(gold, bars([:]), config: KillzonePivots.Config()).isEmpty)
         // Two highs in a row only: 5→15 and 15→25 move the same way in both markets, and 5→25 is not compared

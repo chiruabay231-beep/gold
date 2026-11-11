@@ -826,7 +826,7 @@
    * SMT divergence: two swing highs (or two swing lows) in a row, on the same stretch of candles in both
    * markets, where one market's second high is higher and the other's is lower (lows: one lower, one higher).
    *  - A swing is `swing` bars each side, in each market on its own; the other market's swing must be within
-   *    `near` bars of ours (same candles, a bar or two apart at most).
+   *    `near` bars of ours (default: `swing` bars; the nearest one).
    *  - The two swings are the top (bottom) of the stretch between them in both markets, so a line never
    *    crosses a bigger high, and they are at most `lookback` bars apart.
    *  - Two SMTs that share a swing (a chain) keep only the newer.
@@ -834,7 +834,8 @@
    */
   function smt(a, b, opts = {}) {
     const L = Math.max(opts.swing || 5, 1), lookback = opts.lookback || 60, count = opts.count || 3, inverse = !!opts.inverse;
-    const near = opts.near != null ? opts.near : 2;
+    // The other market's swing may come a few bars before or after ours (up to one swing length).
+    const near = opts.near != null ? opts.near : L;
     const n = a.length;
     if (n <= L * 2 + 2 || !b.length) return [];
     const other = new Map(b.map((x) => [x.time, x]));
