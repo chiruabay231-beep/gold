@@ -956,3 +956,25 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .acct-row .btn-small + .btn-small { margin-left: 6px; }
 .acct-add { margin-top: 12px; }
 .acct-add summary { cursor: pointer; font-weight: 600; padding: 8px 0; color: var(--gold, #f2c14e); }
+
+/* Chart tab: the whole width of the window, thin edges */
+body.on-chart .dash { max-width: none; padding: 6px 6px 16px; gap: 6px; }
+body.on-chart .chart-panel { padding: 6px; }
+body.in-member .nav { padding-left: 12px; padding-right: 12px; }
+#fullBtn .fs-out { display: none; }
+body.chart-full #fullBtn .fs-in { display: none; }
+body.chart-full #fullBtn .fs-out { display: inline; }
+
+/* Full screen: only the chart panel, edge to edge (also on phones, where the browser cannot go full screen) */
+body.chart-full { overflow: hidden; }
+body.chart-full .nav, body.chart-full #dashError, body.chart-full #chartNote { display: none !important; }
+body.chart-full .dash { position: fixed; inset: 0; z-index: 30; max-width: none; padding: 0; background: var(--bg); overflow: hidden; }
+body.chart-full .chart-panel { border: 0; border-radius: 0; padding: 4px 6px 0; height: 100dvh; display: flex; flex-direction: column; }
+body.chart-full .chart-body { flex: 1 1 auto; min-height: 0; }
+body.chart-full .charts { height: 100%; }
+body.chart-full .chart-wrap { height: calc(100dvh - var(--fs-top, 70px) - var(--rb, 0px)); }
+body.chart-full .charts.col .chart-wrap { height: calc((100dvh - var(--fs-top, 70px) - var(--rb, 0px)) / 2 - 3px); }
+body.chart-full .charts.mtf { height: calc(100dvh - var(--fs-top, 70px) - var(--rb, 0px)); }
+@media (max-width: 600px) {
+  body.chart-full .charts.row .chart-wrap { height: calc((100dvh - var(--fs-top, 90px) - var(--rb, 0px)) / 2 - 3px); }
+}

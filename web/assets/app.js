@@ -1449,6 +1449,8 @@
       $("tabs").innerHTML = list.map(([k, name]) => `<button type="button" data-tab="${k}" class="${k === this.tab ? "on" : ""}">${name}</button>`).join("");
       $("tabs").querySelectorAll("button").forEach((b) => (b.onclick = () => this.setTab(b.dataset.tab)));
       document.querySelectorAll("#dashView .tab").forEach((el) => { el.hidden = el.dataset.tab !== this.tab; });
+      document.body.classList.toggle("on-chart", this.tab === "chart");
+      if (this.tab !== "chart" && document.body.classList.contains("chart-full")) this.setFull(false);
       this.renderFavBar();
     },
 
@@ -3408,6 +3410,23 @@
       $("indBtn").onclick = () => this.indicatorSheet();
       $("drawBtn").onclick = () => this.toggleRail();
       $("styleBtn").onclick = () => this.chartStyleSheet();
+      $("fullBtn").onclick = () => this.setFull(!document.body.classList.contains("chart-full"));
+      if (!this.fullKeys) {
+        this.fullKeys = true;
+        // F toggles full screen (not while typing); leaving the browser's full screen (Esc) leaves it too.
+        document.addEventListener("keydown", (e) => {
+          const t = e.target;
+          if (e.key !== "f" && e.key !== "F") return;
+          if (e.ctrlKey || e.metaKey || e.altKey || (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))) return;
+          if (this.tab !== "chart" || $("dashView").hidden) return;
+          e.preventDefault();
+          this.setFull(!document.body.classList.contains("chart-full"));
+        });
+        document.addEventListener("fullscreenchange", () => {
+          if (!document.fullscreenElement && document.body.classList.contains("chart-full") && this.fullNative) this.setFull(false);
+        });
+        window.addEventListener("resize", () => { if (document.body.classList.contains("chart-full")) this.fitFull(); });
+      }
       $("replayBtn").onclick = () => this.startReplayPick();
       $("chartSymbol").onclick = () => this.symbolSheet();
 
@@ -7059,6 +7078,37 @@
       this.redraw();
       // Indicator settings changed here reach the extra timeframes too (at most every 1.5 s).
       (this.panes || []).forEach((p) => p.analyseSoon());
+    },
+
+    /** Full screen: the chart panel alone over the whole window, and the browser's own full screen where it has
+     *  one (not iPhone Safari: there the panel still fills the page). */
+    setFull(on) {
+      document.body.classList.toggle("chart-full", on);
+      $("fullBtn").title = on ? "Thoát toàn màn hình (F / Esc)" : "Toàn màn hình (F, thoát: Esc)";
+      const el = document.documentElement;
+      if (on) {
+        this.fullNative = false;
+        if (el.requestFullscreen && !document.fullscreenElement) {
+          el.requestFullscreen({ navigationUI: "hide" }).then(() => { this.fullNative = true; }).catch(() => {});
+        }
+      } else if (document.fullscreenElement && document.exitFullscreen) {
+        this.fullNative = false;
+        document.exitFullscreen().catch(() => {});
+      }
+      this.fitFull();
+    },
+
+    /** The space above the charts (title, timeframes, flow lines) taken off their height. */
+    fitFull() {
+      requestAnimationFrame(() => {
+        const charts = $("charts");
+        if (document.body.classList.contains("chart-full") && charts) {
+          const top = Math.max(0, Math.round(charts.getBoundingClientRect().top)) + 6;
+          document.body.style.setProperty("--fs-top", top + "px");
+        }
+        this.redraw();
+        if (this.placeSplits) this.placeSplits();
+      });
     },
 
     /** "Báo khi giá phá High/Low": the newest candle crossed PDH / PDL / PWH… (once per level, live only). */
