@@ -747,13 +747,16 @@ struct LiveView: View {
 
     private var legend: some View {
         VStack(alignment: .leading, spacing: 3) {
-            // Layer names and the next red news; the chart tools sit in the timeframe row
-            // (one row less, like TradingView's toolbar), so the chart is taller.
-            VStack(alignment: .leading, spacing: 3) {
-                if legendExpanded { layerNames }
-                newsInfo.fixedSize()
+            // Layer names and the next red news on the left, the chart tools on their own at the right:
+            // the timeframes get a row of their own below.
+            HStack(alignment: .top, spacing: 6) {
+                VStack(alignment: .leading, spacing: 3) {
+                    if legendExpanded { layerNames }
+                    newsInfo.fixedSize()
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                chartTools
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             // Dòng tiền cá mập: two lines of words, the full width. For the first minute
             // after a red USD news the verdict of the news takes its place.
             TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -873,7 +876,6 @@ struct LiveView: View {
                                onToggleFavorite: toggleFavorite)
                     .presentationCompactAdaptation(.popover)
             }
-            chartTools
         }
     }
 
