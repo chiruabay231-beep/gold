@@ -1450,6 +1450,7 @@
       $("tabs").querySelectorAll("button").forEach((b) => (b.onclick = () => this.setTab(b.dataset.tab)));
       document.querySelectorAll("#dashView .tab").forEach((el) => { el.hidden = el.dataset.tab !== this.tab; });
       document.body.classList.toggle("on-chart", this.tab === "chart");
+      if (this.tab === "chart" && this.fitReady) requestAnimationFrame(() => this.fitChart());
       if (this.tab !== "chart" && document.body.classList.contains("chart-full")) this.setFull(false);
       this.renderFavBar();
     },
@@ -3411,6 +3412,7 @@
       $("drawBtn").onclick = () => this.toggleRail();
       $("styleBtn").onclick = () => this.chartStyleSheet();
       $("fullBtn").onclick = () => this.setFull(!document.body.classList.contains("chart-full"));
+      this.setupChartFit();
       if (!this.fullKeys) {
         this.fullKeys = true;
         // F toggles full screen (not while typing); leaving the browser's full screen (Esc) leaves it too.
@@ -7080,6 +7082,52 @@
       (this.panes || []).forEach((p) => p.analyseSoon());
     },
 
+    /** The charts reach down to the window's bottom (whatever the lines above them take), plus or minus what
+     *  the grip under them was dragged (saved). Refitted when the window or the lines above change size. */
+    setupChartFit() {
+      if (this.fitReady) return;
+      this.fitReady = true;
+      this.chartExtra = +(store.get("aurum.chartExtra") || 0) || 0;
+      const fit = () => this.fitChart();
+      window.addEventListener("resize", fit);
+      if (window.ResizeObserver) {
+        const ro = new ResizeObserver(fit);
+        document.querySelectorAll(".chart-top, .chart-sub").forEach((el) => ro.observe(el));
+      }
+      const grip = $("chartGrip");
+      grip.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        grip.setPointerCapture(e.pointerId);
+        grip.classList.add("drag");
+        const y0 = e.clientY, start = this.chartExtra;
+        const move = (ev) => { this.chartExtra = Math.round(start + ev.clientY - y0); this.fitChart(); };
+        const up = () => {
+          grip.classList.remove("drag");
+          grip.removeEventListener("pointermove", move);
+          grip.removeEventListener("pointerup", up);
+          grip.removeEventListener("pointercancel", up);
+          store.set("aurum.chartExtra", String(this.chartExtra));
+        };
+        grip.addEventListener("pointermove", move);
+        grip.addEventListener("pointerup", up);
+        grip.addEventListener("pointercancel", up);
+      });
+      grip.addEventListener("dblclick", () => { this.chartExtra = 0; store.set("aurum.chartExtra", "0"); this.fitChart(); });
+      fit();
+    },
+
+    fitChart() {
+      const charts = $("charts");
+      if (!charts || $("dashView").hidden || this.tab !== "chart") return;
+      // From the charts' top on the page (not the scrolled view) to the window's bottom, less the grip.
+      const top = charts.getBoundingClientRect().top + window.scrollY;
+      const avail = window.innerHeight - top - 16;
+      const h = Math.max(300, Math.round(avail + (this.chartExtra || 0)));
+      // Never less than 300 px: drags past that are not kept.
+      if (avail + (this.chartExtra || 0) < 300) this.chartExtra = 300 - avail;
+      document.documentElement.style.setProperty("--ch", h + "px");
+    },
+
     /** Full screen: the chart panel alone over the whole window, and the browser's own full screen where it has
      *  one (not iPhone Safari: there the panel still fills the page). */
     setFull(on) {
@@ -8001,7 +8049,19 @@
         flat: ["Giá đi ngang → chờ dòng tiền chọn hướng", "muted"],
       }[f.situation];
       box.hidden = false;
-      box.innerHTML = `<div>🦈 Dòng tiền <b class="${verdict[1]}">${verdict[0]} ${pct}</b>${f.shark ? ` <span class="${f.shark.buying ? "pos" : "neg"}">· cá mập ${f.shark.buying ? "MUA" : "BÁN"} ×${f.shark.ratio.toFixed(1)}</span>` : ""}</div><div class="${advice[1]}">${advice[0]}</div>${this.zonesLine(f)}`;
+      const min = store.get("aurum.flowMin") === "1";
+      box.classList.toggle("min", min);
+      if (min) {
+        // Folded: one line, the verdict and the zone prices; a tap opens it again.
+        const z = f.zones && showInd.zones ? f.zones : [];
+        const buy = z.find((x) => x.demand), sell = z.find((x) => !x.demand), d = this.digits;
+        box.innerHTML = `🦈 <b class="${verdict[1]}">${verdict[0]} ${pct}</b>${buy ? ` · <span class="pos">🟢 ${fmt(buy.bottom, d)}–${fmt(buy.top, d)}</span>` : ""}${sell ? ` · <span class="neg">🔴 ${fmt(sell.bottom, d)}–${fmt(sell.top, d)}</span>` : ""}<button type="button" class="flow-x" title="Mở rộng">▾</button>`;
+        box.onclick = () => { store.set("aurum.flowMin", "0"); this.updateFlow(); };
+        return;
+      }
+      box.onclick = null;
+      box.innerHTML = `<div>🦈 Dòng tiền <b class="${verdict[1]}">${verdict[0]} ${pct}</b>${f.shark ? ` <span class="${f.shark.buying ? "pos" : "neg"}">· cá mập ${f.shark.buying ? "MUA" : "BÁN"} ×${f.shark.ratio.toFixed(1)}</span>` : ""}<button type="button" class="flow-x" title="Thu gọn còn 1 dòng (chart cao hơn)">▴</button></div><div class="${advice[1]}">${advice[0]}</div>${this.zonesLine(f)}`;
+      box.querySelector(".flow-x").onclick = (e) => { e.stopPropagation(); store.set("aurum.flowMin", "1"); this.updateFlow(); };
     },
 
     /** Shark supply / demand: the bands under the candles, their names over them (`labels`). */

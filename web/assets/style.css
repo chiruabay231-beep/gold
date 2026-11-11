@@ -211,11 +211,19 @@ body.in-member .nav-links, body.in-member .nav-login { display: none; }
 .tf .tf-more option { color: var(--text); background: var(--card); }
 .icon-btn { font-style: italic; font-weight: 800; color: var(--gold); }
 .icon-btn.plain { font-style: normal; font-size: 13px; color: var(--text); }
-.flow { font-size: 12.5px; line-height: 1.45; padding: 2px 4px 6px; }
+.flow { position: relative; font-size: 12.5px; line-height: 1.45; padding: 2px 4px 6px; }
+.flow .flow-x { background: var(--chip); border: 0; color: var(--muted); border-radius: 6px; height: 18px; min-width: 22px; padding: 0 5px; margin-left: 6px; cursor: pointer; font: 600 11px/1 var(--font); vertical-align: 1px; }
+.flow .flow-x:hover { color: var(--text); }
+.flow.min { padding-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; cursor: pointer; }
+.chart-grip { height: 10px; margin: 2px 0 0; display: flex; align-items: center; justify-content: center; cursor: ns-resize; touch-action: none; border-radius: 6px; }
+.chart-grip span { width: 46px; height: 4px; border-radius: 3px; background: var(--line2); }
+.chart-grip:hover span, .chart-grip.drag span { background: var(--gold2); }
+body.chart-full .chart-grip { display: none; }
 .warn-t { color: #f5a524; }
 .chart-body { position: relative; display: flex; gap: 6px; }
 /* --rb: the replay bar's height while it shows, taken off the chart so the bar fits on the screen too */
-.chart-wrap { position: relative; flex: 1 1 auto; min-width: 0; height: max(360px, calc(100vh - 250px - var(--rb, 0px))); }
+/* --ch: height for the charts, from their top to the window's bottom plus what the grip under them added (set in app.js) */
+.chart-wrap { position: relative; flex: 1 1 auto; min-width: 0; height: max(300px, calc(var(--ch, calc(100vh - 250px)) - var(--rb, 0px))); }
 #chart { position: absolute; inset: 0; }
 .pill-pos { position: absolute; bottom: 38px; left: 8px; z-index: 3; display: flex; align-items: center; gap: 8px; background: var(--glass);
   border: 1px solid var(--line); border-radius: 999px; padding: 5px 6px 5px 12px; font-size: 12.5px; font-variant-numeric: tabular-nums; backdrop-filter: blur(6px); }
@@ -517,7 +525,7 @@ details.set .toggle:first-child { border-top: 1px solid var(--line); }
 .charts { display: flex; gap: 6px; flex: 1 1 auto; min-width: 0; }
 .charts.row { flex-direction: row; }
 .charts.col { flex-direction: column; }
-.charts.col .chart-wrap { height: max(220px, calc((100vh - 260px - var(--rb, 0px)) / 2)); }
+.charts.col .chart-wrap { height: max(200px, calc((var(--ch, calc(100vh - 250px)) - var(--rb, 0px)) / 2 - 3px)); }
 .chart-wrap.second[hidden] { display: none; }
 #chart2 { position: absolute; inset: 0; }
 .c2-head { position: absolute; top: 6px; left: 8px; z-index: 3; display: flex; align-items: baseline; gap: 8px; background: var(--glass); border-radius: 8px; padding: 3px 8px; font-size: 13px; }
@@ -560,7 +568,7 @@ body:not(.in-member) .nav-logout { display: none; }
 .charts .chart-wrap.focus { box-shadow: 0 0 0 1px var(--gold2); border-radius: 4px; }
 #chartWrap2 .draw-bar { top: auto; bottom: 36px; }
 /* one symbol on 2 / 3 / 4 timeframes: the main chart first, the extra ones beside it */
-.charts.mtf { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-auto-rows: 1fr; height: max(360px, calc(100vh - 250px - var(--rb, 0px))); }
+.charts.mtf { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-auto-rows: 1fr; height: max(300px, calc(var(--ch, calc(100vh - 250px)) - var(--rb, 0px))); }
 .charts.mtf .chart-wrap { height: auto; min-height: 0; }
 .charts.m3 #chartWrap { grid-row: span 2; }
 .charts.m3, .charts.m4 { grid-template-rows: 1fr 1fr; }
@@ -976,5 +984,6 @@ body.chart-full .chart-wrap { height: calc(100dvh - var(--fs-top, 70px) - var(--
 body.chart-full .charts.col .chart-wrap { height: calc((100dvh - var(--fs-top, 70px) - var(--rb, 0px)) / 2 - 3px); }
 body.chart-full .charts.mtf { height: calc(100dvh - var(--fs-top, 70px) - var(--rb, 0px)); }
 @media (max-width: 600px) {
+  .chart-grip { display: none; }
   body.chart-full .charts.row .chart-wrap { height: calc((100dvh - var(--fs-top, 90px) - var(--rb, 0px)) / 2 - 3px); }
 }
