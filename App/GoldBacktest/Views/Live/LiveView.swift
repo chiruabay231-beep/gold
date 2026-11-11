@@ -312,9 +312,11 @@ struct LiveView: View {
                             titleView: AnyView(fullScreenTitle),
                             onClose: { fullScreen = false }) {
                 VStack(spacing: 0) {
+                    ohlcLegend
                     if showTradeButtons && tradeBarOnTop { tradeBar }
                     charts
                     if showTradeButtons && !tradeBarOnTop { tradeBar }
+                    rangeBar
                 }
             }
             .sheet(isPresented: Binding(get: { orderTicket != nil && fullScreen }, set: { if !$0 { orderTicket = nil } })) {
@@ -343,6 +345,86 @@ struct LiveView: View {
             .presentationDragIndicator(.visible)
             // The chart stays usable: drag the order's lines while the sheet is open.
             .presentationBackgroundInteraction(.enabled(upThrough: Self.ticketFull))
+    }
+
+    /// TradingView's line over the chart: O H L C and the change of the bar under the crosshair (or the last one).
+    private var ohlcLegend: some View {
+        let candles = chartCandles
+        let bar = linkedCrosshairTime.flatMap { t in candles.last(where: { $0.time <= t }) } ?? candles.last
+        let d = currentDecimals
+        return HStack(spacing: 8) {
+            if let bar {
+                let change = bar.close - bar.open
+                let pct = bar.open != 0 ? change / bar.open * 100 : 0
+                let color = change >= 0 ? theme.up : theme.down
+                ForEach(Array(zip(["O", "H", "L", "C"], [bar.open, bar.high, bar.low, bar.close]).enumerated()), id: \.offset) { item in
+                    HStack(spacing: 2) {
+                        Text(item.element.0).foregroundColor(theme.text)
+                        Text(CandleChart.format(item.element.1, d)).foregroundColor(color)
+                    }
+                }
+                Text(String(format: "%+.\(d)f (%+.2f%%)", change, pct)).foregroundColor(color)
+            }
+            Spacer(minLength: 0)
+        }
+        .font(.system(size: 11.5, weight: .medium).monospacedDigit())
+        .lineLimit(1)
+        .minimumScaleFactor(0.75)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 4)
+    }
+
+    /// Under the full-screen chart: how far back to show (of the loaded bars), and the clock.
+    private var rangeBar: some View {
+        let ranges: [(String, Double?)] = [("1N", 1), ("5N", 5), ("1T", 30), ("3T", 91), ("6T", 182), ("1Năm", 365), ("Tất cả", nil)]
+        return HStack(spacing: 2) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 2) {
+                    ForEach(ranges, id: \.0) { range in
+                        Button {
+                            showRange(days: range.1)
+                        } label: {
+                            Text(range.0)
+                                .font(.system(size: 12.5, weight: .medium))
+                                .foregroundColor(theme.text)
+                                .padding(.horizontal, 8)
+                                .frame(height: 26)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(Self.clockText(context.date))
+                    .font(.system(size: 11.5).monospacedDigit())
+                    .foregroundColor(theme.text)
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 30)
+        .overlay(alignment: .top) { Rectangle().fill(theme.grid).frame(height: 1) }
+    }
+
+    /// The last `days` days of the loaded bars on screen (all of them for nil).
+    private func showRange(days: Double?) {
+        let candles = chartCandles
+        guard let last = candles.last?.time else { return }
+        var count = Double(candles.count)
+        if let days {
+            let from = last.addingTimeInterval(-days * 86_400)
+            count = Double(candles.count - (candles.firstIndex { $0.time >= from } ?? 0))
+        }
+        withAnimation(.easeInOut(duration: 0.2)) {
+            viewport.rightOffset = 0
+            viewport.visibleCount = min(max(count + viewport.rightPadding, 15), 1500)
+        }
+    }
+
+    static func clockText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HH:mm:ss"
+        let hours = TimeZone.current.secondsFromGMT(for: date) / 3600
+        return "\(formatter.string(from: date)) UTC\(hours >= 0 ? "+" : "−")\(abs(hours))"
     }
 
     /// Full screen: "XAUUSD · 1m ▾" — tap for the timeframes.
@@ -657,16 +739,13 @@ struct LiveView: View {
 
     private var legend: some View {
         VStack(alignment: .leading, spacing: 3) {
-            // Layer names on the left, the chart tools on the right under Lệnh chờ:
-            // no tool bar under the chart, so the chart is taller.
-            HStack(alignment: .top, spacing: 6) {
-                VStack(alignment: .leading, spacing: 3) {
-                    if legendExpanded { layerNames }
-                    newsInfo.fixedSize()
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                chartTools
+            // Layer names and the next red news; the chart tools sit in the timeframe row
+            // (one row less, like TradingView's toolbar), so the chart is taller.
+            VStack(alignment: .leading, spacing: 3) {
+                if legendExpanded { layerNames }
+                newsInfo.fixedSize()
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             // Dòng tiền cá mập: two lines of words, the full width. For the first minute
             // after a red USD news the verdict of the news takes its place.
             TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -732,7 +811,7 @@ struct LiveView: View {
 
     /// Show/hide the layer names, the favourite timeframes, ▾ for all of them.
     private var timeframeRow: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 6) {
             Button {
                 withAnimation(.easeInOut(duration: 0.15)) { legendExpanded.toggle() }
             } label: {
@@ -780,6 +859,7 @@ struct LiveView: View {
                                onToggleFavorite: toggleFavorite)
                     .presentationCompactAdaptation(.popover)
             }
+            chartTools
         }
     }
 
@@ -997,7 +1077,8 @@ struct LiveView: View {
                         axisLeading: axisLeading,
                         // The pending-order panel closes with a tap on the chart.
                         onBackgroundTap: orderTicket == nil ? nil : { orderTicket = nil },
-                        linkedCrosshair: compareMode ? $linkedCrosshairTime : nil,
+                        // Also in full screen, for the OHLC line of the bar under the crosshair.
+                        linkedCrosshair: compareMode || fullScreen ? $linkedCrosshairTime : nil,
                         mascots: mascots,
                         mascotMood: { mascotMood($0) },
                         selectedMascotID: selectedMascotID,
@@ -2050,7 +2131,7 @@ struct LiveView: View {
             Image(systemName: compareMode ? "rectangle.split.1x2.fill" : "rectangle")
                 .font(.system(size: 15))
                 .foregroundColor(compareMode ? .white : theme.primaryText)
-                .frame(width: 31, height: 28)
+                .frame(width: 27, height: 26)
                 .background(RoundedRectangle(cornerRadius: 7).fill(compareMode ? theme.accent : .clear))
         }
         .accessibilityLabel("Bố cục")
@@ -2113,8 +2194,8 @@ struct LiveView: View {
         Image(systemName: systemName)
             .font(.system(size: 15, weight: .regular))
             .foregroundColor(active ? theme.accent : theme.primaryText)
-            .frame(width: 31, height: 28)
-            .background(RoundedRectangle(cornerRadius: 8).fill(active ? theme.accent.opacity(0.14) : .clear))
+            .frame(width: 27, height: 26)
+            .background(RoundedRectangle(cornerRadius: 7).fill(active ? theme.accent.opacity(0.14) : .clear))
     }
 
     private func toolbarButton(_ systemName: String, active: Bool, action: @escaping () -> Void) -> some View {

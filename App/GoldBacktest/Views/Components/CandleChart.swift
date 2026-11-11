@@ -1589,13 +1589,21 @@ struct CandleChart: View {
         return points
     }
 
-    /// Bars of OHLC data in the chosen style. Wicks are snapped to device
-    /// pixels so they stay sharp and visible at every zoom level.
+    /// Bars of OHLC data in the chosen style, drawn on whole device pixels (TradingView's way): bodies,
+    /// wicks and edges are filled rectangles whose sides fall on pixel boundaries, the wick centred in the
+    /// body (their widths in pixels have the same parity), so nothing is blurred by half-covered pixels.
     private func drawCandles(in context: inout GraphicsContext, range: Range<Int>, s: Scale) {
-        let pixel = 1 / max(context.environment.displayScale, 1)
-        func snap(_ v: CGFloat) -> CGFloat { (v / pixel).rounded() * pixel }
-        let wickWidth: CGFloat = s.barWidth >= 16 ? 1.5 : 1
-        let bodyWidth = max(pixel, snap(s.barWidth * 0.72))
+        let scale = max(context.environment.displayScale, 1)
+        let pixel = 1 / scale
+        func snap(_ v: CGFloat) -> CGFloat { (v * scale).rounded() / scale }
+        // Wick: 1 pt (1.5 pt on wide bars) in whole pixels; body: ~72% of the bar, same parity as the wick.
+        let wickPixels = max(1, ((s.barWidth >= 16 ? 1.5 : 1) * scale).rounded())
+        var bodyPixels = max(wickPixels, (s.barWidth * 0.72 * scale).rounded(.down))
+        if Int(bodyPixels - wickPixels) % 2 != 0 { bodyPixels -= 1 }
+        let wickWidth = wickPixels * pixel
+        let bodyWidth = bodyPixels * pixel
+        // Edge of a body: 1 pt in whole pixels.
+        let edge = max(pixel, scale.rounded() * pixel)
         if candleStyle == .line {
             var path = Path()
             for i in range {
@@ -1616,49 +1624,49 @@ struct CandleChart: View {
             let color = isUp ? upBody : downBody
             let wickColor = isUp ? upWick : downWick
             let borderColor = isUp ? upBorder : downBorder
-            let x = snap(s.x(i))
-            let highY = s.y(c.high), lowY = s.y(c.low)
-            let top = s.y(max(c.open, c.close)), bottom = s.y(min(c.open, c.close))
+            // Body's left side on a pixel; the wick in its middle, also on pixels.
+            let left = snap(s.x(i) - bodyWidth / 2)
+            let wickLeft = left + (bodyWidth - wickWidth) / 2
+            let highY = snap(s.y(c.high)), lowY = snap(s.y(c.low))
+            let top = snap(s.y(max(c.open, c.close))), bottom = snap(s.y(min(c.open, c.close)))
             if candleStyle == .bars {
                 var bar = Path()
-                bar.move(to: CGPoint(x: x, y: highY))
-                bar.addLine(to: CGPoint(x: x, y: lowY))
-                let tick = max(2, bodyWidth / 2)
-                bar.move(to: CGPoint(x: x - tick, y: s.y(c.open)))
-                bar.addLine(to: CGPoint(x: x, y: s.y(c.open)))
-                bar.move(to: CGPoint(x: x, y: s.y(c.close)))
-                bar.addLine(to: CGPoint(x: x + tick, y: s.y(c.close)))
-                context.stroke(bar, with: .color(color), lineWidth: max(1, wickWidth))
+                bar.addRect(CGRect(x: wickLeft, y: highY, width: wickWidth, height: max(pixel, lowY - highY)))
+                let tick = max(snap(2), snap(bodyWidth / 2))
+                bar.addRect(CGRect(x: wickLeft - tick, y: snap(s.y(c.open)) - wickWidth / 2, width: tick, height: wickWidth))
+                bar.addRect(CGRect(x: wickLeft + wickWidth, y: snap(s.y(c.close)) - wickWidth / 2, width: tick, height: wickWidth))
+                context.fill(bar, with: .color(color))
                 continue
             }
-            // Upper and lower wick as separate segments so hollow bodies stay empty.
+            // Upper and lower wick as separate rectangles so hollow bodies stay empty.
             if colors.showWick {
                 var wick = Path()
-                wick.move(to: CGPoint(x: x, y: highY))
-                wick.addLine(to: CGPoint(x: x, y: top))
-                wick.move(to: CGPoint(x: x, y: bottom))
-                wick.addLine(to: CGPoint(x: x, y: lowY))
-                context.stroke(wick, with: .color(wickColor), lineWidth: wickWidth)
+                if top > highY { wick.addRect(CGRect(x: wickLeft, y: highY, width: wickWidth, height: top - highY)) }
+                if lowY > bottom { wick.addRect(CGRect(x: wickLeft, y: bottom, width: wickWidth, height: lowY - bottom)) }
+                context.fill(wick, with: .color(wickColor))
             }
             // Very narrow bars are just the high–low line, like TradingView when zoomed out.
-            guard s.barWidth >= 2.5 else {
-                var line = Path()
-                line.move(to: CGPoint(x: x, y: top))
-                line.addLine(to: CGPoint(x: x, y: max(bottom, top + pixel)))
-                context.stroke(line, with: .color(colors.showBody ? color : borderColor), lineWidth: wickWidth)
+            guard bodyPixels > wickPixels, s.barWidth >= 2.5 else {
+                let line = CGRect(x: wickLeft, y: top, width: wickWidth, height: max(pixel, bottom - top))
+                context.fill(Path(line), with: .color(colors.showBody ? color : borderColor))
                 continue
             }
-            let body = CGRect(x: x - bodyWidth / 2, y: snap(top), width: bodyWidth,
-                              height: max(pixel * 2, snap(bottom) - snap(top)))
+            let body = CGRect(x: left, y: top, width: bodyWidth, height: max(pixel, bottom - top))
             let hollow = candleStyle == .hollow && isUp
-            if hollow {
-                context.fill(Path(body), with: .color(theme.background))
+            let framed = colors.showBorder || hollow
+            if framed {
+                // The edge as the outer rectangle, the inside over it: both on whole pixels.
+                context.fill(Path(body), with: .color(colors.showBorder ? borderColor : color))
+                let inner = body.insetBy(dx: edge, dy: edge)
+                if inner.width > 0, inner.height > 0 {
+                    if hollow {
+                        context.fill(Path(inner), with: .color(theme.background))
+                    } else if colors.showBody {
+                        context.fill(Path(inner), with: .color(color))
+                    }
+                }
             } else if colors.showBody {
                 context.fill(Path(body), with: .color(color))
-            }
-            if colors.showBorder || hollow {
-                context.stroke(Path(body.insetBy(dx: 0.5, dy: 0.5)),
-                               with: .color(colors.showBorder ? borderColor : color), lineWidth: 1)
             }
         }
     }
@@ -2730,8 +2738,8 @@ struct FullScreenChart<Content: View>: View {
             }
             .font(.system(size: 16, weight: .semibold))
             .foregroundColor(theme.text)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
             content()
         }
         .background(theme.background.ignoresSafeArea())
