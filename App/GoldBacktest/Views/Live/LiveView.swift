@@ -818,8 +818,8 @@ struct LiveView: View {
                 Image(systemName: legendExpanded ? "chevron.up" : "chevron.down")
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(theme.text)
-                    .frame(width: 30, height: 22)
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(theme.grid, lineWidth: 1))
+                    .frame(width: 26, height: 24)
+                    .background(theme.grid.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
             }
             // The chosen timeframes, one tap to switch; ▾ opens all of them.
             ScrollViewReader { proxy in
@@ -827,27 +827,33 @@ struct LiveView: View {
                     HStack(spacing: 6) {
                         ForEach(rowIntervals, id: \.self) { interval in
                             Button { selectInterval(interval) } label: {
+                                // Plain words, the current one filled (no frames to be cut at the edges).
                                 Text(Self.label(interval))
                                     .font(.system(size: 13, weight: .semibold))
                                     .foregroundColor(interval == market.interval ? .white : theme.primaryText)
-                                    .frame(minWidth: 38, minHeight: 22)
+                                    .frame(minWidth: 34, minHeight: 24)
                                     .background(interval == market.interval ? theme.accent : .clear,
-                                                in: RoundedRectangle(cornerRadius: 5))
-                                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(theme.grid, lineWidth: 1))
+                                                in: RoundedRectangle(cornerRadius: 6))
                             }
                             .buttonStyle(.plain)
                             .id(interval)
                         }
                     }
+                    .padding(.horizontal, 6)
                     .padding(.vertical, 1)
                 }
+                // Timeframes past the edges fade out instead of being cut off.
+                .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.06),
+                                             .init(color: .black, location: 0.94), .init(color: .clear, location: 1)],
+                                     startPoint: .leading, endPoint: .trailing))
                 .onAppear { proxy.scrollTo(market.interval, anchor: .center) }
             }
             Button { showIntervalPicker = true } label: {
-                Image(systemName: "chevron.down.square")
-                    .font(.system(size: 18))
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 11, weight: .semibold))
                     .foregroundColor(theme.text)
-                    .frame(width: 30, height: 24)
+                    .frame(width: 26, height: 24)
+                    .background(theme.grid.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
             }
             .accessibilityLabel("Tất cả khung thời gian")
             .popover(isPresented: $showIntervalPicker) {
@@ -1061,6 +1067,10 @@ struct LiveView: View {
                         onDrawingCreated: { drawing in drawingCreated(drawing) },
                         onDrawingChanged: { drawing in store.updateDrawing(drawing, key: drawingKey) },
                         onSelectDrawing: { id in selectedDrawingID = id },
+                        // No OHLC / EMA row over the chart: shown on it while the crosshair is out
+                        // (full screen has its own OHLC line).
+                        showHeader: !fullScreen,
+                        headerOnCrosshair: true,
                         candleStyle: CandleStyle(rawValue: candleStyle) ?? .candles,
                         magnet: magnet,
                         candleColors: frameCache.candleColors(candleColorsJSON),

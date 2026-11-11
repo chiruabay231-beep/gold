@@ -260,6 +260,8 @@ struct CandleChart: View {
     var onDrawingChanged: ((Drawing) -> Void)?
     var onSelectDrawing: ((UUID?) -> Void)?
     var showHeader = true
+    /// The OHLC / indicator values only while the crosshair is out, over the plot (no row of their own).
+    var headerOnCrosshair = false
     var candleStyle: CandleStyle = .candles
     /// Snap new drawing points to the open, high, low or close of the bar.
     var magnet = false
@@ -392,7 +394,7 @@ struct CandleChart: View {
     static let axisLabelHeight: CGFloat = 23
     private var timeAxisHeight: CGFloat { showTimeAxis ? 18 : 0 }
 
-    private var headerHeight: CGFloat { showHeader && !headerInside ? 34 : (headerInside ? 0 : 4) }
+    private var headerHeight: CGFloat { showHeader && !headerInside && !headerOnCrosshair ? 34 : (headerInside ? 0 : 4) }
 
     var body: some View {
         chartBody
@@ -424,7 +426,17 @@ struct CandleChart: View {
                 if !mascots.isEmpty {
                     mascotLayer(layout: layout)
                 }
-                if showHeader {
+                if showHeader && headerOnCrosshair {
+                    if crosshairIndex(layout: layout, ownOnly: true) != nil {
+                        header(layout: layout)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .background(theme.background.opacity(0.88), in: RoundedRectangle(cornerRadius: 6))
+                            .padding(.leading, axisLeading ? axisWidth + 4 : 4)
+                            .padding(.top, 4)
+                            .allowsHitTesting(false)
+                    }
+                } else if showHeader {
                     header(layout: layout)
                         .padding(.horizontal, 6)
                         .padding(.leading, axisLeading ? axisWidth : 0)
