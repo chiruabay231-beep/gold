@@ -348,28 +348,37 @@
     return { start, high, low, hiI, loI };
   }
 
-  /** Each week's first fair value gap made on Monday after 09:30 Vietnam time (UTC+7): the three candles
-   *  of the gap from 09:30 on, all on that Monday. From its middle candle to the week's last bar (the right
-   *  edge for the running week). `touched`: a later candle of the week came back into it. Newest `weekFvgWeeks`. */
-  function mondayFvgs(c, cfg) {
+  /** Each week's first M1 fair value gap made on Monday after 09:30 Vietnam time (UTC+7): the three
+   *  1-minute candles of the gap from 09:30 on, all on that Monday (`m1`, the chart's own bars on a 1-minute
+   *  chart). Laid on the chart's bars `c`: from the bar holding its middle candle to the week's last bar (the
+   *  right edge for the running week). `touched`: a later bar of the week came back into it. Newest `weekFvgWeeks`. */
+  function mondayFvgs(c, cfg, m1) {
     const n = c.length, VN = 7 * 3600;
+    if (!n || !m1 || m1.length < 3) return [];
     const vnDay = (t) => Math.floor((t + VN) / 86400);
     const week = (t) => Math.floor((vnDay(t) + 3) / 7); // changes on Mondays (1970-01-01 was a Thursday)
     const mondayAfter = (t) => { const d = vnDay(t); return (d + 4) % 7 === 1 && (t + VN) - d * 86400 >= 9.5 * 3600; };
-    const out = [], done = new Set();
-    for (let i = 2; i < n; i++) {
-      const wk = week(c[i].time);
-      if (done.has(wk)) continue;
-      if (!mondayAfter(c[i - 2].time) || vnDay(c[i].time) !== vnDay(c[i - 2].time)) continue;
-      const bull = c[i].low > c[i - 2].high, bear = c[i].high < c[i - 2].low;
+    // The chart bar holding a time (the last one starting at or before it).
+    const barAt = (t) => { let lo = 0, hi = n - 1; if (t < c[0].time) return null; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (c[m].time <= t) lo = m; else hi = m - 1; } return lo; };
+    const out = [], done = new Set(), upTo = c[n - 1].time + 86400;
+    for (let i = 2; i < m1.length; i++) {
+      const b = m1[i], a = m1[i - 2];
+      if (b.time > upTo) break;
+      const wk = week(b.time);
+      if (done.has(wk) || !mondayAfter(a.time) || vnDay(b.time) !== vnDay(a.time)) continue;
+      const bull = b.low > a.high, bear = b.high < a.low;
       if (!bull && !bear) continue;
       done.add(wk);
-      let end = i;
+      // Only once the gap's last candle is on the chart (no look-ahead in a replay).
+      const start = barAt(m1[i - 1].time);
+      if (start == null || c[n - 1].time < b.time - (c[n - 1].time - c[Math.max(0, n - 2)].time)) continue;
+      let end = start;
       while (end + 1 < n && week(c[end + 1].time) === wk) end++;
-      const top = bull ? c[i].low : c[i - 2].low, bottom = bull ? c[i - 2].high : c[i].high;
+      const top = bull ? b.low : a.low, bottom = bull ? a.high : b.high;
       let touched = false;
-      for (let j = i + 1; j <= end && !touched; j++) if (c[j].low <= top && c[j].high >= bottom) touched = true;
-      out.push({ bull, top, bottom, start: i - 1, end: end === n - 1 ? null : end, touched });
+      const after = barAt(b.time + 60);
+      for (let j = after == null ? end + 1 : Math.max(after, start + 1); j <= end && !touched; j++) if (c[j].low <= top && c[j].high >= bottom) touched = true;
+      out.push({ bull, top, bottom, start, end: end === n - 1 ? null : end, touched, time: m1[i - 1].time });
     }
     return out.slice(-Math.max(1, cfg.weekFvgWeeks || 1));
   }
@@ -423,7 +432,9 @@
 
   /* ---------- everything ---------- */
 
-  function compute(c, sec, cfg, show) {
+  /** `extra.m1`: 1-minute bars around each Monday 09:30 (VN) for the Monday FVG; without them a 1-minute
+   *  chart's own bars are used. */
+  function compute(c, sec, cfg, show, extra = {}) {
     const out = { boxes: [], levels: [], stamps: [], macros: [], fvgs: [], vis: [], breaks: [], sweeps: [], days: [], ranges: [], weekFvgs: [], hidden: false };
     if (c.length < 3) return out;
     const n = c.length;
@@ -438,7 +449,10 @@
     if (show.daily && cfg.daily && sec < 86400) out.levels.push(...dailyLevels(c, ck, cfg));
     if (!show.killzones) return out;
     periodLevels(c, ck, sec, cfg, out);
-    if (cfg.weekFvg && sec < 86400) out.weekFvgs = mondayFvgs(c, cfg);
+    if (cfg.weekFvg && sec < 86400) {
+      const m1 = extra.m1 && extra.m1.length ? extra.m1 : sec === 60 ? c : null;
+      if (m1) out.weekFvgs = mondayFvgs(c, cfg, m1);
+    }
     if (sec > cfg.tfLimit * 60) { out.hidden = true; return out; }
     const firstDay = ck.day[n - 1] - Math.max(cfg.maxDays, 1) + 1;
     const cutoffs = cfg.cutoff ? cutoffIndexes(ck, cfg.cutoffHour) : [];

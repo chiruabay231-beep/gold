@@ -157,7 +157,7 @@ final class KillzonePivotsTests: XCTestCase {
         c[20].low = 103; c[20].high = 104
         // Price comes back into it on Wednesday.
         c[600].low = 100.8
-        let gaps = KillzonePivots.mondayFVGs(c, weeks: 4)
+        let gaps = KillzonePivots.mondayFVGs(c, minutes: c, weeks: 4)
         XCTAssertEqual(gaps.count, 1)
         XCTAssertEqual(gaps.first?.bullish, true)
         XCTAssertEqual(gaps.first?.start, 8)
@@ -166,6 +166,18 @@ final class KillzonePivotsTests: XCTestCase {
         XCTAssertEqual(gaps.first?.touched, true)
         // The week runs to the last bar of the data: carried to the right edge.
         XCTAssertNil(gaps.first?.end)
+
+        // On an hourly chart the same M1 gap, placed on the bar holding its middle candle (09:00-10:00 VN).
+        let hourly = stride(from: 0, to: c.count, by: 12).map { k -> Candle in
+            let part = c[k..<min(k + 12, c.count)]
+            return Candle(time: part.first!.time, open: part.first!.open, high: part.map(\.high).max()!,
+                          low: part.map(\.low).min()!, close: part.last!.close)
+        }
+        let onHourly = KillzonePivots.compute(candles: hourly, barInterval: 3600, config: KillzonePivots.Config(), minuteBars: c)
+        XCTAssertEqual(onHourly.weekFVGs.first?.start, 0)
+        XCTAssertEqual(onHourly.weekFVGs.first?.top, 101.2)
+        // No 1-minute bars on an hourly chart: none.
+        XCTAssertTrue(KillzonePivots.compute(candles: hourly, barInterval: 3600, config: KillzonePivots.Config()).weekFVGs.isEmpty)
     }
 
     func testAlignedComparisonBars() {

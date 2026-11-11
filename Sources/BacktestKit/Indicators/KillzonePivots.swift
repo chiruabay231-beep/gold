@@ -518,8 +518,10 @@ public enum KillzonePivots {
     /// `comparison` holds the bars of the SMT market (same timeframe); empty = no SMT.
     /// `focusIndex` is the bar the "days to show" count back from (the right edge of
     /// the screen when scrolled into history); nil = the last bar.
+    /// `minuteBars`: 1-minute bars around each Monday 09:30 (VN) for the Monday FVG (a 1-minute chart's own
+    /// bars without them).
     public static func compute(candles: [Candle], barInterval: TimeInterval, config: Config,
-                               comparison: [Candle] = [], focusIndex: Int? = nil) -> Output {
+                               comparison: [Candle] = [], focusIndex: Int? = nil, minuteBars: [Candle] = []) -> Output {
         var output = Output()
         guard candles.count > 2 else { return output }
         if config.showSMT, !comparison.isEmpty {
@@ -541,7 +543,8 @@ public enum KillzonePivots {
         let clock = ICT.NewYorkClock(time: candles.map(\.time), zone: zone)
         periodLevels(candles, clock: clock, zone: zone, barInterval: barInterval, config: config, into: &output)
         if config.showWeekFVG, barInterval < 86_400 {
-            output.weekFVGs = mondayFVGs(candles, weeks: config.weekFVGWeeks)
+            let minutes = !minuteBars.isEmpty ? minuteBars : (barInterval == 60 ? candles : [])
+            output.weekFVGs = mondayFVGs(candles, minutes: minutes, weeks: config.weekFVGWeeks)
         }
         guard barInterval <= config.timeframeLimitMinutes * 60 else {
             output.hiddenByTimeframe = true
@@ -661,35 +664,53 @@ public enum KillzonePivots {
         return output
     }
 
-    /// Each week's first FVG made on Monday after 09:30 Vietnam time (UTC+7): the gap's three candles from
-    /// 09:30 on, all on that Monday. Runs from its middle candle to the week's last bar. The newest `weeks`.
-    static func mondayFVGs(_ c: [Candle], weeks: Int) -> [WeekFVG] {
+    /// Each week's first M1 FVG made on Monday after 09:30 Vietnam time (UTC+7): the gap's three 1-minute
+    /// candles (`minutes`) from 09:30 on, all on that Monday. Laid on the chart's bars `c`: from the bar holding
+    /// its middle candle to the week's last bar. Gaps after the chart's last bar are left out (replay). The
+    /// newest `weeks`.
+    static func mondayFVGs(_ c: [Candle], minutes m: [Candle], weeks: Int) -> [WeekFVG] {
         let n = c.count
-        guard n > 2 else { return [] }
+        guard n > 0, m.count > 2 else { return [] }
         let vn = 7.0 * 3600
-        func day(_ i: Int) -> Int { Int(floor((c[i].time.timeIntervalSince1970 + vn) / 86_400)) }
+        func day(_ date: Date) -> Int { Int(floor((date.timeIntervalSince1970 + vn) / 86_400)) }
         // Weeks from Monday (1970-01-01 was a Thursday).
-        func week(_ i: Int) -> Int { Int(floor(Double(day(i) + 3) / 7)) }
-        func mondayAfterOpen(_ i: Int) -> Bool {
-            let d = day(i)
-            let seconds = c[i].time.timeIntervalSince1970 + vn - Double(d) * 86_400
+        func week(_ date: Date) -> Int { Int(floor(Double(day(date) + 3) / 7)) }
+        func mondayAfterOpen(_ date: Date) -> Bool {
+            let d = day(date)
+            let seconds = date.timeIntervalSince1970 + vn - Double(d) * 86_400
             return (d + 4) % 7 == 1 && seconds >= 9.5 * 3600
         }
+        /// The chart bar holding a time (the last one starting at or before it).
+        func bar(at time: Date) -> Int? {
+            guard time >= c[0].time else { return nil }
+            var lo = 0, hi = n - 1
+            while lo < hi {
+                let mid = (lo + hi + 1) / 2
+                if c[mid].time <= time { lo = mid } else { hi = mid - 1 }
+            }
+            return lo
+        }
+        let lastBarLength = n > 1 ? c[n - 1].time.timeIntervalSince(c[n - 2].time) : 60
         var result: [WeekFVG] = []
         var done = Set<Int>()
-        for i in 2..<n {
-            let wk = week(i)
-            guard !done.contains(wk), mondayAfterOpen(i - 2), day(i) == day(i - 2) else { continue }
-            let bullish = c[i].low > c[i - 2].high
-            let bearish = c[i].high < c[i - 2].low
+        for i in 2..<m.count {
+            let a = m[i - 2], b = m[i]
+            // Not past the chart's last bar.
+            if b.time.timeIntervalSince(c[n - 1].time) > max(lastBarLength, 60) { break }
+            let wk = week(b.time)
+            guard !done.contains(wk), mondayAfterOpen(a.time), day(b.time) == day(a.time) else { continue }
+            let bullish = b.low > a.high
+            let bearish = b.high < a.low
             guard bullish || bearish else { continue }
             done.insert(wk)
-            var end = i
-            while end + 1 < n, week(end + 1) == wk { end += 1 }
-            let top = bullish ? c[i].low : c[i - 2].low
-            let bottom = bullish ? c[i - 2].high : c[i].high
-            let touched = end > i && (i + 1...end).contains { c[$0].low <= top && c[$0].high >= bottom }
-            result.append(WeekFVG(bullish: bullish, top: top, bottom: bottom, start: i - 1,
+            guard let start = bar(at: m[i - 1].time) else { continue }
+            var end = start
+            while end + 1 < n, week(c[end + 1].time) == wk { end += 1 }
+            let top = bullish ? b.low : a.low
+            let bottom = bullish ? a.high : b.high
+            let after = max(start + 1, bar(at: b.time.addingTimeInterval(60)) ?? (end + 1))
+            let touched = after <= end && (after...end).contains { c[$0].low <= top && c[$0].high >= bottom }
+            result.append(WeekFVG(bullish: bullish, top: top, bottom: bottom, start: start,
                                   end: end == n - 1 ? nil : end, touched: touched))
         }
         return Array(result.suffix(max(weeks, 1)))

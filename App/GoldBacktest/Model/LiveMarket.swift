@@ -264,6 +264,59 @@ final class LiveMarket {
         restart()
     }
 
+    /// 1-minute bars of each Monday 09:30–15:30 (Vietnam time) of the newest weeks: the "FVG đầu tuần"
+    /// (first M1 FVG after 09:30) on any timeframe. Sorted by time.
+    private(set) var mondayMinuteBars: [Candle] = []
+    private var mondayDays: [Date: (bars: [Candle], at: Date)] = [:]
+    private var mondayKey = ""
+    private var mondayLoading = false
+
+    /// Fetches the Mondays not loaded yet (the running Monday again every minute until 15:30).
+    func loadMondayMinutes(weeks: Int) async {
+        guard !mondayLoading else { return }
+        let key = "\(source.rawValue):\(symbol)"
+        if key != mondayKey {
+            mondayKey = key
+            mondayDays = [:]
+            mondayMinuteBars = []
+        }
+        mondayLoading = true
+        defer { mondayLoading = false }
+        let vn = 7.0 * 3600, now = Date()
+        var day = Int(floor((now.timeIntervalSince1970 + vn) / 86_400))
+        while (day + 4) % 7 != 1 { day -= 1 }
+        var changed = false
+        for _ in 0..<max(1, weeks) {
+            let open = Date(timeIntervalSince1970: Double(day) * 86_400 - vn + 9.5 * 3600)
+            let close = open.addingTimeInterval(6 * 3600)
+            day -= 7
+            guard open < now else { continue }
+            if let got = mondayDays[open], now >= close || now.timeIntervalSince(got.at) < 60 { continue }
+            guard let bars = try? await minuteBars(before: close), key == mondayKey else { continue }
+            mondayDays[open] = (bars.filter { $0.time >= open && $0.time < close }, now)
+            changed = true
+        }
+        if changed { mondayMinuteBars = mondayDays.keys.sorted().flatMap { mondayDays[$0]?.bars ?? [] } }
+    }
+
+    /// Up to 6 hours of 1-minute bars before `before`, from the chart's source.
+    private func minuteBars(before: Date) async throws -> [Candle] {
+        let symbol = self.symbol, count = 6 * 60 + 5
+        switch source {
+        case .binance, .binanceFutures:
+            let market: BinanceClient.Market = source == .binanceFutures ? .futures : .spot
+            return try await BinanceClient.withFallback(market: market) { client in
+                try await client.fetchCandles(symbol: symbol, interval: .m1, count: count, before: before)
+            }
+        case .oanda:
+            guard let client = OandaSettings.client() else { return [] }
+            return try await client.fetchCandles(instrument: symbol, interval: .m1, count: count, to: before).map(\.candle)
+        case .mt5:
+            guard let client = RemoteBotSettings.client() else { return [] }
+            return try await client.mt5Candles(symbol: symbol, interval: .m1, count: count, before: before)
+        }
+    }
+
     /// Loads up to `count` bars before the oldest one on the chart and puts
     /// them in front of the history. Returns the bars added.
     @discardableResult

@@ -193,6 +193,14 @@ struct LiveView: View {
             }
         }
         .task(id: nextNewsTime) { await noteNewsPrice() }
+        .task(id: "\(market.source.rawValue):\(market.symbol):\(killzoneSettings.config.showWeekFVG):\(killzoneSettings.config.weekFVGWeeks)") {
+            // "FVG đầu tuần": Monday-morning M1 bars, again every minute while a Monday morning runs.
+            guard showKillzonePivots, killzoneSettings.config.showWeekFVG else { return }
+            while !Task.isCancelled {
+                await market.loadMondayMinutes(weeks: killzoneSettings.config.weekFVGWeeks)
+                try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
+            }
+        }
         .task(id: replayResume) {
             if let resume = replayResume { await resumeReplay(resume) }
         }
@@ -910,6 +918,15 @@ struct LiveView: View {
     /// SMT is only drawn while the two markets are side by side.
     private var smtComparison: [Candle] { compareMode ? comparisonChartCandles : [] }
 
+    /// Monday-morning 1-minute bars for "FVG đầu tuần", cut at the replayed bar.
+    private var mondayMinutes: [Candle] {
+        guard killzoneSettings.config.showWeekFVG else { return [] }
+        let bars = market.mondayMinuteBars
+        guard replay.isActive, let last = chartCandles.last?.time else { return bars }
+        let end = last.addingTimeInterval(market.interval.seconds)
+        return bars.filter { $0.time < end }
+    }
+
     /// The comparison bars, cut at the replayed bar so replay shows no future.
     private var comparisonChartCandles: [Candle] {
         guard replay.isActive, let last = chartCandles.last?.time else { return market.comparisonCandles }
@@ -919,7 +936,8 @@ struct LiveView: View {
     private var killzoneLayer: KillzonePivotsLayer {
         killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
                             settings: killzoneSettings, enabled: showKillzonePivots, comparison: smtComparison,
-                            focusIndex: focusIndex, live: !replay.isActive, symbol: market.symbol)
+                            focusIndex: focusIndex, live: !replay.isActive, symbol: market.symbol,
+                            minuteBars: mondayMinutes)
     }
 
     /// One chart, or in compare mode the two markets stacked (side by side in landscape).
@@ -1030,7 +1048,8 @@ struct LiveView: View {
         let settings = killzoneSettings
         let layer = killzoneCache.layer(candles: chartCandles, barInterval: market.interval.seconds,
                                         settings: settings, enabled: showKillzonePivots, comparison: smtComparison,
-                                        focusIndex: focusIndex, live: !replay.isActive, symbol: market.symbol)
+                                        focusIndex: focusIndex, live: !replay.isActive, symbol: market.symbol,
+                            minuteBars: mondayMinutes)
         return ZStack(alignment: .trailing) {
             CandleChart(candles: chartCandles,
                         overlays: overlays,

@@ -725,7 +725,7 @@
       v.sharkZones = flow && showInd.zones ? flow.zones : null;
       v.ict = null;
       if ((term.owner || term.features.killzones !== false) && bars.length && window.ICT && term.ictCfg) {
-        try { v.ict = window.ICT.compute(bars, TF_SECONDS[this.tf], term.ictCfg, showInd); } catch { /* none */ }
+        try { v.ict = window.ICT.compute(bars, TF_SECONDS[this.tf], term.ictCfg, showInd, { m1: term.mondayM1(bars) }); } catch { /* none */ }
       }
       v.models = term.modelsFor(bars, TF_SECONDS[this.tf], v.digits);
       v.plan = term.planFor(bars, TF_SECONDS[this.tf], v.digits);
@@ -6330,8 +6330,8 @@
             + `<div class="fr">${chk("dayOfWeek")}<span class="grow">Nhãn thứ trong tuần</span>${selI("dowPos", [["bottom", "Dưới"], ["top", "Trên"]])}${selI("dowAt", [["midnight", "Nửa đêm"], ["midday", "Giữa trưa"]])}</div>`
             + tog("dowHideWeekend", "Ẩn nhãn T7 / CN")
             + note("Open: giá mở ngày (DO) / tuần (WO) / tháng (MO) hiện tại. High/Low: đỉnh – đáy của ngày / tuần / tháng trước (PDH–PDL, PWH–PWL, PMH–PML). Midline: giữa của chúng (PDM, PWM, PMM). Divider: vạch dọc nơi mỗi ngày / tuần / tháng bắt đầu. Ngày tính theo múi giờ ở tab Hiển thị (ICT: 0h New York). Hiện ở mọi khung nhỏ hơn kỳ đó.")
-            + head("FVG đầu tuần (thứ 2 sau 9:30 VN)") + tog("weekFvg", "FVG đầu tiên của thứ 2 sau 9:30 sáng (giờ VN), kẻ tới hết tuần") + numf("weekFvgWeeks", "Số tuần gần nhất")
-            + note("Mỗi tuần lấy FVG đầu tiên hình thành trong ngày thứ 2 từ 9:30 sáng giờ Việt Nam (3 cây nến tạo FVG đều từ 9:30, cùng ngày thứ 2), theo khung đang xem; vùng kéo ngang tới hết tuần để xem giá phản ứng. Đường giữa là 50% của FVG.")
+            + head("FVG đầu tuần (M1, thứ 2 sau 9:30 VN)") + tog("weekFvg", "FVG M1 đầu tiên của thứ 2 sau 9:30 sáng (giờ VN), kẻ tới hết tuần") + numf("weekFvgWeeks", "Số tuần gần nhất")
+            + note("Mỗi tuần lấy FVG đầu tiên trên khung M1 hình thành trong ngày thứ 2 từ 9:30 sáng giờ Việt Nam (3 cây nến M1 tạo FVG đều từ 9:30, cùng ngày thứ 2), dù chart đang ở khung nào; vùng kéo ngang tới hết tuần để xem giá phản ứng. Đường giữa là 50% của FVG. Nến M1 lấy từ máy chủ MT5 (hoặc Binance).")
             + head("FVG & VI") + tog("fvg", "Hiện FVG") + tog("fvgStrong", "Chỉ FVG mạnh (lọc FVG yếu)") + numf("fvgDisplacement", "Nến tạo FVG ≥ × thân TB", 0.1)
             + tog("fvgConfluence", "Tô nền khi trùng FVG khung lớn") + tog("fvgMid", "Đường giữa 50%") + tog("fvgHideFilled", "Ẩn FVG đã bị chạm")
             + numf("gapKeep", "Chạm rồi bật ngược: giữ (phút)") + numf("fvgMinSize", "Lọc FVG nhỏ (× biên độ nến)", 0.1) + numf("fvgCount", "Giữ FVG gần nhất")
@@ -6642,6 +6642,55 @@
       }
       const i = Math.floor(l), a = ts.logicalToCoordinate(i), c = ts.logicalToCoordinate(i + 1);
       return a == null || c == null ? a : a + (c - a) * (l - i);
+    },
+
+    /** 1-minute bars of each Monday 09:30–15:30 (VN) of the weeks on the chart, for "FVG đầu tuần" (the first
+     *  M1 FVG after 09:30) on any timeframe: from the VPS (MT5) or Binance, fetched once per Monday (the
+     *  running Monday again every minute until its gap is there). Cut at the chart's last bar (replay). */
+    mondayM1(bars) {
+      const cfg = this.ictCfg;
+      if (!cfg || !cfg.weekFvg || !bars || !bars.length || !showInd.killzones) return null;
+      const key = this.symbolKey();
+      if (!this.wfM1 || this.wfM1.key !== key) this.wfM1 = { key, days: new Map() };
+      const VN = 7 * 3600, store1 = this.wfM1, now = Date.now() / 1000;
+      const first = bars[0].time, last = bars[bars.length - 1].time;
+      let d = Math.floor((last + VN) / 86400);
+      while ((d + 4) % 7 !== 1) d--;
+      const want = [];
+      for (let k = 0; k < Math.max(1, cfg.weekFvgWeeks || 1); k++, d -= 7) {
+        const open = d * 86400 - VN + 9.5 * 3600;
+        if (open + 6 * 3600 < first) break;
+        want.push(open);
+      }
+      want.forEach((open) => {
+        const got = store1.days.get(open);
+        const running = now < open + 6 * 3600;
+        if (got && (got.busy || !running || now - got.at < 60)) return;
+        if (now < open) return;
+        const entry = { busy: true, at: now, bars: got ? got.bars : [] };
+        store1.days.set(open, entry);
+        this.fetchM1(open, open + 6 * 3600).then((list) => {
+          entry.bars = list || entry.bars; entry.busy = false; entry.at = Date.now() / 1000;
+          if (this.wfM1 === store1 && list && list.length) this.computeICT();
+        }).catch(() => { entry.busy = false; });
+      });
+      const upTo = last + TF_SECONDS[this.interval];
+      return want.slice().reverse().flatMap((open) => (store1.days.get(open) || { bars: [] }).bars).filter((b) => b.time < upTo);
+    },
+
+    /** 1-minute bars from `from` to `to` (UTC seconds) of the chart's symbol. */
+    async fetchM1(from, to) {
+      const count = Math.ceil((to - from) / 60) + 5;
+      if (this.source === "exness") {
+        const path = this.owner ? `/mt5/candles?symbol=${encodeURIComponent(this.symbol)}&interval=1m&count=${count}&before=${to}` : `/member/candles?interval=1m&count=${count}&before=${to}`;
+        const data = await this.call(path);
+        return this.toBars(data.candles || []).filter((b) => b.time >= from && b.time < to);
+      }
+      const market = binanceMarket(this.symbol);
+      if (!market) return [];
+      const rest = market.futures ? "https://fapi.binance.com/fapi/v1/klines" : "https://api.binance.com/api/v3/klines";
+      const rows = await (await fetch(`${rest}?symbol=${market.name}&interval=1m&startTime=${from * 1000}&endTime=${to * 1000 - 1}&limit=${Math.min(1000, count)}`)).json();
+      return Array.isArray(rows) ? rows.map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] })) : [];
     },
 
     /** Day, H4 and H1 candles of the chart's symbol (for the plan), from the VPS; again after a minute. */
@@ -7085,7 +7134,7 @@
       this.sharkZones = flow && showInd.zones ? flow.zones : null;
       if (!allowed || !bars.length || !window.ICT || !this.ictCfg) { this.ict = null; this.redraw(); (this.panes || []).forEach((p) => p.analyseSoon()); return; }
       try {
-        this.ict = window.ICT.compute(bars, TF_SECONDS[this.interval], this.ictCfg, showInd);
+        this.ict = window.ICT.compute(bars, TF_SECONDS[this.interval], this.ictCfg, showInd, { m1: this.mondayM1(bars) });
       } catch { this.ict = null; }
       this.alertPeriodBreaks();
       this.models = this.modelsFor(bars, TF_SECONDS[this.interval], this.digits);

@@ -139,11 +139,11 @@ struct KillzonePivotsLayer {
     init() {}
 
     init(candles: [Candle], barInterval: TimeInterval, settings: KillzonePivotsSettings, comparison: [Candle] = [],
-         focusIndex: Int? = nil) {
+         focusIndex: Int? = nil, minuteBars: [Candle] = []) {
         let config = settings.config
         let scale = CGFloat(settings.lineScale)
         output = KillzonePivots.compute(candles: candles, barInterval: barInterval, config: config, comparison: comparison,
-                                        focusIndex: focusIndex)
+                                        focusIndex: focusIndex, minuteBars: minuteBars)
         for box in output.boxes {
             let session = config.sessions[box.session]
             boxes.append(SessionBox(id: "kz-\(box.session)-\(box.range.lowerBound)", range: box.range, high: box.high, low: box.low,
@@ -300,7 +300,8 @@ final class KillzonePivotsCache {
     /// follow the bars being looked at. It only changes the key every few hours of bars,
     /// so scrolling doesn't recompute on every frame.
     func layer(candles: [Candle], barInterval: TimeInterval, settings: KillzonePivotsSettings, enabled: Bool,
-               comparison: [Candle] = [], focusIndex: Int? = nil, live: Bool = true, symbol: String = "") -> KillzonePivotsLayer {
+               comparison: [Candle] = [], focusIndex: Int? = nil, live: Bool = true, symbol: String = "",
+               minuteBars: [Candle] = []) -> KillzonePivotsLayer {
         guard enabled else { return KillzonePivotsLayer() }
         let focus = focusIndex.flatMap { candles.indices.contains($0) ? $0 : nil }
         let focusBucket = focus.map { Int(candles[$0].time.timeIntervalSince1970 / 21_600) } ?? -1
@@ -309,10 +310,11 @@ final class KillzonePivotsCache {
         let other = comparison.last
         let newKey = "\(candles.count)-\(candles.first?.time.timeIntervalSince1970 ?? 0)-\(last?.high ?? 0)-\(last?.low ?? 0)-\(barInterval)-\(settings.hashValue)"
             + "-\(comparison.count)-\(other?.time.timeIntervalSince1970 ?? 0)-\(other?.high ?? 0)-\(other?.low ?? 0)-\(focusBucket)"
+            + "-\(minuteBars.count)-\(minuteBars.last?.time.timeIntervalSince1970 ?? 0)"
         if newKey != key {
             key = newKey
             cached = KillzonePivotsLayer(candles: candles, barInterval: barInterval, settings: settings, comparison: comparison,
-                                         focusIndex: focus)
+                                         focusIndex: focus, minuteBars: minuteBars)
             if announces, live, settings.config.alertPeriodBreaks { announce(cached.output.periodBreaks, chart: "\(symbol)-\(barInterval)") }
         }
         return cached
