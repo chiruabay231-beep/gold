@@ -1930,6 +1930,14 @@
       return $("pStopType").checked ? (below ? "short" : "long") : (below ? "long" : "short");
     },
 
+    /** The side at `price` with a Stop (`stop` true) or Limit order. */
+    draftSideAs(price, stop) {
+      const last = this.bars.length ? this.bars[this.bars.length - 1].close : price;
+      const mid = this.bid != null && this.ask != null ? (this.bid + this.ask) / 2 : last;
+      const below = price < mid;
+      return stop ? (below ? "short" : "long") : (below ? "long" : "short");
+    },
+
     pendingKind(side) { return (side === "long" ? "BUY " : "SELL ") + ($("pStopType").checked ? "STOP" : "LIMIT"); },
 
     updatePendingLabels() {
@@ -1956,7 +1964,8 @@
         ? `<button type="button" class="dadd ${f}" data-add="${f}">+ ${name}</button>`
         : `<span class="dfield ${f}"><em>${name}</em><input data-f="${f}" inputmode="decimal" value="${fmt(lv, this.digits)}" size="${fmt(lv, this.digits).length}">${money(lv)}<button type="button" data-del="${f}" title="Bỏ ${name}">✕</button></span>`;
       bar.hidden = false;
-      bar.innerHTML = `<span class="dk ${side === "long" ? "buy" : "sell"}">${kind}</span>
+      const other = this.pendingKind(this.draftSideAs(price, !$("pStopType").checked)).replace(/ .*/, "") + " " + ($("pStopType").checked ? "LIMIT" : "STOP");
+      bar.innerHTML = `<button type="button" class="dk ${side === "long" ? "buy" : "sell"}" data-a="kind" title="Bấm để đổi sang ${other} (cùng giá)">${kind} <span class="dk-swap">⇄</span></button>
         <span><b>${lots.toFixed(2)}</b> @ <b>${fmt(price, this.digits)}</b></span>
         ${field("stop", "SL", sl)}${field("target", "TP", tp)}
         <button type="button" class="go ${side === "long" ? "buy" : "sell"}" data-a="place">Đặt lệnh</button>
@@ -1982,6 +1991,12 @@
         input(b.dataset.add).value = fmt(price + (isStop === long ? -1 : 1) * dist, this.digits);
         apply();
       }));
+      // LIMIT ⇄ STOP at the same price: the side turns over (above the price: SELL LIMIT ⇄ BUY STOP), SL / TP with it.
+      bar.querySelector("[data-a=kind]").onclick = () => {
+        this.readDraftDist();
+        $("pStopType").checked = !$("pStopType").checked;
+        this.placeDraftStops(); this.updatePendingLabels(); this.syncLines();
+      };
       bar.querySelector("[data-a=place]").onclick = (e) => this.pendingOrder(e.currentTarget);
       bar.querySelector("[data-a=cancel]").onclick = () => this.togglePending(false);
     },
