@@ -264,17 +264,18 @@ final class LiveMarket {
         restart()
     }
 
-    /// 1-minute bars of each Monday 09:30–15:30 (Vietnam time) of the newest weeks: the "FVG đầu tuần"
-    /// (first M1 FVG after 09:30) on any timeframe. Sorted by time.
+    /// 1-minute bars of each Monday from the chosen time for 6 hours (09:30 New York by default) of the newest
+    /// weeks: the "FVG đầu tuần" (first M1 FVG from that time) on any timeframe. Sorted by time.
     private(set) var mondayMinuteBars: [Candle] = []
     private var mondayDays: [Date: (bars: [Candle], at: Date)] = [:]
     private var mondayKey = ""
     private var mondayLoading = false
 
     /// Fetches the Mondays not loaded yet (the running Monday again every minute until 15:30).
-    func loadMondayMinutes(weeks: Int) async {
+    func loadMondayMinutes(weeks: Int, hour: Double = 9.5, zoneID: String = "America/New_York") async {
         guard !mondayLoading else { return }
-        let key = "\(source.rawValue):\(symbol)"
+        let zone = TimeZone(identifier: zoneID) ?? TimeZone(identifier: "America/New_York")!
+        let key = "\(source.rawValue):\(symbol):\(hour):\(zoneID)"
         if key != mondayKey {
             mondayKey = key
             mondayDays = [:]
@@ -282,12 +283,14 @@ final class LiveMarket {
         }
         mondayLoading = true
         defer { mondayLoading = false }
-        let vn = 7.0 * 3600, now = Date()
-        var day = Int(floor((now.timeIntervalSince1970 + vn) / 86_400))
+        let now = Date()
+        var day = Int(floor((now.timeIntervalSince1970 + Double(zone.secondsFromGMT(for: now))) / 86_400))
         while (day + 4) % 7 != 1 { day -= 1 }
         var changed = false
         for _ in 0..<max(1, weeks) {
-            let open = Date(timeIntervalSince1970: Double(day) * 86_400 - vn + 9.5 * 3600)
+            // That Monday's start there, in UTC (the zone's offset on that day, summer time included).
+            let guess = Date(timeIntervalSince1970: Double(day) * 86_400 + hour * 3600)
+            let open = guess.addingTimeInterval(-Double(zone.secondsFromGMT(for: guess.addingTimeInterval(-Double(zone.secondsFromGMT(for: guess))))))
             let close = open.addingTimeInterval(6 * 3600)
             day -= 7
             guard open < now else { continue }

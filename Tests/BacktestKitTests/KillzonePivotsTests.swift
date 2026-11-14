@@ -146,7 +146,7 @@ final class KillzonePivotsTests: XCTestCase {
     func testMondayFirstFVGAfter0930Vietnam() {
         // Monday 2 Nov 2026 09:00 VN = 02:00 UTC, 5-minute bars for a week.
         let t0 = Date(timeIntervalSince1970: 1_793_584_800)
-        var c = (0..<(6 * 288)).map { i in
+        var c = (0..<(5 * 288 + 100)).map { i in
             Candle(time: t0.addingTimeInterval(Double(i) * 300), open: 100, high: 100.5, low: 99.5, close: 100)
         }
         // A gap at 09:10 (before 09:30): ignored.
@@ -157,7 +157,8 @@ final class KillzonePivotsTests: XCTestCase {
         c[20].low = 103; c[20].high = 104
         // Price comes back into it on Wednesday.
         c[600].low = 100.8
-        let gaps = KillzonePivots.mondayFVGs(c, minutes: c, weeks: 4)
+        let vietnam = TimeZone(identifier: "Asia/Ho_Chi_Minh")!
+        let gaps = KillzonePivots.mondayFVGs(c, minutes: c, weeks: 4, zone: vietnam)
         XCTAssertEqual(gaps.count, 1)
         XCTAssertEqual(gaps.first?.bullish, true)
         XCTAssertEqual(gaps.first?.start, 8)
@@ -173,11 +174,15 @@ final class KillzonePivotsTests: XCTestCase {
             return Candle(time: part.first!.time, open: part.first!.open, high: part.map(\.high).max()!,
                           low: part.map(\.low).min()!, close: part.last!.close)
         }
-        let onHourly = KillzonePivots.compute(candles: hourly, barInterval: 3600, config: KillzonePivots.Config(), minuteBars: c)
+        var vnConfig = KillzonePivots.Config()
+        vnConfig.weekFVGZoneID = "Asia/Ho_Chi_Minh"
+        let onHourly = KillzonePivots.compute(candles: hourly, barInterval: 3600, config: vnConfig, minuteBars: c)
         XCTAssertEqual(onHourly.weekFVGs.first?.start, 0)
         XCTAssertEqual(onHourly.weekFVGs.first?.top, 101.2)
+        // By New York time (the default) this data has no Monday 09:30 (it is Sunday night there).
+        XCTAssertTrue(KillzonePivots.mondayFVGs(c, minutes: c, weeks: 4).isEmpty)
         // No 1-minute bars on an hourly chart: none.
-        XCTAssertTrue(KillzonePivots.compute(candles: hourly, barInterval: 3600, config: KillzonePivots.Config()).weekFVGs.isEmpty)
+        XCTAssertTrue(KillzonePivots.compute(candles: hourly, barInterval: 3600, config: vnConfig).weekFVGs.isEmpty)
     }
 
     func testAlignedComparisonBars() {

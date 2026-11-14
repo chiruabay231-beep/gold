@@ -190,6 +190,9 @@ public enum KillzonePivots {
         public var showWeekFVG = true
         /// Newest weeks shown.
         public var weekFVGWeeks = 4
+        /// From this hour on Monday (9.5 = 09:30) in this time zone (New York, or Asia/Ho_Chi_Minh).
+        public var weekFVGHour = 9.5
+        public var weekFVGZoneID = "America/New_York"
 
         /// Fair value gaps (3-candle imbalances): two edge lines and a 50% line,
         /// running from the gap until a candle touches it (or to the last bar).
@@ -312,6 +315,8 @@ public enum KillzonePivots {
             showFVG = try c.decodeIfPresent(Bool.self, forKey: .showFVG) ?? d.showFVG
             showWeekFVG = try c.decodeIfPresent(Bool.self, forKey: .showWeekFVG) ?? d.showWeekFVG
             weekFVGWeeks = try c.decodeIfPresent(Int.self, forKey: .weekFVGWeeks) ?? d.weekFVGWeeks
+            weekFVGHour = try c.decodeIfPresent(Double.self, forKey: .weekFVGHour) ?? d.weekFVGHour
+            weekFVGZoneID = try c.decodeIfPresent(String.self, forKey: .weekFVGZoneID) ?? d.weekFVGZoneID
             fvgFromMinutes = try c.decodeIfPresent(Double.self, forKey: .fvgFromMinutes) ?? d.fvgFromMinutes
             fvgToMinutes = try c.decodeIfPresent(Double.self, forKey: .fvgToMinutes) ?? d.fvgToMinutes
             fvgConfluence = try c.decodeIfPresent(Bool.self, forKey: .fvgConfluence) ?? d.fvgConfluence
@@ -544,7 +549,8 @@ public enum KillzonePivots {
         periodLevels(candles, clock: clock, zone: zone, barInterval: barInterval, config: config, into: &output)
         if config.showWeekFVG, barInterval < 86_400 {
             let minutes = !minuteBars.isEmpty ? minuteBars : (barInterval == 60 ? candles : [])
-            output.weekFVGs = mondayFVGs(candles, minutes: minutes, weeks: config.weekFVGWeeks)
+            output.weekFVGs = mondayFVGs(candles, minutes: minutes, weeks: config.weekFVGWeeks, hour: config.weekFVGHour,
+                                         zone: TimeZone(identifier: config.weekFVGZoneID) ?? TimeZone(identifier: "America/New_York")!)
         }
         guard barInterval <= config.timeframeLimitMinutes * 60 else {
             output.hiddenByTimeframe = true
@@ -664,21 +670,21 @@ public enum KillzonePivots {
         return output
     }
 
-    /// Each week's first M1 FVG made on Monday after 09:30 Vietnam time (UTC+7): the gap's three 1-minute
-    /// candles (`minutes`) from 09:30 on, all on that Monday. Laid on the chart's bars `c`: from the bar holding
-    /// its middle candle to the week's last bar. Gaps after the chart's last bar are left out (replay). The
-    /// newest `weeks`.
-    static func mondayFVGs(_ c: [Candle], minutes m: [Candle], weeks: Int) -> [WeekFVG] {
+    /// Each week's first M1 FVG made on Monday from `hour` (09:30 by default) in `zone` (New York with its
+    /// summer time, or Vietnam): the gap's three 1-minute candles (`minutes`) from that time on, all on that
+    /// Monday there. Laid on the chart's bars `c`: from the bar holding its middle candle to the week's last
+    /// bar. Gaps after the chart's last bar are left out (replay). The newest `weeks`.
+    static func mondayFVGs(_ c: [Candle], minutes m: [Candle], weeks: Int, hour: Double = 9.5,
+                           zone: TimeZone = TimeZone(identifier: "America/New_York")!) -> [WeekFVG] {
         let n = c.count
         guard n > 0, m.count > 2 else { return [] }
-        let vn = 7.0 * 3600
-        func day(_ date: Date) -> Int { Int(floor((date.timeIntervalSince1970 + vn) / 86_400)) }
-        // Weeks from Monday (1970-01-01 was a Thursday).
-        func week(_ date: Date) -> Int { Int(floor(Double(day(date) + 3) / 7)) }
+        func local(_ date: Date) -> Double { date.timeIntervalSince1970 + Double(zone.secondsFromGMT(for: date)) }
+        func day(_ date: Date) -> Int { Int(floor(local(date) / 86_400)) }
+        // Weeks from Sunday (gold's week opens Sunday evening in New York, Monday morning in Vietnam).
+        func week(_ date: Date) -> Int { Int(floor(Double(day(date) + 4) / 7)) }
         func mondayAfterOpen(_ date: Date) -> Bool {
             let d = day(date)
-            let seconds = date.timeIntervalSince1970 + vn - Double(d) * 86_400
-            return (d + 4) % 7 == 1 && seconds >= 9.5 * 3600
+            return (d + 4) % 7 == 1 && local(date) - Double(d) * 86_400 >= hour * 3600
         }
         /// The chart bar holding a time (the last one starting at or before it).
         func bar(at time: Date) -> Int? {

@@ -193,11 +193,12 @@ struct LiveView: View {
             }
         }
         .task(id: nextNewsTime) { await noteNewsPrice() }
-        .task(id: "\(market.source.rawValue):\(market.symbol):\(killzoneSettings.config.showWeekFVG):\(killzoneSettings.config.weekFVGWeeks)") {
+        .task(id: "\(market.source.rawValue):\(market.symbol):\(killzoneSettings.config.showWeekFVG):\(killzoneSettings.config.weekFVGWeeks):\(killzoneSettings.config.weekFVGHour):\(killzoneSettings.config.weekFVGZoneID)") {
             // "FVG đầu tuần": Monday-morning M1 bars, again every minute while a Monday morning runs.
             guard showKillzonePivots, killzoneSettings.config.showWeekFVG else { return }
             while !Task.isCancelled {
-                await market.loadMondayMinutes(weeks: killzoneSettings.config.weekFVGWeeks)
+                let config = killzoneSettings.config
+                await market.loadMondayMinutes(weeks: config.weekFVGWeeks, hour: config.weekFVGHour, zoneID: config.weekFVGZoneID)
                 try? await Task.sleep(nanoseconds: 60 * 1_000_000_000)
             }
         }

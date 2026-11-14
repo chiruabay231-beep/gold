@@ -49,7 +49,8 @@
       dayOfWeek: false, dowPos: "bottom", dowAt: "midnight", dowHideWeekend: false,
       rangeTable: false, rangeAvg: 5,
       // The first FVG of each Monday after 09:30 Vietnam time, carried to the end of that week.
-      weekFvg: true, weekFvgWeeks: 4, weekFvgColor: "#2962ff",
+      // From weekFvgHour on Monday in weekFvgZone (09:30 New York by default, or Vietnam time).
+      weekFvg: true, weekFvgWeeks: 4, weekFvgColor: "#2962ff", weekFvgHour: 9.5, weekFvgZone: "America/New_York",
       macros: true, macroTfLimit: 15, macroTimeLabels: true, macroColor: "#787b86",
       macroList: [
         { on: true, name: "London 1", start: 2 + 33 / 60, end: 3 },
@@ -350,16 +351,19 @@
     return { start, high, low, hiI, loI };
   }
 
-  /** Each week's first M1 fair value gap made on Monday after 09:30 Vietnam time (UTC+7): the three
-   *  1-minute candles of the gap from 09:30 on, all on that Monday (`m1`, the chart's own bars on a 1-minute
-   *  chart). Laid on the chart's bars `c`: from the bar holding its middle candle to the week's last bar (the
-   *  right edge for the running week). `touched`: a later bar of the week came back into it. Newest `weekFvgWeeks`. */
+  /** Each week's first M1 fair value gap made on Monday from `weekFvgHour` (09:30 by default) in
+   *  `weekFvgZone` (New York, with its summer time, or Vietnam): the three 1-minute candles of the gap from that
+   *  time on, all on that Monday there (`m1`, the chart's own bars on a 1-minute chart). Laid on the chart's
+   *  bars `c`: from the bar holding its middle candle to the week's last bar (the right edge for the running
+   *  week). `touched`: a later bar of the week came back into it. Newest `weekFvgWeeks`. */
   function mondayFvgs(c, cfg, m1) {
-    const n = c.length, VN = 7 * 3600;
+    const n = c.length, zone = cfg.weekFvgZone || "America/New_York", from = (cfg.weekFvgHour != null ? +cfg.weekFvgHour : 9.5) * 3600;
     if (!n || !m1 || m1.length < 3) return [];
-    const vnDay = (t) => Math.floor((t + VN) / 86400);
-    const week = (t) => Math.floor((vnDay(t) + 3) / 7); // changes on Mondays (1970-01-01 was a Thursday)
-    const mondayAfter = (t) => { const d = vnDay(t); return (d + 4) % 7 === 1 && (t + VN) - d * 86400 >= 9.5 * 3600; };
+    const local = (t) => t + offsetSeconds(t, zone);
+    const day = (t) => Math.floor(local(t) / 86400);
+    // Weeks from Sunday (gold's week opens Sunday evening in New York, Monday morning in Vietnam).
+    const week = (t) => Math.floor((day(t) + 4) / 7);
+    const mondayAfter = (t) => { const d = day(t); return (d + 4) % 7 === 1 && local(t) - d * 86400 >= from; };
     // The chart bar holding a time (the last one starting at or before it).
     const barAt = (t) => { let lo = 0, hi = n - 1; if (t < c[0].time) return null; while (lo < hi) { const m = (lo + hi + 1) >> 1; if (c[m].time <= t) lo = m; else hi = m - 1; } return lo; };
     const out = [], done = new Set(), upTo = c[n - 1].time + 86400;
@@ -367,7 +371,7 @@
       const b = m1[i], a = m1[i - 2];
       if (b.time > upTo) break;
       const wk = week(b.time);
-      if (done.has(wk) || !mondayAfter(a.time) || vnDay(b.time) !== vnDay(a.time)) continue;
+      if (done.has(wk) || !mondayAfter(a.time) || day(b.time) !== day(a.time)) continue;
       const bull = b.low > a.high, bear = b.high < a.low;
       if (!bull && !bear) continue;
       done.add(wk);
@@ -1067,5 +1071,5 @@
     g.restore();
   }
 
-  window.ICT = { drawSharks, drawZones, defaults, merge, compute, draw, sharkFlow, smt, drawSMT };
+  window.ICT = { drawSharks, drawZones, defaults, merge, compute, draw, sharkFlow, smt, drawSMT, offsetSeconds };
 })();

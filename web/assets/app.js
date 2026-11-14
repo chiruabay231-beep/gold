@@ -6362,8 +6362,10 @@
             + tog("dowHideWeekend", "Ẩn nhãn T7 / CN")
             + `<div class="fr">${chk("nextDay")}<span class="grow">Đường dọc bắt đầu ngày hôm sau (giờ VN, đếm ngược)</span>${sw("nextDayColor")}</div>`
             + note("Open: giá mở ngày (DO) / tuần (WO) / tháng (MO) hiện tại. High/Low: đỉnh – đáy của ngày / tuần / tháng trước (PDH–PDL, PWH–PWL, PMH–PML). Midline: giữa của chúng (PDM, PWM, PMM). Divider: vạch dọc nơi mỗi ngày / tuần / tháng bắt đầu. Ngày tính theo múi giờ ở tab Hiển thị (ICT: 0h New York). Hiện ở mọi khung nhỏ hơn kỳ đó.")
-            + head("FVG đầu tuần (M1, thứ 2 sau 9:30 VN)") + tog("weekFvg", "FVG M1 đầu tiên của thứ 2 sau 9:30 sáng (giờ VN), kẻ tới hết tuần") + numf("weekFvgWeeks", "Số tuần gần nhất")
-            + note("Mỗi tuần lấy FVG đầu tiên trên khung M1 hình thành trong ngày thứ 2 từ 9:30 sáng giờ Việt Nam (3 cây nến M1 tạo FVG đều từ 9:30, cùng ngày thứ 2), dù chart đang ở khung nào; vùng kéo ngang tới hết tuần để xem giá phản ứng. Đường giữa là 50% của FVG. Nến M1 lấy từ máy chủ MT5 (hoặc Binance).")
+            + head("FVG đầu tuần (M1, thứ 2)") + tog("weekFvg", "FVG M1 đầu tiên của thứ 2 sau giờ bên dưới, kẻ tới hết tuần")
+            + `<div class="fr"><span class="grow">Tính từ</span>${time("weekFvgHour")}${selI("weekFvgZone", [["America/New_York", "Giờ New York"], ["Asia/Ho_Chi_Minh", "Giờ Việt Nam"]])}</div>`
+            + numf("weekFvgWeeks", "Số tuần gần nhất")
+            + note("Mỗi tuần lấy FVG đầu tiên trên khung M1 hình thành trong ngày thứ 2 từ giờ đã chọn (mặc định 9:30 sáng New York, tức 21:30 giờ VN mùa đông / 20:30 mùa hè; New York tự đổi giờ mùa hè), 3 cây nến M1 tạo FVG đều từ giờ đó và cùng ngày thứ 2, dù chart đang ở khung nào; vùng kéo ngang tới hết tuần để xem giá phản ứng. Đường giữa là 50% của FVG. Nến M1 lấy từ máy chủ MT5 (hoặc Binance).")
             + head("FVG & VI") + tog("fvg", "Hiện FVG") + tog("fvgStrong", "Chỉ FVG mạnh (lọc FVG yếu)") + numf("fvgDisplacement", "Nến tạo FVG ≥ × thân TB", 0.1)
             + tog("fvgConfluence", "Tô nền khi trùng FVG khung lớn") + tog("fvgMid", "Đường giữa 50%") + tog("fvgHideFilled", "Ẩn FVG đã bị chạm")
             + numf("gapKeep", "Chạm rồi bật ngược: giữ (phút)") + numf("fvgMinSize", "Lọc FVG nhỏ (× biên độ nến)", 0.1) + numf("fvgCount", "Giữ FVG gần nhất")
@@ -6684,13 +6686,17 @@
       if (!cfg || !cfg.weekFvg || !bars || !bars.length || !showInd.killzones) return null;
       const key = this.symbolKey();
       if (!this.wfM1 || this.wfM1.key !== key) this.wfM1 = { key, days: new Map() };
-      const VN = 7 * 3600, store1 = this.wfM1, now = Date.now() / 1000;
+      const store1 = this.wfM1, now = Date.now() / 1000;
+      const zone = cfg.weekFvgZone || "America/New_York", hour = cfg.weekFvgHour != null ? +cfg.weekFvgHour : 9.5;
+      const off = (t) => window.ICT.offsetSeconds(t, zone);
       const first = bars[0].time, last = bars[bars.length - 1].time;
-      let d = Math.floor((last + VN) / 86400);
+      let d = Math.floor((last + off(last)) / 86400);
       while ((d + 4) % 7 !== 1) d--;
       const want = [];
       for (let k = 0; k < Math.max(1, cfg.weekFvgWeeks || 1); k++, d -= 7) {
-        const open = d * 86400 - VN + 9.5 * 3600;
+        // That Monday's start time there, in UTC (the zone's offset on that day, summer time included).
+        const guess = d * 86400 + hour * 3600;
+        const open = guess - off(guess - off(guess));
         if (open + 6 * 3600 < first) break;
         want.push(open);
       }

@@ -224,15 +224,20 @@ struct KillzonePivotsSettingsView: View {
 
     private var weekFVGSection: some View {
         Section {
-            Toggle("FVG M1 đầu tiên thứ 2 sau 9:30 (VN)", isOn: $settings.config.showWeekFVG)
+            Toggle("FVG M1 đầu tiên của thứ 2", isOn: $settings.config.showWeekFVG)
             if settings.config.showWeekFVG {
+                timeRow("Tính từ", hour: $settings.config.weekFVGHour)
+                Picker("Theo giờ", selection: $settings.config.weekFVGZoneID) {
+                    Text("New York").tag("America/New_York")
+                    Text("Việt Nam").tag("Asia/Ho_Chi_Minh")
+                }
                 Stepper("\(settings.config.weekFVGWeeks) tuần gần nhất", value: $settings.config.weekFVGWeeks, in: 1...12)
                 colorRow("Màu", color: $settings.weekFVGColor)
             }
         } header: {
             Text("FVG đầu tuần")
         } footer: {
-            Text("Mỗi tuần lấy FVG đầu tiên trên khung M1 hình thành trong ngày thứ 2 từ 9:30 sáng giờ Việt Nam (3 cây nến M1 tạo FVG đều từ 9:30, cùng ngày thứ 2), dù chart đang ở khung nào; vùng kéo ngang tới hết tuần để xem giá phản ứng. Đường đứt ở giữa là 50% của FVG.")
+            Text("Mỗi tuần lấy FVG đầu tiên trên khung M1 hình thành trong ngày thứ 2 từ giờ đã chọn (mặc định 9:30 sáng New York, tức 21:30 giờ VN mùa đông / 20:30 mùa hè; New York tự đổi giờ mùa hè), 3 cây nến M1 tạo FVG đều từ giờ đó và cùng ngày thứ 2, dù chart đang ở khung nào; vùng kéo ngang tới hết tuần để xem giá phản ứng. Đường đứt ở giữa là 50% của FVG.")
         }
     }
 
