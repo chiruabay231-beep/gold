@@ -876,7 +876,20 @@ public enum KillzonePivots {
     ///  - The two swings are the top (bottom) of the stretch between them in both markets, so a line never
     ///    crosses a bigger high, and they are at most `smtLookback` bars apart.
     ///  - Two SMTs that share a swing (a chain) keep only the newer.
-    /// With `smtInverse` (DXY) our highs pair with its lows. Confirmed `smtSwingLength` bars later.
+    /// A market moving the other way (DXY) is found by itself: our highs pair with its lows. Confirmed `smtSwingLength` bars later.
+    /// How the closes of `a` and of `m` (its bars matched on time) move together, −1…1 (1 with too few bars).
+    static func closeCorrelation(_ a: [Candle], _ m: [Candle?]) -> Double {
+        var sx = 0.0, sy = 0.0, sxx = 0.0, syy = 0.0, sxy = 0.0, k = 0.0
+        for i in a.indices.dropFirst() {
+            guard let b = m[i], let p = m[i - 1] else { continue }
+            let x = a[i].close - a[i - 1].close, y = b.close - p.close
+            sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y; k += 1
+        }
+        guard k >= 10 else { return 1 }
+        let cov = sxy - sx * sy / k, vx = sxx - sx * sx / k, vy = syy - sy * sy / k
+        return vx > 0 && vy > 0 ? cov / (vx * vy).squareRoot() : 1
+    }
+
     public static func smtDivergences(_ a: [Candle], _ b: [Candle], config: Config) -> [SMTDivergence] {
         let length = max(config.smtSwingLength, 1)
         // The other market's swing may come a few bars before or after ours (up to one swing length).
@@ -885,6 +898,10 @@ public enum KillzonePivots {
         guard n > length * 2 + 2, !b.isEmpty else { return [] }
         let other = Dictionary(b.map { ($0.time, $0) }, uniquingKeysWith: { _, new in new })
         let matched = a.map { other[$0.time] }
+        // Highs with highs, lows with lows; only a market that moves the other way (DXY against gold, found
+        // from how their closes move together) has its lows paired with our highs. `smtInverse` is no longer
+        // read: left on for silver it paired gold's highs with silver's lows.
+        let inverse = closeCorrelation(a, matched) < -0.2
         // Swings: `length` bars each side less extreme (`more`: higher for highs, lower for lows).
         func pivots(_ value: (Int) -> Double?, _ more: (Double, Double) -> Bool) -> [Int] {
             (length..<(n - length)).filter { p in
@@ -897,7 +914,7 @@ public enum KillzonePivots {
         }
         var result: [SMTDivergence] = []
         for high in [true, false] {
-            let otherHigh = high != config.smtInverse
+            let otherHigh = high != inverse
             let valueA: (Int) -> Double? = { high ? a[$0].high : a[$0].low }
             let valueB: (Int) -> Double? = { i in matched[i].map { otherHigh ? $0.high : $0.low } }
             let moreA: (Double, Double) -> Bool = { high ? $0 > $1 : $0 < $1 }

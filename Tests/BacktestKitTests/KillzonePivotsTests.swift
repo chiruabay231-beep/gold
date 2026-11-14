@@ -93,10 +93,12 @@ final class KillzonePivotsTests: XCTestCase {
 
     func testSMTDivergence() {
         let t0 = Date(timeIntervalSince1970: 1_790_000_000)
-        func bars(_ highs: [Int: Double], lows: [Int: Double] = [:]) -> [Candle] {
+        // `sway`: closes going up and down by this much (negative = the other way), so the two markets'
+        // moves are related; 0 = flat closes.
+        func bars(_ highs: [Int: Double], lows: [Int: Double] = [:], sway: Double = 0) -> [Candle] {
             (0..<40).map { i in
                 Candle(time: t0.addingTimeInterval(Double(i) * 300), open: 100, high: highs[i] ?? 100.5,
-                       low: lows[i] ?? 99.5, close: 100)
+                       low: lows[i] ?? 99.5, close: 100 + (i % 2 == 0 ? sway : -sway) * 0.1)
             }
         }
         // Gold makes a higher high, silver a lower high: bearish SMT.
@@ -110,14 +112,19 @@ final class KillzonePivotsTests: XCTestCase {
         // Both make higher highs: no divergence.
         XCTAssertTrue(KillzonePivots.smtDivergences(gold, bars([10: 105, 20: 107]), config: KillzonePivots.Config()).isEmpty)
 
-        // Inverse market (DXY): gold lower low while DXY makes a lower high = bullish SMT.
-        var inverse = KillzonePivots.Config()
-        inverse.smtInverse = true
-        let goldLows = bars([:], lows: [10: 95, 20: 94])
-        let dxy = bars([10: 105, 20: 104])
-        let bullish = KillzonePivots.smtDivergences(goldLows, dxy, config: inverse)
+        // A market moving the other way (DXY, found from the closes): gold lower low while DXY makes a lower
+        // high = bullish SMT.
+        let goldLows = bars([:], lows: [10: 95, 20: 94], sway: 1)
+        let dxy = bars([10: 105, 20: 104], sway: -1)
+        let bullish = KillzonePivots.smtDivergences(goldLows, dxy, config: KillzonePivots.Config())
         XCTAssertEqual(bullish.first?.bullish, true)
         XCTAssertEqual(bullish.first?.end, 20)
+        // Silver moves with gold: the old "inverse" switch left on no longer pairs gold's highs with silver's lows.
+        var switchOn = KillzonePivots.Config()
+        switchOn.smtInverse = true
+        let same = KillzonePivots.smtDivergences(bars([10: 105, 20: 106], sway: 1), bars([10: 105, 20: 104], sway: 1), config: switchOn)
+        XCTAssertEqual(same.first?.bullish, false)
+        XCTAssertEqual(same.first?.otherEndPrice, 104)
 
         // Gold a lower high, silver a higher high on the same candles: bearish SMT too.
         let lower = KillzonePivots.smtDivergences(bars([10: 105, 20: 104.6]), bars([10: 105, 20: 106]),

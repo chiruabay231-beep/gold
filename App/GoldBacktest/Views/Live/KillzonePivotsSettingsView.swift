@@ -326,7 +326,9 @@ struct KillzonePivotsSettingsView: View {
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
                 }
-                Toggle("Mã so sánh chạy ngược chiều (DXY)", isOn: $settings.config.smtInverse)
+                Text("So đỉnh với đỉnh, đáy với đáy của 2 mã. Mã chạy ngược chiều (DXY) được tự nhận biết: khi đó đỉnh vàng so với đáy DXY.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
                 Stepper("Swing: \(settings.config.smtSwingLength) nến mỗi bên", value: $settings.config.smtSwingLength, in: 2...10)
                 Stepper("Hai đỉnh/đáy cách tối đa \(settings.config.smtLookback) nến", value: $settings.config.smtLookback,
                         in: 10...300, step: 10)

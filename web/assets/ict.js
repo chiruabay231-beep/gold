@@ -929,16 +929,33 @@
    *  - The two swings are the top (bottom) of the stretch between them in both markets, so a line never
    *    crosses a bigger high, and they are at most `lookback` bars apart.
    *  - Two SMTs that share a swing (a chain) keep only the newer.
-   * `inverse` (DXY): our highs pair with its lows. Confirmed `swing` bars after the second swing. The newest `count`.
+   * A market moving the other way (DXY) is found by itself: our highs pair with its lows. Confirmed `swing` bars after the second swing. The newest `count`.
    */
+  /** How the closes of `a` and of `m` (its bars matched on time, null where missing) move together, −1…1. */
+  function correlation(a, m) {
+    let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, k = 0;
+    for (let i = 1; i < a.length; i++) {
+      if (!m[i] || !m[i - 1]) continue;
+      const x = a[i].close - a[i - 1].close, y = m[i].close - m[i - 1].close;
+      sx += x; sy += y; sxx += x * x; syy += y * y; sxy += x * y; k++;
+    }
+    if (k < 10) return 1;
+    const cov = sxy - (sx * sy) / k, vx = sxx - (sx * sx) / k, vy = syy - (sy * sy) / k;
+    return vx > 0 && vy > 0 ? cov / Math.sqrt(vx * vy) : 1;
+  }
+
   function smt(a, b, opts = {}) {
-    const L = Math.max(opts.swing || 5, 1), lookback = opts.lookback || 60, count = opts.count || 3, inverse = !!opts.inverse;
+    const L = Math.max(opts.swing || 5, 1), lookback = opts.lookback || 60, count = opts.count || 3;
     // The other market's swing may come a few bars before or after ours (up to one swing length).
     const near = opts.near != null ? opts.near : L;
     const n = a.length;
     if (n <= L * 2 + 2 || !b.length) return [];
     const other = new Map(b.map((x) => [x.time, x]));
     const m = a.map((x) => other.get(x.time) || null);
+    // Highs with highs, lows with lows; only a market that moves the other way (DXY against gold, found
+    // from how their closes move together) has its lows paired with our highs. Never set by hand: a
+    // switch left on for silver paired gold's highs with silver's lows.
+    const inverse = correlation(a, m) < -0.2;
     // Swings: `L` bars each side less extreme (`up`: higher for highs, lower for lows).
     const pivots = (get, up) => {
       const out = [];
