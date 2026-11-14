@@ -162,8 +162,9 @@
     }
     y(p) { return this.host.series.priceToCoordinate(p); }
     /** A chart point at (x, y). `snap`: "free" (or false) where the mouse is; "weak" (or undefined) on the
-     *  candle under it, its open/high/low/close when within 8 px; "strong" (or true, the magnet) on the
-     *  candle and its nearest open/high/low/close within 30 px. */
+     *  candle under it, stuck to a candle's wick tip (its high or low, which is the body's edge when it has no
+     *  wick) within 16 px, looking at that candle and the ones either side; "strong" (or true, the magnet)
+     *  also its open / close, within 30 px. */
     point(x, y, snap) {
       const mode = snap === true ? "strong" : snap === false ? "free" : snap || "weak";
       const ts = this.host.chart.timeScale();
@@ -174,13 +175,23 @@
       else l = Math.round(l);
       let p = this.host.series.coordinateToPrice(y);
       if (p == null) return null;
-      // Onto the candle's open/high/low/close when near one.
       if (mode !== "free") {
-        const bar = this.host.bars()[l];
-        if (bar) {
-          const near = [bar.open, bar.high, bar.low, bar.close].map((v) => [v, Math.abs(this.y(v) - y)]).sort((m, k) => m[1] - k[1])[0];
-          if (near[1] < (mode === "strong" ? 30 : 8)) p = near[0];
+        const bars = this.host.bars(), reach = mode === "strong" ? 30 : 16;
+        let best = null;
+        for (const k of [l, l - 1, l + 1]) {
+          const bar = bars[k];
+          if (!bar) continue;
+          const levels = mode === "strong" ? [bar.high, bar.low, bar.open, bar.close] : [bar.high, bar.low];
+          const bx = ts.logicalToCoordinate(k);
+          for (const v of levels) {
+            const vy = this.y(v);
+            if (vy == null) continue;
+            // Mostly by height; a neighbour counts a little farther than the candle under the mouse.
+            const dist = Math.abs(vy - y) + (k === l ? 0 : Math.min(12, Math.abs((bx == null ? x : bx) - x) * 0.5));
+            if (dist <= reach && (!best || dist < best.dist)) best = { dist, v, k };
+          }
         }
+        if (best) { p = best.v; l = best.k; }
       }
       return { t: this.logicalToTime(l), p: +p.toFixed(this.host.digits()) };
     }
