@@ -4423,7 +4423,16 @@
 
           return;
         }
-        if (tap && e.target && wrap.contains(e.target)) { const { x, y } = rel(e); this.tapChart(y, x); }
+        if (tap && e.target && wrap.contains(e.target)) {
+          const { x, y } = rel(e);
+          // A double tap with a finger (the mouse has dblclick): 2 charts for the SMT, or back to one.
+          if (e.pointerType === "touch") {
+            const prev = this.lastTap, now = performance.now();
+            this.lastTap = { t: now, x, y };
+            if (prev && now - prev.t < 320 && Math.hypot(x - prev.x, y - prev.y) < 30 && !this.chartDblBusy(e)) { this.lastTap = null; this.togglePairLayout(); return; }
+          }
+          this.tapChart(y, x);
+        }
       });
       window.addEventListener("pointercancel", (e) => {
         fingers.delete(e.pointerId);
@@ -4432,7 +4441,11 @@
         if (this.drawGesture) { this.drawGesture = false; lock(false); this.drawings.up(); }
         down = null;
       });
-      wrap.addEventListener("dblclick", () => { if (this.drawings && this.drawings.current) this.drawingSettings(this.drawings.current); });
+      wrap.addEventListener("dblclick", (e) => {
+        if (this.drawings && this.drawings.current) { this.drawingSettings(this.drawings.current); return; }
+        // Double-click on the chart: the 2-chart layout for the SMT (again: back to one chart).
+        if (!this.chartDblBusy(e)) this.togglePairLayout();
+      });
       wrap.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         if (this.drawings && this.drawings.pending) { this.drawings.cancel(); return; }
@@ -6347,6 +6360,7 @@
             + `<div class="fr"><span class="grow">Kiểu nét</span>${selI("dwmStyle", styles)}${selI("dwmWidth", [[1, "1"], [2, "2"], [3, "3"]])}</div>`
             + `<div class="fr">${chk("dayOfWeek")}<span class="grow">Nhãn thứ trong tuần</span>${selI("dowPos", [["bottom", "Dưới"], ["top", "Trên"]])}${selI("dowAt", [["midnight", "Nửa đêm"], ["midday", "Giữa trưa"]])}</div>`
             + tog("dowHideWeekend", "Ẩn nhãn T7 / CN")
+            + `<div class="fr">${chk("nextDay")}<span class="grow">Đường dọc bắt đầu ngày hôm sau (giờ VN, đếm ngược)</span>${sw("nextDayColor")}</div>`
             + note("Open: giá mở ngày (DO) / tuần (WO) / tháng (MO) hiện tại. High/Low: đỉnh – đáy của ngày / tuần / tháng trước (PDH–PDL, PWH–PWL, PMH–PML). Midline: giữa của chúng (PDM, PWM, PMM). Divider: vạch dọc nơi mỗi ngày / tuần / tháng bắt đầu. Ngày tính theo múi giờ ở tab Hiển thị (ICT: 0h New York). Hiện ở mọi khung nhỏ hơn kỳ đó.")
             + head("FVG đầu tuần (M1, thứ 2 sau 9:30 VN)") + tog("weekFvg", "FVG M1 đầu tiên của thứ 2 sau 9:30 sáng (giờ VN), kẻ tới hết tuần") + numf("weekFvgWeeks", "Số tuần gần nhất")
             + note("Mỗi tuần lấy FVG đầu tiên trên khung M1 hình thành trong ngày thứ 2 từ 9:30 sáng giờ Việt Nam (3 cây nến M1 tạo FVG đều từ 9:30, cùng ngày thứ 2), dù chart đang ở khung nào; vùng kéo ngang tới hết tuần để xem giá phản ứng. Đường giữa là 50% của FVG. Nến M1 lấy từ máy chủ MT5 (hoặc Binance).")
@@ -7651,6 +7665,29 @@
       }));
     },
 
+    /** A double-click that belongs to something else: a button or panel over the chart, a drawing being made. */
+    chartDblBusy(e) {
+      if (e && e.target && e.target.closest && e.target.closest("#ticket, #ticket2, #selBar, #posPill, #drawBar, #favBar, #draftBar, #btChip, .mascot, .c2-head, .quick-trade, button, input, select")) return true;
+      const dr = this.drawings;
+      return !!(dr && (dr.pending || dr.tool)) || !!this.replayPicking;
+    },
+
+    /** One chart ⇄ two markets (gold / silver) with the SMT on; the 2-chart layout last used comes back. */
+    togglePairLayout() {
+      if (this.pair()) {
+        store.set("aurum.pairMode", this.layout);
+        this.setLayout("1");
+        return;
+      }
+      if (!showInd.smt) { showInd.smt = true; store.set("aurum.ind", JSON.stringify(showInd)); }
+      const mode = store.get("aurum.pairMode") === "h" ? "h" : "v";
+      this.setLayout(mode);
+      if (!store.get("aurum.pairHint")) {
+        store.set("aurum.pairHint", "1");
+        toast("Đã mở 2 biểu đồ (SMT). Bấm đúp vào chart lần nữa để về 1 biểu đồ");
+      }
+    },
+
     setLayout(mode) {
       if (!LAYOUTS.includes(mode)) mode = "h";
       this.layout = mode;
@@ -7974,7 +8011,10 @@
       const end = () => { if (!gesture) return; gesture = false; lock(false); this.drawings2.up(); };
       window.addEventListener("pointerup", end);
       window.addEventListener("pointercancel", end);
-      wrap.addEventListener("dblclick", () => { if (this.drawings2.current) this.drawingSettings(this.drawings2.current); });
+      wrap.addEventListener("dblclick", (e) => {
+        if (this.drawings2.current) { this.drawingSettings(this.drawings2.current); return; }
+        if (!this.chartDblBusy(e)) this.togglePairLayout();
+      });
       wrap.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         if (this.drawings2.pending) { this.drawings2.cancel(); return; }

@@ -43,6 +43,8 @@
         { key: "M", open: false, hl: false, mid: false, divider: false, color: "#9c27b0" },
       ],
       dwmStyle: "solid", dwmWidth: 1, dwmAlert: false,
+      // A vertical line where the next day starts (right of the last candle), with the time left.
+      nextDay: true, nextDayColor: "#f5a524",
       // Weekday names under (or over) each day, at its midnight or midday; weekends can be left out.
       dayOfWeek: false, dowPos: "bottom", dowAt: "midnight", dowHideWeekend: false,
       rangeTable: false, rangeAvg: 5,
@@ -449,6 +451,14 @@
     if (show.daily && cfg.daily && sec < 86400) out.levels.push(...dailyLevels(c, ck, cfg));
     if (!show.killzones) return out;
     periodLevels(c, ck, sec, cfg, out);
+    if (cfg.nextDay && sec < 86400) {
+      // The next day of the indicator's time zone (as the D lines): its start and its place right of the last bar.
+      const tl = c[n - 1].time, zone = cfg.timeZone;
+      const day = Math.floor((tl + offsetSeconds(tl, zone)) / 86400) + 1;
+      let t = day * 86400 - offsetSeconds(tl, zone);
+      t = day * 86400 - offsetSeconds(t, zone);
+      out.nextDay = { time: t, index: n - 1 + (t - tl) / sec };
+    }
     if (cfg.weekFvg && sec < 86400) {
       const m1 = extra.m1 && extra.m1.length ? extra.m1 : sec === 60 ? c : null;
       if (m1) out.weekFvgs = mondayFvgs(c, cfg, m1);
@@ -744,6 +754,35 @@
       g.restore();
     });
 
+    // Where the next day starts: a dashed line, the time in Vietnam and how long until then.
+    if (o.nextDay) {
+      const x = X(o.nextDay.index);
+      const c7 = (cfg.nextDayColor || "#f5a524").slice(0, 7);
+      const vn = new Date((o.nextDay.time + 7 * 3600) * 1000), p2 = (v) => String(v).padStart(2, "0");
+      const left = Math.max(0, Math.round(o.nextDay.time - Date.now() / 1000));
+      const hh = Math.floor(left / 3600), mm = Math.floor((left % 3600) / 60);
+      const ahead = x == null || x > w;
+      const text = `${ahead ? "Ngày mới →" : "Ngày mới"} ${p2(vn.getUTCHours())}:${p2(vn.getUTCMinutes())} VN${left > 0 ? ` · còn ${hh ? hh + "h" : ""}${p2(mm)}m` : ""}`;
+      g.font = "600 10.5px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+      const tw = g.measureText(text).width;
+      let bx;
+      if (ahead) {
+        // Off to the right (hours away on small timeframes): its name at the right edge.
+        bx = w - tw - 12;
+      } else if (x >= 0) {
+        g.strokeStyle = alpha(c7, 0.85); g.lineWidth = 1; g.setLineDash([5, 4]);
+        g.beginPath(); g.moveTo(Math.round(x) + 0.5, 0); g.lineTo(Math.round(x) + 0.5, h); g.stroke(); g.setLineDash([]);
+        bx = x + tw + 12 > w ? x - tw - 10 : x + 4;
+      }
+      if (bx != null) {
+        g.fillStyle = alpha(c7, 0.92);
+        g.beginPath(); g.roundRect(bx, 22, tw + 8, 16, 4); g.fill();
+        g.fillStyle = "#1a1205"; g.textAlign = "left"; g.textBaseline = "middle";
+        g.fillText(text, bx + 4, 30.5);
+        g.textBaseline = "bottom";
+      }
+      g.font = "10px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+    }
     (o.dividers || []).forEach((d) => {
       const x = X(d.index);
       if (x == null || x < 0 || x > w) return;
