@@ -8265,10 +8265,12 @@
           if (!market) throw new Error("no Binance pair");
           bars = await binanceBars(market.futures ? "https://fapi.binance.com/fapi/v1/klines" : "https://api.binance.com/api/v3/klines", market.name, this.interval, 800);
           name = market.name; digits = market.digits != null ? market.digits : 2;
+          this.cmpMarket = market;
         } catch { bars = []; }
       }
       if (token !== this.cmpToken) return;
-      this.cmpBars = bars; this.cmpQuote = quote; this.cmpLive = live; this.cmpView = null; this.cmpNoOlder = false;
+      this.cmpBars = bars; this.cmpQuote = quote; this.cmpLive = live; this.cmpView = null; this.cmpNoOlder = false; this.cmpCovered = [];
+      if (live) this.cmpMarket = null;
       this.cmpName = name; this.cmpDigits = digits;
       if (live) this.cmpTimer = setInterval(() => this.pollCmp(token), 2000);
       if (feed) {
@@ -8305,6 +8307,8 @@
     /** The related market up to the replay moment; drawn on the second chart when it is shown. */
     showCmp(full) {
       const until = this.replay ? this.bars[this.replay.idx].time + TF_SECONDS[this.interval] - 1 : Infinity;
+      // A replay further back than the compared market's loaded bars: fetch them around the replayed bar.
+      if (this.replay) this.cmpCover(until);
       const view = (this.cmpBars || []).filter((b) => b.time <= until);
       const changed = full || !this.cmpView || view.length !== this.cmpView.length || this.replay;
       this.cmpView = view;
@@ -8360,6 +8364,40 @@
     },
 
     /** Older bars of the second chart, so it covers what the first one shows. */
+    /** The compared market's bars around `until` (the replayed bar): from 400 bars before it to 1000 after,
+     *  fetched when they are not loaded yet (and again when the replay runs past them). */
+    async cmpCover(until) {
+      const bars = this.cmpBars || [], sec = TF_SECONDS[this.interval];
+      if (!sec || this.cmpCoverBusy || isSecTF(this.interval)) return;
+      const from = until - 400 * sec, to = until + 60 * sec;
+      const covered = (this.cmpCovered || []).some(([a, b]) => a <= from && b >= Math.min(to, Date.now() / 1000));
+      const loaded = bars.length && bars[0].time <= from && bars[bars.length - 1].time >= Math.min(to, Date.now() / 1000 - 2 * sec);
+      if (covered || loaded) return;
+      const before = Math.min(Math.floor(Date.now() / 1000) + sec, until + 1000 * sec);
+      const token = this.cmpToken;
+      this.cmpCoverBusy = true;
+      try {
+        let got = [];
+        if (this.cmpLive) {
+          const data = await this.call(this.cmpPath(1400, before));
+          got = this.toBars(data.candles || []);
+        } else if (this.cmpMarket) {
+          const m = this.cmpMarket, [kname, factor] = binanceKline(this.interval);
+          const rest = m.futures ? "https://fapi.binance.com/fapi/v1/klines" : "https://api.binance.com/api/v3/klines";
+          const rows = await (await fetch(`${rest}?symbol=${m.name}&interval=${kname}&endTime=${before * 1000}&limit=${Math.min(1000, 1400 * factor)}`)).json();
+          got = Array.isArray(rows) ? mergeKlines(rows.map((r) => ({ time: r[0] / 1000, open: +r[1], high: +r[2], low: +r[3], close: +r[4], volume: +r[5] })), this.interval) : [];
+        }
+        if (token !== this.cmpToken || !got.length) return;
+        // Into the loaded bars, by time (a gap between the two stays a gap; the charts line up by time).
+        const map = new Map((this.cmpBars || []).map((b) => [b.time, b]));
+        got.forEach((b) => map.set(b.time, b));
+        this.cmpBars = [...map.values()].sort((a, b) => a.time - b.time);
+        this.cmpCovered = (this.cmpCovered || []).concat([[got[0].time, got[got.length - 1].time]]);
+        this.cmpView = null;
+        this.showCmp(true);
+      } catch { /* keep what there is */ } finally { this.cmpCoverBusy = false; }
+    },
+
     async loadOlderCmp() {
       if (this.cmpFeed) {
         const feed = this.cmpFeed;
