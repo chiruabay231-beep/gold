@@ -917,20 +917,6 @@
 
   /* ---------- SMT divergence against a related market ---------- */
 
-  /**
-   * Two swing highs (lows) in a row where one market makes a higher high (lower low)
-   * and the other does not — the app's rule. Bars of `b` are matched to `a` by time.
-   */
-  /**
-   * SMT divergence: two swing highs (or two swing lows) in a row, on the same stretch of candles in both
-   * markets, where one market's second high is higher and the other's is lower (lows: one lower, one higher).
-   *  - A swing is `swing` bars each side, in each market on its own; the other market's swing must be within
-   *    `near` bars of ours (default: `swing` bars; the nearest one).
-   *  - The two swings are the top (bottom) of the stretch between them in both markets, so a line never
-   *    crosses a bigger high, and they are at most `lookback` bars apart.
-   *  - Two SMTs that share a swing (a chain) keep only the newer.
-   * A market moving the other way (DXY) is found by itself: our highs pair with its lows. Confirmed `swing` bars after the second swing. The newest `count`.
-   */
   /** How the closes of `a` and of `m` (its bars matched on time, null where missing) move together, −1…1. */
   function correlation(a, m) {
     let sx = 0, sy = 0, sxx = 0, syy = 0, sxy = 0, k = 0;
@@ -944,17 +930,26 @@
     return vx > 0 && vy > 0 ? cov / Math.sqrt(vx * vy) : 1;
   }
 
+  /**
+   * SMT divergence, on the same candles of both markets (one vertical line through each end):
+   *  - Two swing highs (or lows) in a row of either market — whichever made them — and the other market's
+   *    high (low) on those same two candles. One makes the higher high (lower low), the other does not.
+   *  - A swing is `swing` bars each side; nothing between the two swings goes beyond them in the market that
+   *    made them; at most `lookback` bars apart.
+   *  - Broken: once a later candle of either market goes beyond the SMT's highest high (lowest low) in that
+   *    market, it is gone.
+   *  - Two SMTs sharing a swing (a chain): only the newer.
+   * A market moving the other way (DXY, found from the closes) is compared at its lows for our highs.
+   * Bars of `b` are matched to `a` by time. The newest `count`.
+   */
   function smt(a, b, opts = {}) {
     const L = Math.max(opts.swing || 5, 1), lookback = opts.lookback || 60, count = opts.count || 3;
-    // The other market's swing may come a few bars before or after ours (up to one swing length).
-    const near = opts.near != null ? opts.near : L;
     const n = a.length;
     if (n <= L * 2 + 2 || !b.length) return [];
     const other = new Map(b.map((x) => [x.time, x]));
     const m = a.map((x) => other.get(x.time) || null);
     // Highs with highs, lows with lows; only a market that moves the other way (DXY against gold, found
-    // from how their closes move together) has its lows paired with our highs. Never set by hand: a
-    // switch left on for silver paired gold's highs with silver's lows.
+    // from how their closes move together) is read at its lows for our highs.
     const inverse = correlation(a, m) < -0.2;
     // Swings: `L` bars each side less extreme (`up`: higher for highs, lower for lows).
     const pivots = (get, up) => {
@@ -973,38 +968,44 @@
       const A = (i) => (high ? a[i].high : a[i].low);
       const bHigh = high !== inverse;
       const B = (i) => (m[i] ? (bHigh ? m[i].high : m[i].low) : null);
-      const pa = pivots(A, (x, y) => (high ? x > y : x < y));
-      const pb = pivots(B, (x, y) => (bHigh ? x > y : x < y));
-      // Our swings that the other market also made (its nearest swing within `near` bars).
-      const pairs = [];
-      pa.forEach((i) => {
-        let best = null;
-        pb.forEach((j) => { if (Math.abs(j - i) <= near && (best == null || Math.abs(j - i) < Math.abs(best - i))) best = j; });
-        if (best != null) pairs.push([i, best]);
-      });
-      for (let k = 1; k < pairs.length; k++) {
-        const [i1, j1] = pairs[k - 1], [i2, j2] = pairs[k];
-        if (i2 - i1 > lookback || j2 <= j1) continue;
-        const a1 = A(i1), a2 = A(i2), b1 = B(j1), b2 = B(j2);
-        if (a1 === a2 || b1 === b2) continue;
-        const aUp = high ? a2 > a1 : a2 < a1, bUp = bHigh ? b2 > b1 : b2 < b1;
-        if (aUp === bUp) continue;
-        // Nothing between the two swings beyond them, in either market.
-        const aTop = high ? Math.max(a1, a2) : Math.min(a1, a2), bTop = bHigh ? Math.max(b1, b2) : Math.min(b1, b2);
-        let clean = true;
-        for (let j = Math.min(i1, j1) + 1; j < Math.max(i2, j2) && clean; j++) {
-          if (j !== i1 && j !== i2 && (high ? A(j) > aTop : A(j) < aTop)) clean = false;
-          const v = B(j);
-          if (clean && v != null && j !== j1 && j !== j2 && (bHigh ? v > bTop : v < bTop)) clean = false;
+      const moreA = (x, y) => (high ? x > y : x < y), moreB = (x, y) => (bHigh ? x > y : x < y);
+      const found = new Map();
+      // Pairs of swings of one market (`get`, `more`), read on the same candles in both.
+      const scan = (get, more) => {
+        const piv = pivots(get, more);
+        for (let k = 1; k < piv.length; k++) {
+          const i1 = piv[k - 1], i2 = piv[k];
+          if (i2 - i1 > lookback) continue;
+          const top = more(get(i1), get(i2)) ? get(i1) : get(i2);
+          let clean = true;
+          for (let j = i1 + 1; j < i2 && clean; j++) { const v = get(j); if (v != null && more(v, top)) clean = false; }
+          if (!clean) continue;
+          const a1 = A(i1), a2 = A(i2), b1 = B(i1), b2 = B(i2);
+          if (b1 == null || b2 == null || a1 === a2 || b1 === b2) continue;
+          const aUp = moreA(a2, a1), bUp = moreB(b2, b1);
+          if (aUp === bUp) continue;
+          // Broken: a later candle beyond the SMT's extreme, in either market.
+          const aTop = moreA(a1, a2) ? a1 : a2, bTop = moreB(b1, b2) ? b1 : b2;
+          let broken = false;
+          for (let j = i2 + 1; j < n && !broken; j++) {
+            if (moreA(A(j), aTop)) broken = true;
+            const v = B(j);
+            if (!broken && v != null && moreB(v, bTop)) broken = true;
+          }
+          if (broken) continue;
+          found.set(i1 + ":" + i2, { bull: !high, start: i1, end: i2, p1: a1, p2: a2, t1: a[i1].time, t2: a[i2].time,
+            b1, b2, bt1: a[i1].time, bt2: a[i2].time, chartHigher: aUp, confirmed: a[Math.min(n - 1, i2 + L)].time });
         }
-        if (!clean) continue;
-        // Chained with the one before (its second swing is this one's first): keep only the newer, so the
-        // lines never zigzag from swing to swing.
+      };
+      scan(A, moreA);
+      scan(B, moreB);
+      // Chains (the second swing of one is the first of another): only the newer.
+      const list = [...found.values()].sort((x, y) => x.end - y.end || x.start - y.start);
+      list.forEach((d) => {
         const prev = out[out.length - 1];
-        if (prev && prev.bull === !high && prev.end === i1) out.pop();
-        out.push({ bull: !high, start: i1, end: i2, p1: a1, p2: a2, t1: a[i1].time, t2: a[i2].time,
-          b1, b2, bt1: a[j1].time, bt2: a[j2].time, chartHigher: aUp, confirmed: a[Math.min(n - 1, Math.max(i2, j2) + L)].time });
-      }
+        if (prev && prev.bull === d.bull && prev.end >= d.start) out.pop();
+        out.push(d);
+      });
     }
     return out.sort((x, y) => x.end - y.end).slice(-count);
   }

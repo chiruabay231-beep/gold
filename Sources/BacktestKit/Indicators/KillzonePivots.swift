@@ -868,15 +868,6 @@ public enum KillzonePivots {
         }
     }
 
-    /// SMT divergence: two swing highs (or two swing lows) in a row, on the same stretch of candles in
-    /// `a` (the chart) and `b` (the comparison market, matched on time), where one market's second high is
-    /// higher and the other's is lower (lows: one lower, one higher).
-    ///  - Swings are `smtSwingLength` bars each side, in each market on its own; the other market's swing
-    ///    must be within `smtSwingLength` bars of ours (the nearest one).
-    ///  - The two swings are the top (bottom) of the stretch between them in both markets, so a line never
-    ///    crosses a bigger high, and they are at most `smtLookback` bars apart.
-    ///  - Two SMTs that share a swing (a chain) keep only the newer.
-    /// A market moving the other way (DXY) is found by itself: our highs pair with its lows. Confirmed `smtSwingLength` bars later.
     /// How the closes of `a` and of `m` (its bars matched on time) move together, −1…1 (1 with too few bars).
     static func closeCorrelation(_ a: [Candle], _ m: [Candle?]) -> Double {
         var sx = 0.0, sy = 0.0, sxx = 0.0, syy = 0.0, sxy = 0.0, k = 0.0
@@ -890,17 +881,24 @@ public enum KillzonePivots {
         return vx > 0 && vy > 0 ? cov / (vx * vy).squareRoot() : 1
     }
 
+    /// SMT divergence, on the same candles of both markets (one vertical line through each end):
+    ///  - Two swing highs (or lows) in a row of either market (whichever made them) and the other market's
+    ///    high (low) on those same two candles. One makes the higher high (lower low), the other does not.
+    ///  - Swings are `smtSwingLength` bars each side; nothing between the two goes beyond them in the market
+    ///    that made them; at most `smtLookback` bars apart.
+    ///  - Broken: once a later candle of either market goes beyond the SMT's highest high (lowest low) in that
+    ///    market, it is gone.
+    ///  - Two SMTs sharing a swing (a chain): only the newer.
+    /// A market moving the other way (DXY, found from the closes) is compared at its lows for our highs.
+    /// `b` is matched to `a` on time; `otherStart` / `otherEnd` are the same bars as `start` / `end`.
     public static func smtDivergences(_ a: [Candle], _ b: [Candle], config: Config) -> [SMTDivergence] {
         let length = max(config.smtSwingLength, 1)
-        // The other market's swing may come a few bars before or after ours (up to one swing length).
-        let near = length
         let n = a.count
         guard n > length * 2 + 2, !b.isEmpty else { return [] }
         let other = Dictionary(b.map { ($0.time, $0) }, uniquingKeysWith: { _, new in new })
         let matched = a.map { other[$0.time] }
         // Highs with highs, lows with lows; only a market that moves the other way (DXY against gold, found
-        // from how their closes move together) has its lows paired with our highs. `smtInverse` is no longer
-        // read: left on for silver it paired gold's highs with silver's lows.
+        // from how their closes move together) is read at its lows for our highs. `smtInverse` is not read.
         let inverse = closeCorrelation(a, matched) < -0.2
         // Swings: `length` bars each side less extreme (`more`: higher for highs, lower for lows).
         func pivots(_ value: (Int) -> Double?, _ more: (Double, Double) -> Bool) -> [Int] {
@@ -919,34 +917,38 @@ public enum KillzonePivots {
             let valueB: (Int) -> Double? = { i in matched[i].map { otherHigh ? $0.high : $0.low } }
             let moreA: (Double, Double) -> Bool = { high ? $0 > $1 : $0 < $1 }
             let moreB: (Double, Double) -> Bool = { otherHigh ? $0 > $1 : $0 < $1 }
-            let swingsB = pivots(valueB, moreB)
-            // Our swings that the other market also made (its nearest swing within `near` bars).
-            let pairs: [(Int, Int)] = pivots(valueA, moreA).compactMap { i in
-                swingsB.filter { abs($0 - i) <= near }.min { abs($0 - i) < abs($1 - i) }.map { (i, $0) }
-            }
-            for ((i1, j1), (i2, j2)) in zip(pairs, pairs.dropFirst()) where i2 - i1 <= config.smtLookback && j2 > j1 {
-                guard let a1 = valueA(i1), let a2 = valueA(i2), let b1 = valueB(j1), let b2 = valueB(j2),
-                      a1 != a2, b1 != b2 else { continue }
-                let chartHigher = moreA(a2, a1)
-                guard chartHigher != moreB(b2, b1) else { continue }
-                // Nothing between the two swings beyond them, in either market.
-                let topA = moreA(a1, a2) ? a1 : a2, topB = moreB(b1, b2) ? b1 : b2
-                let between = (min(i1, j1) + 1)..<max(i2, j2)
-                let clean = between.allSatisfy { j in
-                    if j != i1, j != i2, let v = valueA(j), moreA(v, topA) { return false }
-                    if j != j1, j != j2, let v = valueB(j), moreB(v, topB) { return false }
-                    return true
+            var found: [String: SMTDivergence] = [:]
+            // Pairs of swings of one market, read on the same candles in both.
+            func scan(_ value: (Int) -> Double?, _ more: (Double, Double) -> Bool) {
+                let swings = pivots(value, more)
+                for (i1, i2) in zip(swings, swings.dropFirst()) where i2 - i1 <= config.smtLookback {
+                    guard let v1 = value(i1), let v2 = value(i2) else { continue }
+                    let top = more(v1, v2) ? v1 : v2
+                    let clean = (i1 + 1..<i2).allSatisfy { j in value(j).map { !more($0, top) } ?? true }
+                    guard clean, let a1 = valueA(i1), let a2 = valueA(i2), let b1 = valueB(i1), let b2 = valueB(i2),
+                          a1 != a2, b1 != b2 else { continue }
+                    let chartHigher = moreA(a2, a1)
+                    guard chartHigher != moreB(b2, b1) else { continue }
+                    // Broken: a later candle beyond the SMT's extreme, in either market.
+                    let topA = moreA(a1, a2) ? a1 : a2, topB = moreB(b1, b2) ? b1 : b2
+                    let broken = (i2 + 1..<n).contains { j in
+                        (valueA(j).map { moreA($0, topA) } ?? false) || (valueB(j).map { moreB($0, topB) } ?? false)
+                    }
+                    guard !broken else { continue }
+                    var div = SMTDivergence(bullish: !high, start: i1, end: i2, startPrice: a1, endPrice: a2)
+                    div.otherStart = i1
+                    div.otherEnd = i2
+                    div.otherStartPrice = b1
+                    div.otherEndPrice = b2
+                    div.chartHigher = chartHigher
+                    found["\(i1):\(i2)"] = div
                 }
-                guard clean else { continue }
-                // Chained with the one before (its second swing is this one's first): keep only the newer,
-                // so the lines never zigzag from swing to swing.
-                if let last = result.last, last.bullish == !high, last.end == i1 { result.removeLast() }
-                var div = SMTDivergence(bullish: !high, start: i1, end: i2, startPrice: a1, endPrice: a2)
-                div.otherStart = j1
-                div.otherEnd = j2
-                div.otherStartPrice = b1
-                div.otherEndPrice = b2
-                div.chartHigher = chartHigher
+            }
+            scan(valueA, moreA)
+            scan(valueB, moreB)
+            // Chains (the second swing of one is the first of another): only the newer.
+            for div in found.values.sorted(by: { ($0.end, $0.start) < ($1.end, $1.start) }) {
+                if let last = result.last, last.bullish == div.bullish, last.end >= div.start { result.removeLast() }
                 result.append(div)
             }
         }
