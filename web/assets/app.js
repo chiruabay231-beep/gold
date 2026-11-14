@@ -6461,6 +6461,8 @@
             + sel("pivotColorMode", "Màu đỉnh / đáy phiên", [["session", "Theo màu phiên"], ["custom", "Màu riêng (bên dưới)"]])
             + color("pivotHighColor", "Màu đỉnh") + color("pivotLowColor", "Màu đáy")
             + sel("levelLabelAlign", "Vị trí chữ trên đường", [["left", "Trái"], ["center", "Giữa"], ["right", "Phải"]])
+            + `<div class="fr"><span class="grow">Đường đang chạy kéo tới …</span>${selI("lineEnd", [["near", "Gần nến cuối (gọn)"], ["edge", "Sát bảng giá (cũ)"]])}</div>`
+            + numf("lineEndBars", "Qua nến cuối bao nhiêu cây (khi chọn gần nến cuối)")
             + sel("pivotUntilMitigated", "Kéo dài", [[true, "Tới khi giá phá"], [false, "Qua cả khi bị phá"]]) + tog("keepMitigated", "Giữ pivot đã bị phá") + tog("periodUntilBroken", "PDH/PDL, PWH/PWL dừng tại nến cắt qua") + tog("midpoints", "Đường giữa phiên (50%)")
             + cfg.sessions.map((s, i) => `<div class="fr"><span class="grow muted">${esc(s.name)}</span>${text(`sessions.${i}.hi`, "lb")}${text(`sessions.${i}.lo`, "lb")}</div>`).join("")
             + head("Giá mở cửa") + cfg.opens.map((o, i) => `<div class="fr">${chk(`opens.${i}.on`)}${sw(`opens.${i}.color`)}${text(`opens.${i}.label`, "lb")}${time(`opens.${i}.hour`)}</div>`).join("")
@@ -8503,9 +8505,12 @@
       // Heights of the trade labels at the right, for the names to keep clear of.
       const avoid = labels ? this.tradeLines().map((w) => this.series.priceToCoordinate(w.price)).filter((y) => y != null) : [];
       const sc = this.sharkColors();
+      // Ending near the last candle like the ICT lines (unless those reach the right edge).
+      const cfg = this.ictCfg || {}, n = this.viewBars().length;
+      const near = cfg.lineEnd === "edge" || !n ? null : ts.logicalToCoordinate(n - 1 + Math.max(1, cfg.lineEndBars || 8));
       window.ICT.drawZones(g, this.sharkZones, (i) => ts.logicalToCoordinate(i), (v) => this.series.priceToCoordinate(v), width,
         sc.demand, sc.supply, this.digits,
-        document.documentElement.dataset.theme === "light" ? "rgba(255,255,255,.9)" : "rgba(21,28,42,.88)", labels, avoid, sc.zone);
+        document.documentElement.dataset.theme === "light" ? "rgba(255,255,255,.9)" : "rgba(21,28,42,.88)", labels, avoid, sc.zone, near);
     },
 
     /** "Dòng tiền cá mập" colours: the candles' own by default, or the ones picked in its settings. */

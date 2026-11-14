@@ -25,6 +25,8 @@
       pivotStyle: "solid", mitigatedStyle: "solid", midpoints: false, pivotWidth: 1,
       // Session highs/lows in the session's colour or their own; where the level names sit on their lines.
       pivotColorMode: "session", pivotHighColor: "#089981", pivotLowColor: "#f23645", levelLabelAlign: "right",
+      // Running lines end `lineEndBars` past the last candle ("near") or at the right edge ("edge").
+      lineEnd: "near", lineEndBars: 8,
       opens: [
         { on: true, hour: 0, label: "DO", color: "#787b86" },
         { on: false, hour: 8.5, label: "08:30", color: "#787b86" },
@@ -445,7 +447,7 @@
   /** `extra.m1`: 1-minute bars around each Monday 09:30 (VN) for the Monday FVG; without them a 1-minute
    *  chart's own bars are used. */
   function compute(c, sec, cfg, show, extra = {}) {
-    const out = { boxes: [], levels: [], stamps: [], macros: [], fvgs: [], vis: [], breaks: [], sweeps: [], days: [], ranges: [], weekFvgs: [], hidden: false };
+    const out = { boxes: [], levels: [], stamps: [], macros: [], fvgs: [], vis: [], breaks: [], sweeps: [], days: [], ranges: [], weekFvgs: [], hidden: false, last: c.length - 1 };
     if (c.length < 3) return out;
     const n = c.length;
     // Second charts count as the smallest minute setting.
@@ -616,7 +618,15 @@
     const s = cfg.lineScale || 1;
     const x0 = X(0), x1 = X(1);
     const half = x0 != null && x1 != null ? Math.max(0.5, (x1 - x0) / 2) : 2;
-    const xEnd = (end) => (end == null ? w : X(end) + half);
+    // Lines still running stop a few bars past the last candle, their names there, clear of the price scale
+    // (TradingView's look); "edge": to the right edge as before.
+    const openEnd = (() => {
+      if (cfg.lineEnd === "edge" || o.last == null) return w;
+      const x = X(o.last + Math.max(1, cfg.lineEndBars || 8));
+      return x == null ? w : Math.min(w, x);
+    })();
+    o.openEnd = openEnd;
+    const xEnd = (end) => (end == null ? openEnd : X(end) + half);
     g.save();
     g.font = "10px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
     g.textBaseline = "bottom";
@@ -704,7 +714,7 @@
     });
     // Monday's first FVG after 09:30 (VN): a band to the end of its week, its middle and its name.
     (o.weekFvgs || []).forEach((f) => {
-      const a = X(f.start), e = f.end == null ? w : X(f.end) + half, yt = Y(f.top), yb = Y(f.bottom);
+      const a = X(f.start), e = f.end == null ? openEnd : X(f.end) + half, yt = Y(f.top), yb = Y(f.bottom);
       if (a == null || e == null || yt == null || yb == null) return;
       const l = a - half;
       if (e < 0 || l > w) return;
@@ -1044,7 +1054,8 @@
   /** Shark bubbles like the app: a big buyer under its candle, a big seller above it. */
   /** Shark supply / demand: a band from the zone's first bar to the right (`labels` false, under the candles),
    *  or its "CẦU 4012.50 – 4015.00 · 12%" at the right (`labels` true, over them). */
-  function drawZones(g, zones, X, Y, w, up, down, digits, bg = "rgba(21,28,42,.88)", labels = false, avoid = [], fill = 0.13) {
+  function drawZones(g, zones, X, Y, w, up, down, digits, bg = "rgba(21,28,42,.88)", labels = false, avoid = [], fill = 0.13, right0 = null) {
+    const edge = right0 == null ? w : Math.min(w, right0);
     if (!zones || !zones.length) return;
     const placed = [];
     const x0 = X(0), x1 = X(1), half = x0 != null && x1 != null ? Math.max(0.5, (x1 - x0) / 2) : 2;
@@ -1065,7 +1076,10 @@
         // Clear of the other zones' names, and left of a trade label at the same height.
         while (placed.some((p) => Math.abs(p - ym) < 17)) ym += 17;
         placed.push(ym);
-        const right = avoid.some((y) => Math.abs(y - ym) < 17) ? w - 210 : w - 4;
+        // Clear of the trade labels at the right edge when they share the height.
+        const clash = avoid.some((y) => Math.abs(y - ym) < 17);
+        let right = edge < w - 8 ? Math.min(w - 4, edge + tw + 14) : clash ? w - 210 : w - 4;
+        if (clash) right = Math.min(right, w - 210);
         g.fillStyle = bg;
         g.beginPath(); g.roundRect(right - tw - 10, ym - 8, tw + 10, 16, 4); g.fill();
         g.strokeStyle = color; g.globalAlpha = 0.7; g.lineWidth = 1; g.stroke(); g.globalAlpha = 1;
@@ -1074,9 +1088,9 @@
         return;
       }
       g.globalAlpha = fill; g.fillStyle = color;
-      g.fillRect(left, yt, w - left, Math.max(2, yb - yt));
+      g.fillRect(left, yt, edge - left, Math.max(2, yb - yt));
       g.globalAlpha = 0.6; g.strokeStyle = color; g.lineWidth = 0.8; g.setLineDash([4, 3]);
-      [yt, yb].forEach((y) => { g.beginPath(); g.moveTo(left, Math.round(y) + 0.5); g.lineTo(w, Math.round(y) + 0.5); g.stroke(); });
+      [yt, yb].forEach((y) => { g.beginPath(); g.moveTo(left, Math.round(y) + 0.5); g.lineTo(edge, Math.round(y) + 0.5); g.stroke(); });
       g.setLineDash([]); g.globalAlpha = 1;
     });
     g.restore();
