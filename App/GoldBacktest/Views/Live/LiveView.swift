@@ -152,6 +152,9 @@ struct LiveView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Drawings shared with the website (its own small view: the body is long enough for the compiler).
+            DrawingSyncRunner(sync: drawingSync, store: store, enabled: market.source == .mt5, symbol: market.symbol,
+                              key: drawingKey, drawings: drawings)
             header
             if showTradeButtons && tradeBarOnTop { tradeBar }
             charts
@@ -195,18 +198,7 @@ struct LiveView: View {
             }
         }
         .task(id: nextNewsTime) { await noteNewsPrice() }
-        .task(id: drawingKey) {
-            // The website's drawings of this market (through the VPS), every few seconds.
-            guard market.source == .mt5 else { return }
-            while !Task.isCancelled {
-                await drawingSync.pull(symbol: market.symbol, key: drawingKey, store: store)
-                try? await Task.sleep(nanoseconds: 8_000_000_000)
-            }
-        }
-        .onChange(of: drawings) { _, list in
-            // Drawn or changed here: to the VPS, for the website.
-            if market.source == .mt5 { drawingSync.push(symbol: market.symbol, key: drawingKey, drawings: list) }
-        }
+
         .task(id: "\(market.source.rawValue):\(market.symbol):\(killzoneSettings.config.showWeekFVG):\(killzoneSettings.config.weekFVGWeeks):\(killzoneSettings.config.weekFVGHour):\(killzoneSettings.config.weekFVGZoneID)") {
             // "FVG đầu tuần": Monday-morning M1 bars, again every minute while a Monday morning runs.
             guard showKillzonePivots, killzoneSettings.config.showWeekFVG else { return }

@@ -144,3 +144,29 @@ extension RGBAColor {
         return "#" + byte(red) + byte(green) + byte(blue) + (alpha < 0.999 ? byte(alpha) : "")
     }
 }
+
+/// Keeps a chart's drawings in step with the website while it shows: the VPS copy every 8 seconds, this
+/// chart's changes a moment after they are made. Takes no room.
+struct DrawingSyncRunner: View {
+    let sync: DrawingSync
+    let store: AppStore
+    let enabled: Bool
+    let symbol: String
+    let key: String
+    let drawings: [Drawing]
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .task(id: "\(key)|\(enabled)") {
+                guard enabled else { return }
+                while !Task.isCancelled {
+                    await sync.pull(symbol: symbol, key: key, store: store)
+                    try? await Task.sleep(nanoseconds: 8_000_000_000)
+                }
+            }
+            .onChange(of: drawings) { _, list in
+                if enabled { sync.push(symbol: symbol, key: key, drawings: list) }
+            }
+    }
+}
