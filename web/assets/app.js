@@ -4284,35 +4284,63 @@
       this.updateTouchAction();
     },
 
-    /** The blue box being dragged with Ctrl (blue, 80% see-through), or none. */
+    /** The blue box being dragged with Alt (80% see-through) on the chart it was started on, or none. */
     drawBox() {
-      let el = $("boxSel");
-      if (!el) { el = document.createElement("div"); el.id = "boxSel"; el.className = "box-sel"; $("chartWrap").appendChild(el); }
       const b = this.boxSel;
-      el.hidden = !b;
+      document.querySelectorAll(".box-sel").forEach((el) => { if (!b || el.parentNode !== b.wrap) el.hidden = true; });
       if (!b) return;
+      let el = b.wrap.querySelector(".box-sel");
+      if (!el) { el = document.createElement("div"); el.className = "box-sel"; b.wrap.appendChild(el); }
+      el.hidden = false;
       Object.assign(el.style, { left: Math.min(b.x0, b.x1) + "px", top: Math.min(b.y0, b.y1) + "px", width: Math.abs(b.x1 - b.x0) + "px", height: Math.abs(b.y1 - b.y0) + "px" });
     },
 
-    /** "N bản vẽ · Xoá tất cả · ✕" while drawings are picked by the box. */
-    renderBoxBar() {
-      let bar = $("boxBar");
-      if (!bar) { bar = document.createElement("div"); bar.id = "boxBar"; bar.className = "box-bar"; $("chartWrap").appendChild(bar); }
-      const n = this.drawings ? this.drawings.multiCount : 0;
-      bar.hidden = !n;
-      if (!n) return;
-      bar.innerHTML = `<span><b>${n}</b> bản vẽ đã chọn</span><button type="button" class="danger" data-a="del">🗑 Xoá tất cả</button><button type="button" data-a="x" title="Bỏ chọn (Esc)">✕</button>`;
-      const b = this.boxPicked;
-      if (b) { bar.style.left = Math.max(8, Math.min(b.x0, b.x1)) + "px"; bar.style.top = Math.max(8, Math.min(b.y0, b.y1) - 40) + "px"; }
-      bar.querySelector("[data-a=del]").onclick = () => this.deleteBoxed();
-      bar.querySelector("[data-a=x]").onclick = () => { this.drawings.clearMulti(); this.renderBoxBar(); };
+    /** Starts the Alt box on a chart (`dr` its drawings, `wrap` its frame) at (x, y). */
+    startBox(dr, wrap, x, y) {
+      this.boxSel = { dr, wrap, x0: x, y0: y, x1: x, y1: y };
+      [this.drawings, this.drawings2].forEach((d) => d && d.clearMulti());
+      this.renderBoxBar();
+      this.drawBox();
     },
 
-    deleteBoxed() {
-      const n = this.drawings ? this.drawings.removeMulti() : 0;
+    /** The box let go: its drawings picked on that chart. */
+    endBox() {
+      const b = this.boxSel;
+      if (!b) return;
+      this.boxSel = null;
+      this.drawBox();
+      const n = Math.hypot(b.x1 - b.x0, b.y1 - b.y0) > 4 ? b.dr.selectIn(b.x0, b.y0, b.x1, b.y1) : 0;
+      b.wrap.boxPicked = n ? b : null;
+      this.renderBoxBar();
+      if (!n) toast("Không có bản vẽ nào trong ô");
+    },
+
+    /** "N bản vẽ · Xoá tất cả · ✕" on each chart whose drawings are picked by the box. */
+    renderBoxBar() {
+      [[this.drawings, $("chartWrap")], [this.drawings2, $("chartWrap2")]].forEach(([dr, wrap]) => {
+        if (!wrap) return;
+        let bar = wrap.querySelector(".box-bar");
+        const n = dr ? dr.multiCount : 0;
+        if (!bar && !n) return;
+        if (!bar) { bar = document.createElement("div"); bar.className = "box-bar"; wrap.appendChild(bar); }
+        bar.hidden = !n;
+        if (!n) return;
+        bar.innerHTML = `<span><b>${n}</b> bản vẽ đã chọn</span><button type="button" class="danger" data-a="del">🗑 Xoá tất cả</button><button type="button" data-a="x" title="Bỏ chọn (Esc)">✕</button>`;
+        const b = wrap.boxPicked;
+        if (b) { bar.style.left = Math.max(8, Math.min(b.x0, b.x1)) + "px"; bar.style.top = Math.max(8, Math.min(b.y0, b.y1) - 40) + "px"; }
+        bar.onpointerdown = (e) => e.stopPropagation();
+        bar.querySelector("[data-a=del]").onclick = () => this.deleteBoxed(dr);
+        bar.querySelector("[data-a=x]").onclick = () => { dr.clearMulti(); this.renderBoxBar(); };
+      });
+    },
+
+    /** Deletes the drawings picked by the box (on `dr`, else whichever chart has some). */
+    deleteBoxed(dr) {
+      const target = dr || [this.drawings, this.drawings2].find((d) => d && d.multiCount);
+      const n = target ? target.removeMulti() : 0;
       this.renderBoxBar();
       if (n) toast(`Đã xoá ${n} bản vẽ`);
-      this.drawingsChanged && this.drawingsChanged(this.drawings);
+      if (target && this.drawingsChanged) this.drawingsChanged(target);
     },
 
     renderSelBar() {
@@ -4394,7 +4422,7 @@
         if (fingers.size > 1) { cancelDrag(); clearTimeout(longPress); return; }
         this.closeMenu();
         this.focusChart(1);
-        if (e.button > 0 || e.target.closest("#selBar, #posPill, #ticket, #drawBar, #favBar, #draftBar, #btChip, #boxBar, #mascots .mascot")) return;
+        if (e.button > 0 || e.target.closest("#selBar, #posPill, #ticket, #drawBar, #favBar, #draftBar, #btChip, .box-bar, #mascots .mascot")) return;
         if (this.mascotSel) { this.mascotSel = null; document.querySelectorAll("#mascots .sel").forEach((x) => x.classList.remove("sel")); }
         const { x, y } = rel(e);
         down = { x: e.clientX, y: e.clientY, moved: false, menu: false };
@@ -4409,15 +4437,13 @@
         if (this.replayPicking) return;
         // Alt (⌥ on a Mac) + drag with the mouse: a blue box; the drawings in it are picked, to delete together.
         if (e.pointerType === "mouse" && e.altKey && this.drawings && !this.drawings.tool && !this.drawings.pending) {
-          this.boxSel = { x0: x, y0: y, x1: x, y1: y };
-          this.drawings.clearMulti(); this.renderBoxBar();
+          this.startBox(this.drawings, wrap, x, y);
           lock(true); e.stopPropagation(); e.preventDefault();
-          this.drawBox();
           return;
         }
         const r = this.drawings ? this.drawings.down(x, y, e) : false;
         // A press elsewhere let the box's drawings go.
-        if ($("boxBar") && !$("boxBar").hidden && !this.drawings.multiCount) this.renderBoxBar();
+        this.renderBoxBar();
         if (r === true) {
           this.drawGesture = true; lock(true); e.stopPropagation();
           clearTimeout(longPress);
@@ -4444,7 +4470,7 @@
       });
       wrap.addEventListener("pointerleave", () => { if (this.drawings) this.drawings.hover(null); });
       window.addEventListener("pointermove", (e) => {
-        if (this.boxSel) { const { x, y } = rel(e); this.boxSel.x1 = Math.max(0, Math.min(x, paneWidth())); this.boxSel.y1 = y; this.drawBox(); return; }
+        if (this.boxSel && this.boxSel.wrap === wrap) { const { x, y } = rel(e); this.boxSel.x1 = Math.max(0, Math.min(x, paneWidth())); this.boxSel.y1 = y; this.drawBox(); return; }
         if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down.moved = true; clearTimeout(longPress); }
         if (this.drawGesture) { const { x, y } = rel(e); this.drawings.move(x, y, e); return; }
         if (!this.drag || e.pointerId !== this.drag.pid) return;
@@ -4463,14 +4489,10 @@
       window.addEventListener("pointerup", (e) => {
         fingers.delete(e.pointerId);
         clearTimeout(longPress);
-        if (this.boxSel) {
-          const b = this.boxSel;
-          this.boxSel = null; down = null;
-          lock(false); this.drawBox();
-          const n = Math.hypot(b.x1 - b.x0, b.y1 - b.y0) > 4 ? this.drawings.selectIn(b.x0, b.y0, b.x1, b.y1) : 0;
-          this.boxPicked = n ? b : null;
-          this.renderBoxBar();
-          if (!n) toast("Không có bản vẽ nào trong ô");
+        if (this.boxSel && this.boxSel.wrap === wrap) {
+          down = null;
+          lock(false);
+          this.endBox();
           return;
         }
         if (this.drag && e.pointerId !== this.drag.pid) return;
@@ -4531,9 +4553,9 @@
       window.addEventListener("keydown", (e) => {
         if (this.tab !== "chart" || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "") || $("sheet").open) return;
         if (e.key === "Escape") { this.closeMenu(); if (this.drawings) this.drawings.cancel(); if (this.replayPicking) this.exitReplay(); }
-        if ((e.key === "Delete" || e.key === "Backspace") && this.drawings && this.drawings.multiCount) { this.deleteBoxed(); e.preventDefault(); }
+        if ((e.key === "Delete" || e.key === "Backspace") && [this.drawings, this.drawings2].some((d) => d && d.multiCount)) { this.deleteBoxed(); e.preventDefault(); }
         else if ((e.key === "Delete" || e.key === "Backspace") && this.drawings && this.drawings.selected) { this.drawings.remove(this.drawings.selected); e.preventDefault(); }
-        if (e.key === "Escape" && this.drawings && this.drawings.multiCount) { this.drawings.clearMulti(); this.renderBoxBar(); }
+        if (e.key === "Escape") { [this.drawings, this.drawings2].forEach((d) => d && d.clearMulti()); this.renderBoxBar(); }
         if (this.replay && e.key === "ArrowRight") { this.replayStep(); e.preventDefault(); }
         if (this.replay && e.key === " ") { this.replayPlay(); e.preventDefault(); }
       });
@@ -8099,10 +8121,17 @@
       wrap.addEventListener("pointerdown", (e) => {
         this.closeMenu();
         this.focusChart(2);
-        if (e.button > 0 || e.target.closest("#ticket2, .c2-head, #drawBar")) return;
+        if (e.button > 0 || e.target.closest("#ticket2, .c2-head, #drawBar, .box-bar")) return;
         const { x, y } = rel(e);
         if (x > this.chart2.timeScale().width()) return;
+        // Alt (⌥ on a Mac) + drag with the mouse: the blue box picking this chart's drawings, as on the first one.
+        if (e.pointerType === "mouse" && e.altKey && !this.drawings2.tool && !this.drawings2.pending) {
+          this.startBox(this.drawings2, wrap, x, y);
+          lock(true); e.stopPropagation(); e.preventDefault();
+          return;
+        }
         const r = this.drawings2.down(x, y, e);
+        this.renderBoxBar();
         if (r === true) { gesture = true; lock(true); e.stopPropagation(); }
       }, true);
       ["mousedown", "touchstart"].forEach((t) => wrap.addEventListener(t, (e) => { if (gesture) e.stopPropagation(); }, { capture: true, passive: true }));
@@ -8113,8 +8142,14 @@
         if (this.drawings2.pending) { this.drawings2.move(x, y, e); return; }
         if (e.pointerType === "mouse") wrap.style.cursor = this.drawings2.tool ? "crosshair" : x <= this.chart2.timeScale().width() && this.drawings2.hitTest(x, y, 8) ? "move" : "";
       });
-      window.addEventListener("pointermove", (e) => { if (gesture) { const { x, y } = rel(e); this.drawings2.move(x, y, e); } });
-      const end = () => { if (!gesture) return; gesture = false; lock(false); this.drawings2.up(); };
+      window.addEventListener("pointermove", (e) => {
+        if (this.boxSel && this.boxSel.wrap === wrap) { const { x, y } = rel(e); this.boxSel.x1 = Math.max(0, Math.min(x, this.chart2.timeScale().width())); this.boxSel.y1 = y; this.drawBox(); return; }
+        if (gesture) { const { x, y } = rel(e); this.drawings2.move(x, y, e); }
+      });
+      const end = () => {
+        if (this.boxSel && this.boxSel.wrap === wrap) { lock(false); this.endBox(); return; }
+        if (!gesture) return; gesture = false; lock(false); this.drawings2.up();
+      };
       window.addEventListener("pointerup", end);
       window.addEventListener("pointercancel", end);
       wrap.addEventListener("dblclick", (e) => {
