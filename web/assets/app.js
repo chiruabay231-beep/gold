@@ -3394,8 +3394,11 @@
           bars: () => this.viewBars(), sec: () => TF_SECONDS[this.interval], digits: () => this.digits,
           symbol: () => this.symbolKey(), magnet: () => this.magnet,
           onChange: () => this.drawingsChanged(this.drawingsMain),
+          onSave: (dr) => this.pushDrawings(dr),
           interval: () => this.interval, onEdit: (d, isNew) => this.drawingSettings(d, isNew),
         });
+        // The app's drawings of this market (through the VPS), every few seconds while the chart shows.
+        setInterval(() => { if (this.tab === "chart" && !document.hidden) this.pullDrawings(); }, 8000);
         this.chartStyle = loadChartStyle();
         this.applyChartStyle();
         this.layout = LAYOUTS.includes(store.get("aurum.layout")) ? store.get("aurum.layout") : "1";
@@ -3730,7 +3733,7 @@
         this.renderSymTabs();
         $("chartSource").textContent = "";
         this.bars = bars;
-        if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); }
+        if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); this.pullDrawings(); }
         if (replayTime != null) {
           // The bars around the replay moment, fetched there directly (paging back from today could not
           // reach a moment weeks ago on a small timeframe, and the replay would land somewhere else).
@@ -4036,7 +4039,7 @@
       try {
         this.bars = await binanceBars(rest, m.name, interval, 800);
         if (this.replay) this.exitReplay();
-        if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); }
+        if (this.drawKey !== this.symbolKey()) { this.drawKey = this.symbolKey(); this.drawings.load(); this.pullDrawings(); }
         this.showFresh(this.bars);
         this.setQuote({});
         this.computeICT();
@@ -8183,6 +8186,42 @@
 
     /** The chart last touched: its drawing is the one the bar and settings edit. */
     /** A drawing changed (or was picked) on one chart of the symbol: the bar follows, the others repaint. */
+    /** Drawings shared with the app: kept on the VPS per market (XAUUSDm and XAUUSD are one), the newest
+     *  copy winning. Only the owner's MT5 (VPS) charts. */
+    drawSyncOn() { return this.owner && this.source === "exness" && !!this.symbol; },
+    drawSyncKey() { return "aurum.drawUpd." + ((this.symbol || "").match(/^[#.]?([A-Z0-9]+)/) || [, this.symbol])[1]; },
+
+    pushDrawings(dr) {
+      if (dr !== this.drawingsMain || !this.drawSyncOn()) return;
+      clearTimeout(this.drawPushTimer);
+      const symbol = this.symbol, key = this.drawSyncKey();
+      this.drawPushTimer = setTimeout(async () => {
+        if (symbol !== this.symbol) return;
+        const updated = Date.now() / 1000;
+        store.set(key, String(updated));
+        try { await this.call("/drawings", { symbol, updated, drawings: dr.list }); } catch { /* an older server: kept here */ }
+      }, 1200);
+    },
+
+    async pullDrawings() {
+      const dr = this.drawingsMain;
+      if (!dr || !this.drawSyncOn() || this.drawPulling || dr.pending || (dr.gesture && dr.gesture.moved)) return;
+      const symbol = this.symbol, key = this.drawSyncKey();
+      this.drawPulling = true;
+      try {
+        const res = await this.call(`/drawings?symbol=${encodeURIComponent(symbol)}`);
+        if (symbol !== this.symbol || !res || !Array.isArray(res.drawings)) return;
+        const mine = +(store.get(key) || 0);
+        if (res.updated > mine + 0.001) {
+          store.set(key, String(res.updated));
+          if (JSON.stringify(res.drawings) !== JSON.stringify(dr.list)) { dr.replaceAll(res.drawings); this.drawingsChanged(dr); }
+        } else if (!res.updated && dr.list.length) {
+          // The VPS has none yet: this chart's become the shared ones.
+          this.pushDrawings(dr);
+        }
+      } catch { /* an older server or offline: nothing shared */ } finally { this.drawPulling = false; }
+    },
+
     drawingsChanged(from) {
       if (from === this.drawings || !this.drawings) this.renderDrawBar();
       const main = this.drawingsMain;

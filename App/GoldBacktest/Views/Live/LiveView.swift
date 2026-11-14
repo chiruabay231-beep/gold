@@ -123,6 +123,8 @@ struct LiveView: View {
     @State private var indicatorCache = LiveIndicatorCache()
     /// Results reused between frames while the chart is dragged.
     @State private var frameCache = LiveFrameCache()
+    /// Drawings shared with the website through the VPS (MT5 charts).
+    @State private var drawingSync = DrawingSync()
     @AppStorage(LiveIndicators.sharkKey) private var sharkSetting = false
     @AppStorage(LiveIndicators.sharkMultipleKey) private var sharkMultiple = 2.5
     @AppStorage(LiveIndicators.sharkZonesKey) private var sharkZonesOn = true
@@ -193,6 +195,18 @@ struct LiveView: View {
             }
         }
         .task(id: nextNewsTime) { await noteNewsPrice() }
+        .task(id: drawingKey) {
+            // The website's drawings of this market (through the VPS), every few seconds.
+            guard market.source == .mt5 else { return }
+            while !Task.isCancelled {
+                await drawingSync.pull(symbol: market.symbol, key: drawingKey, store: store)
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+            }
+        }
+        .onChange(of: drawings) { _, list in
+            // Drawn or changed here: to the VPS, for the website.
+            if market.source == .mt5 { drawingSync.push(symbol: market.symbol, key: drawingKey, drawings: list) }
+        }
         .task(id: "\(market.source.rawValue):\(market.symbol):\(killzoneSettings.config.showWeekFVG):\(killzoneSettings.config.weekFVGWeeks):\(killzoneSettings.config.weekFVGHour):\(killzoneSettings.config.weekFVGZoneID)") {
             // "FVG đầu tuần": Monday-morning M1 bars, again every minute while a Monday morning runs.
             guard showKillzonePivots, killzoneSettings.config.showWeekFVG else { return }

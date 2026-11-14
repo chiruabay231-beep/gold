@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "4.0"
+VERSION = "4.1"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -1399,6 +1399,35 @@ def smt_pair(symbol):
     if not m or m.group(2) not in SMT_PAIRS:
         return symbol
     return m.group(1) + SMT_PAIRS[m.group(2)] + m.group(3)
+
+
+DRAWINGS_PATH = os.path.join(HERE, "drawings.json")
+_drawings_lock = threading.Lock()
+
+
+def drawings_get(symbol):
+    """The chart drawings of a market shared by the web and the app (the web's format), by its base name."""
+    key = base_symbol(symbol or "XAUUSD")
+    with _drawings_lock:
+        entry = read_json(DRAWINGS_PATH, {}).get(key) or {}
+    return {"ok": True, "symbol": key, "updated": entry.get("updated", 0), "drawings": entry.get("drawings", [])}
+
+
+def drawings_save(body):
+    """Stores a market's drawings when they are newer than the stored ones; answers what is stored."""
+    key = base_symbol(str(body.get("symbol") or "XAUUSD"))
+    items = body.get("drawings")
+    if not isinstance(items, list) or len(items) > 1000:
+        raise ValueError("Danh sách bản vẽ không hợp lệ")
+    updated = float(body.get("updated") or time.time())
+    with _drawings_lock:
+        data = read_json(DRAWINGS_PATH, {})
+        entry = data.get(key) or {}
+        if updated >= float(entry.get("updated", 0)):
+            entry = {"updated": updated, "drawings": items}
+            data[key] = entry
+            write_json(DRAWINGS_PATH, data)
+    return {"ok": True, "symbol": key, "updated": entry.get("updated", 0), "drawings": entry.get("drawings", [])}
 
 
 def base_symbol(symbol):
@@ -3873,6 +3902,8 @@ def make_handler(server):
                     return self._send(200, server.mt5_account.status())
                 if path == "/mt5/accounts":
                     return self._send(200, server.mt5_account.accounts())
+                if path == "/drawings":
+                    return self._send(200, drawings_get((params.get("symbol") or [""])[0]))
                 if path == "/mt5/symbols":
                     return self._send(200, server.mt5_account.symbols((params.get("q") or [""])[0], limit))
                 if path == "/copy/status":
@@ -3949,6 +3980,8 @@ def make_handler(server):
                     return self._send(200, server.mt5_account.switch(body))
                 if path == "/mt5/remember":
                     return self._send(200, server.mt5_account.remember(body))
+                if path == "/drawings":
+                    return self._send(200, drawings_save(body))
                 if path == "/mt5/forget":
                     return self._send(200, server.mt5_account.forget(body))
                 if path == "/mt5/settings":

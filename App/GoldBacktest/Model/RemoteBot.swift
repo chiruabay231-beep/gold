@@ -389,6 +389,26 @@ struct RemoteBotClient {
 }
 
 extension RemoteBotClient {
+    // MARK: - Drawings shared with the web
+
+    /// A market's drawings kept on the VPS for the web and the app (in the web's format), and when they were saved.
+    func sharedDrawings(symbol: String) async throws -> (updated: Double, items: [[String: Any]]) {
+        let data = try await request("/drawings?symbol=\(Self.queryValue(symbol))", timeout: 15)
+        let object = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        return ((object["updated"] as? NSNumber)?.doubleValue ?? 0, (object["drawings"] as? [[String: Any]]) ?? [])
+    }
+
+    /// Saves a market's drawings on the VPS (kept when newer than the stored ones); the time stored.
+    @discardableResult
+    func saveSharedDrawings(symbol: String, updated: Double, items: [[String: Any]]) async throws -> Double {
+        let body = try JSONSerialization.data(withJSONObject: ["symbol": symbol, "updated": updated, "drawings": items])
+        let data = try await request("/drawings", method: "POST", body: body, timeout: 15)
+        let object = (try JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        return (object["updated"] as? NSNumber)?.doubleValue ?? updated
+    }
+}
+
+extension RemoteBotClient {
     // MARK: - Trading the MT5 account by hand
 
     private func post<T: Decodable>(_ path: String, _ object: [String: Any], as type: T.Type,

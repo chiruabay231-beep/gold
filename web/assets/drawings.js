@@ -122,7 +122,20 @@
     }
     save() {
       try { this.host.store.set(this.key(), JSON.stringify(this.list)); } catch { /* full */ }
+      // Shared with the app through the VPS (not while a copy from there is being put in).
+      if (this.host.onSave && !this.syncing) this.host.onSave(this);
       this.host.onChange();
+    }
+
+    /** Drawings from the VPS (made or changed in the app): they replace this chart's, saved here too. */
+    replaceAll(list) {
+      this.syncing = true;
+      try {
+        this.list = (list || []).filter((d) => d && d.tool && Array.isArray(d.pts)).map((d) => this.upgrade(d));
+        if (this.selected && !this.list.some((d) => d.id === this.selected)) this.selected = null;
+        this.save();
+      } finally { this.syncing = false; }
+      this.update();
     }
 
     /** Drawings saved by an earlier version get the options added since. */

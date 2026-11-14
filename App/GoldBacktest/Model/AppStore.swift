@@ -62,6 +62,12 @@ final class AppStore {
         mutateDrawings(key) { $0.removeAll { $0.id == id } }
     }
 
+    /// The drawings of `key` as they came from the web (through the VPS): replaced as a whole, undo kept.
+    func replaceDrawings(_ list: [Drawing], key: String) {
+        guard drawings[key] ?? [] != list else { return }
+        mutateDrawings(key) { $0 = list }
+    }
+
     func clearDrawings(key: String) {
         mutateDrawings(key) { $0.removeAll() }
     }
