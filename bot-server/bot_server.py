@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "3.9"
+VERSION = "4.0"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -357,7 +357,7 @@ class Mt5:
     # Other names of the same market at other brokers.
     ALIASES = {"XAUUSD": ("GOLD", "XAUUSD"), "XAGUSD": ("SILVER", "XAGUSD"), "USTEC": ("NAS100", "US100", "NDX100", "USTEC"),
                "US30": ("DJ30", "WS30", "DOW30", "US30"), "US500": ("SPX500", "SP500", "US500"), "USOIL": ("WTI", "XTIUSD", "USOIL"),
-               "UKOIL": ("BRENT", "XBRUSD", "UKOIL"), "BTCUSD": ("BTCUSD", "BITCOIN")}
+               "UKOIL": ("BRENT", "XBRUSD", "UKOIL"), "BTCUSD": ("BTCUSD", "BITCOIN"), "ETHUSD": ("ETHUSD", "ETHEREUM")}
     _names = {}
 
     @classmethod
@@ -1380,6 +1380,25 @@ def copy_comment(ticket):
 def copy_master_ticket(comment):
     m = re.match(rf"{COPY_PREFIX}(\d+)", comment or "")
     return int(m.group(1)) if m else None
+
+
+# The usual SMT pair of a market (the second chart of the members' web): gold ⇄ silver, Nasdaq / Dow → S&P 500,
+# S&P 500 → Nasdaq, BTC ⇄ ETH, EUR ⇄ GBP, AUD ⇄ NZD, WTI ⇄ Brent. The account's own name is found by find_symbol.
+SMT_PAIRS = {"XAUUSD": "XAGUSD", "XAGUSD": "XAUUSD", "GOLD": "SILVER", "SILVER": "GOLD",
+             "USTEC": "US500", "NAS100": "SPX500", "US100": "US500", "NDX100": "SPX500",
+             "US500": "USTEC", "SPX500": "NAS100", "SP500": "NAS100",
+             "US30": "US500", "DJ30": "SPX500", "WS30": "SPX500", "DOW30": "SPX500",
+             "BTCUSD": "ETHUSD", "ETHUSD": "BTCUSD", "EURUSD": "GBPUSD", "GBPUSD": "EURUSD",
+             "AUDUSD": "NZDUSD", "NZDUSD": "AUDUSD", "USOIL": "UKOIL", "UKOIL": "USOIL",
+             "XTIUSD": "XBRUSD", "XBRUSD": "XTIUSD", "WTI": "BRENT", "BRENT": "WTI"}
+
+
+def smt_pair(symbol):
+    """XAUUSDm → XAGUSDm, USTEC → US500 (prefix / suffix kept); the symbol itself when it has no pair."""
+    m = re.match(r"([#.]?)([A-Z0-9]+)(.*)$", symbol or "")
+    if not m or m.group(2) not in SMT_PAIRS:
+        return symbol
+    return m.group(1) + SMT_PAIRS[m.group(2)] + m.group(3)
 
 
 def base_symbol(symbol):
@@ -3825,8 +3844,8 @@ def make_handler(server):
                         # Exness (MT5) bars of the signals' symbol, for the members' web chart.
                         symbol = server.members.chart_symbol()
                         if (params.get("symbol") or [""])[0] == "compare":
-                            # The SMT pair of the second chart: silver for gold.
-                            symbol = re.sub("XAU", "XAG", symbol, flags=re.I) if "XAU" in symbol.upper() else symbol
+                            # The SMT pair of the second chart: silver for gold, S&P 500 for Nasdaq, ETH for BTC…
+                            symbol = smt_pair(symbol)
                         data = server.mt5_account.candles(symbol, (params.get("interval") or ["1m"])[0],
                                                           min(int((params.get("count") or ["500"])[0]), 1000),
                                                           (params.get("before") or [None])[0])

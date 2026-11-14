@@ -934,8 +934,8 @@
    * SMT divergence, on the same candles of both markets (one vertical line through each end):
    *  - Two swing highs (or lows) in a row of either market — whichever made them — and the other market's
    *    high (low) on those same two candles. One makes the higher high (lower low), the other does not.
-   *  - A swing is `swing` bars each side; nothing between the two swings goes beyond them in the market that
-   *    made them; at most `lookback` bars apart.
+   *  - A swing is `swing` bars each side; nothing between the two candles goes beyond them in either market
+   *    (so the market with the bigger high / low in between is the one followed); at most `lookback` bars apart.
    *  - Broken: once a later candle of either market goes beyond the SMT's highest high (lowest low) in that
    *    market, it is gone.
    *  - Two SMTs sharing a swing (a chain): only the newer.
@@ -984,8 +984,17 @@
           if (b1 == null || b2 == null || a1 === a2 || b1 === b2) continue;
           const aUp = moreA(a2, a1), bUp = moreB(b2, b1);
           if (aUp === bUp) continue;
-          // Broken: a later candle beyond the SMT's extreme, in either market.
           const aTop = moreA(a1, a2) ? a1 : a2, bTop = moreB(b1, b2) ? b1 : b2;
+          // Nothing between the two candles beyond them in either market: when the other market made the
+          // bigger high (low) in between, the SMT is drawn from that market's swings instead.
+          let inside = true;
+          for (let j = i1 + 1; j < i2 && inside; j++) {
+            if (moreA(A(j), aTop)) inside = false;
+            const v = B(j);
+            if (inside && v != null && moreB(v, bTop)) inside = false;
+          }
+          if (!inside) continue;
+          // Broken: a later candle beyond the SMT's extreme, in either market.
           let broken = false;
           for (let j = i2 + 1; j < n && !broken; j++) {
             if (moreA(A(j), aTop)) broken = true;

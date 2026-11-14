@@ -295,6 +295,31 @@
 
   /* ----- second bars (5s / 10s / 15s) from Binance: MT5 has nothing under one minute ----- */
 
+  /** The usual SMT pair of a symbol, with its broker prefix / suffix kept: XAUUSDm → XAGUSDm, USTEC → US500,
+   *  BTCUSDT → ETHUSDT… null when it has none. */
+  const SMT_PAIRS = {
+    XAUUSD: "XAGUSD", XAGUSD: "XAUUSD", GOLD: "SILVER", SILVER: "GOLD", XAUUSDT: "XAGUSDT", XAGUSDT: "XAUUSDT",
+    USTEC: "US500", NAS100: "SPX500", US100: "US500", NDX100: "SPX500", NQ: "ES",
+    US500: "USTEC", SPX500: "NAS100", SP500: "NAS100", ES: "NQ",
+    US30: "US500", DJ30: "SPX500", WS30: "SPX500", DOW30: "SPX500", YM: "ES",
+    BTCUSD: "ETHUSD", ETHUSD: "BTCUSD", BTCUSDT: "ETHUSDT", ETHUSDT: "BTCUSDT",
+    EURUSD: "GBPUSD", GBPUSD: "EURUSD", AUDUSD: "NZDUSD", NZDUSD: "AUDUSD",
+    USOIL: "UKOIL", UKOIL: "USOIL", XTIUSD: "XBRUSD", XBRUSD: "XTIUSD", WTI: "BRENT", BRENT: "WTI",
+  };
+  function smtPair(symbol) {
+    const m = String(symbol || "").match(/^([#.]?)([A-Z0-9]+)(.*)$/);
+    if (!m) return null;
+    const [, pre, base, rest] = m;
+    if (SMT_PAIRS[base]) return pre + SMT_PAIRS[base] + rest;
+    // OANDA style: NAS100_USD → SPX500_USD, XAU_USD → XAG_USD.
+    const o = String(symbol).match(/^([A-Z0-9]+)_([A-Z]+)$/);
+    if (o) {
+      const pair = SMT_PAIRS[o[1] + o[2]] || SMT_PAIRS[o[1]];
+      if (pair) return /USD$/.test(pair) && pair.length === 6 ? pair.slice(0, 3) + "_" + pair.slice(3) : pair + "_" + o[2];
+    }
+    return null;
+  }
+
   /** The Binance market for a symbol: gold and silver from the futures trades, crypto from the spot 1-second candles. */
   function binanceMarket(symbol) {
     const s = String(symbol || "XAUUSD").toUpperCase();
@@ -7874,10 +7899,12 @@
     },
 
     /** The second chart's symbol: silver for gold (the SMT pair), or the one picked. */
+    /** The market compared for the SMT: the one set by hand, else the usual pair of the chart's symbol
+     *  (gold ⇄ silver, Nasdaq → S&P 500, Dow → S&P 500, S&P 500 → Nasdaq, BTC ⇄ ETH, EUR ⇄ GBP, AUD ⇄ NZD,
+     *  WTI ⇄ Brent), with the broker's own prefix / suffix kept (USTECm → US500m). */
     cmpSymbol() {
-      if (!this.owner) return "XAG";
-      const sym = this.symbol || "XAUUSD";
-      return (this.ictCfg && this.ictCfg.smtSymbol) || (/XAU/i.test(sym) ? sym.replace(/XAU/i, "XAG") : /BTC/i.test(sym) ? sym.replace(/BTC/i, "ETH") : sym);
+      const sym = this.owner ? this.symbol || "XAUUSD" : $("chartSymbol").textContent || "XAUUSD";
+      return (this.owner && this.ictCfg && this.ictCfg.smtSymbol) || smtPair(sym) || sym;
     },
 
     ensureChart2() {
@@ -8123,10 +8150,13 @@
         quote = { bid: data.bid, ask: data.ask };
         live = true;
       } catch {
-        // Binance silver as the stand-in (member servers before 2.6, or no MT5).
+        // From Binance (a Binance chart, member servers before 2.6, or no MT5): the pair's Binance market
+        // (silver futures for gold, ETH for BTC…); none for markets Binance does not have.
         try {
-          bars = await binanceBars("https://fapi.binance.com/fapi/v1/klines", "XAGUSDT", this.interval, 800);
-          name = "XAGUSDT"; digits = 3;
+          const market = binanceMarket(name) || (/XAU|GOLD/i.test($("chartSymbol").textContent) ? binanceMarket("XAG") : null);
+          if (!market) throw new Error("no Binance pair");
+          bars = await binanceBars(market.futures ? "https://fapi.binance.com/fapi/v1/klines" : "https://api.binance.com/api/v3/klines", market.name, this.interval, 800);
+          name = market.name; digits = market.digits != null ? market.digits : 2;
         } catch { bars = []; }
       }
       if (token !== this.cmpToken) return;

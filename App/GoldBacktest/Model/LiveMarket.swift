@@ -137,24 +137,41 @@ final class LiveMarket {
     private(set) var comparisonError: String?
     @ObservationIgnored private var comparisonTask: Task<Void, Never>?
 
-    /// Correlated market for SMT on this chart: silver for gold and gold for silver.
-    var defaultComparisonSymbol: String? {
-        switch (source, symbol) {
-        case (.binanceFutures, "XAUUSDT"): return "XAGUSDT"
-        case (.binanceFutures, "XAGUSDT"): return "XAUUSDT"
-        case (.binanceFutures, "BTCUSDT"), (.binance, "BTCUSDT"): return "ETHUSDT"
-        case (.binanceFutures, "ETHUSDT"), (.binance, "ETHUSDT"): return "BTCUSDT"
-        case (.oanda, "XAU_USD"): return "XAG_USD"
-        case (.oanda, "XAG_USD"): return "XAU_USD"
-        case (.oanda, "EUR_USD"): return "GBP_USD"
-        case (.oanda, "GBP_USD"): return "EUR_USD"
-        case (.mt5, _):
-            // Exness and most brokers name silver like gold: XAUUSDm ↔ XAGUSDm, XAUUSD.r ↔ XAGUSD.r.
-            if symbol.hasPrefix("XAU") { return "XAG" + symbol.dropFirst(3) }
-            if symbol.hasPrefix("XAG") { return "XAU" + symbol.dropFirst(3) }
+    /// Correlated market for SMT on this chart: gold ⇄ silver, Nasdaq / Dow → S&P 500, S&P 500 → Nasdaq,
+    /// BTC ⇄ ETH, EUR ⇄ GBP, AUD ⇄ NZD, WTI ⇄ Brent, with the broker's prefix / suffix kept (USTECm → US500m).
+    var defaultComparisonSymbol: String? { Self.smtPair(symbol) }
+
+    static let smtPairs: [String: String] = [
+        "XAUUSD": "XAGUSD", "XAGUSD": "XAUUSD", "GOLD": "SILVER", "SILVER": "GOLD",
+        "XAUUSDT": "XAGUSDT", "XAGUSDT": "XAUUSDT",
+        "USTEC": "US500", "NAS100": "SPX500", "US100": "US500", "NDX100": "SPX500",
+        "US500": "USTEC", "SPX500": "NAS100", "SP500": "NAS100",
+        "US30": "US500", "DJ30": "SPX500", "WS30": "SPX500", "DOW30": "SPX500",
+        "BTCUSD": "ETHUSD", "ETHUSD": "BTCUSD", "BTCUSDT": "ETHUSDT", "ETHUSDT": "BTCUSDT",
+        "EURUSD": "GBPUSD", "GBPUSD": "EURUSD", "AUDUSD": "NZDUSD", "NZDUSD": "AUDUSD",
+        "USOIL": "UKOIL", "UKOIL": "USOIL", "XTIUSD": "XBRUSD", "XBRUSD": "XTIUSD", "WTI": "BRENT", "BRENT": "WTI",
+    ]
+
+    /// XAUUSDm → XAGUSDm, NAS100_USD → SPX500_USD, BTCUSDT → ETHUSDT; nil when the market has no pair.
+    static func smtPair(_ symbol: String) -> String? {
+        // OANDA: BASE_QUOTE.
+        let parts = symbol.split(separator: "_").map(String.init)
+        if parts.count == 2 {
+            if let pair = smtPairs[parts[0] + parts[1]], pair.count == 6, pair.hasSuffix(parts[1]) {
+                return String(pair.prefix(3)) + "_" + parts[1]
+            }
+            // OANDA's index names.
+            let oanda = ["US500": "SPX500", "USTEC": "NAS100", "US100": "NAS100"]
+            if let pair = smtPairs[parts[0]] { return (oanda[pair] ?? pair) + "_" + parts[1] }
             return nil
-        default: return nil
         }
+        // Broker names: a "#" / "." prefix, the base in capitals and digits, then any suffix (m, .r, .prop).
+        var rest = Substring(symbol)
+        var prefix = ""
+        if let first = rest.first, first == "#" || first == "." { prefix = String(first); rest = rest.dropFirst() }
+        let base = String(rest.prefix(while: { $0.isUppercase || $0.isNumber }))
+        guard let pair = smtPairs[base] else { return nil }
+        return prefix + pair + String(rest.dropFirst(base.count))
     }
 
     /// Shows `requested` as the comparison market: loads its history, then
