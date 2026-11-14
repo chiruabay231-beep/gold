@@ -3458,7 +3458,7 @@
         if (!this.owner || !this.cmpName || this.source !== "exness") return;
         const main = this.symbol;
         this.symbol = this.cmpName; store.set("aurum.sym", this.symbol);
-        this.ictCfg.smtSymbol = main; this.saveIct();
+        this.setCmpFor(this.symbol, main);
         this.selected = null; this.togglePending(false);
         this.loadCandles();
       };
@@ -4407,8 +4407,8 @@
           }, 550);
         }
         if (this.replayPicking) return;
-        // Ctrl (⌘ on a Mac) + drag with the mouse: a blue box; the drawings in it are picked, to delete together.
-        if (e.pointerType === "mouse" && (e.ctrlKey || e.metaKey) && this.drawings && !this.drawings.tool && !this.drawings.pending) {
+        // Alt (⌥ on a Mac) + drag with the mouse: a blue box; the drawings in it are picked, to delete together.
+        if (e.pointerType === "mouse" && e.altKey && this.drawings && !this.drawings.tool && !this.drawings.pending) {
           this.boxSel = { x0: x, y0: y, x1: x, y1: y };
           this.drawings.clearMulti(); this.renderBoxBar();
           lock(true); e.stopPropagation(); e.preventDefault();
@@ -6403,6 +6403,12 @@
     /* ----- indicator settings (like the app's ICT Killzones + Pivots sheet) ----- */
 
     saveIct() {
+      // The "Mã so sánh" field is the current chart symbol's own choice (empty: its usual pair).
+      if (this.owner && this.ictCfg.smtSymbol !== this.lastSmtSymbol) {
+        const main = this.symbol, cmp = (this.ictCfg.smtSymbol || "").trim();
+        this.ictCfg.smtFor = Object.assign({}, this.ictCfg.smtFor || {});
+        if (cmp) this.ictCfg.smtFor[main] = cmp; else delete this.ictCfg.smtFor[main];
+      }
       store.set("aurum.ictcfg", JSON.stringify(this.ictCfg));
       if (this.ictCfg.smtSymbol !== this.lastSmtSymbol) {
         this.lastSmtSymbol = this.ictCfg.smtSymbol;
@@ -6416,6 +6422,8 @@
     ictSettingsSheet() {
       if (!this.owner && this.features.killzones === false) return toast("Chỉ báo chưa được mở cho bạn", true);
       sheet.close();
+      // The "Mã so sánh" field shows this chart symbol's own choice.
+      if (this.ictCfg) { this.ictCfg.smtSymbol = (this.ictCfg.smtFor || {})[this.symbol] || ""; this.lastSmtSymbol = this.ictCfg.smtSymbol; }
       const tfOpts = [[1, "1m"], [5, "5m"], [15, "15m"], [30, "30m"], [60, "1h"], [240, "4h"], [1440, "1D"]];
       const styles = [["solid", "———"], ["dashed", "– – –"], ["dotted", "·····"]];
       const render = (tab) => {
@@ -6455,7 +6463,7 @@
             + numf("dmBody", "Nến khoẻ: thân ≥ × ATR(14) (0 = mọi cây)", 0.1) + numf("dmWick", "Coi là không râu khi râu ≤ % cả cây (0 = không râu)", 0.5)
             + numf("dmCount", "Số đường DM gần nhất") + tog("dmUntilBroken", "Dừng đường ở nến cắt qua (tắt = kéo tới nến hiện tại)")
             + head("SMT") + `<label class="fr"><input type="checkbox" data-smt ${showInd.smt ? "checked" : ""}><span>Hiện SMT khi mở 2 biểu đồ (nút ▥)</span></label>`
-            + (this.owner ? `<div class="fr"><span class="grow">Mã so sánh</span>${text("smtSymbol", "lb")}<span class="muted small">trống = tự động (${esc(this.cmpSymbol())})</span></div>` : "")
+            + (this.owner ? `<div class="fr"><span class="grow">Mã so sánh</span>${text("smtSymbol", "lb")}<span class="muted small">riêng cho ${esc(this.symbol || "")} · trống = tự động (${esc(smtPair(this.symbol) || "—")})</span></div>` : "")
             + note("SMT so đỉnh với đỉnh, đáy với đáy của 2 mã. Mã chạy ngược chiều (DXY) được tự nhận biết: khi đó đỉnh vàng so với đáy DXY.") + numf("smtSwing", "Swing: số nến mỗi bên (lớn hơn = ít SMT, chỉ đỉnh/đáy chính)") + numf("smtLookback", "Hai đỉnh/đáy cách tối đa (nến)") + numf("smtCount", "Giữ SMT gần nhất")
             + head("Macros") + tog("macros", "Hiện macros")
             + cfg.macroList.map((m, i) => `<div class="fr">${chk(`macroList.${i}.on`)}${text(`macroList.${i}.name`)}${time(`macroList.${i}.start`)}<span class="to">—</span>${time(`macroList.${i}.end`)}</div>`).join("");
@@ -7949,7 +7957,7 @@
     },
 
     pickCmp() {
-      this.symbolSheet((sym) => { this.ictCfg.smtSymbol = sym; this.saveIct(); this.loadCmp(); });
+      this.symbolSheet((sym) => { this.setCmpFor(this.symbol, sym); this.loadCmp(); });
     },
 
     /** The second chart's symbol: silver for gold (the SMT pair), or the one picked. */
@@ -7958,7 +7966,18 @@
      *  WTI ⇄ Brent), with the broker's own prefix / suffix kept (USTECm → US500m). */
     cmpSymbol() {
       const sym = this.owner ? this.symbol || "XAUUSD" : $("chartSymbol").textContent || "XAUUSD";
-      return (this.owner && this.ictCfg && this.ictCfg.smtSymbol) || smtPair(sym) || sym;
+      const own = this.owner && this.ictCfg && this.ictCfg.smtFor ? this.ictCfg.smtFor[sym] : "";
+      return own || smtPair(sym) || sym;
+    },
+
+    /** The comparison market picked by hand for one chart symbol only (another symbol keeps its own pair). */
+    setCmpFor(main, cmp) {
+      const cfg = this.ictCfg;
+      cfg.smtFor = Object.assign({}, cfg.smtFor || {});
+      if (cmp && cmp !== smtPair(main)) cfg.smtFor[main] = cmp; else delete cfg.smtFor[main];
+      cfg.smtSymbol = cfg.smtFor[main] || "";
+      this.lastSmtSymbol = cfg.smtSymbol;
+      this.saveIct();
     },
 
     ensureChart2() {

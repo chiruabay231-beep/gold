@@ -89,12 +89,16 @@
       } else if (typeof saved[k] === typeof d[k]) d[k] = saved[k];
     }
     // SMT v3: the old defaults (3-bar swings, 10 kept) gave a line on nearly every swing.
-    if (saved.smtVersion !== 2 && saved.smtVersion !== 3) {
+    if (![2, 3, 4].includes(saved.smtVersion)) {
       if (d.smtSwing === 3) d.smtSwing = 5;
       if (d.smtCount === 10) d.smtCount = 5;
       d.smtVersion = 3;
     }
     if (saved.smtVersion === 2) { if (d.smtCount === 3) d.smtCount = 5; d.smtVersion = 3; }
+    // The comparison symbol is now per chart symbol (smtFor); one saved for every symbol is dropped, so each
+    // market gets its own pair again (it kept XAGUSD on a Nasdaq chart).
+    if (saved.smtVersion !== 4) { d.smtSymbol = ""; d.smtFor = saved.smtFor && typeof saved.smtFor === "object" ? saved.smtFor : {}; d.smtVersion = 4; }
+    else { d.smtFor = saved.smtFor && typeof saved.smtFor === "object" ? saved.smtFor : {}; d.smtVersion = 4; }
     // D/W/M replaces the three PDH / PWH / PMH switches and their one colour.
     if (!Array.isArray(saved.dwm)) {
       if (saved.prevWeek) d.dwm[1].hl = true;

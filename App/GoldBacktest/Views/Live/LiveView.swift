@@ -908,8 +908,10 @@ struct LiveView: View {
     /// Market shown beside the chart in compare mode (silver for gold, or the SMT symbol set in the indicator).
     private var compareTarget: String? {
         guard compareMode else { return nil }
+        // Each market's own pair (gold ⇄ silver, Nasdaq → S&P 500…); the symbol typed in the SMT settings only
+        // for markets without one, so it never sticks to every symbol (silver on a Nasdaq chart).
         let custom = killzoneSettings.smtSymbol.trimmingCharacters(in: .whitespaces)
-        return custom.isEmpty ? market.defaultComparisonSymbol : custom
+        return market.defaultComparisonSymbol ?? (custom.isEmpty ? nil : custom)
     }
 
     /// Last bar on screen when scrolled back into history; nil at the live edge.

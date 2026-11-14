@@ -321,7 +321,7 @@ struct KillzonePivotsSettingsView: View {
             if settings.config.showSMT {
                 HStack {
                     Text("So với mã")
-                    TextField("Tự động (XAG cho vàng)", text: $settings.smtSymbol)
+                    TextField("Tự động theo mã (chỉ dùng cho mã chưa có cặp)", text: $settings.smtSymbol)
                         .multilineTextAlignment(.trailing)
                         .textInputAutocapitalization(.characters)
                         .autocorrectionDisabled()
