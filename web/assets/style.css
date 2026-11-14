@@ -1028,3 +1028,12 @@ body.chart-full #ticket { top: 26px; }
   body.chart-full .range-bar .clock { display: none; }
   body.chart-full .tv-legend { flex-wrap: nowrap; white-space: nowrap; overflow: hidden; right: 64px; font-size: 11.5px; gap: 6px; }
 }
+
+/* Ctrl + drag: a blue box picking drawings (80% see-through), and its bar */
+.box-sel { position: absolute; z-index: 5; pointer-events: none; background: rgba(41, 98, 255, .2); border: 1px solid rgba(41, 98, 255, .85); border-radius: 2px; }
+.box-sel[hidden] { display: none; }
+.box-bar { position: absolute; z-index: 6; display: flex; align-items: center; gap: 6px; white-space: nowrap; background: var(--glass); border: 1px solid rgba(41, 98, 255, .7);
+  border-radius: 10px; padding: 4px 5px 4px 10px; font-size: 12.5px; backdrop-filter: blur(6px); }
+.box-bar[hidden] { display: none; }
+.box-bar button { background: var(--chip); color: var(--text); border: 0; border-radius: 999px; height: 26px; padding: 0 10px; cursor: pointer; font: 600 12px/1 var(--font); }
+.box-bar button.danger { background: var(--down); color: #fff; }

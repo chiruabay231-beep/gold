@@ -161,23 +161,35 @@
       return a + (b - a) * (l - i);
     }
     y(p) { return this.host.series.priceToCoordinate(p); }
+    /** A chart point at (x, y). `snap`: "free" (or false) where the mouse is; "weak" (or undefined) on the
+     *  candle under it, its open/high/low/close when within 8 px; "strong" (or true, the magnet) on the
+     *  candle and its nearest open/high/low/close within 30 px. */
     point(x, y, snap) {
+      const mode = snap === true ? "strong" : snap === false ? "free" : snap || "weak";
       const ts = this.host.chart.timeScale();
       let l = ts.coordinateToLogical(x);
       if (l == null) return null;
       const a = ts.logicalToCoordinate(l), b = ts.logicalToCoordinate(l + 1);
-      if (!snap && a != null && b != null && b !== a) l = l + (x - a) / (b - a);
+      if (mode === "free" && a != null && b != null && b !== a) l = l + (x - a) / (b - a);
+      else l = Math.round(l);
       let p = this.host.series.coordinateToPrice(y);
       if (p == null) return null;
-      // Magnet: snap to the nearest open/high/low/close of the bar under the finger.
-      if (snap) {
-        const bar = this.host.bars()[Math.round(l)];
+      // Onto the candle's open/high/low/close when near one.
+      if (mode !== "free") {
+        const bar = this.host.bars()[l];
         if (bar) {
           const near = [bar.open, bar.high, bar.low, bar.close].map((v) => [v, Math.abs(this.y(v) - y)]).sort((m, k) => m[1] - k[1])[0];
-          if (near[1] < 10) p = near[0];
+          if (near[1] < (mode === "strong" ? 30 : 8)) p = near[0];
         }
       }
       return { t: this.logicalToTime(l), p: +p.toFixed(this.host.digits()) };
+    }
+
+    /** How points of the tool being drawn snap: free with Shift / Alt held and for the brush, else onto the
+     *  candle (strongly with the magnet on). */
+    snapMode(e) {
+      if ((e && (e.shiftKey || e.altKey)) || this.tool === "brush" || (this.pending && this.pending.tool === "brush")) return "free";
+      return this.host.magnet() ? "strong" : "weak";
     }
 
     /* ----- creating ----- */
@@ -351,9 +363,11 @@
 
     down(x, y, e) {
       const touch = e.pointerType !== "mouse";
+      this.lastEvent = e;
+      this.clearMulti();
       if (this.tool) {
         const spec = TOOLS[this.tool];
-        const pt = this.point(x, y, e.shiftKey === false && this.host.magnet());
+        const pt = this.point(x, y, this.snapMode(e));
         if (!pt) return true;
         if (!this.pending && isPos(this.tool)) {
           // A position is placed with one tap, sized to the chart on screen (like TradingView); its stop,
@@ -406,11 +420,12 @@
       return true;
     }
 
-    move(x, y) {
+    move(x, y, e) {
+      if (e) this.lastEvent = e;
       const g = this.gesture;
       if (!g) {
         if (this.pending && this.pending.pts.length) {
-          const pt = this.point(x, y, this.host.magnet());
+          const pt = this.point(x, y, this.snapMode(this.lastEvent));
           if (pt) { this.pending.pts[this.pending.pts.length - 1] = pt; this.constrain(this.pending, this.pending.pts.length - 1); this.update(); }
           if (this.raw) this.raw[1] = [x, y];
         }
@@ -420,12 +435,12 @@
       if (Math.hypot(x - g.x, y - g.y) > 4) g.moved = true;
       if (g.kind === "create") {
         if (this.raw) this.raw[1] = [x, y];
-        const pt = this.point(x, y, this.host.magnet());
+        const pt = this.point(x, y, this.snapMode(this.lastEvent));
         if (!pt) return true;
         const d = this.pending;
         if (d.tool === "brush") { if (g.moved) d.pts.push(pt); } else { d.pts[d.pts.length - 1] = pt; this.constrain(d, d.pts.length - 1); }
       } else if (g.kind === "handle") {
-        const pt = this.point(x, y, this.host.magnet());
+        const pt = this.point(x, y, g.d.tool === "brush" ? "free" : this.snapMode(this.lastEvent));
         const d = g.d;
         if (pt && isPos(d.tool) && d.pts.length >= 3 && g.handle > 0) {
           // Stop and target handles move only their own price; the one on the entry line only the width.
@@ -502,6 +517,36 @@
     }
 
     get current() { return this.list.find((d) => d.id === this.selected) || null; }
+
+    /* ----- several drawings at once (Ctrl + drag a box) ----- */
+
+    /** The drawings with a point inside the box (x0, y0)–(x1, y1) on screen, shown picked; their count. */
+    selectIn(x0, y0, x1, y1) {
+      const [l, r] = [Math.min(x0, x1), Math.max(x0, x1)], [t, b] = [Math.min(y0, y1), Math.max(y0, y1)];
+      this.multi = new Set();
+      if (!this.hidden) {
+        this.list.forEach((d) => {
+          if (!this.shownNow(d)) return;
+          const inside = d.pts.some((p) => { const x = this.x(p.t), y = this.y(p.p); return x != null && y != null && x >= l && x <= r && y >= t && y <= b; });
+          if (inside) this.multi.add(d.id);
+        });
+      }
+      this.selected = null;
+      this.update();
+      this.host.onChange();
+      return this.multi.size;
+    }
+    get multiCount() { return this.multi ? this.multi.size : 0; }
+    clearMulti() { if (this.multiCount) { this.multi = null; this.update(); } }
+    /** Deletes every drawing picked by the box (locked ones too: the box is an explicit choice). */
+    removeMulti() {
+      if (!this.multiCount) return 0;
+      const n = this.multi.size, ids = this.multi;
+      this.list = this.list.filter((d) => !ids.has(d.id));
+      this.multi = null;
+      this.save(); this.update();
+      return n;
+    }
 
     /** The drawing under the mouse (labels of positions light up). */
     hover(id) {
@@ -655,7 +700,7 @@
         g.save();
         try { this.paintOne(g, d, pts, w, h); } catch { /* skip a broken drawing */ }
         g.restore();
-        if (d.id === this.selected || d === this.pending) {
+        if (d.id === this.selected || d === this.pending || (this.multi && this.multi.has(d.id))) {
           // Handles: a soft halo, then a ring in the drawing's colour on the chart's background.
           const light = document.documentElement.dataset.theme === "light";
           this.handles(d, pts).forEach(([a, b]) => {

@@ -801,10 +801,10 @@
       wrap.addEventListener("pointermove", (e) => {
         if (gesture) return;
         const { x, y } = rel(e);
-        if (dr.pending) { dr.move(x, y); return; }
+        if (dr.pending) { dr.move(x, y, e); return; }
         if (e.pointerType === "mouse") wrap.style.cursor = dr.tool ? "crosshair" : x <= this.chart.timeScale().width() && dr.hitTest(x, y, 8) ? "move" : "";
       });
-      this.onWinMove = (e) => { if (gesture) { const { x, y } = rel(e); dr.move(x, y); } };
+      this.onWinMove = (e) => { if (gesture) { const { x, y } = rel(e); dr.move(x, y, e); } };
       this.onWinUp = () => { if (!gesture) return; gesture = false; lock(false); dr.up(); };
       window.addEventListener("pointermove", this.onWinMove);
       window.addEventListener("pointerup", this.onWinUp);
@@ -4284,6 +4284,37 @@
       this.updateTouchAction();
     },
 
+    /** The blue box being dragged with Ctrl (blue, 80% see-through), or none. */
+    drawBox() {
+      let el = $("boxSel");
+      if (!el) { el = document.createElement("div"); el.id = "boxSel"; el.className = "box-sel"; $("chartWrap").appendChild(el); }
+      const b = this.boxSel;
+      el.hidden = !b;
+      if (!b) return;
+      Object.assign(el.style, { left: Math.min(b.x0, b.x1) + "px", top: Math.min(b.y0, b.y1) + "px", width: Math.abs(b.x1 - b.x0) + "px", height: Math.abs(b.y1 - b.y0) + "px" });
+    },
+
+    /** "N bản vẽ · Xoá tất cả · ✕" while drawings are picked by the box. */
+    renderBoxBar() {
+      let bar = $("boxBar");
+      if (!bar) { bar = document.createElement("div"); bar.id = "boxBar"; bar.className = "box-bar"; $("chartWrap").appendChild(bar); }
+      const n = this.drawings ? this.drawings.multiCount : 0;
+      bar.hidden = !n;
+      if (!n) return;
+      bar.innerHTML = `<span><b>${n}</b> bản vẽ đã chọn</span><button type="button" class="danger" data-a="del">🗑 Xoá tất cả</button><button type="button" data-a="x" title="Bỏ chọn (Esc)">✕</button>`;
+      const b = this.boxPicked;
+      if (b) { bar.style.left = Math.max(8, Math.min(b.x0, b.x1)) + "px"; bar.style.top = Math.max(8, Math.min(b.y0, b.y1) - 40) + "px"; }
+      bar.querySelector("[data-a=del]").onclick = () => this.deleteBoxed();
+      bar.querySelector("[data-a=x]").onclick = () => { this.drawings.clearMulti(); this.renderBoxBar(); };
+    },
+
+    deleteBoxed() {
+      const n = this.drawings ? this.drawings.removeMulti() : 0;
+      this.renderBoxBar();
+      if (n) toast(`Đã xoá ${n} bản vẽ`);
+      this.drawingsChanged && this.drawingsChanged(this.drawings);
+    },
+
     renderSelBar() {
       const bar = $("selBar");
       const x = this.findSelected();
@@ -4363,7 +4394,7 @@
         if (fingers.size > 1) { cancelDrag(); clearTimeout(longPress); return; }
         this.closeMenu();
         this.focusChart(1);
-        if (e.button > 0 || e.target.closest("#selBar, #posPill, #ticket, #drawBar, #favBar, #draftBar, #btChip, #mascots .mascot")) return;
+        if (e.button > 0 || e.target.closest("#selBar, #posPill, #ticket, #drawBar, #favBar, #draftBar, #btChip, #boxBar, #mascots .mascot")) return;
         if (this.mascotSel) { this.mascotSel = null; document.querySelectorAll("#mascots .sel").forEach((x) => x.classList.remove("sel")); }
         const { x, y } = rel(e);
         down = { x: e.clientX, y: e.clientY, moved: false, menu: false };
@@ -4376,7 +4407,17 @@
           }, 550);
         }
         if (this.replayPicking) return;
+        // Ctrl (⌘ on a Mac) + drag with the mouse: a blue box; the drawings in it are picked, to delete together.
+        if (e.pointerType === "mouse" && (e.ctrlKey || e.metaKey) && this.drawings && !this.drawings.tool && !this.drawings.pending) {
+          this.boxSel = { x0: x, y0: y, x1: x, y1: y };
+          this.drawings.clearMulti(); this.renderBoxBar();
+          lock(true); e.stopPropagation(); e.preventDefault();
+          this.drawBox();
+          return;
+        }
         const r = this.drawings ? this.drawings.down(x, y, e) : false;
+        // A press elsewhere let the box's drawings go.
+        if ($("boxBar") && !$("boxBar").hidden && !this.drawings.multiCount) this.renderBoxBar();
         if (r === true) {
           this.drawGesture = true; lock(true); e.stopPropagation();
           clearTimeout(longPress);
@@ -4394,7 +4435,7 @@
       wrap.addEventListener("pointermove", (e) => {
         if (this.drag || this.drawGesture) return;
         const { x, y } = rel(e);
-        if (this.drawings && this.drawings.pending) { this.drawings.move(x, y); return; }
+        if (this.drawings && this.drawings.pending) { this.drawings.move(x, y, e); return; }
         if (e.pointerType !== "mouse") return;
         const overDrawing = this.drawings && x <= paneWidth() && this.drawings.hitTest(x, y, 8);
         if (this.drawings) this.drawings.hover(overDrawing ? overDrawing.d.id : null);
@@ -4403,8 +4444,9 @@
       });
       wrap.addEventListener("pointerleave", () => { if (this.drawings) this.drawings.hover(null); });
       window.addEventListener("pointermove", (e) => {
+        if (this.boxSel) { const { x, y } = rel(e); this.boxSel.x1 = Math.max(0, Math.min(x, paneWidth())); this.boxSel.y1 = y; this.drawBox(); return; }
         if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 6) { down.moved = true; clearTimeout(longPress); }
-        if (this.drawGesture) { const { x, y } = rel(e); this.drawings.move(x, y); return; }
+        if (this.drawGesture) { const { x, y } = rel(e); this.drawings.move(x, y, e); return; }
         if (!this.drag || e.pointerId !== this.drag.pid) return;
         if (fingers.size > 1) { cancelDrag(); return; }
         if (!this.drag.armed) { if (Math.abs(e.clientY - this.drag.y0) < 8) return; this.drag.armed = true; }
@@ -4421,6 +4463,16 @@
       window.addEventListener("pointerup", (e) => {
         fingers.delete(e.pointerId);
         clearTimeout(longPress);
+        if (this.boxSel) {
+          const b = this.boxSel;
+          this.boxSel = null; down = null;
+          lock(false); this.drawBox();
+          const n = Math.hypot(b.x1 - b.x0, b.y1 - b.y0) > 4 ? this.drawings.selectIn(b.x0, b.y0, b.x1, b.y1) : 0;
+          this.boxPicked = n ? b : null;
+          this.renderBoxBar();
+          if (!n) toast("Không có bản vẽ nào trong ô");
+          return;
+        }
         if (this.drag && e.pointerId !== this.drag.pid) return;
         const d = this.drag, tap = down && !down.moved && !down.menu;
         down = null;
@@ -4479,7 +4531,9 @@
       window.addEventListener("keydown", (e) => {
         if (this.tab !== "chart" || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "") || $("sheet").open) return;
         if (e.key === "Escape") { this.closeMenu(); if (this.drawings) this.drawings.cancel(); if (this.replayPicking) this.exitReplay(); }
-        if ((e.key === "Delete" || e.key === "Backspace") && this.drawings && this.drawings.selected) { this.drawings.remove(this.drawings.selected); e.preventDefault(); }
+        if ((e.key === "Delete" || e.key === "Backspace") && this.drawings && this.drawings.multiCount) { this.deleteBoxed(); e.preventDefault(); }
+        else if ((e.key === "Delete" || e.key === "Backspace") && this.drawings && this.drawings.selected) { this.drawings.remove(this.drawings.selected); e.preventDefault(); }
+        if (e.key === "Escape" && this.drawings && this.drawings.multiCount) { this.drawings.clearMulti(); this.renderBoxBar(); }
         if (this.replay && e.key === "ArrowRight") { this.replayStep(); e.preventDefault(); }
         if (this.replay && e.key === " ") { this.replayPlay(); e.preventDefault(); }
       });
@@ -8037,10 +8091,10 @@
       wrap.addEventListener("pointermove", (e) => {
         if (gesture) return;
         const { x, y } = rel(e);
-        if (this.drawings2.pending) { this.drawings2.move(x, y); return; }
+        if (this.drawings2.pending) { this.drawings2.move(x, y, e); return; }
         if (e.pointerType === "mouse") wrap.style.cursor = this.drawings2.tool ? "crosshair" : x <= this.chart2.timeScale().width() && this.drawings2.hitTest(x, y, 8) ? "move" : "";
       });
-      window.addEventListener("pointermove", (e) => { if (gesture) { const { x, y } = rel(e); this.drawings2.move(x, y); } });
+      window.addEventListener("pointermove", (e) => { if (gesture) { const { x, y } = rel(e); this.drawings2.move(x, y, e); } });
       const end = () => { if (!gesture) return; gesture = false; lock(false); this.drawings2.up(); };
       window.addEventListener("pointerup", end);
       window.addEventListener("pointercancel", end);
