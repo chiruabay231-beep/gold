@@ -93,7 +93,8 @@
               self.dpr = hr || 1;
               context.save();
               context.scale(hr, vr);
-              self.paint(context, bitmapSize.width / hr, bitmapSize.height / vr);
+              const paint = () => self.paint(context, bitmapSize.width / hr, bitmapSize.height / vr);
+              if (window.AurumPop) window.AurumPop.wrap(context, paint); else paint();
               context.restore();
             }) }),
           }];

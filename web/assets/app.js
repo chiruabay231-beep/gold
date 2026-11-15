@@ -1295,6 +1295,55 @@
     }
     return rgbHex(contrastOf([255, 255, 255], b) > contrastOf([0, 0, 0], b) ? [255, 255, 255] : [0, 0, 0]);
   }
+  /* The same for the indicators' and drawings' lines: while they paint, a stroke colour too close to the
+   * background is moved away from it (and a see-through one made a little stronger); a coloured text or mark too. */
+  const POP = { on: false, bg: "#151c2a", cache: new Map() };
+  function parseColor(v) {
+    v = v.trim();
+    if (v[0] === "#") {
+      let h = v.slice(1);
+      if (h.length === 3 || h.length === 4) h = h.split("").map((c) => c + c).join("");
+      if (!/^[0-9a-f]{6}([0-9a-f]{2})?$/i.test(h)) return null;
+      return { rgb: hexRgb(h), a: h.length === 8 ? parseInt(h.slice(6), 16) / 255 : 1 };
+    }
+    const m = v.match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)(?:[\s,/]+([\d.]+%?))?\s*\)$/i);
+    if (!m) return null;
+    let a = m[4] == null ? 1 : parseFloat(m[4]);
+    if (m[4] && m[4].endsWith("%")) a /= 100;
+    return { rgb: [+m[1], +m[2], +m[3]], a };
+  }
+  function popColor(v, fill) {
+    if (!POP.on || typeof v !== "string") return v;
+    const key = (fill ? "f" : "s") + v;
+    let r = POP.cache.get(key);
+    if (r !== undefined) return r;
+    r = v;
+    const p = parseColor(v);
+    if (p) {
+      const [, sat, l] = rgbHsl(p.rgb);
+      // Fills: only coloured ones (texts and marks in an indicator's colour), never the zones' light shading
+      // nor black or white text on a label.
+      const take = fill ? p.a >= 0.85 && sat > 0.25 && l > 0.12 && l < 0.88 : p.a >= 0.2;
+      if (take) {
+        const c = hexRgb(standOut(rgbHex(p.rgb), POP.bg, 3));
+        const a = fill || p.a >= 1 ? p.a : Math.min(1, p.a * 1.35);
+        r = a >= 1 ? rgbHex(c) : `rgba(${c.map(Math.round).join(",")},${a.toFixed(3)})`;
+      }
+    }
+    if (POP.cache.size > 3000) POP.cache.clear();
+    POP.cache.set(key, r);
+    return r;
+  }
+  const CTX_STROKE = Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype, "strokeStyle");
+  const CTX_FILL = Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype, "fillStyle");
+  /** Runs a paint with the colours it sets made to stand out (when on); the context is left as it was. */
+  function withPop(ctx, paint) {
+    if (!POP.on || !ctx || !CTX_STROKE || !CTX_FILL) return paint();
+    Object.defineProperty(ctx, "strokeStyle", { configurable: true, get: () => CTX_STROKE.get.call(ctx), set: (v) => CTX_STROKE.set.call(ctx, popColor(v, false)) });
+    Object.defineProperty(ctx, "fillStyle", { configurable: true, get: () => CTX_FILL.get.call(ctx), set: (v) => CTX_FILL.set.call(ctx, popColor(v, true)) });
+    try { return paint(); } finally { delete ctx.strokeStyle; delete ctx.fillStyle; }
+  }
+  window.AurumPop = { wrap: withPop, color: (v) => popColor(v, false) };
   function candleLook(st, bg) {
     const solid = (h, d) => String(h || d).slice(0, 7);
     const look = { up: solid(st.up, "#14b88a"), down: solid(st.down, "#f0455a"), wickUp: solid(st.wickUp, st.up), wickDown: solid(st.wickDown, st.down),
@@ -6611,7 +6660,7 @@
           <div class="fr"><span class="grow">Thân nến tăng / giảm</span>${k.sw("up")}${k.sw("down")}</div>
           <div class="fr">${k.chk("border")}<span class="grow">Viền nến</span>${k.sw("borderUp")}${k.sw("borderDown")}</div>
           <div class="fr"><span class="grow">Bấc nến tăng / giảm</span>${k.sw("wickUp")}${k.sw("wickDown")}</div>
-          <div class="fr">${k.chk("pop")}<span class="grow">Nến nổi bật (tự tăng tương phản với nền)</span></div>
+          <div class="fr">${k.chk("pop")}<span class="grow">Nến, đường chỉ báo và bản vẽ nổi bật (tự tăng tương phản với nền)</span></div>
           <div class="fp-sec">Nền và lưới</div>
           <div class="fr">${k.chk("customBg")}<span class="grow">Màu nền riêng</span>${k.sw("bg")}</div>
           <div class="fr">${k.chk("vGrid")}<span class="grow">Lưới dọc</span>${k.sw("grid")}</div>
@@ -6740,6 +6789,12 @@
         crosshair: { mode: st.crosshairMagnet ? 1 : 0 },
       });
       const look = this.look = candleLook(st, bg);
+      if (POP.on !== !!st.pop || POP.bg !== bg) {
+        POP.on = !!st.pop; POP.bg = bg; POP.cache.clear();
+        if (this.studySeries && this.studies) try { this.applyStudies(); } catch { /* not ready */ }
+        if (this.drawings && this.drawings.requestUpdate) this.drawings.requestUpdate();
+        if (this.drawings2 && this.drawings2.requestUpdate) this.drawings2.requestUpdate();
+      }
       const candles = {
         upColor: look.up, downColor: look.down, wickUpColor: look.wickUp, wickDownColor: look.wickDown,
         borderVisible: look.border, borderUpColor: look.borderUp, borderDownColor: look.borderDown,
@@ -6899,7 +6954,7 @@
             ? { time: bars[k].time + TZ, value: v, color: o.colorOf ? o.colorOf(k) : o.color }
             : { time: bars[k].time + TZ, value: v }));
           list[i].setData(data);
-          if (o.kind !== "hist") list[i].applyOptions({ color: o.color });
+          if (o.kind !== "hist") list[i].applyOptions({ color: popColor(o.color, false) });
         });
       });
       // Bands from the bottom up, in the order they were added; volume sits right above them.
@@ -7834,7 +7889,7 @@
           return [{
             zOrder: () => "bottom",
             renderer: () => ({
-              draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+              draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => withPop(context, () => {
                 const ts = term.chart.timeScale();
                 const X = (i) => ts.logicalToCoordinate(i), Y = (v) => term.series.priceToCoordinate(v);
                 if (term.ict) window.ICT.draw(context, term.ict, term.ictCfg, X, Y, mediaSize.width, mediaSize.height);
@@ -7849,13 +7904,13 @@
                 term.drawNews(context, mediaSize.width, mediaSize.height);
                 term.drawAlerts(context, mediaSize.width);
                 if (!term.isPane) { term.placeMascotsSoon(); term.placeCrewSoon(); }
-              }),
+              })),
             }),
           }, {
             // Shark bubbles over the candles, like the app.
             zOrder: () => "top",
             renderer: () => ({
-              draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+              draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => withPop(context, () => {
                 term.drawSharkZones(context, mediaSize.width, true);
                 // The TTrades panel over the candles, so they never cross its text.
                 if (term.models && window.MODELS && window.MODELS.drawPanelOnly) window.MODELS.drawPanelOnly(context, term.models, term.modelCfg, mediaSize.width, mediaSize.height);
@@ -7867,7 +7922,7 @@
                 const sc = term.sharkColors();
                 window.ICT.drawSharks(context, term.sharks, term.viewBars(), (i) => ts.logicalToCoordinate(i), (v) => term.series.priceToCoordinate(v),
                   mediaSize.width, sc.buy, sc.sell, sc.bubble);
-              }),
+              })),
             }),
           }, {
             zOrder: () => "top",
@@ -8183,7 +8238,7 @@
       this.series2.attachPrimitive({
         attached(p) { term.request2 = p.requestUpdate; }, detached() {}, updateAllViews() {},
         paneViews() {
-          return [{ zOrder: () => "top", renderer: () => ({ draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => {
+          return [{ zOrder: () => "top", renderer: () => ({ draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => withPop(context, () => {
             if (!term.smt || !term.cmpView) return;
             // Mapped onto the second chart's bars once per SMT result, not every frame.
             const c = term.smt2Cache;
@@ -8200,7 +8255,7 @@
             const list = term.smt2Cache.list;
             const ts = term.chart2.timeScale();
             window.ICT.drawSMT(context, list, (i) => ts.logicalToCoordinate(i), (v) => term.series2.priceToCoordinate(v), mediaSize.width, { bull: term.ictCfg.smtBull, bear: term.ictCfg.smtBear });
-          }) }) }];
+          })) }) }];
         },
       });
       // Dragging either chart moves both.
