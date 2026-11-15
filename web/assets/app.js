@@ -1254,7 +1254,66 @@
   function defaultChartStyle() {
     return { theme: "dark", up: "#14b88a", down: "#f0455a", wickUp: "#14b88a", wickDown: "#f0455a", border: true, borderV: 2, borderUp: "#14b88a", borderDown: "#f0455a",
       customBg: false, bg: "#151c2a", vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
-      askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3" };
+      askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3", pop: true };
+  }
+  /* Candles that stand out: a colour too close to the background is pushed away from it (lighter on a dark or
+   * grey background, darker on a light one), and a body still near the background gets a dark or light edge. */
+  function hexRgb(h) {
+    h = String(h || "").replace("#", "");
+    if (h.length === 3) h = h.split("").map((c) => c + c).join("");
+    const n = parseInt(h.slice(0, 6), 16);
+    return isNaN(n) ? [0, 0, 0] : [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  function lum(c) { const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }; return 0.2126 * f(c[0]) + 0.7152 * f(c[1]) + 0.0722 * f(c[2]); }
+  function contrastOf(a, b) { const x = lum(a), y = lum(b); return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05); }
+  function rgbHex(c) { return "#" + c.map((v) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0")).join(""); }
+  function mixRgb(c, to, t) { return c.map((v, i) => v + (to[i] - v) * t); }
+  function rgbHsl([r, g, b]) {
+    r /= 255; g /= 255; b /= 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2, d = mx - mn;
+    if (!d) return [0, 0, l];
+    const sat = d / (1 - Math.abs(2 * l - 1));
+    const h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    return [(h * 60 + 360) % 360, sat, l];
+  }
+  function hslRgb([h, sat, l]) {
+    const c = (1 - Math.abs(2 * l - 1)) * sat, x = c * (1 - Math.abs(((h / 60) % 2) - 1)), m = l - c / 2;
+    const [r, g, b] = h < 60 ? [c, x, 0] : h < 120 ? [x, c, 0] : h < 180 ? [0, c, x] : h < 240 ? [0, x, c] : h < 300 ? [x, 0, c] : [c, 0, x];
+    return [(r + m) * 255, (g + m) * 255, (b + m) * 255];
+  }
+  /** The colour moved in lightness (its hue kept, a coloured one made vivid) until it stands out from the background. */
+  function standOut(color, bg, min) {
+    const c = hexRgb(color), b = hexRgb(bg);
+    if (contrastOf(c, b) >= min) return rgbHex(c);
+    const [h, sat, l] = rgbHsl(c), s2 = sat > 0.15 ? Math.max(sat, 0.8) : sat;
+    const ways = lum(c) >= lum(b) ? [1, -1] : [-1, 1];
+    for (const dir of ways) for (let t = 0.02; t <= 1.001; t += 0.02) {
+      const nl = l + dir * t;
+      if (nl < 0 || nl > 1) break;
+      const m = hslRgb([h, s2, nl]);
+      if (contrastOf(m, b) >= min) return rgbHex(m);
+    }
+    return rgbHex(contrastOf([255, 255, 255], b) > contrastOf([0, 0, 0], b) ? [255, 255, 255] : [0, 0, 0]);
+  }
+  function candleLook(st, bg) {
+    const solid = (h, d) => String(h || d).slice(0, 7);
+    const look = { up: solid(st.up, "#14b88a"), down: solid(st.down, "#f0455a"), wickUp: solid(st.wickUp, st.up), wickDown: solid(st.wickDown, st.down),
+      border: st.border, borderUp: solid(st.borderUp, st.up), borderDown: solid(st.borderDown, st.down) };
+    if (!st.pop) return Object.assign(look, { up: st.up, down: st.down, wickUp: st.wickUp, wickDown: st.wickDown, borderUp: st.borderUp, borderDown: st.borderDown });
+    const b = hexRgb(bg);
+    for (const k of ["up", "down"]) {
+      const W = k === "up" ? "wickUp" : "wickDown", B = k === "up" ? "borderUp" : "borderDown";
+      look[k] = standOut(look[k], bg, 3);
+      look[W] = standOut(look[W], bg, 3);
+      const body = hexRgb(look[k]);
+      if (contrastOf(body, b) < 3.3) {
+        // An edge from the end (black or white) that is furthest from the body, so the body's outline shows.
+        const to = contrastOf(body, [0, 0, 0]) >= contrastOf(body, [255, 255, 255]) ? [0, 0, 0] : [255, 255, 255];
+        look[B] = rgbHex(mixRgb(body, to, 0.55));
+        look.border = true;
+      } else look[B] = st.border ? standOut(look[B], bg, 3) : look[k];
+    }
+    return look;
   }
   function loadChartStyle() {
     try {
@@ -3369,6 +3428,12 @@
             return { priceRange: { minValue, maxValue }, margins: res.margins };
           },
         });
+        // Every bar fed to the candles also goes to the series of the chosen chart type (line, bars…).
+        {
+          const s = this.series, set = s.setData.bind(s), upd = s.update.bind(s);
+          s.setData = (data) => { set(data); this.altSet(data); };
+          s.update = (bar) => { upd(bar); this.altUpdate(bar); };
+        }
         this.ictCfg = (() => { try { return window.ICT.merge(JSON.parse(store.get("aurum.ictcfg") || "null")); } catch { return window.ICT.defaults(); } })();
         const loadCfg = (lib, key) => (lib ? (() => { try { return lib.merge(JSON.parse(store.get(key) || "null")); } catch { return lib.defaults(); } })() : null);
         this.macroCfg = loadCfg(window.MACRO, "aurum.macrocfg");
@@ -3468,6 +3533,8 @@
       $("indBtn").onclick = () => this.indicatorSheet();
       $("drawBtn").onclick = () => this.toggleRail();
       $("styleBtn").onclick = () => this.chartStyleSheet();
+      $("typeBtn").onclick = (e) => { e.stopPropagation(); const m = $("ctxMenu"); if (m && !m.hidden && m.querySelector(".type-list")) this.closeMenu(); else this.chartTypeMenu(e.currentTarget); };
+      this.renderTypeBtn();
       $("fullBtn").onclick = () => this.setFull(!document.body.classList.contains("chart-full"));
       this.setupChartFit();
       if (!this.fullKeys) {
@@ -4563,7 +4630,7 @@
         if (this.replay && e.key === " ") { this.replayPlay(); e.preventDefault(); }
       });
       document.addEventListener("pointerdown", (e) => {
-        if (!e.target.closest("#ctxMenu") && !e.target.closest(".lot-pick") && !e.target.closest(".db-pick")) this.closeMenu();
+        if (!e.target.closest("#ctxMenu") && !e.target.closest(".lot-pick") && !e.target.closest(".db-pick") && !e.target.closest("#typeBtn")) this.closeMenu();
         if (!e.target.closest("#flyout, #toolRail")) this.closeFlyout();
       });
     },
@@ -6544,6 +6611,7 @@
           <div class="fr"><span class="grow">Thân nến tăng / giảm</span>${k.sw("up")}${k.sw("down")}</div>
           <div class="fr">${k.chk("border")}<span class="grow">Viền nến</span>${k.sw("borderUp")}${k.sw("borderDown")}</div>
           <div class="fr"><span class="grow">Bấc nến tăng / giảm</span>${k.sw("wickUp")}${k.sw("wickDown")}</div>
+          <div class="fr">${k.chk("pop")}<span class="grow">Nến nổi bật (tự tăng tương phản với nền)</span></div>
           <div class="fp-sec">Nền và lưới</div>
           <div class="fr">${k.chk("customBg")}<span class="grow">Màu nền riêng</span>${k.sw("bg")}</div>
           <div class="fr">${k.chk("vGrid")}<span class="grow">Lưới dọc</span>${k.sw("grid")}</div>
@@ -6566,6 +6634,95 @@
       this.applyChartStyle();
     },
 
+    /* ----- chart type (TradingView's menu): bars, candles, hollow, volume candles, line, line with markers, steps ----- */
+
+    chartTypes() {
+      const ic = (d) => `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+      return [
+        ["bars", "Thanh", ic('<path d="M7 4v15M4 8h3M7 15h3M16 6v14M13 10h3M16 17h3"/>')],
+        ["candles", "Biểu đồ nến", ic('<path d="M8 3v3M8 17v4M16 5v3M16 15v5"/><rect x="5.5" y="6" width="5" height="11" rx="1" fill="currentColor"/><rect x="13.5" y="8" width="5" height="7" rx="1"/>')],
+        ["hollow", "Biểu đồ nến rỗng", ic('<path d="M8 3v3M8 17v4M16 5v3M16 15v5"/><rect x="5.5" y="6" width="5" height="11" rx="1"/><rect x="13.5" y="8" width="5" height="7" rx="1"/><path d="M7.5 9v5"/>')],
+        ["volume", "Nến khối lượng", ic('<path d="M8 3v3M8 18v3M16 6v3M16 15v4"/><rect x="4.5" y="6" width="7" height="12" rx="1"/><rect x="14" y="9" width="4" height="6" rx="1"/>')],
+        ["line", "Đường", ic('<path d="M3 17l5-6 4 3 4-6 5 4"/>')],
+        ["markers", "Biểu đồ có điểm đánh dấu", ic('<path d="M3 17l5-6 4 3 4-6 5 4"/><circle cx="8" cy="11" r="1.6" fill="currentColor"/><circle cx="12" cy="14" r="1.6" fill="currentColor"/><circle cx="16" cy="8" r="1.6" fill="currentColor"/>')],
+        ["steps", "Biểu đồ đường bậc", ic('<path d="M3 18h4v-5h5v-5h4v4h5"/>')],
+      ];
+    },
+    chartType() { const t = store.get("aurum.chartType"); return this.chartTypes().some(([k]) => k === t) ? t : "candles"; },
+
+    /** The chosen type: candles and hollow on the candle series itself; the others in a series of their own
+     *  over it, the candles left see-through (they keep the price scale, the indicators and drawings). */
+    applyChartType() {
+      if (!this.chart || !this.series) return;
+      const type = this.chartType(), st = this.chartStyle || {}, look = this.look || {};
+      const up = (look.up || st.up || "#14b88a").slice(0, 7), down = (look.down || st.down || "#f0455a").slice(0, 7);
+      const clear = "rgba(0,0,0,0)";
+      if (this.altSeries && this.altType !== type) { try { this.chart.removeSeries(this.altSeries); } catch { /* gone */ } this.altSeries = null; }
+      this.altType = type;
+      if (type === "candles") return;
+      if (type === "hollow") {
+        this.series.applyOptions({ upColor: clear, borderVisible: true, borderUpColor: up, wickUpColor: up, downColor: down, borderDownColor: down, wickDownColor: down });
+        return;
+      }
+      // The candles hidden, their last-price label kept.
+      this.series.applyOptions({ upColor: clear, downColor: clear, borderVisible: false, wickVisible: false });
+      const common = { lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: type !== "bars" && type !== "volume" };
+      if (!this.altSeries) {
+        if (type === "bars") this.altSeries = this.chart.addBarSeries(Object.assign({ upColor: up, downColor: down, thinBars: false, openVisible: true }, common));
+        else if (type === "volume") this.altSeries = this.chart.addCandlestickSeries(Object.assign({ upColor: up, downColor: down, borderVisible: false, wickUpColor: up, wickDownColor: down }, common));
+        else this.altSeries = this.chart.addLineSeries(Object.assign({ color: st.lineColor || "#2962ff", lineWidth: 2, lineType: type === "steps" ? 1 : 0,
+          pointMarkersVisible: type === "markers", pointMarkersRadius: 2.5 }, common));
+      } else if (type === "bars") this.altSeries.applyOptions({ upColor: up, downColor: down });
+      this.altSet(this.series.data ? this.series.data() : this.viewBars().map(shown));
+    },
+
+    /** A bar as the chosen type's series takes it: OHLC, or the close for the lines; volume candles weighted
+     *  by their volume against the average (stronger colour, wider look). */
+    altPoint(b) {
+      const t = this.altType;
+      if (t === "line" || t === "markers" || t === "steps") return { time: b.time, value: b.close };
+      if (t === "volume") {
+        const avg = this.altAvgVol || 0, k = avg > 0 && b.volume ? Math.min(1, 0.25 + 0.75 * (b.volume / (avg * 2))) : 0.6;
+        const st = Object.assign({}, this.chartStyle, this.look), base = (b.close >= b.open ? st.up || "#14b88a" : st.down || "#f0455a").slice(0, 7);
+        const c = base + Math.round(k * 255).toString(16).padStart(2, "0");
+        return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close, color: c, borderColor: c, wickColor: base };
+      }
+      return { time: b.time, open: b.open, high: b.high, low: b.low, close: b.close };
+    },
+    altSet(data) {
+      if (!this.altSeries || !data) return;
+      if (this.altType === "volume") { const v = data.filter((b) => b.volume > 0); this.altAvgVol = v.length ? v.reduce((a, b) => a + b.volume, 0) / v.length : 0; }
+      try { this.altSeries.setData(data.map((b) => this.altPoint(b))); } catch { /* not ready */ }
+    },
+    altUpdate(bar) {
+      if (!this.altSeries || !bar) return;
+      try { this.altSeries.update(this.altPoint(bar)); } catch { /* older bar */ }
+    },
+
+    /** TradingView's chart type menu, under its button. */
+    chartTypeMenu(anchor) {
+      const menu = $("ctxMenu"), cur = this.chartType();
+      menu.innerHTML = `<div class="db-list type-list">${this.chartTypes().map(([k, name, icon], i) => `${i === 4 ? '<div class="type-sep"></div>' : ""}<button type="button" data-t="${k}" class="${k === cur ? "on" : ""}">${icon}<span>${name}</span></button>`).join("")}</div>`;
+      menu.classList.add("db-menu");
+      menu.hidden = false;
+      const r = anchor.getBoundingClientRect();
+      menu.style.left = Math.max(8, Math.min(r.left, window.innerWidth - menu.offsetWidth - 8)) + "px";
+      menu.style.top = Math.min(r.bottom + 8, window.innerHeight - menu.offsetHeight - 8) + "px";
+      menu.querySelectorAll("[data-t]").forEach((b) => (b.onclick = () => {
+        store.set("aurum.chartType", b.dataset.t);
+        this.closeMenu();
+        this.applyChartStyle();
+        this.renderTypeBtn();
+      }));
+    },
+    renderTypeBtn() {
+      const btn = $("typeBtn");
+      if (!btn) return;
+      const t = this.chartTypes().find(([k]) => k === this.chartType());
+      btn.innerHTML = t[2];
+      btn.title = "Kiểu biểu đồ: " + t[1];
+    },
+
     applyChartStyle() {
       if (!this.chart) return;
       if (!this.axisFontAsked && document.fonts && document.fonts.load) {
@@ -6582,11 +6739,13 @@
         timeScale: { borderColor: light ? "#d6dae1" : "#222c3d", secondsVisible: st.seconds || isSecTF(this.interval) },
         crosshair: { mode: st.crosshairMagnet ? 1 : 0 },
       });
+      const look = this.look = candleLook(st, bg);
       const candles = {
-        upColor: st.up, downColor: st.down, wickUpColor: st.wickUp, wickDownColor: st.wickDown,
-        borderVisible: st.border, borderUpColor: st.borderUp, borderDownColor: st.borderDown,
+        upColor: look.up, downColor: look.down, wickUpColor: look.wickUp, wickDownColor: look.wickDown,
+        borderVisible: look.border, borderUpColor: look.borderUp, borderDownColor: look.borderDown,
       };
       this.series.applyOptions(candles);
+      this.applyChartType();
       if (this.chart2) {
         this.chart2.applyOptions({
           layout: axisFont(bg, light),

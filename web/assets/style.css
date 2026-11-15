@@ -1037,3 +1037,10 @@ body.chart-full #ticket { top: 26px; }
 .box-bar[hidden] { display: none; }
 .box-bar button { background: var(--chip); color: var(--text); border: 0; border-radius: 999px; height: 26px; padding: 0 10px; cursor: pointer; font: 600 12px/1 var(--font); }
 .box-bar button.danger { background: var(--down); color: #fff; }
+
+/* Chart type menu (TradingView's) */
+.type-btn { display: inline-grid; place-items: center; }
+.type-btn svg { width: 18px; height: 18px; }
+.ctx .type-list { min-width: 230px; }
+.ctx .type-list button span { font-size: 13.5px; }
+.ctx .type-list .type-sep { height: 1px; background: var(--line); margin: 4px 6px; }
