@@ -8,7 +8,7 @@ struct AppSettingsView: View {
     @AppStorage("live.theme") private var themeName = "tradingView"
     @AppStorage(ChartBackground.key) private var backgroundJSON = ""
     @AppStorage("live.showGrid") private var showGrid = true
-    @AppStorage(StandOut.key) private var standOut = true
+    @AppStorage(StandOut.key) private var standOut = false
     @AppStorage("live.candleStyle") private var candleStyle = CandleStyle.candles.rawValue
     @AppStorage("live.candleColors") private var candleColorsJSON = ""
     @AppStorage("live.precision") private var precision = -1

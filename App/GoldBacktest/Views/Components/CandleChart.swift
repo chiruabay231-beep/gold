@@ -111,7 +111,9 @@ enum CandleStyle: String, CaseIterable, Identifiable {
 /// A highlighted time window (killzone, ICT macro…) drawn as a box from the
 /// window's low to its high.
 struct SessionBox: Identifiable {
-    enum Style { case filled, dotted }
+    /// `barHigh` / `barBottom`: a coloured bar across the window's time, just over its high or at the
+    /// bottom of the chart (the ICT macros' compact look).
+    enum Style { case filled, dotted, barHigh, barBottom }
 
     var id: String
     var range: ClosedRange<Int>
@@ -123,6 +125,7 @@ struct SessionBox: Identifiable {
     var fillOpacity = 0.10
     var showBorder = false
     var borderWidth: CGFloat = 1
+    var barHeight: CGFloat = 6
 }
 
 /// A horizontal line between two bars with a small label at its right end;
@@ -816,10 +819,15 @@ struct CandleChart: View {
 
         // Session boxes (behind candles).
         for box in sessionBoxes where !axisOnly && box.range.upperBound >= range.lowerBound && box.range.lowerBound < range.upperBound {
-            let rect = CGRect(x: s.x(box.range.lowerBound) - s.barWidth / 2, y: s.y(box.high),
+            var rect = CGRect(x: s.x(box.range.lowerBound) - s.barWidth / 2, y: s.y(box.high),
                               width: s.x(box.range.upperBound) - s.x(box.range.lowerBound) + s.barWidth,
                               height: max(2, s.y(box.low) - s.y(box.high)))
             switch box.style {
+            case .barHigh, .barBottom:
+                let h = max(2, box.barHeight)
+                let y = box.style == .barHigh ? s.y(box.high) - h - 4 : layout.plot.maxY - h - 3
+                rect = CGRect(x: rect.minX, y: y, width: max(2, rect.width), height: h)
+                plotContext.fill(Path(roundedRect: rect, cornerRadius: min(3, h / 2)), with: .color(box.color.opacity(box.fillOpacity)))
             case .filled:
                 plotContext.fill(Path(rect), with: .color(box.color.opacity(box.fillOpacity)))
                 if box.showBorder {

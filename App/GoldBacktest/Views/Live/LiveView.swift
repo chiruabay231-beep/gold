@@ -135,7 +135,7 @@ struct LiveView: View {
 
     @AppStorage(ChartBackground.key) private var chartBackgroundJSON = ""
     @AppStorage("live.showGrid") private var showGrid = true
-    @AppStorage(StandOut.key) private var standOutOn = true
+    @AppStorage(StandOut.key) private var standOutOn = false
     private var theme: ChartTheme {
         (themeName == "binance" ? ChartTheme.binance : .tradingView).with(background: ChartBackground.decode(chartBackgroundJSON))
     }

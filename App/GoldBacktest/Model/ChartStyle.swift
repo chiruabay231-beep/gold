@@ -127,7 +127,7 @@ extension CandleColors {
 /// like the website: a colour too close to the background moves away from it in lightness (its hue kept,
 /// a coloured one made vivid); a body still near the background gets a dark or light edge.
 enum StandOut {
-    static let key = "live.standOut"
+    static let key = "live.standOut.v2"
 
     private static var cache: [String: RGBAColor] = [:]
 

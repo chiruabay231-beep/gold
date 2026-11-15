@@ -35,6 +35,14 @@ struct KillzonePivotsSettings: Codable, Hashable {
     var periodWidth = 1.0
     var labelColor = RGBAColor(red: 0.471, green: 0.482, blue: 0.525)
     var macroColor = RGBAColor(red: 0.471, green: 0.482, blue: 0.525)
+    /// Macros as a coloured bar across their time ("bar"), or the dotted box round their candles ("box").
+    var macroStyle = "bar"
+    /// The bar just over the window's high (true) or at the bottom of the chart (false).
+    var macroBarAtHigh = false
+    var macroBarHeight = 6.0
+    var macroBarOpacity = 0.75
+    /// A colour for each macro, by name (others: `macroColor`).
+    var macroColors: [String: RGBAColor] = KillzonePivotsSettings.defaultMacroColors
     var fvgBullColor = RGBAColor(red: 0.031, green: 0.6, blue: 0.506)
     var fvgBearColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
     var fvgOpacity = 0.22
@@ -52,6 +60,15 @@ struct KillzonePivotsSettings: Codable, Hashable {
     var smtBearColor = RGBAColor(red: 0.949, green: 0.212, blue: 0.271)
     /// Market compared for SMT; empty = automatic (silver for gold…).
     var smtSymbol = ""
+
+    static let defaultMacroColors: [String: RGBAColor] = {
+        let blue = RGBAColor(red: 0.161, green: 0.384, blue: 1.0), orange = RGBAColor(red: 1.0, green: 0.596, blue: 0.0)
+        return ["London 1": blue, "London 2": blue, "NY AM 1": orange, "NY AM 2": orange, "NY AM 3": orange,
+                "NY Lunch": RGBAColor(red: 0.612, green: 0.153, blue: 0.69), "NY PM": RGBAColor(red: 0.0, green: 0.737, blue: 0.831),
+                "Last Hour": RGBAColor(red: 0.914, green: 0.118, blue: 0.388)]
+    }()
+
+    func colorOfMacro(_ name: String) -> RGBAColor { macroColors[name] ?? macroColor }
 
     static let storageKey = "live.killzonePivots"
 
@@ -82,6 +99,11 @@ struct KillzonePivotsSettings: Codable, Hashable {
         periodWidth = try c.decodeIfPresent(Double.self, forKey: .periodWidth) ?? d.periodWidth
         labelColor = try c.decodeIfPresent(RGBAColor.self, forKey: .labelColor) ?? d.labelColor
         macroColor = try c.decodeIfPresent(RGBAColor.self, forKey: .macroColor) ?? d.macroColor
+        macroStyle = try c.decodeIfPresent(String.self, forKey: .macroStyle) ?? d.macroStyle
+        macroBarAtHigh = try c.decodeIfPresent(Bool.self, forKey: .macroBarAtHigh) ?? d.macroBarAtHigh
+        macroBarHeight = try c.decodeIfPresent(Double.self, forKey: .macroBarHeight) ?? d.macroBarHeight
+        macroBarOpacity = try c.decodeIfPresent(Double.self, forKey: .macroBarOpacity) ?? d.macroBarOpacity
+        macroColors = try c.decodeIfPresent([String: RGBAColor].self, forKey: .macroColors) ?? d.macroColors
         fvgBullColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgBullColor) ?? d.fvgBullColor
         fvgBearColor = try c.decodeIfPresent(RGBAColor.self, forKey: .fvgBearColor) ?? d.fvgBearColor
         fvgOpacity = try c.decodeIfPresent(Double.self, forKey: .fvgOpacity) ?? d.fvgOpacity
@@ -218,9 +240,12 @@ struct KillzonePivotsLayer {
             let label = config.macroTimeLabels
                 ? "\(KillzonePivotsSettingsView.clock(macro.start))–\(KillzonePivotsSettingsView.clock(macro.end))"
                 : macro.name
+            let bar = settings.macroStyle != "box"
             boxes.append(SessionBox(id: "macro-\(box.macro)-\(box.range.lowerBound)", range: box.range, high: box.high,
-                                    low: box.low, label: label, color: settings.macroColor.color, style: .dotted,
-                                    borderWidth: CGFloat(settings.boxBorderWidth)))
+                                    low: box.low, label: label, color: settings.colorOfMacro(macro.name).color,
+                                    style: bar ? (settings.macroBarAtHigh ? .barHigh : .barBottom) : .dotted,
+                                    fillOpacity: settings.macroBarOpacity,
+                                    borderWidth: CGFloat(settings.boxBorderWidth), barHeight: CGFloat(settings.macroBarHeight)))
         }
         for level in output.levels {
             var segment = ChartSegment(start: Double(level.start), end: level.end.map(Double.init), price: level.price,

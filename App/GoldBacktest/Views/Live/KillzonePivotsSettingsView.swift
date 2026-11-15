@@ -354,10 +354,25 @@ struct KillzonePivotsSettingsView: View {
                     Text("Giờ (08:50–09:10)").tag(true)
                     Text("Tên macro").tag(false)
                 }
-                colorRow("Màu", color: $settings.macroColor)
+                Picker("Kiểu", selection: $settings.macroStyle) {
+                    Text("Thanh ngang (gọn)").tag("bar")
+                    Text("Hộp chấm quanh nến").tag("box")
+                }
+                if settings.macroStyle != "box" {
+                    Picker("Vị trí thanh", selection: $settings.macroBarAtHigh) {
+                        Text("Dưới đáy chart").tag(false)
+                        Text("Trên đỉnh khung macro").tag(true)
+                    }
+                    Stepper(String(format: "Độ dày thanh: %.0f px", settings.macroBarHeight),
+                            value: $settings.macroBarHeight, in: 2...20, step: 1)
+                    Stepper(String(format: "Độ đậm thanh: %.0f%%", settings.macroBarOpacity * 100),
+                            value: $settings.macroBarOpacity, in: 0.1...1, step: 0.05)
+                }
+                colorRow("Màu (macro thêm mới)", color: $settings.macroColor)
                 ForEach(settings.config.macros.indices, id: \.self) { index in
                     DisclosureGroup {
                         TextField("Tên", text: $settings.config.macros[index].name)
+                        colorRow("Màu", color: macroColorBinding(settings.config.macros[index].name))
                         timeRow("Bắt đầu", hour: $settings.config.macros[index].start)
                         timeRow("Kết thúc", hour: $settings.config.macros[index].end)
                     } label: {
@@ -573,6 +588,10 @@ struct KillzonePivotsSettingsView: View {
             .labelsHidden()
             .environment(\.timeZone, utc)
             .environment(\.locale, Locale(identifier: "vi_VN"))
+    }
+
+    private func macroColorBinding(_ name: String) -> Binding<RGBAColor> {
+        Binding(get: { settings.colorOfMacro(name) }, set: { settings.macroColors[name] = $0 })
     }
 
     private func colorRow(_ title: String, color: Binding<RGBAColor>) -> some View {

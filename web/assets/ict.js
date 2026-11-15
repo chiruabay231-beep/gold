@@ -54,15 +54,18 @@
       // From weekFvgHour on Monday in weekFvgZone (09:30 New York by default, or Vietnam time).
       weekFvg: true, weekFvgWeeks: 4, weekFvgColor: "#2962ff", weekFvgHour: 9.5, weekFvgZone: "America/New_York",
       macros: true, macroTfLimit: 15, macroTimeLabels: true, macroColor: "#787b86",
+      // A coloured bar across each macro's time (at the bottom, the top or over the window's high), or the
+      // dotted box round its candles as before.
+      macroStyle: "bar", macroBarPos: "bottom", macroBarHeight: 6, macroBarOpacity: 75, macroVersion: 2,
       macroList: [
-        { on: true, name: "London 1", start: 2 + 33 / 60, end: 3 },
-        { on: true, name: "London 2", start: 4 + 3 / 60, end: 4.5 },
-        { on: true, name: "NY AM 1", start: 8 + 50 / 60, end: 9 + 10 / 60 },
-        { on: true, name: "NY AM 2", start: 9 + 50 / 60, end: 10 + 10 / 60 },
-        { on: true, name: "NY AM 3", start: 10 + 50 / 60, end: 11 + 10 / 60 },
-        { on: true, name: "NY Lunch", start: 11 + 50 / 60, end: 12 + 10 / 60 },
-        { on: true, name: "NY PM", start: 13 + 10 / 60, end: 13 + 40 / 60 },
-        { on: true, name: "Last Hour", start: 15.25, end: 15.75 },
+        { on: true, name: "London 1", start: 2 + 33 / 60, end: 3, color: "#2962ff" },
+        { on: true, name: "London 2", start: 4 + 3 / 60, end: 4.5, color: "#2962ff" },
+        { on: true, name: "NY AM 1", start: 8 + 50 / 60, end: 9 + 10 / 60, color: "#ff9800" },
+        { on: true, name: "NY AM 2", start: 9 + 50 / 60, end: 10 + 10 / 60, color: "#ff9800" },
+        { on: true, name: "NY AM 3", start: 10 + 50 / 60, end: 11 + 10 / 60, color: "#ff9800" },
+        { on: true, name: "NY Lunch", start: 11 + 50 / 60, end: 12 + 10 / 60, color: "#9c27b0" },
+        { on: true, name: "NY PM", start: 13 + 10 / 60, end: 13 + 40 / 60, color: "#00bcd4" },
+        { on: true, name: "Last Hour", start: 15.25, end: 15.75, color: "#e91e63" },
       ],
       fvg: true, fvgFrom: 1, fvgTo: 1440, fvgStrong: true, fvgDisplacement: 1.5, fvgConfluence: true,
       fvgMid: true, fvgHideFilled: false, gapKeep: 15, fvgMinSize: 0, fvgCount: 40,
@@ -113,6 +116,11 @@
     if (saved.viVersion !== 2) {
       // Touched VIs now stay (ending at the touching candle) instead of going.
       d.viKeep = true; d.viHideTouched = false; d.viVersion = 2;
+    }
+    if (saved.macroVersion !== 2) {
+      // Macros got a colour each: one chosen before for all of them carries over.
+      if (typeof saved.macroColor === "string" && saved.macroColor !== "#787b86") d.macroList.forEach((m) => { m.color = saved.macroColor; });
+      d.macroVersion = 2;
     }
     if (saved.dmVersion !== 2) {
       // DM became lines from candles bare on one side: the first version's size settings do not carry over.
@@ -528,7 +536,7 @@
           let high = -Infinity, low = Infinity;
           for (let i = a; i <= b; i++) { high = Math.max(high, c[i].high); low = Math.min(low, c[i].low); }
           const h = Math.floor(m.start), mm = Math.round((m.start - h) * 60);
-          out.macros.push({ start: a, end: b, high, low, label: cfg.macroTimeLabels ? `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}` : m.name });
+          out.macros.push({ start: a, end: b, high, low, color: m.color || cfg.macroColor, label: cfg.macroTimeLabels ? `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}` : m.name });
         }
       });
     }
@@ -675,9 +683,23 @@
     o.macros.forEach((b) => {
       const a = X(b.start), e = X(b.end), y1 = Y(b.high), y2 = Y(b.low);
       if (a == null || e == null || y1 == null || y2 == null) return;
-      g.setLineDash([2, 2]); g.strokeStyle = alpha(cfg.macroColor, 0.7); g.lineWidth = 1;
+      const mc = b.color || cfg.macroColor;
+      if (cfg.macroStyle !== "box") {
+        // A bar across the macro's time: compact, out of the candles' way.
+        const bh = Math.max(2, cfg.macroBarHeight || 6), pos = cfg.macroBarPos || "bottom";
+        const x0 = Math.round(a - half), x1 = Math.round(e + half);
+        const y = pos === "top" ? 4 : pos === "high" ? Math.round(y1) - bh - 4 : Math.round(h - bh - 3);
+        g.setLineDash([]);
+        g.fillStyle = alpha(mc, Math.max(0.1, Math.min(1, (cfg.macroBarOpacity ?? 75) / 100)));
+        g.beginPath(); g.roundRect(x0, y, Math.max(2, x1 - x0), bh, Math.min(3, bh / 2)); g.fill();
+        g.textAlign = "left"; g.fillStyle = alpha(mc, 0.95);
+        if (pos === "top") { g.textBaseline = "top"; g.fillText(b.label, x0 + 1, y + bh + 2); g.textBaseline = "bottom"; }
+        else g.fillText(b.label, x0 + 1, y - 2);
+        return;
+      }
+      g.setLineDash([2, 2]); g.strokeStyle = alpha(mc, 0.7); g.lineWidth = 1;
       g.strokeRect(Math.round(a - half) + 0.5, Math.round(y1) + 0.5, Math.round(e - a + 2 * half), Math.round(y2 - y1));
-      g.textAlign = "left"; g.fillStyle = alpha(cfg.macroColor, 0.9);
+      g.textAlign = "left"; g.fillStyle = alpha(mc, 0.9);
       g.fillText(b.label, a - half + 1, y1 - 1);
     });
 

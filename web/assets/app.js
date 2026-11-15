@@ -1254,7 +1254,7 @@
   function defaultChartStyle() {
     return { theme: "dark", up: "#14b88a", down: "#f0455a", wickUp: "#14b88a", wickDown: "#f0455a", border: true, borderV: 2, borderUp: "#14b88a", borderDown: "#f0455a",
       customBg: false, bg: "#151c2a", vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
-      askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3", pop: true };
+      askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3", pop: false, popV: 2 };
   }
   /* Candles that stand out: a colour too close to the background is pushed away from it (lighter on a dark or
    * grey background, darker on a light one), and a body still near the background gets a dark or light edge. */
@@ -1366,10 +1366,13 @@
   }
   function loadChartStyle() {
     try {
-      const st = Object.assign(defaultChartStyle(), JSON.parse(store.get("aurum.chartStyle") || "{}"));
+      const saved = JSON.parse(store.get("aurum.chartStyle") || "{}") || {};
+      const st = Object.assign(defaultChartStyle(), saved);
       if (st.askColor === "#f5a524") st.askColor = defaultChartStyle().askColor; // the first, single-line look
       // Candle edges on (TradingView's look: sharp bodies even when thin), once for styles saved before.
       if (st.borderV !== 2) { st.border = true; st.borderUp = st.up; st.borderDown = st.down; st.borderV = 2; }
+      // "Nổi bật" changed the chosen colours: off again, the colours exactly as picked (it can be turned on).
+      if (saved.popV !== 2) { st.pop = false; st.popV = 2; }
       return st;
     } catch { return defaultChartStyle(); }
   }
@@ -6609,7 +6612,10 @@
             + (this.owner ? `<div class="fr"><span class="grow">Mã so sánh</span>${text("smtSymbol", "lb")}<span class="muted small">riêng cho ${esc(this.symbol || "")} · trống = tự động (${esc(smtPair(this.symbol) || "—")})</span></div>` : "")
             + note("SMT so đỉnh với đỉnh, đáy với đáy của 2 mã. Mã chạy ngược chiều (DXY) được tự nhận biết: khi đó đỉnh vàng so với đáy DXY.") + numf("smtSwing", "Swing: số nến mỗi bên (lớn hơn = ít SMT, chỉ đỉnh/đáy chính)") + numf("smtLookback", "Hai đỉnh/đáy cách tối đa (nến)") + numf("smtCount", "Giữ SMT gần nhất")
             + head("Macros") + tog("macros", "Hiện macros")
-            + cfg.macroList.map((m, i) => `<div class="fr">${chk(`macroList.${i}.on`)}${text(`macroList.${i}.name`)}${time(`macroList.${i}.start`)}<span class="to">—</span>${time(`macroList.${i}.end`)}</div>`).join("");
+            + cfg.macroList.map((m, i) => `<div class="fr">${chk(`macroList.${i}.on`)}${sw(`macroList.${i}.color`)}${text(`macroList.${i}.name`)}${time(`macroList.${i}.start`)}<span class="to">—</span>${time(`macroList.${i}.end`)}</div>`).join("")
+            + sel("macroStyle", "Kiểu", [["bar", "Thanh ngang (gọn)"], ["box", "Hộp chấm quanh nến"]])
+            + sel("macroBarPos", "Vị trí thanh", [["bottom", "Dưới đáy chart"], ["top", "Trên đỉnh chart"], ["high", "Trên đỉnh khung macro"]])
+            + numf("macroBarHeight", "Độ dày thanh (px)") + numf("macroBarOpacity", "Độ đậm thanh (%)", 5);
         }
         if (tab === "style") {
           return head("Hộp phiên") + tog("boxLabels", "Tên phiên trên hộp") + tog("boxBorder", "Viền hộp") + numf("boxOpacity", "Độ đậm nền (%)")
@@ -6620,7 +6626,7 @@
             + head("FVG & VI") + color("fvgBull", "FVG tăng") + color("fvgBear", "FVG giảm") + color("fvgZone", "Nền FVG trùng khung") + color("fvgZoneMid", "Đường giữa FVG trùng khung") + color("viColor", "VI")
             + head("SMT") + color("smtBull", "SMT tăng") + color("smtBear", "SMT giảm")
             + head("FVG đầu tuần") + color("weekFvgColor", "Màu vùng FVG thứ 2")
-            + head("Khác") + color("mssBull", "MSS tăng") + color("mssBear", "MSS giảm") + color("sweepColor", "Quét thanh khoản") + color("macroColor", "Macros")
+            + head("Khác") + color("mssBull", "MSS tăng") + color("mssBear", "MSS giảm") + color("sweepColor", "Quét thanh khoản")
             + head("DM") + color("dmLineColor", "Màu đường") + color("dmTextColor", "Màu chữ") + sel("dmStyle", "Nét", styles)
             + sel("dmWidth", "Độ dày", [[1, "1px"], [2, "2px"], [3, "3px"]]);
         }
