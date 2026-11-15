@@ -1483,7 +1483,8 @@ struct CandleChart: View {
             var path = Path()
             path.move(to: CGPoint(x: left + inset, y: y))
             path.addLine(to: CGPoint(x: right - inset, y: y))
-            context.stroke(path, with: .color(color), lineWidth: width)
+            context.stroke(path, with: .color(color),
+                           style: StrokeStyle(lineWidth: width, lineCap: d.lineStyle == .dotted ? .round : .butt, dash: d.lineStyle.dash))
         }
         hline(targetY, up, 1, inset: 6)
         hline(stopY, down, 1, inset: 6)

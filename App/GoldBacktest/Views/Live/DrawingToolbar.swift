@@ -148,6 +148,8 @@ struct DrawingActionsBar: View {
                         } label: {
                             item { Text(String(format: "%gpx", drawing.lineWidth)).font(.system(size: 13, weight: .semibold).monospacedDigit()) }
                         }
+                    }
+                    if drawing.tool.hasLineStyle {
                         Menu {
                             ForEach(LineStyle.allCases, id: \.self) { style in
                                 Button {
@@ -409,6 +411,8 @@ struct DrawingSettingsView: View {
                         Picker("Độ dày", selection: $drawing.lineWidth) {
                             ForEach([0.5, 1.0, 1.5, 2.0, 3.0, 4.0], id: \.self) { Text(String(format: "%gpx", $0)).tag($0) }
                         }
+                    }
+                    if drawing.tool.hasLineStyle {
                         Picker("Nét", selection: $drawing.lineStyle) {
                             ForEach(LineStyle.allCases, id: \.self) { Text($0.title).tag($0) }
                         }

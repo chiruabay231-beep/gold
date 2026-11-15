@@ -162,6 +162,11 @@ enum DrawingTool: String, Codable, CaseIterable, Identifiable {
         }
     }
 
+    /// Drawings whose lines can be solid, dashed or dotted: every line, and a position's entry / stop / target.
+    var hasLineStyle: Bool {
+        isLine || self == .longPosition || self == .shortPosition
+    }
+
     /// Sections of the drawing tools sheet, like TradingView's.
     struct Category: Identifiable {
         var id: String { title }

@@ -903,8 +903,9 @@
           if (d.fill) { g.fillStyle = alpha(c, d.fillOpacity / 100); g.fillRect(p0[0], p0[1], p1[0] - p0[0], p1[1] - p0[1]); }
           g.strokeStyle = alpha(c, 0.85); g.setLineDash([]); g.lineWidth = this.lw(1);
           lineTo([[p0[0], p0[1]], [p1[0], p0[1]]]); lineTo([[p0[0], p1[1]], [p1[0], p1[1]]]);
-          g.strokeStyle = c; g.lineWidth = width;
+          g.strokeStyle = c; g.lineWidth = width; g.setLineDash(DASH[d.style] || []);
           lineTo([[(p0[0] + p1[0]) / 2, p0[1]], [(p0[0] + p1[0]) / 2, p1[1]]]);
+          g.setLineDash([]);
           g.fillStyle = c; arrowHead([(p0[0] + p1[0]) / 2, p0[1]], [(p0[0] + p1[0]) / 2, p1[1]], 8);
           tag(`${diff >= 0 ? "+" : ""}${diff.toFixed(dg)} (${(diff / a * 100).toFixed(2)}%)  ·  ${bars} nến`, (p0[0] + p1[0]) / 2, Math.max(p0[1], p1[1]) + 24, c, "#fff", "center");
           break;
@@ -992,10 +993,13 @@
       g.strokeStyle = light ? "rgba(0, 0, 0, 0.10)" : "rgba(255, 255, 255, 0.10)"; g.lineWidth = 1;
       g.beginPath(); g.roundRect(left + 0.5, top + 0.5, bw - 1, bottom - top - 1, 7); g.stroke();
       g.lineWidth = this.lw(1);
+      // The drawing's dash (solid, dashed, dotted) on its target, stop and entry lines.
+      g.setLineDash(DASH[d.style] || []);
       g.strokeStyle = tc; lineTo([[left + 6, yt], [right - 6, yt]]);
       g.strokeStyle = sc; lineTo([[left + 6, ys], [right - 6, ys]]);
       // Entry: the side's colour, ends rounded off with dots.
       g.strokeStyle = side; g.lineWidth = Math.max(width, this.lw(1.5)); lineTo([[left, ye], [right, ye]]);
+      g.setLineDash([]);
       g.fillStyle = side;
       [left, right].forEach((x) => { g.beginPath(); g.arc(x, ye, 2.5, 0, Math.PI * 2); g.fill(); });
       // Now: a dot with a halo where price is (or where it hit TP / SL).
@@ -1102,7 +1106,8 @@
       const yPoc = this.y(lo + (poc + 0.5) * step);
       g.strokeStyle = "#ff9800"; g.lineWidth = 1; g.beginPath(); g.moveTo(left, yPoc); g.lineTo(right, yPoc); g.stroke();
       if (d.tool === "fixedRangeVolume") { g.strokeStyle = alpha(d.color, 0.6); g.setLineDash([3, 3]); g.strokeRect(left, this.y(hi), right - left, this.y(lo) - this.y(hi)); }
-      else { g.strokeStyle = d.color; g.beginPath(); g.moveTo(pts[0][0], pts[0][1] - 30); g.lineTo(pts[0][0], pts[0][1] + 30); g.stroke(); }
+      else { g.strokeStyle = d.color; g.setLineDash(DASH[d.style] || []); g.beginPath(); g.moveTo(pts[0][0], pts[0][1] - 30); g.lineTo(pts[0][0], pts[0][1] + 30); g.stroke(); }
+      g.setLineDash([]);
     }
   }
 
