@@ -18,6 +18,7 @@ struct LiveIndicatorSheet: View {
     @AppStorage("live.showEMA200") private var showEMA200 = true
     @AppStorage(LiveIndicators.sharkKey) private var showSharkFlow = false
     @AppStorage(LiveIndicators.sharkMultipleKey) private var sharkMultiple = 2.5
+    @AppStorage(LiveIndicators.sharkMaxBubblesKey) private var sharkMaxBubbles = 0
     @AppStorage(LiveIndicators.sharkZonesKey) private var sharkZones = true
     @AppStorage("live.volume") private var showVolume = true
     @AppStorage("live.highLow") private var showHighLow = true
@@ -60,6 +61,16 @@ struct LiveIndicatorSheet: View {
                                 Text("2.5 × trung bình").tag(2.5)
                                 Text("3 × trung bình").tag(3.0)
                                 Text("4 × trung bình").tag(4.0)
+                                Text("5 × trung bình").tag(5.0)
+                                Text("7 × trung bình (rất mạnh)").tag(7.0)
+                                Text("10 × trung bình (cực mạnh)").tag(10.0)
+                            }
+                            Picker("Bong bóng tối đa trên màn hình", selection: $sharkMaxBubbles) {
+                                Text("Không giới hạn").tag(0)
+                                Text("5 mạnh nhất").tag(5)
+                                Text("10 mạnh nhất").tag(10)
+                                Text("20 mạnh nhất").tag(20)
+                                Text("30 mạnh nhất").tag(30)
                             }
                             Toggle("Vùng cung / cầu cá mập (ghi giá)", isOn: $sharkZones)
                         }

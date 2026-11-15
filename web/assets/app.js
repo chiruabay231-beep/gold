@@ -7981,7 +7981,7 @@
                 if (!term.sharks) return;
                 const ts = term.chart.timeScale();
                 const sc = term.sharkColors();
-                window.ICT.drawSharks(context, term.sharks, term.viewBars(), (i) => ts.logicalToCoordinate(i), (v) => term.series.priceToCoordinate(v),
+                window.ICT.drawSharks(context, term.sharksShown(term.sharks), term.viewBars(), (i) => ts.logicalToCoordinate(i), (v) => term.series.priceToCoordinate(v),
                   mediaSize.width, sc.buy, sc.sell, sc.bubble);
               })),
             }),
@@ -8790,7 +8790,7 @@
 
     /** "Dòng tiền cá mập" colours: the candles' own by default, or the ones picked in its settings. */
     sharkDefaults() {
-      return { follow: true, buy: "#14b88a", sell: "#f0455a", demand: "#14b88a", supply: "#f0455a", bubbleOpacity: 35, zoneOpacity: 13 };
+      return { follow: true, buy: "#14b88a", sell: "#f0455a", demand: "#14b88a", supply: "#f0455a", bubbleOpacity: 35, zoneOpacity: 13, minRatio: 2.5, maxBubbles: 0 };
     },
     sharkCfgGet() {
       if (!this.sharkCfg) {
@@ -8807,12 +8807,29 @@
         : { buy: c.buy.slice(0, 7), sell: c.sell.slice(0, 7), demand: c.demand.slice(0, 7), supply: c.supply.slice(0, 7), bubble: pct(c.bubbleOpacity, 35), zone: pct(c.zoneOpacity, 13) };
     },
 
+    /** The bubbles kept by "Bong bóng hiện": at least the chosen strength, and only the strongest N on screen. */
+    sharksShown(list) {
+      if (!list || !list.length) return list;
+      const c = this.sharkCfgGet(), min = +c.minRatio || 0, max = +c.maxBubbles || 0;
+      let out = min > 2.5 ? list.filter((x) => x.ratio >= min) : list;
+      if (max > 0 && out.length > max) {
+        const r = this.chart && this.chart.timeScale().getVisibleLogicalRange();
+        const seen = r ? out.filter((x) => x.index >= Math.floor(r.from) - 1 && x.index <= Math.ceil(r.to) + 1) : out;
+        out = seen.slice().sort((a, b) => b.ratio - a.ratio).slice(0, max);
+      }
+      return out;
+    },
+
     sharkSettingsSheet() {
       sheet.close();
       const cfg = this.sharkCfgGet();
       const render = () => {
-        const { tog, color, numf, head, note } = fieldKit(cfg);
-        return head("Màu") + tog("follow", "Theo màu nến (tắt để chọn màu riêng bên dưới)")
+        const { tog, color, numf, sel, head, note } = fieldKit(cfg);
+        return head("Bong bóng hiện")
+          + sel("minRatio", "Độ mạnh tối thiểu (khối lượng ≥)", [[2.5, "2.5 × TB (tất cả)"], [3, "3 × trung bình"], [4, "4 × trung bình"], [5, "5 × trung bình"], [7, "7 × trung bình (rất mạnh)"], [10, "10 × trung bình (cực mạnh)"]])
+          + sel("maxBubbles", "Số bong bóng tối đa trên màn hình", [[0, "Không giới hạn"], [5, "5 mạnh nhất"], [10, "10 mạnh nhất"], [20, "20 mạnh nhất"], [30, "30 mạnh nhất"]])
+          + note("Bong bóng to = khối lượng lớn hơn. Chọn mức cao hoặc giới hạn số lượng để chart đỡ rối: chỉ còn những lệnh cá mập mạnh nhất.")
+          + head("Màu") + tog("follow", "Theo màu nến (tắt để chọn màu riêng bên dưới)")
           + color("buy", "Bong bóng cá mập MUA 🦈") + color("sell", "Bong bóng cá mập BÁN 🦈")
           + color("demand", "Vùng CẦU (chờ mua)") + color("supply", "Vùng CUNG (chờ bán)")
           + head("Độ đậm") + numf("bubbleOpacity", "Nền bong bóng (%)") + numf("zoneOpacity", "Nền vùng cung / cầu (%)")
@@ -8822,7 +8839,7 @@
         root: cfg,
         onChange: () => { store.set("aurum.sharkcfg", JSON.stringify(cfg)); this.redraw(); },
         onReset: () => {
-          if (!confirm("Đặt lại màu dòng tiền cá mập về mặc định?")) return;
+          if (!confirm("Đặt lại dòng tiền cá mập về mặc định?")) return;
           Object.assign(cfg, this.sharkDefaults()); store.set("aurum.sharkcfg", JSON.stringify(cfg)); this.redraw(); open();
         },
       });

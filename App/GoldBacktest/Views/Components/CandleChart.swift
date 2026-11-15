@@ -234,6 +234,8 @@ struct CandleChart: View {
     var timeEvents: [ChartTimeEvent] = []
     /// Shark bubbles: a big buyer under the bar, a big seller above it.
     var bubbles: [ChartBubble] = []
+    /// Only the strongest this many bubbles of the visible bars (0 = all).
+    var maxBubbles = 0
     /// Shark supply / demand zones, behind the candles.
     var zones: [ChartZone] = []
     /// Ask price, drawn as a second dotted line above the bid (the spread).
@@ -1820,7 +1822,11 @@ struct CandleChart: View {
     }
 
     private func drawBubbles(in context: inout GraphicsContext, range: Range<Int>, s: Scale) {
-        for bubble in bubbles where range.contains(bubble.index) && candles.indices.contains(bubble.index) {
+        var shownBubbles = bubbles.filter { range.contains($0.index) && candles.indices.contains($0.index) }
+        if maxBubbles > 0, shownBubbles.count > maxBubbles {
+            shownBubbles = Array(shownBubbles.sorted { $0.ratio > $1.ratio }.prefix(maxBubbles))
+        }
+        for bubble in shownBubbles {
             let c = candles[bubble.index]
             let radius = min(5 + CGFloat(bubble.ratio) * 1.6, 16)
             let x = s.x(bubble.index)

@@ -7,6 +7,8 @@ enum LiveIndicators {
     static let storageKey = "live.customIndicators"
     static let sharkKey = "live.sharkFlow"
     static let sharkMultipleKey = "live.sharkMultiple"
+    /// Only the strongest this many shark bubbles on screen (0 = all).
+    static let sharkMaxBubblesKey = "live.sharkMaxBubbles"
     /// Supply / demand zones of the shark flow (where big players wait to buy or sell).
     static let sharkZonesKey = "live.sharkZones"
 

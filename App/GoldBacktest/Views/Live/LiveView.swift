@@ -127,6 +127,7 @@ struct LiveView: View {
     @State private var drawingSync = DrawingSync()
     @AppStorage(LiveIndicators.sharkKey) private var sharkSetting = false
     @AppStorage(LiveIndicators.sharkMultipleKey) private var sharkMultiple = 2.5
+    @AppStorage(LiveIndicators.sharkMaxBubblesKey) private var sharkMaxBubbles = 0
     @AppStorage(LiveIndicators.sharkZonesKey) private var sharkZonesOn = true
     @State private var showKillzoneSettings = false
     @State private var showOandaSettings = false
@@ -1075,6 +1076,7 @@ struct LiveView: View {
                         notes: layer.notes,
                         timeEvents: replay.isActive ? [] : newsTimeEvents,
                         bubbles: sharkBubbles,
+                        maxBubbles: sharkMaxBubbles,
                         zones: sharkZones,
                         askPrice: liveQuote.ask > liveQuote.bid ? liveQuote.ask : nil,
                         priceLines: tradeLines,
