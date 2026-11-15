@@ -1044,3 +1044,8 @@ body.chart-full #ticket { top: 26px; }
 .ctx .type-list { min-width: 230px; }
 .ctx .type-list button span { font-size: 13.5px; }
 .ctx .type-list .type-sep { height: 1px; background: var(--line); margin: 4px 6px; }
+
+/* Chart background picture: under the see-through chart, over the wrap's colour. */
+.chart-wrap > .chart-bg-img { position: absolute; inset: 0; background-size: cover; background-position: center; pointer-events: none; border-radius: inherit; }
+.fp-body .op-v { min-width: 38px; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted, #8b95a7); font-size: 12px; }
+.bg-pick { cursor: pointer; }

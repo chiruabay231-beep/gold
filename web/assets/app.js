@@ -1253,7 +1253,7 @@
 
   function defaultChartStyle() {
     return { theme: "dark", up: "#14b88a", down: "#f0455a", wickUp: "#14b88a", wickDown: "#f0455a", border: true, borderV: 2, borderUp: "#14b88a", borderDown: "#f0455a",
-      customBg: false, bg: "#151c2a", vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
+      customBg: false, bg: "#151c2a", bgType: "theme", bg2: "#2a3550", bgImgOpacity: 35, vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
       askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3", pop: false, popV: 2 };
   }
   /* Candles that stand out: a colour too close to the background is pushed away from it (lighter on a dark or
@@ -1373,6 +1373,8 @@
       if (st.borderV !== 2) { st.border = true; st.borderUp = st.up; st.borderDown = st.down; st.borderV = 2; }
       // "Nổi bật" changed the chosen colours: off again, the colours exactly as picked (it can be turned on).
       if (saved.popV !== 2) { st.pop = false; st.popV = 2; }
+      // Background: the theme's, one colour, a gradient (top → bottom) or a picture (TradingView's choices + image).
+      if (!["theme", "solid", "gradient", "image"].includes(saved.bgType)) st.bgType = saved.customBg ? "solid" : "theme";
       return st;
     } catch { return defaultChartStyle(); }
   }
@@ -6668,7 +6670,11 @@
           <div class="fr"><span class="grow">Bấc nến tăng / giảm</span>${k.sw("wickUp")}${k.sw("wickDown")}</div>
           <div class="fr">${k.chk("pop")}<span class="grow">Nến, đường chỉ báo và bản vẽ nổi bật (tự tăng tương phản với nền)</span></div>
           <div class="fp-sec">Nền và lưới</div>
-          <div class="fr">${k.chk("customBg")}<span class="grow">Màu nền riêng</span>${k.sw("bg")}</div>
+          <div class="fr"><span class="grow">Hình nền</span><select data-p="bgType" data-t="str" data-redraw>${[["theme", "Theo giao diện"], ["solid", "Solid (một màu)"], ["gradient", "Gradient"], ["image", "Ảnh"]].map(([v, n]) => `<option value="${v}" ${st.bgType === v ? "selected" : ""}>${n}</option>`).join("")}</select>
+            ${st.bgType === "solid" || st.bgType === "gradient" || st.bgType === "image" ? k.sw("bg") : ""}${st.bgType === "gradient" ? k.sw("bg2") : ""}</div>
+          ${st.bgType === "image" ? `<div class="fr"><span class="grow">Ảnh nền</span><label class="btn btn-ghost btn-small bg-pick">${store.get("aurum.chartBgImg") ? "Đổi ảnh…" : "Chọn ảnh…"}<input type="file" accept="image/*" data-bgimg hidden></label>${store.get("aurum.chartBgImg") ? '<button type="button" class="btn btn-ghost btn-small" data-bgdel>Xoá ảnh</button>' : ""}</div>
+            <div class="fr"><span class="grow">Độ rõ của ảnh</span><input type="range" min="5" max="100" step="5" data-p="bgImgOpacity" data-t="num" value="${st.bgImgOpacity}" class="op"><span class="op-v">${st.bgImgOpacity}%</span></div>
+            <p class="fp-note">Ảnh phủ kín chart, nằm dưới nến. Kéo thanh để ảnh mờ hơn hoặc rõ hơn; ô màu là màu lót dưới ảnh.</p>` : ""}
           <div class="fr">${k.chk("vGrid")}<span class="grow">Lưới dọc</span>${k.sw("grid")}</div>
           <div class="fr">${k.chk("hGrid")}<span>Lưới ngang</span></div>
           <div class="fr">${k.chk("crosshairMagnet")}<span>Con trỏ bắt vào nến</span></div>
@@ -6678,8 +6684,50 @@
       };
       this.openPanel("Cài đặt biểu đồ", [["look", "Giao diện"]], render, {
         root: st,
-        onChange: () => { this.saveChartStyle(); },
+        onChange: () => { this.saveChartStyle(); const v = $("floatPanel").querySelector(".op-v"); if (v) v.textContent = `${st.bgImgOpacity}%`; },
         onReset: (redraw) => { this.chartStyle = defaultChartStyle(); this.saveChartStyle(); this.chartStyleSheet(); void redraw; },
+        afterDraw: (panel) => {
+          const file = panel.querySelector("[data-bgimg]"), del = panel.querySelector("[data-bgdel]");
+          if (file) file.onchange = () => { const f = file.files && file.files[0]; if (f) this.setChartBgImage(f); };
+          if (del) del.onclick = () => { store.set("aurum.chartBgImg", null); this.applyChartStyle(); if (this.panelDraw) this.panelDraw(); };
+        },
+      });
+    },
+
+    /** A picture for the chart background: made at most 1920 px wide (JPEG) so it keeps in the browser's storage. */
+    setChartBgImage(file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+          const k = Math.min(1, 1920 / Math.max(img.width, img.height));
+          const c = document.createElement("canvas");
+          c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+          c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+          let url = c.toDataURL("image/jpeg", 0.85);
+          try { store.set("aurum.chartBgImg", url); } catch {
+            url = c.toDataURL("image/jpeg", 0.6);
+            try { store.set("aurum.chartBgImg", url); } catch { return toast("Ảnh quá lớn, chọn ảnh nhỏ hơn", true); }
+          }
+          this.applyChartStyle();
+          if (this.panelDraw) this.panelDraw();
+        };
+        img.onerror = () => toast("Không đọc được ảnh", true);
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    },
+
+    /** The picture under every chart of the page (behind the see-through chart), at the chosen strength. */
+    applyChartBgImage(on, base) {
+      const url = on ? store.get("aurum.chartBgImg") : null;
+      document.querySelectorAll(".chart-wrap").forEach((wrap) => {
+        let el = wrap.querySelector(":scope > .chart-bg-img");
+        if (!url) { if (el) el.remove(); wrap.style.backgroundColor = ""; return; }
+        if (!el) { el = document.createElement("div"); el.className = "chart-bg-img"; wrap.insertBefore(el, wrap.firstChild); }
+        if (el.dataset.src !== String(url.length)) { el.style.backgroundImage = `url("${url}")`; el.dataset.src = String(url.length); }
+        el.style.opacity = String(Math.max(0.05, Math.min(1, (this.chartStyle.bgImgOpacity ?? 35) / 100)));
+        wrap.style.backgroundColor = base;
       });
     },
 
@@ -6785,10 +6833,17 @@
         document.fonts.load("13px AurumAxis").then(() => this.applyChartStyle()).catch(() => {});
       }
       const st = this.chartStyle, light = document.documentElement.dataset.theme === "light";
-      const bg = st.customBg ? st.bg : (light ? "#ffffff" : "#151c2a");
+      const themeBg = light ? "#ffffff" : "#151c2a", type = st.bgType || (st.customBg ? "solid" : "theme");
+      const bg = type === "theme" ? themeBg : st.bg;
+      const image = type === "image" && !!store.get("aurum.chartBgImg");
+      // What the chart's own canvas paints: a colour, a gradient, or nothing over the picture.
+      const paint = type === "gradient" ? { type: "gradient", topColor: st.bg, bottomColor: st.bg2 || st.bg }
+        : image ? { type: "solid", color: "rgba(0,0,0,0)" } : { type: "solid", color: bg };
+      const layoutOf = () => Object.assign(axisFont(bg, light), { background: paint });
+      this.applyChartBgImage(image, bg);
       const grid = light && st.grid === "#1a2233" ? "#eef0f4" : st.grid;
       this.chart.applyOptions({
-        layout: axisFont(bg, light),
+        layout: layoutOf(),
         grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
         rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
         timeScale: { borderColor: light ? "#d6dae1" : "#222c3d", secondsVisible: st.seconds || isSecTF(this.interval) },
@@ -6809,7 +6864,7 @@
       this.applyChartType();
       if (this.chart2) {
         this.chart2.applyOptions({
-          layout: axisFont(bg, light),
+          layout: layoutOf(),
           grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
           rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" }, timeScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
         });
@@ -6817,7 +6872,7 @@
       }
       (this.panes || []).forEach((p) => {
         p.chart.applyOptions({
-          layout: axisFont(bg, light),
+          layout: layoutOf(),
           grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
           rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" }, timeScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
         });
