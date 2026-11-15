@@ -6796,7 +6796,7 @@
         if (this.drawings2 && this.drawings2.requestUpdate) this.drawings2.requestUpdate();
       }
       const candles = {
-        upColor: look.up, downColor: look.down, wickUpColor: look.wickUp, wickDownColor: look.wickDown,
+        upColor: look.up, downColor: look.down, wickUpColor: look.wickUp, wickDownColor: look.wickDown, wickVisible: true,
         borderVisible: look.border, borderUpColor: look.borderUp, borderDownColor: look.borderDown,
       };
       this.series.applyOptions(candles);
