@@ -298,6 +298,8 @@ struct CandleChart: View {
     var selectedMascotID: UUID? = nil
     var onSelectMascot: ((UUID?) -> Void)? = nil
     var onMascotMoved: ((UUID, Date, Double) -> Void)? = nil
+    /// Candles, indicator lines and drawings made to stand out from the background (see `standingOut`).
+    var standOut = false
     @Binding var viewport: ChartViewport
     /// The view while a finger pans or zooms: drawn here at every move, handed on to the screen (the other
     /// chart, the indicators) about 10 times a second, so the whole screen is not rebuilt at every finger move.
@@ -1225,7 +1227,7 @@ struct CandleChart: View {
 
     private func drawDrawing(_ d: Drawing, in context: inout GraphicsContext, s: Scale, layout: Layout,
                              decimals: Int, selected: Bool, axisLabels: inout [AxisLabel]) {
-        let color = d.color
+        let color = standOut ? StandOut.line(d.color, on: theme.background) : d.color
         let width = CGFloat(d.lineWidth) + (selected ? 0.8 : 0)
         let stroke = StrokeStyle(lineWidth: width, lineCap: d.lineStyle == .dotted ? .round : .butt, dash: d.lineStyle.dash)
         let points = d.points.map { CGPoint(x: s.x(index(for: $0.time)), y: s.y($0.price)) }
@@ -1626,7 +1628,8 @@ struct CandleChart: View {
             context.stroke(path, with: .color(theme.accent), style: StrokeStyle(lineWidth: 1.6, lineJoin: .round))
             return
         }
-        let colors = candleColors ?? CandleColors.standard(for: theme)
+        let baseColors = candleColors ?? CandleColors.standard(for: theme)
+        let colors = standOut ? StandOut.candles(baseColors, on: theme.background) : baseColors
         let upBody = colors.upBody.color, downBody = colors.downBody.color
         let upBorder = colors.upBorder.color, downBorder = colors.downBorder.color
         let upWick = colors.upWick.color, downWick = colors.downWick.color
@@ -2762,5 +2765,22 @@ struct FullScreenChart<Content: View>: View {
     static func rotate(_ orientation: UIInterfaceOrientationMask) {
         guard let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first else { return }
         scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientation)) { _ in }
+    }
+}
+
+extension CandleChart {
+    /// The chart with its candles, indicator lines (moving averages, ICT levels, SMT…), their labels and the
+    /// drawings moved off the background colour when they would sink into it (Cài đặt → Nổi bật).
+    /// Only how they are painted changes: the colours saved stay as chosen.
+    func standingOut(_ on: Bool) -> CandleChart {
+        guard on else { return self }
+        var chart = self
+        let bg = theme.background
+        chart.standOut = true
+        chart.overlays = overlays.map { var l = $0; l.color = StandOut.line(l.color, on: bg); return l }
+        chart.segments = segments.map { var l = $0; l.color = StandOut.line(l.color, on: bg); return l }
+        chart.verticalLines = verticalLines.map { var l = $0; l.color = StandOut.line(l.color, on: bg); return l }
+        chart.notes = notes.map { var n = $0; n.color = StandOut.line(n.color, on: bg); return n }
+        return chart
     }
 }

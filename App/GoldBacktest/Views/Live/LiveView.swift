@@ -135,6 +135,7 @@ struct LiveView: View {
 
     @AppStorage(ChartBackground.key) private var chartBackgroundJSON = ""
     @AppStorage("live.showGrid") private var showGrid = true
+    @AppStorage(StandOut.key) private var standOutOn = true
     private var theme: ChartTheme {
         (themeName == "binance" ? ChartTheme.binance : .tradingView).with(background: ChartBackground.decode(chartBackgroundJSON))
     }
@@ -1024,6 +1025,7 @@ struct LiveView: View {
                             headerInside: true,
                             linkedCrosshair: $linkedCrosshairTime,
                             viewport: comparisonViewport)
+                .standingOut(standOutOn)
             } else {
                 VStack(spacing: 8) {
                     if let error = market.comparisonError {
@@ -1125,6 +1127,7 @@ struct LiveView: View {
                         onSelectMascot: { selectedMascotID = $0 },
                         onMascotMoved: { id, time, price in editMascot(id) { $0.time = time; $0.price = price } },
                         viewport: $viewport)
+            .standingOut(standOutOn)
             .background(mascotWatcher)
         }
         .overlay(alignment: .leading) {

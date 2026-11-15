@@ -8,6 +8,7 @@ struct AppSettingsView: View {
     @AppStorage("live.theme") private var themeName = "tradingView"
     @AppStorage(ChartBackground.key) private var backgroundJSON = ""
     @AppStorage("live.showGrid") private var showGrid = true
+    @AppStorage(StandOut.key) private var standOut = true
     @AppStorage("live.candleStyle") private var candleStyle = CandleStyle.candles.rawValue
     @AppStorage("live.candleColors") private var candleColorsJSON = ""
     @AppStorage("live.precision") private var precision = -1
@@ -87,6 +88,12 @@ struct AppSettingsView: View {
                     }
                     Button { showCandles = true } label: {
                         Label("Màu nến, độ chính xác, múi giờ…", systemImage: "paintpalette")
+                    }
+                    Toggle(isOn: $standOut) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Nến, đường chỉ báo và bản vẽ nổi bật")
+                            Text("Tự tăng tương phản với màu nền").font(.caption).foregroundColor(.secondary)
+                        }
                     }
                     Toggle("Khối lượng", isOn: $showVolume)
                     Toggle("Nhãn Cao / Thấp", isOn: $showHighLow)

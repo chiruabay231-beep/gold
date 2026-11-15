@@ -122,3 +122,120 @@ extension CandleColors {
         (try? JSONEncoder().encode(self)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
     }
 }
+
+/// Candles, indicator lines and drawings that stand out from the chart background (Cài đặt → "Nổi bật"),
+/// like the website: a colour too close to the background moves away from it in lightness (its hue kept,
+/// a coloured one made vivid); a body still near the background gets a dark or light edge.
+enum StandOut {
+    static let key = "live.standOut"
+
+    private static var cache: [String: RGBAColor] = [:]
+
+    static func luminance(_ c: RGBAColor) -> Double {
+        func f(_ v: Double) -> Double { v <= 0.03928 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+        return 0.2126 * f(c.red) + 0.7152 * f(c.green) + 0.0722 * f(c.blue)
+    }
+
+    static func contrast(_ a: RGBAColor, _ b: RGBAColor) -> Double {
+        let x = luminance(a), y = luminance(b)
+        return (max(x, y) + 0.05) / (min(x, y) + 0.05)
+    }
+
+    static func hsl(_ c: RGBAColor) -> (h: Double, s: Double, l: Double) {
+        let mx = max(c.red, c.green, c.blue), mn = min(c.red, c.green, c.blue), l = (mx + mn) / 2, d = mx - mn
+        guard d > 0 else { return (0, 0, l) }
+        let s = d / (1 - abs(2 * l - 1))
+        var h: Double
+        if mx == c.red { h = ((c.green - c.blue) / d).truncatingRemainder(dividingBy: 6) }
+        else if mx == c.green { h = (c.blue - c.red) / d + 2 }
+        else { h = (c.red - c.green) / d + 4 }
+        h = (h * 60 + 360).truncatingRemainder(dividingBy: 360)
+        return (h, s, l)
+    }
+
+    static func rgb(h: Double, s: Double, l: Double, alpha: Double) -> RGBAColor {
+        let c = (1 - abs(2 * l - 1)) * s, x = c * (1 - abs((h / 60).truncatingRemainder(dividingBy: 2) - 1)), m = l - c / 2
+        let (r, g, b): (Double, Double, Double)
+        switch h {
+        case ..<60: (r, g, b) = (c, x, 0)
+        case ..<120: (r, g, b) = (x, c, 0)
+        case ..<180: (r, g, b) = (0, c, x)
+        case ..<240: (r, g, b) = (0, x, c)
+        case ..<300: (r, g, b) = (x, 0, c)
+        default: (r, g, b) = (c, 0, x)
+        }
+        return RGBAColor(red: min(1, max(0, r + m)), green: min(1, max(0, g + m)), blue: min(1, max(0, b + m)), alpha: alpha)
+    }
+
+    /// The colour moved in lightness until its contrast with the background is at least `minimum`.
+    static func adjust(_ c: RGBAColor, on bg: RGBAColor, minimum: Double = 3) -> RGBAColor {
+        let solid = RGBAColor(red: c.red, green: c.green, blue: c.blue)
+        if contrast(solid, bg) >= minimum { return c }
+        let (h, s, l) = hsl(solid)
+        let s2 = s > 0.15 ? max(s, 0.8) : s
+        let ways: [Double] = luminance(solid) >= luminance(bg) ? [1, -1] : [-1, 1]
+        for dir in ways {
+            var t = 0.02
+            while t <= 1.001 {
+                let nl = l + dir * t
+                if nl < 0 || nl > 1 { break }
+                let m = rgb(h: h, s: s2, l: nl, alpha: c.alpha)
+                if contrast(m, bg) >= minimum { return m }
+                t += 0.02
+            }
+        }
+        let white = RGBAColor(red: 1, green: 1, blue: 1), black = RGBAColor(red: 0, green: 0, blue: 0)
+        var end = contrast(white, bg) > contrast(black, bg) ? white : black
+        end.alpha = c.alpha
+        return end
+    }
+
+    private static func key(_ c: RGBAColor, _ bg: RGBAColor, _ tag: String) -> String {
+        String(format: "%@%.3f,%.3f,%.3f,%.3f|%.3f,%.3f,%.3f", tag, c.red, c.green, c.blue, c.alpha, bg.red, bg.green, bg.blue)
+    }
+
+    /// A line's colour (indicator, drawing): moved off the background, a see-through one a little stronger.
+    static func line(_ color: Color, on background: Color) -> Color {
+        let c = RGBAColor(color), bg = RGBAColor(background)
+        guard c.alpha >= 0.2 else { return color }
+        let k = key(c, bg, "l")
+        if let hit = cache[k] { return hit.color }
+        var out = adjust(c, on: bg)
+        if out.alpha < 1 { out.alpha = min(1, out.alpha * 1.35) }
+        if cache.count > 2000 { cache.removeAll() }
+        cache[k] = out
+        return out.color
+    }
+
+    /// The candle colours made to stand out from the background.
+    static func candles(_ colors: CandleColors, on background: Color) -> CandleColors {
+        let bg = RGBAColor(background)
+        var out = colors
+        func body(_ c: RGBAColor) -> RGBAColor {
+            let k = key(c, bg, "b")
+            if let hit = cache[k] { return hit }
+            let v = adjust(c, on: bg)
+            cache[k] = v
+            return v
+        }
+        out.upBody = body(colors.upBody)
+        out.downBody = body(colors.downBody)
+        out.upWick = body(colors.upWick)
+        out.downWick = body(colors.downWick)
+        func edge(_ b: RGBAColor, _ border: RGBAColor) -> (RGBAColor, Bool) {
+            let solid = RGBAColor(red: b.red, green: b.green, blue: b.blue)
+            guard contrast(solid, bg) < 3.3 else { return (colors.showBorder ? body(border) : b, false) }
+            // An edge from the end (black or white) furthest from the body, so its outline shows.
+            let black = RGBAColor(red: 0, green: 0, blue: 0), white = RGBAColor(red: 1, green: 1, blue: 1)
+            let to = contrast(solid, black) >= contrast(solid, white) ? black : white
+            return (RGBAColor(red: b.red + (to.red - b.red) * 0.55, green: b.green + (to.green - b.green) * 0.55,
+                              blue: b.blue + (to.blue - b.blue) * 0.55, alpha: b.alpha), true)
+        }
+        let (upEdge, upNeeds) = edge(out.upBody, colors.upBorder)
+        let (downEdge, downNeeds) = edge(out.downBody, colors.downBorder)
+        out.upBorder = upEdge
+        out.downBorder = downEdge
+        if upNeeds || downNeeds { out.showBorder = true }
+        return out
+    }
+}
