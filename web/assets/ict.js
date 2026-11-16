@@ -47,6 +47,8 @@
       dwmStyle: "solid", dwmWidth: 1, dwmAlert: false,
       // A vertical line where the next day starts (right of the last candle), with the time left.
       nextDay: true, nextDayColor: "#f5a524",
+      // A vertical line at every day's open (the daily candle's start, as "Ngày mới"), kept on the past days.
+      dayOpenLines: true,
       // Weekday names under (or over) each day, at its midnight or midday; weekends can be left out.
       dayOfWeek: false, dowPos: "bottom", dowAt: "midnight", dowHideWeekend: false,
       rangeTable: false, rangeAvg: 5,
@@ -469,6 +471,11 @@
     if (show.daily && cfg.daily && sec < 86400) out.levels.push(...dailyLevels(c, ck, cfg));
     if (!show.killzones) return out;
     periodLevels(c, ck, sec, cfg, out);
+    out.dayOpens = [];
+    if (cfg.dayOpenLines && sec < 86400) {
+      const id = ck.day;
+      for (let i = 1; i < n; i++) if (id[i] !== id[i - 1]) out.dayOpens.push({ index: i, time: c[i].time });
+    }
     if (cfg.nextDay && sec < 86400) {
       // The next day of the indicator's time zone (as the D lines): its start and its place right of the last bar.
       const tl = c[n - 1].time, zone = cfg.timeZone;
@@ -822,6 +829,23 @@
         g.textBaseline = "bottom";
       }
       g.font = "10px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+    }
+    // Every day's open: a dashed line in the "Ngày mới" colour, the date and VN time at the top.
+    if (o.dayOpens && o.dayOpens.length) {
+      const c7 = (cfg.nextDayColor || "#f5a524").slice(0, 7), p2 = (v) => String(v).padStart(2, "0");
+      g.save();
+      g.font = "600 10px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif"; g.textAlign = "left"; g.textBaseline = "top";
+      o.dayOpens.forEach((d) => {
+        const x = X(d.index);
+        if (x == null || x < -2 || x > w + 2) return;
+        const xx = Math.round(x - half) + 0.5;
+        g.strokeStyle = alpha(c7, 0.55); g.lineWidth = 1; g.setLineDash([4, 4]);
+        g.beginPath(); g.moveTo(xx, 0); g.lineTo(xx, h); g.stroke();
+        const vn = new Date((d.time + 7 * 3600) * 1000);
+        g.fillStyle = alpha(c7, 0.85);
+        g.fillText(`${p2(vn.getUTCDate())}/${p2(vn.getUTCMonth() + 1)} ${p2(vn.getUTCHours())}:${p2(vn.getUTCMinutes())}`, xx + 3, 44);
+      });
+      g.restore();
     }
     (o.dividers || []).forEach((d) => {
       const x = X(d.index);

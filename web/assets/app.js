@@ -1143,9 +1143,9 @@
     phrase(key) { return String(this.cfg[key] || "").trim() || this.defaults()[key]; },
 
     /** The voices for the chosen language, the clearest first (natural / neural / enhanced ones). */
-    voices() {
+    voices(forLang) {
       if (!window.speechSynthesis) return [];
-      const lang = this.cfg.lang.toLowerCase(), short = lang.slice(0, 2);
+      const lang = (forLang || this.cfg.lang).toLowerCase(), short = lang.slice(0, 2);
       const score = (v) => (/natural|neural/i.test(v.name) ? 40 : 0) + (/online/i.test(v.name) ? 10 : 0) + (/google/i.test(v.name) ? 25 : 0)
         + (/premium|enhanced|nâng cao|siri/i.test(v.name) ? 30 : 0) + (/^(linh|samantha|ava|allison|zoe)\b/i.test(v.name) ? 8 : 0)
         + (v.lang.replace("_", "-").toLowerCase() === lang ? 5 : 0) + (/compact|espeak/i.test(v.name) ? -30 : 0);
@@ -1184,12 +1184,13 @@
       }
     },
 
-    speak(text, force, good) {
+    /** `lang` reads it with the best voice of that language instead of the chosen one (English session calls). */
+    speak(text, force, good, lang) {
       if ((!force && !this.cfg.enabled) || !text || !window.speechSynthesis) return;
       const say = () => {
         const u = new SpeechSynthesisUtterance(text);
-        const voice = this.pick();
-        u.lang = voice ? voice.lang : this.cfg.lang;
+        const voice = lang && !this.cfg.lang.toLowerCase().startsWith(lang.slice(0, 2)) ? this.voices(lang)[0] || null : this.pick();
+        u.lang = voice ? voice.lang : lang || this.cfg.lang;
         if (voice) u.voice = voice;
         u.rate = +this.cfg.rate || 0.95; u.pitch = +this.cfg.pitch || 1; u.volume = this.cfg.volume != null ? +this.cfg.volume : 1;
         this.current = u; // Chrome drops an utterance nothing holds on to
@@ -1238,8 +1239,8 @@
     },
 
     /** Spoken, plus a toast and (with the tab in the background) a browser notification. */
-    alert(spoken, title, body, good) {
-      this.speak(spoken, false, good);
+    alert(spoken, title, body, good, lang) {
+      this.speak(spoken, false, good, lang);
       if (this.cfg.popup) toast(`${title}: ${body}`, good === false);
       if (this.cfg.notify && document.hidden && window.Notification && Notification.permission === "granted") {
         try { new Notification(title, { body, icon: "favicon.svg" }); } catch { /* not allowed here */ }
@@ -6628,6 +6629,7 @@
             + `<div class="fr">${chk("dayOfWeek")}<span class="grow">Nhãn thứ trong tuần</span>${selI("dowPos", [["bottom", "Dưới"], ["top", "Trên"]])}${selI("dowAt", [["midnight", "Nửa đêm"], ["midday", "Giữa trưa"]])}</div>`
             + tog("dowHideWeekend", "Ẩn nhãn T7 / CN")
             + `<div class="fr">${chk("nextDay")}<span class="grow">Đường dọc bắt đầu ngày hôm sau (giờ VN, đếm ngược)</span>${sw("nextDayColor")}</div>`
+            + tog("dayOpenLines", "Giữ đường dọc ở mỗi lần mở nến ngày (ngày/tháng + giờ VN)")
             + note("Open: giá mở ngày (DO) / tuần (WO) / tháng (MO) hiện tại. High/Low: đỉnh – đáy của ngày / tuần / tháng trước (PDH–PDL, PWH–PWL, PMH–PML). Midline: giữa của chúng (PDM, PWM, PMM). Divider: vạch dọc nơi mỗi ngày / tuần / tháng bắt đầu. Ngày tính theo múi giờ ở tab Hiển thị (ICT: 0h New York). Hiện ở mọi khung nhỏ hơn kỳ đó.")
             + head("FVG đầu tuần (M1, thứ 2)") + tog("weekFvg", "FVG M1 đầu tiên của thứ 2 sau giờ bên dưới, kẻ tới hết tuần")
             + `<div class="fr"><span class="grow">Tính từ</span>${time("weekFvgHour")}${selI("weekFvgZone", [["America/New_York", "Giờ New York"], ["Asia/Ho_Chi_Minh", "Giờ Việt Nam"]])}</div>`
@@ -7909,9 +7911,9 @@
      *  summer time moves them by itself), Monday to Friday there. */
     sessionOpens(nowS) {
       const SESS = [
-        { key: "asia", name: "Á", icon: "🌏", tz: "Asia/Tokyo", h: 9, m: 0 },
-        { key: "eu", name: "Âu", icon: "🌍", tz: "Europe/London", h: 8, m: 0 },
-        { key: "ny", name: "New York", icon: "🗽", tz: "America/New_York", h: 9, m: 30 }, // the US stock market opens
+        { key: "asia", name: "Á", en: "Asian", icon: "🌏", tz: "Asia/Tokyo", h: 9, m: 0 },
+        { key: "eu", name: "Âu", en: "London", icon: "🌍", tz: "Europe/London", h: 8, m: 0 },
+        { key: "ny", name: "New York", en: "New York", icon: "🗽", tz: "America/New_York", h: 9, m: 30 }, // the US stock market opens
       ];
       const off = (tz, t) => (window.ICT && window.ICT.offsetSeconds ? window.ICT.offsetSeconds(t, tz) : 0);
       const out = [];
@@ -7941,11 +7943,11 @@
         const id = x.key + ":" + Math.round(x.time);
         if (left <= 900 && left > 840 && !this.sessAlerted.has(id + ":15")) {
           this.sessAlerted.add(id + ":15");
-          Voice.alert(`Còn 15 phút nữa vào phiên ${x.name}`, `${x.icon} Sắp vào phiên ${x.name}`, `mở lúc ${vnHM(x.time)} (giờ VN) · còn 15 phút`);
+          Voice.alert(`${x.en} session opens in 15 minutes`, `${x.icon} Sắp vào phiên ${x.name}`, `mở lúc ${vnHM(x.time)} (giờ VN) · còn 15 phút`, undefined, "en-US");
         }
         if (left <= 0 && left > -60 && !this.sessAlerted.has(id + ":0")) {
           this.sessAlerted.add(id + ":0");
-          Voice.alert(`Đã vào phiên ${x.name}`, `${x.icon} Phiên ${x.name} đã mở`, `${vnHM(x.time)} giờ VN · giá hay biến động mạnh đầu phiên`);
+          Voice.alert(`${x.en} session is open`, `${x.icon} Phiên ${x.name} đã mở`, `${vnHM(x.time)} giờ VN · giá hay biến động mạnh đầu phiên`, undefined, "en-US");
         }
       }
       const x = list.find((e) => e.time > nowS - 900 && e.time - nowS <= 3600);
