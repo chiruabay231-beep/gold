@@ -528,9 +528,9 @@
       this.chart = LightweightCharts.createChart(wrap.firstChild, {
         autoSize: true,
         kineticScroll: { mouse: true, touch: true },
-        layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif" },
-        rightPriceScale: { borderColor: "#222c3d" },
-        timeScale: { borderColor: "#222c3d", timeVisible: true, rightOffset: 6, barSpacing: 5 },
+        layout: { background: { color: "#050506" }, textColor: "#8b95a7", fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif" },
+        rightPriceScale: { borderColor: "#1e1e23" },
+        timeScale: { borderColor: "#1e1e23", timeVisible: true, rightOffset: 6, barSpacing: 5 },
         localization: { timeFormatter: (t) => term.timeLabel(t) },
         crosshair: { mode: 0 },
       });
@@ -1253,7 +1253,7 @@
 
   function defaultChartStyle() {
     return { theme: "dark", up: "#14b88a", down: "#f0455a", wickUp: "#14b88a", wickDown: "#f0455a", border: true, borderV: 2, borderUp: "#14b88a", borderDown: "#f0455a",
-      customBg: false, bg: "#151c2a", bgType: "theme", bg2: "#2a3550", bgImgOpacity: 35, vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
+      customBg: false, bg: "#050506", bgType: "theme", bg2: "#2a3550", bgImgOpacity: 35, vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
       askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3", pop: false, popV: 2, tfRing: true };
   }
   /* Candles that stand out: a colour too close to the background is pushed away from it (lighter on a dark or
@@ -1297,7 +1297,7 @@
   }
   /* The same for the indicators' and drawings' lines: while they paint, a stroke colour too close to the
    * background is moved away from it (and a see-through one made a little stronger); a coloured text or mark too. */
-  const POP = { on: false, bg: "#151c2a", cache: new Map() };
+  const POP = { on: false, bg: "#050506", cache: new Map() };
   function parseColor(v) {
     v = v.trim();
     if (v[0] === "#") {
@@ -3455,10 +3455,10 @@
         this.chart = LightweightCharts.createChart(el, {
           autoSize: true,
           kineticScroll: { mouse: true, touch: true },
-          layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif" },
+          layout: { background: { color: "#050506" }, textColor: "#8b95a7", fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif" },
           grid: { vertLines: { color: "#1a2233" }, horzLines: { color: "#1a2233" } },
-          rightPriceScale: { borderColor: "#222c3d" },
-          timeScale: { borderColor: "#222c3d", timeVisible: true, secondsVisible: false, rightOffset: 8, barSpacing: el.clientWidth < 500 ? 4 : 6 },
+          rightPriceScale: { borderColor: "#1e1e23" },
+          timeScale: { borderColor: "#1e1e23", timeVisible: true, secondsVisible: false, rightOffset: 8, barSpacing: el.clientWidth < 500 ? 4 : 6 },
           localization: { timeFormatter: (t) => this.timeLabel(t) },
           crosshair: { mode: 0 },
         });
@@ -4347,7 +4347,7 @@
         if (dot && entry) {
           g.beginPath(); g.arc(x0, y, 4, 0, Math.PI * 2);
           g.fillStyle = w.color; g.fill();
-          g.lineWidth = 1.5; g.strokeStyle = light ? "#ffffff" : "#151c2a"; g.stroke();
+          g.lineWidth = 1.5; g.strokeStyle = light ? "#ffffff" : "#050506"; g.stroke();
         }
         const h = 18, top = y - h / 2;
         if (w.entryOf) {
@@ -6838,7 +6838,7 @@
         document.fonts.load("13px AurumAxis").then(() => this.applyChartStyle()).catch(() => {});
       }
       const st = this.chartStyle, light = document.documentElement.dataset.theme === "light";
-      const themeBg = light ? "#ffffff" : "#151c2a", type = st.bgType || (st.customBg ? "solid" : "theme");
+      const themeBg = light ? "#ffffff" : "#050506", type = st.bgType || (st.customBg ? "solid" : "theme");
       const bg = type === "theme" ? themeBg : st.bg;
       const image = type === "image" && !!store.get("aurum.chartBgImg");
       // What the chart's own canvas paints: a colour, a gradient, or nothing over the picture.
@@ -6846,12 +6846,13 @@
         : image ? { type: "solid", color: "rgba(0,0,0,0)" } : { type: "solid", color: bg };
       const layoutOf = () => Object.assign(axisFont(bg, light), { background: paint });
       this.applyChartBgImage(image, bg);
-      const grid = light && st.grid === "#1a2233" ? "#eef0f4" : st.grid;
+      // The default grid: faint grey on the black chart, light on the white one.
+      const grid = st.grid === "#1a2233" ? (light ? "#eef0f4" : "#141417") : st.grid;
       this.chart.applyOptions({
         layout: layoutOf(),
         grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
-        rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
-        timeScale: { borderColor: light ? "#d6dae1" : "#222c3d", secondsVisible: st.seconds || isSecTF(this.interval) },
+        rightPriceScale: { borderColor: light ? "#d6dae1" : "#1e1e23" },
+        timeScale: { borderColor: light ? "#d6dae1" : "#1e1e23", secondsVisible: st.seconds || isSecTF(this.interval) },
         crosshair: { mode: st.crosshairMagnet ? 1 : 0 },
       });
       const look = this.look = candleLook(st, bg);
@@ -6871,7 +6872,7 @@
         this.chart2.applyOptions({
           layout: layoutOf(),
           grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
-          rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" }, timeScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
+          rightPriceScale: { borderColor: light ? "#d6dae1" : "#1e1e23" }, timeScale: { borderColor: light ? "#d6dae1" : "#1e1e23" },
         });
         this.series2.applyOptions(candles);
       }
@@ -6879,7 +6880,7 @@
         p.chart.applyOptions({
           layout: layoutOf(),
           grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
-          rightPriceScale: { borderColor: light ? "#d6dae1" : "#222c3d" }, timeScale: { borderColor: light ? "#d6dae1" : "#222c3d" },
+          rightPriceScale: { borderColor: light ? "#d6dae1" : "#1e1e23" }, timeScale: { borderColor: light ? "#d6dae1" : "#1e1e23" },
         });
         p.series.applyOptions(candles);
       });
@@ -7817,7 +7818,7 @@
           // Over: a small round dot at the release time (a tap shows the news), no line across the chart.
           const y = height - 10;
           g.beginPath(); g.arc(xx, y, 5, 0, Math.PI * 2); g.fillStyle = color; g.fill();
-          g.lineWidth = 1.5; g.strokeStyle = document.documentElement.dataset.theme === "light" ? "#ffffff" : "#151c2a"; g.stroke();
+          g.lineWidth = 1.5; g.strokeStyle = document.documentElement.dataset.theme === "light" ? "#ffffff" : "#050506"; g.stroke();
           this.newsDots.push({ x: xx, y, e });
           return;
         }
@@ -8350,9 +8351,9 @@
       this.chart2 = LightweightCharts.createChart($("chart2"), {
         autoSize: true,
         kineticScroll: { mouse: true, touch: true },
-        layout: { background: { color: "#151c2a" }, textColor: "#8b95a7", fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif" },
-        rightPriceScale: { borderColor: "#222c3d" },
-        timeScale: { borderColor: "#222c3d", timeVisible: true, secondsVisible: isSecTF(this.interval), rightOffset: 8 },
+        layout: { background: { color: "#050506" }, textColor: "#8b95a7", fontFamily: "-apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif" },
+        rightPriceScale: { borderColor: "#1e1e23" },
+        timeScale: { borderColor: "#1e1e23", timeVisible: true, secondsVisible: isSecTF(this.interval), rightOffset: 8 },
         localization: { timeFormatter: (t) => this.timeLabel(t) },
         crosshair: { mode: 0 },
       });
@@ -8847,7 +8848,7 @@
       const near = cfg.lineEnd === "edge" || !n ? null : ts.logicalToCoordinate(n - 1 + Math.max(1, cfg.lineEndBars || 8));
       window.ICT.drawZones(g, this.sharkZones, (i) => ts.logicalToCoordinate(i), (v) => this.series.priceToCoordinate(v), width,
         sc.demand, sc.supply, this.digits,
-        document.documentElement.dataset.theme === "light" ? "rgba(255,255,255,.9)" : "rgba(21,28,42,.88)", labels, avoid, sc.zone, near);
+        document.documentElement.dataset.theme === "light" ? "rgba(255,255,255,.9)" : "rgba(8,8,10,.88)", labels, avoid, sc.zone, near);
     },
 
     /** "Dòng tiền cá mập" colours: the candles' own by default, or the ones picked in its settings. */

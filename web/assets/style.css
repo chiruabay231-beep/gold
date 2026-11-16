@@ -10,10 +10,10 @@
 :root {
   /* TradingView's font stack */
   --font: -apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif;
-  --bg: #0b0f17;
-  --bg2: #111827;
-  --card: #151c2a;
-  --line: #222c3d;
+  --bg: #000000;
+  --bg2: #060607;
+  --card: #0a0a0c;
+  --line: #1e1e23;
   --text: #e8ecf3;
   --muted: #8b95a7;
   --gold: #f2c14e;
@@ -22,14 +22,14 @@
   --down: #f0455a;
   --purple: #9b6bff;
   --radius: 16px;
-  --input: #0c111b;
-  --chip: #222c3d;
+  --input: #050506;
+  --chip: #1a1a1f;
   --text2: #c3cad7;
-  --line2: #2a3449;
-  --glass: rgba(12, 17, 27, .94);
-  --hover: #26304a;
-  --pop: #1a2232;
-  --navbg: rgba(11, 15, 23, .82);
+  --line2: #26262c;
+  --glass: rgba(6, 6, 8, .94);
+  --hover: #1e1e24;
+  --pop: #111114;
+  --navbg: rgba(0, 0, 0, .86);
 }
 :root[data-theme="light"] {
   --bg: #f5f6f8;
@@ -1073,7 +1073,7 @@ body.chart-full #ticket { top: 26px; }
 
 /* Favourite drawing tools: a darker, finer bar — gold for the tool in use, names on hover. */
 .fav-bar { gap: 2px; padding: 5px 6px; border-radius: 16px;
-  background: linear-gradient(180deg, rgba(30, 37, 54, .94), rgba(17, 22, 34, .94));
+  background: linear-gradient(180deg, rgba(24, 24, 28, .95), rgba(6, 6, 8, .95));
   border: 1px solid rgba(242, 193, 78, .18);
   box-shadow: 0 14px 34px rgba(0, 0, 0, .42), 0 2px 6px rgba(0, 0, 0, .25), inset 0 1px 0 rgba(255, 255, 255, .06);
   backdrop-filter: blur(14px) saturate(1.2); }
