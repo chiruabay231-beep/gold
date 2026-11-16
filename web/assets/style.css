@@ -1094,3 +1094,23 @@ html[data-theme="light"] .fav-bar button { color: #3a4356; }
 html[data-theme="light"] .fav-bar button:hover { background: rgba(20, 30, 50, .06); color: #111827; }
 html[data-theme="light"] .fav-bar .grip i { background: rgba(60, 70, 90, .35); }
 html[data-theme="light"] .fav-bar .fav-sep { background: linear-gradient(180deg, transparent, rgba(20, 30, 50, .15), transparent); }
+
+/* Favourite tools bar in TradingView's floating-toolbar look: a flat grey panel, square-ish corners,
+   thin line icons with hollow end points. */
+.fav-bar { gap: 1px; padding: 3px 4px; border-radius: 6px; background: rgba(42, 46, 57, .94); border: 1px solid rgba(255, 255, 255, .10);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .35); backdrop-filter: none; }
+.fav-bar .grip { padding: 6px 5px 6px 3px; }
+.fav-bar .grip i { background: rgba(209, 212, 220, .45); }
+.fav-bar .grip:hover i { background: #d1d4dc; }
+.fav-bar .fav-sep { height: 20px; margin: 0 3px 0 1px; background: rgba(255, 255, 255, .10); }
+.fav-bar button { width: 32px; height: 30px; border-radius: 4px; color: #d1d4dc; transform: none !important; }
+.fav-bar button svg { width: 24px; height: 24px; }
+.fav-bar button svg circle { fill: none; stroke: currentColor; stroke-width: 1.3; r: 2.3px; }
+.fav-bar button:hover { background: rgba(255, 255, 255, .08); color: #fff; }
+.fav-bar button.on { color: #fff; background: rgba(41, 98, 255, .28); box-shadow: none; }
+.fav-bar button.on svg circle { fill: rgba(41, 98, 255, .28); }
+html[data-theme="light"] .fav-bar { background: rgba(255, 255, 255, .97); border-color: #e0e3eb; box-shadow: 0 4px 14px rgba(20, 30, 50, .14); }
+html[data-theme="light"] .fav-bar button { color: #131722; }
+html[data-theme="light"] .fav-bar button:hover { background: #f0f3fa; }
+html[data-theme="light"] .fav-bar button.on { background: rgba(41, 98, 255, .14); color: #2962ff; }
+html[data-theme="light"] .fav-bar .fav-sep { background: #e0e3eb; }
