@@ -7911,7 +7911,7 @@
       const SESS = [
         { key: "asia", name: "Á", icon: "🌏", tz: "Asia/Tokyo", h: 9, m: 0 },
         { key: "eu", name: "Âu", icon: "🌍", tz: "Europe/London", h: 8, m: 0 },
-        { key: "ny", name: "New York", icon: "🗽", tz: "America/New_York", h: 8, m: 0 },
+        { key: "ny", name: "New York", icon: "🗽", tz: "America/New_York", h: 9, m: 30 }, // the US stock market opens
       ];
       const off = (tz, t) => (window.ICT && window.ICT.offsetSeconds ? window.ICT.offsetSeconds(t, tz) : 0);
       const out = [];
