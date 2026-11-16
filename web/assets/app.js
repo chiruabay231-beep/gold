@@ -1254,7 +1254,7 @@
   function defaultChartStyle() {
     return { theme: "dark", up: "#14b88a", down: "#f0455a", wickUp: "#14b88a", wickDown: "#f0455a", border: true, borderV: 2, borderUp: "#14b88a", borderDown: "#f0455a",
       customBg: false, bg: "#050506", bgType: "theme", bg2: "#2a3550", bgImgOpacity: 35, vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
-      askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3", pop: false, popV: 2, tfRing: true };
+      askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3", pop: false, popV: 2, tfRing: true, ringColor: "#4068f6" };
   }
   /* Candles that stand out: a colour too close to the background is pushed away from it (lighter on a dark or
    * grey background, darker on a light one), and a body still near the background gets a dark or light edge. */
@@ -6708,7 +6708,7 @@
           <div class="fr">${k.chk("vGrid")}<span class="grow">Lưới dọc</span>${k.sw("grid")}</div>
           <div class="fr">${k.chk("hGrid")}<span>Lưới ngang</span></div>
           <div class="fr">${k.chk("crosshairMagnet")}<span>Con trỏ bắt vào nến</span></div>
-          <div class="fr">${k.chk("tfRing")}<span>Bấm 1 lần vào chart: hiện vòng chọn khung thời gian</span></div>
+          <div class="fr">${k.chk("tfRing")}<span class="grow">Bấm 1 lần vào chart: hiện vòng chọn khung thời gian</span>${k.sw("ringColor")}</div>
           <div class="fr">${k.chk("seconds")}<span>Hiện giây trên trục thời gian</span></div>
           <div class="fp-sec">Giá</div>
           <div class="fr">${k.chk("askLine")}<span class="grow">Đường Bid / Ask (spread)</span>${k.sw("bidColor")}${k.sw("askColor")}</div>`;
@@ -8099,7 +8099,8 @@
     tfRingSoon(cx, cy) {
       if ((this.chartStyle || {}).tfRing === false) return;
       clearTimeout(this.tfRingTimer);
-      this.tfRingTimer = setTimeout(() => this.openTfRing(cx, cy), 280);
+      // At once: a double click closes it again with its second press (and opens the 2 charts).
+      this.tfRingTimer = setTimeout(() => this.openTfRing(cx, cy), 0);
     },
 
     openTfRing(cx, cy) {
@@ -8114,6 +8115,7 @@
       const tools = [["ind", "ƒ", "Chỉ báo"], ["draw", '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20 18 6M15 4l5 5"/></svg>', "Công cụ vẽ: đường xu hướng"], ["set", '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 4v16M12 4v16M19 4v16"/><circle cx="5" cy="9" r="2" fill="currentColor"/><circle cx="12" cy="15" r="2" fill="currentColor"/><circle cx="19" cy="8" r="2" fill="currentColor"/></svg>', "Cài đặt biểu đồ"]]
         .map(([k, icon, title], i) => { const [x, y] = at(152 + i * 28); return `<button type="button" data-k="${k}" class="tool" title="${title}" style="left:${x}px;top:${y}px">${icon}</button>`; });
       el.innerHTML = items.join("") + tools.join("");
+      el.style.setProperty("--ring", (this.chartStyle && this.chartStyle.ringColor) || "#4068f6");
       const left = Math.max(6, Math.min(window.innerWidth - size - 6, cx - c)), top = Math.max(6, Math.min(window.innerHeight - size - 6, cy - c));
       el.style.left = left + "px"; el.style.top = top + "px";
       el.hidden = false;
