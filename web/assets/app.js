@@ -8109,11 +8109,20 @@
       const tfs = [["1m", "M1"], ["5m", "M5"], ["15m", "M15"], ["30m", "M30"], ["1h", "H1"], ["4h", "H4"], ["1d", "D1"]];
       const R = 68, size = 180, c = size / 2;
       const at = (deg) => { const r = (deg - 90) * Math.PI / 180; return [c + R * Math.cos(r), c + R * Math.sin(r)]; };
-      // Timeframes over the top from lower left to lower right; the tools at the bottom.
-      const items = tfs.map(([tf, name], i) => { const [x, y] = at(-128 + (256 / (tfs.length - 1)) * i);
+      // 11 even places round the ring: the timeframes over the top (M30 at the top), the tools at the bottom.
+      const ic = (d) => `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${d}</svg>`;
+      const toolList = [
+        ["ind", "ƒ", "Chỉ báo"],
+        ["h", ic('<rect x="3" y="5" width="8" height="14" rx="1.5"/><rect x="13" y="5" width="8" height="14" rx="1.5"/>'), "2 mã ngang (trái – phải), SMT"],
+        ["v", ic('<rect x="4" y="3" width="16" height="8" rx="1.5"/><rect x="4" y="13" width="16" height="8" rx="1.5"/>'), "2 mã dọc (trên – dưới), SMT"],
+        ["set", ic('<path d="M5 4v16M12 4v16M19 4v16"/><circle cx="5" cy="9" r="2" fill="currentColor"/><circle cx="12" cy="15" r="2" fill="currentColor"/><circle cx="19" cy="8" r="2" fill="currentColor"/>'), "Cài đặt biểu đồ"],
+      ];
+      const all = tfs.length + toolList.length, step = 360 / all, start = 180 - (tfs.length + (toolList.length - 1) / 2) * step;
+      const items = tfs.map(([tf, name], i) => { const [x, y] = at(start + step * i);
         return `<button type="button" data-tf="${tf}" class="${tf === this.interval ? "on" : ""}" style="left:${x}px;top:${y}px">${name}</button>`; });
-      const tools = [["ind", "ƒ", "Chỉ báo"], ["draw", '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20 18 6M15 4l5 5"/></svg>', "Công cụ vẽ: đường xu hướng"], ["set", '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 4v16M12 4v16M19 4v16"/><circle cx="5" cy="9" r="2" fill="currentColor"/><circle cx="12" cy="15" r="2" fill="currentColor"/><circle cx="19" cy="8" r="2" fill="currentColor"/></svg>', "Cài đặt biểu đồ"]]
-        .map(([k, icon, title], i) => { const [x, y] = at(152 + i * 28); return `<button type="button" data-k="${k}" class="tool" title="${title}" style="left:${x}px;top:${y}px">${icon}</button>`; });
+      const tools = toolList.map(([k, icon, title], j) => { const [x, y] = at(start + step * (tfs.length + j));
+        const on = (k === "h" || k === "v") && this.layout === k;
+        return `<button type="button" data-k="${k}" class="tool${on ? " on" : ""}" title="${title}" style="left:${x}px;top:${y}px">${icon}</button>`; });
       el.innerHTML = items.join("") + tools.join("");
       el.style.setProperty("--ring", (this.chartStyle && this.chartStyle.ringColor) || "#4068f6");
       const left = Math.max(6, Math.min(window.innerWidth - size - 6, cx - c)), top = Math.max(6, Math.min(window.innerHeight - size - 6, cy - c));
@@ -8132,7 +8141,13 @@
           this.interval = b.dataset.tf; store.set("aurum.tf", this.interval); this.loadCandles();
         } else if (b.dataset.k === "ind") this.indicatorSheet();
         else if (b.dataset.k === "set") this.chartStyleSheet();
-        else if (b.dataset.k === "draw" && this.drawings) { this.drawings.setTool("trendLine"); if (this.renderToolRail) this.renderToolRail(); }
+        else if (b.dataset.k === "h" || b.dataset.k === "v") {
+          // The 2-chart layout (SMT) that way, or back to one chart when it is already open.
+          if (this.layout === b.dataset.k) { this.setLayout("1"); return; }
+          if (!showInd.smt) { showInd.smt = true; store.set("aurum.ind", JSON.stringify(showInd)); }
+          store.set("aurum.pairMode", b.dataset.k);
+          this.setLayout(b.dataset.k);
+        }
       };
       if (!this.tfRingKeys) {
         this.tfRingKeys = true;
