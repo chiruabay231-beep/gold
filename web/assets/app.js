@@ -1336,12 +1336,37 @@
   }
   const CTX_STROKE = Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype, "strokeStyle");
   const CTX_FILL = Object.getOwnPropertyDescriptor(CanvasRenderingContext2D.prototype, "fillStyle");
+  /** Sharp lines for the indicator layers (drawn in CSS pixels): every point of a line put on the device
+   *  pixel grid (on a pixel's middle for an odd number of device pixels, between two for an even one),
+   *  widths in whole device pixels and filled boxes on whole pixels, so nothing is smeared over two. */
+  const CTX_P = CanvasRenderingContext2D.prototype;
+  const CTX_LW = Object.getOwnPropertyDescriptor(CTX_P, "lineWidth");
+  function withCrisp(ctx, paint) {
+    if (!ctx || !CTX_LW || !ctx.getTransform) return paint();
+    const dpr = Math.abs(ctx.getTransform().a) || window.devicePixelRatio || 1;
+    const odd = () => Math.round(CTX_LW.get.call(ctx) * dpr) % 2 === 1;
+    const sS = (v) => (odd() ? (Math.floor(v * dpr) + 0.5) / dpr : Math.round(v * dpr) / dpr);
+    const sF = (v) => Math.round(v * dpr) / dpr;
+    ctx.moveTo = (x, y) => CTX_P.moveTo.call(ctx, sS(x), sS(y));
+    ctx.lineTo = (x, y) => CTX_P.lineTo.call(ctx, sS(x), sS(y));
+    ctx.strokeRect = (x, y, w, h) => { const x0 = sS(x), y0 = sS(y); CTX_P.strokeRect.call(ctx, x0, y0, sS(x + w) - x0, sS(y + h) - y0); };
+    ctx.fillRect = (x, y, w, h) => {
+      const x0 = sF(x), y0 = sF(y);
+      let ww = sF(x + w) - x0, hh = sF(y + h) - y0;
+      if (w && !ww) ww = (w > 0 ? 1 : -1) / dpr;
+      if (h && !hh) hh = (h > 0 ? 1 : -1) / dpr;
+      CTX_P.fillRect.call(ctx, x0, y0, ww, hh);
+    };
+    Object.defineProperty(ctx, "lineWidth", { configurable: true, get: () => CTX_LW.get.call(ctx), set: (v) => CTX_LW.set.call(ctx, Math.max(1, Math.round(v * dpr)) / dpr) });
+    try { return paint(); } finally { delete ctx.moveTo; delete ctx.lineTo; delete ctx.strokeRect; delete ctx.fillRect; delete ctx.lineWidth; }
+  }
+
   /** Runs a paint with the colours it sets made to stand out (when on); the context is left as it was. */
   function withPop(ctx, paint) {
-    if (!POP.on || !ctx || !CTX_STROKE || !CTX_FILL) return paint();
+    if (!POP.on || !ctx || !CTX_STROKE || !CTX_FILL) return withCrisp(ctx, paint);
     Object.defineProperty(ctx, "strokeStyle", { configurable: true, get: () => CTX_STROKE.get.call(ctx), set: (v) => CTX_STROKE.set.call(ctx, popColor(v, false)) });
     Object.defineProperty(ctx, "fillStyle", { configurable: true, get: () => CTX_FILL.get.call(ctx), set: (v) => CTX_FILL.set.call(ctx, popColor(v, true)) });
-    try { return paint(); } finally { delete ctx.strokeStyle; delete ctx.fillStyle; }
+    try { return withCrisp(ctx, paint); } finally { delete ctx.strokeStyle; delete ctx.fillStyle; }
   }
   window.AurumPop = { wrap: withPop, color: (v) => popColor(v, false) };
   function candleLook(st, bg) {
@@ -1393,7 +1418,7 @@
   // Axis text: black (white on dark) and bold. Lightweight Charts has no font-weight option, so the
   // family is a bold face under its own name (style.css), falling back to the system font.
   const AXIS_FAMILY = "AurumAxis, -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
-  const axisFont = (bg, light) => ({ background: { color: bg }, textColor: light ? "#000000" : "#f1f4f9", fontFamily: AXIS_FAMILY, fontSize: 13 });
+  const axisFont = (bg, light) => ({ background: { color: bg }, textColor: light ? "#000000" : "#f1f4f9", fontFamily: AXIS_FAMILY, fontSize: 12 });
   const svg = (body) => `<svg viewBox="0 0 28 28" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
   const dot = (x, y) => `<circle cx="${x}" cy="${y}" r="1.8" fill="currentColor"/>`;
   const TOOL_ICON = {
@@ -1619,6 +1644,7 @@
       $("chartSymbol").disabled = !this.owner;
       // Not investment advice: the same note for everyone, under every chart.
       $("chartNote").textContent = "Biểu đồ, chỉ báo, tín hiệu và bot chỉ để tham khảo, không phải lời khuyên đầu tư. Giao dịch vàng, ngoại hối, tiền số có đòn bẩy rủi ro cao và có thể mất toàn bộ vốn; bạn tự chịu trách nhiệm với quyết định của mình.";
+      $("chartNote").title = $("chartNote").textContent;
       if (!this.owner) {
         try { await this.refreshMe(); } catch (e) { if (this.handleAuth(e)) return; }
       }
@@ -7994,7 +8020,7 @@
           }, {
             zOrder: () => "top",
             renderer: () => ({
-              draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => term.drawTradeLines(context, mediaSize.width)),
+              draw: (target) => target.useMediaCoordinateSpace(({ context, mediaSize }) => withCrisp(context, () => term.drawTradeLines(context, mediaSize.width))),
             }),
           }];
         },

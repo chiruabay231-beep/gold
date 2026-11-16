@@ -1114,3 +1114,12 @@ html[data-theme="light"] .fav-bar button { color: #131722; }
 html[data-theme="light"] .fav-bar button:hover { background: #f0f3fa; }
 html[data-theme="light"] .fav-bar button.on { background: rgba(41, 98, 255, .14); color: #2962ff; }
 html[data-theme="light"] .fav-bar .fav-sep { background: #e0e3eb; }
+
+/* Chart tab, TradingView's room: the chart runs to the window's edges, the frames round it thin. */
+body.on-chart .dash { padding: 4px 0 2px; gap: 2px; }
+body.on-chart .chart-panel { padding: 3px 3px 0; border-radius: 0; border-left: 0; border-right: 0; }
+body.on-chart .chart-body { gap: 3px; }
+body.on-chart .chart-wrap { border-radius: 4px; }
+body.on-chart .tool-rail { border-radius: 6px; }
+body.on-chart .flow { padding: 0 4px 2px; }
+body.on-chart #chartNote { font-size: 10.5px; line-height: 1.3; padding: 1px 4px 2px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; opacity: .6; }
