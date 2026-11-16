@@ -9,6 +9,8 @@ struct AppSettingsView: View {
     @AppStorage(ChartBackground.key) private var backgroundJSON = ""
     @AppStorage("live.showGrid") private var showGrid = true
     @AppStorage(StandOut.key) private var standOut = false
+    @AppStorage(TimeframeRingStyle.enabledKey) private var tfRing = true
+    @AppStorage(TimeframeRingStyle.colorKey) private var tfRingHex = TimeframeRingStyle.defaultHex
     @AppStorage("live.candleStyle") private var candleStyle = CandleStyle.candles.rawValue
     @AppStorage("live.candleColors") private var candleColorsJSON = ""
     @AppStorage("live.precision") private var precision = -1
@@ -94,6 +96,12 @@ struct AppSettingsView: View {
                             Text("Nến, đường chỉ báo và bản vẽ nổi bật")
                             Text("Tự tăng tương phản với màu nền").font(.caption).foregroundColor(.secondary)
                         }
+                    }
+                    Toggle("Chạm 1 lần vào chart: vòng chọn khung thời gian", isOn: $tfRing)
+                    if tfRing {
+                        ColorPicker("Màu vòng chọn khung", selection: Binding(get: { TimeframeRingStyle.color(tfRingHex) },
+                                                                               set: { tfRingHex = TimeframeRingStyle.hex($0) }),
+                                    supportsOpacity: false)
                     }
                     Toggle("Khối lượng", isOn: $showVolume)
                     Toggle("Nhãn Cao / Thấp", isOn: $showHighLow)

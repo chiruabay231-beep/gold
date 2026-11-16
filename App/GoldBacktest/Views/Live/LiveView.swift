@@ -137,6 +137,10 @@ struct LiveView: View {
     @AppStorage(ChartBackground.key) private var chartBackgroundJSON = ""
     @AppStorage("live.showGrid") private var showGrid = true
     @AppStorage(StandOut.key) private var standOutOn = false
+    @AppStorage(TimeframeRingStyle.enabledKey) private var tfRingOn = true
+    @AppStorage(TimeframeRingStyle.colorKey) private var tfRingHex = TimeframeRingStyle.defaultHex
+    /// Where the timeframe ring is open on the chart (nil = closed).
+    @State private var ringAt: CGPoint?
     private var theme: ChartTheme {
         (themeName == "binance" ? ChartTheme.binance : .tradingView).with(background: ChartBackground.decode(chartBackgroundJSON))
     }
@@ -1057,6 +1061,35 @@ struct LiveView: View {
         }
     }
 
+    /// A tap on a free spot of the chart opens the ring there (not while drawing or picking a replay bar).
+    private var ringTap: ((CGPoint) -> Void)? {
+        guard tfRingOn, activeTool == nil, !replay.isPicking else { return nil }
+        return { point in ringAt = point }
+    }
+
+    /// MT5's timeframe ring where the chart was tapped; a tap anywhere else closes it.
+    @ViewBuilder
+    private var ringOverlay: some View {
+        if let at = ringAt {
+            GeometryReader { geometry in
+                let half = TimeframeRing.size / 2
+                let x = min(max(at.x, half + 4), max(half + 4, geometry.size.width - half - 4))
+                let y = min(max(at.y, half + 4), max(half + 4, geometry.size.height - half - 4))
+                ZStack {
+                    Color.black.opacity(0.001)
+                        .contentShape(Rectangle())
+                        .onTapGesture { ringAt = nil }
+                    TimeframeRing(current: market.interval, color: TimeframeRingStyle.color(tfRingHex), compareOn: compareMode,
+                                  onPick: { interval in ringAt = nil; selectInterval(interval) },
+                                  onIndicators: { ringAt = nil; showIndicatorSheet = true },
+                                  onCompare: { ringAt = nil; compareMode.toggle(); viewport.rightOffset = 0 },
+                                  onSettings: { ringAt = nil; showAppSettings = true })
+                        .position(x: x, y: y)
+                }
+            }
+        }
+    }
+
     private func chartPanel(timeAxis: Bool, axisLeading: Bool = false) -> some View {
         let axisInset: CGFloat = axisLeading ? 66 : 0
         let settings = killzoneSettings
@@ -1121,6 +1154,7 @@ struct LiveView: View {
                         axisLeading: axisLeading,
                         // The pending-order panel closes with a tap on the chart.
                         onBackgroundTap: orderTicket == nil ? nil : { orderTicket = nil },
+                        onBackgroundTapAt: ringTap,
                         // Also in full screen, for the OHLC line of the bar under the crosshair.
                         linkedCrosshair: compareMode || fullScreen ? $linkedCrosshairTime : nil,
                         mascots: mascots,
@@ -1130,6 +1164,7 @@ struct LiveView: View {
                         onMascotMoved: { id, time, price in editMascot(id) { $0.time = time; $0.price = price } },
                         viewport: $viewport)
             .standingOut(standOutOn)
+            .overlay { ringOverlay }
             .background(mascotWatcher)
         }
         .overlay(alignment: .leading) {

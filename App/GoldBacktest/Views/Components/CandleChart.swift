@@ -294,6 +294,8 @@ struct CandleChart: View {
     /// A tap on the chart that hit nothing (no line, drawing or tool): e.g. closes
     /// the pending-order panel.
     var onBackgroundTap: (() -> Void)? = nil
+    /// A tap on a free spot when `onBackgroundTap` has nothing to do: where it was (the timeframe ring).
+    var onBackgroundTapAt: ((CGPoint) -> Void)? = nil
     /// Time of the crosshair shared with another chart (compare split): moving
     /// it here moves the other chart's vertical line too.
     var linkedCrosshair: Binding<Date?>? = nil
@@ -2362,7 +2364,11 @@ struct CandleChart: View {
             onSelectDrawing?(nil)
             return
         }
-        onBackgroundTap?()
+        if let onBackgroundTap {
+            onBackgroundTap()
+        } else if !crosshairMode {
+            onBackgroundTapAt?(location)
+        }
         if crosshairMode { crosshair = location }
     }
 
