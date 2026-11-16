@@ -8090,7 +8090,8 @@
       const left = Math.max(6, Math.min(window.innerWidth - size - 6, cx - c)), top = Math.max(6, Math.min(window.innerHeight - size - 6, cy - c));
       el.style.left = left + "px"; el.style.top = top + "px";
       el.hidden = false;
-      requestAnimationFrame(() => el.classList.add("open"));
+      el.classList.remove("open"); void el.offsetWidth; // the closed look first, so the turn in plays every time
+      el.classList.add("open");
       el.onpointerdown = (e) => e.stopPropagation();
       el.onclick = (e) => {
         const b = e.target.closest("button");
