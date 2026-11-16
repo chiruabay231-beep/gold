@@ -78,6 +78,7 @@
       this.keepTool = host.store.get("aurum.keepTool") === "1";
       this.lockAll = host.store.get("aurum.lockAll") === "1";
       this.hidden = false;
+      this.undoStack = []; this.redoStack = []; this.baseline = "[]"; this.lastPush = 0;
       this.styles = {};
       try { this.styles = JSON.parse(host.store.get("aurum.drawStyles") || "{}"); } catch { /* none */ }
       const self = this;
@@ -118,14 +119,52 @@
     load() {
       try { this.list = JSON.parse(this.host.store.get(this.key()) || "[]").map((d) => this.upgrade(d)); } catch { this.list = []; }
       this.selected = null; this.pending = null;
+      // Undo / redo start again with each symbol's drawings.
+      this.undoStack = []; this.redoStack = []; this.baseline = JSON.stringify(this.list); this.lastPush = 0;
       this.update();
       this.host.onChange();
     }
     save() {
-      try { this.host.store.set(this.key(), JSON.stringify(this.list)); } catch { /* full */ }
+      const now = JSON.stringify(this.list);
+      // History for undo: the state before each change (changes within half a second, as a drag or typing, are one).
+      if (this.undoStack && !this.syncing && !this.restoring && now !== this.baseline) {
+        if (Date.now() - this.lastPush > 500 || !this.undoStack.length) {
+          this.undoStack.push(this.baseline);
+          if (this.undoStack.length > 100) this.undoStack.shift();
+        }
+        this.lastPush = Date.now();
+        this.redoStack = [];
+      }
+      this.baseline = now;
+      try { this.host.store.set(this.key(), now); } catch { /* full */ }
       // Shared with the app through the VPS (not while a copy from there is being put in).
       if (this.host.onSave && !this.syncing) this.host.onSave(this);
       this.host.onChange();
+    }
+
+    canUndo() { return !!(this.undoStack && this.undoStack.length); }
+    canRedo() { return !!(this.redoStack && this.redoStack.length); }
+    /** Back to the drawings as they were before the last change (a drag, a delete, a new one, a setting). */
+    undo() {
+      if (!this.canUndo()) return false;
+      this.redoStack.push(this.baseline);
+      this.restore(this.undoStack.pop());
+      return true;
+    }
+    redo() {
+      if (!this.canRedo()) return false;
+      this.undoStack.push(this.baseline);
+      this.restore(this.redoStack.pop());
+      return true;
+    }
+    restore(json) {
+      try { this.list = JSON.parse(json).map((d) => this.upgrade(d)); } catch { return; }
+      this.selected = null; this.pending = null; this.gesture = null;
+      if (this.clearMulti) this.clearMulti();
+      this.restoring = true;
+      try { this.save(); } finally { this.restoring = false; }
+      this.lastPush = 0;
+      this.update();
     }
 
     /** Drawings from the VPS (made or changed in the app): they replace this chart's, saved here too. */

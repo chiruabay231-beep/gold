@@ -2338,7 +2338,7 @@
           + k.tog("details", "Đọc thêm mã, giá, số tiền lãi/lỗ")
           + `<div class="fr wrap">${["target", "stop", "entry"].map((key) => `<button type="button" class="btn btn-ghost btn-small" data-say="${key}">▶ ${esc(Voice.phrase(key))}</button>`).join("")}</div>`
           + k.head("Phiên giao dịch")
-          + k.tog("sessions", "Báo sắp vào phiên Á / Âu / New York (trước 15 phút và lúc mở)")
+          + `<div class="fr"><button type="button" class="btn btn-ghost btn-small" data-sess>⚙ Thông báo mở / kết thúc phiên Á · Âu · New York…</button></div>`
           + k.head("Hiện thông báo")
           + k.tog("popup", "Hiện thông báo trên trang")
           + `<label class="fr"><input type="checkbox" data-p="notify" data-t="bool" data-ask ${c.notify ? "checked" : ""}><span>Thông báo của trình duyệt khi đang mở tab khác</span></label>`
@@ -2355,6 +2355,7 @@
           const sample = () => (Voice.vi() ? `${Voice.phrase("target")}, vàng, lời 120 đô` : `${Voice.phrase("target")}, gold, plus 120 dollars`);
           panel.querySelector("[data-try]").onclick = () => Voice.speak(sample(), true, true);
           panel.querySelectorAll("[data-say]").forEach((b) => (b.onclick = () => Voice.speak(Voice.phrase(b.dataset.say), true, b.dataset.say !== "stop")));
+          { const sb = panel.querySelector("[data-sess]"); if (sb) sb.onclick = () => this.sessSettingsSheet(); }
           // Picking a voice reads with it straight away.
           panel.querySelector(".voice-sel").addEventListener("change", () => Voice.speak(sample(), true, true));
           // A new language: the voice picked for the old one no longer applies.
@@ -3614,6 +3615,8 @@
         this.loadCandles();
       };
       $("indBtn").onclick = () => this.indicatorSheet();
+      $("undoBtn").onclick = () => this.undoDrawing();
+      $("redoBtn").onclick = () => this.redoDrawing();
       $("drawBtn").onclick = () => this.toggleRail();
       $("styleBtn").onclick = () => this.chartStyleSheet();
       $("typeBtn").onclick = (e) => { e.stopPropagation(); const m = $("ctxMenu"); if (m && !m.hidden && m.querySelector(".type-list")) this.closeMenu(); else this.chartTypeMenu(e.currentTarget); };
@@ -4708,6 +4711,11 @@
       });
       window.addEventListener("keydown", (e) => {
         if (this.tab !== "chart" || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "") || $("sheet").open) return;
+        // Undo / redo (⌘Z / Ctrl+Z, ⇧⌘Z / Ctrl+Y): the drawings of the chart in use.
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && (e.key === "z" || e.key === "Z" || e.key === "y")) {
+          if (e.key === "y" || e.shiftKey) this.redoDrawing(); else this.undoDrawing();
+          e.preventDefault(); return;
+        }
         if (e.key === "Escape") { this.closeMenu(); if (this.drawings) this.drawings.cancel(); if (this.replayPicking) this.exitReplay(); }
         if ((e.key === "Delete" || e.key === "Backspace") && [this.drawings, this.drawings2].some((d) => d && d.multiCount)) { this.deleteBoxed(); e.preventDefault(); }
         else if ((e.key === "Delete" || e.key === "Backspace") && this.drawings && this.drawings.selected) { this.drawings.remove(this.drawings.selected); e.preventDefault(); }
@@ -4985,7 +4993,7 @@
       items.push(["tools", "✎ Công cụ vẽ…"]);
       if (this.drawings && this.drawings.list.length) items.push(["clear", `🗑 Xoá tất cả bản vẽ (${this.drawings.list.length})`]);
       if (this.drawings && this.drawings.current) items.push(["drawSettings", "⚙ Cài đặt bản vẽ…"], ["drawDel", "🗑 Xoá bản vẽ này"]);
-      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["macroSettings", "⚙ Macro…"], ["liqSettings", "⚙ Vùng thanh khoản…"], ["planSettings", "⚙ Kế hoạch giao dịch…"], ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
+      items.push(["ind", "ƒx Chỉ báo…"], ["ictSettings", "⚙ Cài đặt chỉ báo ICT…"], ["macroSettings", "⚙ Macro…"], ["sessSettings", "🔔 Thông báo phiên…"], ["liqSettings", "⚙ Vùng thanh khoản…"], ["planSettings", "⚙ Kế hoạch giao dịch…"], ["chartStyle", "🎨 Cài đặt biểu đồ (màu, sáng/tối)…"]);
       const menu = $("ctxMenu");
       menu.innerHTML = items.map(([k, t]) => `<button type="button" data-k="${k}">${esc(t)}</button>`).join("");
       menu.hidden = false;
@@ -5010,6 +5018,7 @@
         if (k === "planSettings") this.planSettingsSheet();
         if (k === "liqSettings") this.liqSettingsSheet();
         if (k === "macroSettings") this.macroSettingsSheet();
+        if (k === "sessSettings") this.sessSettingsSheet();
         if (k === "setups") this.setupListSheet();
         if (k === "drawSettings") this.drawingSettings(this.drawings.current);
         if (k === "drawDel" && this.drawings.current) this.drawings.remove(this.drawings.current.id);
@@ -7907,55 +7916,105 @@
     /** Under the timeframes at the right, one short row per news of the day (red and yellow USD news, or the
      *  next day that has some): time, a short name, its own countdown (or how long ago), and ▲ / ▼ for gold
      *  by the forecast (then the result). The figures are in the tooltip; a tap opens News. */
-    /** The opens of the Asian, European and New York sessions near now (each in its own city's clock, so
-     *  summer time moves them by itself), Monday to Friday there. */
-    sessionOpens(nowS) {
+    /** "Thông báo phiên": which sessions, how long before the open the row shows, how long it stays after,
+     *  the alert before the open and before the close, and the voice. */
+    sessDefaults() { return { on: true, asia: true, eu: true, ny: true, showBefore: 60, before: 15, after: 5, endBefore: 15, voice: true, popup: true }; },
+    sessCfg() {
+      if (!this.sessNotice) {
+        try { this.sessNotice = Object.assign(this.sessDefaults(), JSON.parse(store.get("aurum.sessNotice") || "{}")); } catch { this.sessNotice = this.sessDefaults(); }
+        if (Voice.cfg.sessions === false && store.get("aurum.sessNotice") == null) this.sessNotice.on = false;
+      }
+      return this.sessNotice;
+    },
+    sessSettingsSheet() {
+      sheet.close();
+      const cfg = this.sessCfg();
+      const mins = (arr) => arr.map((v) => [v, v ? `${v} phút` : "Không"]);
+      const render = () => {
+        const { tog, sel, head, note } = fieldKit(cfg);
+        return head("Thông báo phiên") + tog("on", "Bật thông báo mở / đóng phiên")
+          + tog("asia", "🌏 Phiên Á — Tokyo 09:00–15:30 (07:00–13:30 VN)")
+          + tog("eu", "🌍 Phiên Âu — London 08:00–16:30 (15:00–23:30 VN mùa đông)")
+          + tog("ny", "🗽 Phiên New York — chứng khoán Mỹ 09:30–16:00 (21:30–04:00 VN mùa đông)")
+          + head("Khi nào hiện")
+          + sel("showBefore", "Hiện dòng đếm ngược trước giờ mở", mins([15, 30, 60, 120]))
+          + sel("after", "Giữ dòng sau khi mở rồi tự ẩn", mins([1, 3, 5, 10, 15]))
+          + sel("before", "Báo trước giờ mở", mins([0, 5, 10, 15, 30]))
+          + sel("endBefore", "Báo sắp kết thúc phiên (trước giờ đóng)", mins([0, 5, 10, 15, 30]))
+          + head("Cách báo") + tog("voice", "Đọc bằng giọng tiếng Anh") + tog("popup", "Hiện thông báo trên trang")
+          + note("Giờ mở / đóng theo giờ của từng sàn chứng khoán, tự đổi khi Âu / Mỹ đổi giờ mùa hè. Chỉ Thứ 2 – Thứ 6.");
+      };
+      const open = () => this.openPanel("Thông báo phiên", [["s", "Cài đặt"]], render, {
+        root: cfg,
+        onChange: () => { store.set("aurum.sessNotice", JSON.stringify(cfg)); this.renderNewsStrip(); },
+        onReset: () => { Object.assign(cfg, this.sessDefaults()); store.set("aurum.sessNotice", JSON.stringify(cfg)); open(); },
+      });
+      open();
+    },
+
+    /** The opens and closes of the Asian, European and New York sessions near now (each in its own city's
+     *  clock, so summer time moves them by itself), Monday to Friday there. */
+    sessionEvents(nowS) {
       const SESS = [
-        { key: "asia", name: "Á", en: "Asian", icon: "🌏", tz: "Asia/Tokyo", h: 9, m: 0 },
-        { key: "eu", name: "Âu", en: "London", icon: "🌍", tz: "Europe/London", h: 8, m: 0 },
-        { key: "ny", name: "New York", en: "New York", icon: "🗽", tz: "America/New_York", h: 9, m: 30 }, // the US stock market opens
+        { key: "asia", name: "Á", en: "Asian", icon: "🌏", tz: "Asia/Tokyo", open: [9, 0], close: [15, 30] },
+        { key: "eu", name: "Âu", en: "London", icon: "🌍", tz: "Europe/London", open: [8, 0], close: [16, 30] },
+        { key: "ny", name: "New York", en: "New York", icon: "🗽", tz: "America/New_York", open: [9, 30], close: [16, 0] }, // the US stock market
       ];
       const off = (tz, t) => (window.ICT && window.ICT.offsetSeconds ? window.ICT.offsetSeconds(t, tz) : 0);
-      const out = [];
+      const cfg = this.sessCfg(), out = [];
       for (const s of SESS) {
+        if (cfg[s.key] === false) continue;
         for (let d = -1; d <= 2; d++) {
-          // That city's calendar day, d days from today there, at its open hour.
           const local = new Date((nowS + off(s.tz, nowS)) * 1000 + d * 86400000);
           const wd = local.getUTCDay();
           if (wd === 0 || wd === 6) continue;
-          const guess = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), s.h, s.m) / 1000;
-          const t = guess - off(s.tz, guess - off(s.tz, guess));
-          out.push(Object.assign({ time: t }, s));
+          const at = ([h, m]) => { const g = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), h, m) / 1000; return g - off(s.tz, g - off(s.tz, g)); };
+          out.push(Object.assign({ kind: "open", time: at(s.open) }, s), Object.assign({ kind: "close", time: at(s.close) }, s));
         }
       }
-      return out.filter((x) => x.time > nowS - 900 && x.time < nowS + 86400).sort((a, b) => a.time - b.time);
+      return out.filter((x) => x.time > nowS - 3600 && x.time < nowS + 86400).sort((a, b) => a.time - b.time);
     },
 
-    /** The next session open as a row over the news (from an hour before to 15 minutes after), with a
-     *  spoken / shown alert 15 minutes before and at the open. */
+    /** Rows over the news: the countdown to an open (until a few minutes after it), and the coming close;
+     *  alerts before the open, at the open and before the close. */
     sessionRow(nowS) {
-      if (Voice.cfg.sessions === false) return "";
+      const cfg = this.sessCfg();
+      if (!cfg.on) return "";
       const vnHM = (t) => new Date((t + 7 * 3600) * 1000).toISOString().slice(11, 16);
-      const list = this.sessionOpens(nowS);
+      const list = this.sessionEvents(nowS);
       this.sessAlerted = this.sessAlerted || new Set();
-      for (const x of list) {
-        const left = x.time - nowS;
-        const id = x.key + ":" + Math.round(x.time);
-        if (left <= 900 && left > 840 && !this.sessAlerted.has(id + ":15")) {
-          this.sessAlerted.add(id + ":15");
-          Voice.alert(`${x.en} session opens in 15 minutes`, `${x.icon} Sắp vào phiên ${x.name}`, `mở lúc ${vnHM(x.time)} (giờ VN) · còn 15 phút`, undefined, "en-US");
+      const say = (id, spoken, title, body) => {
+        if (this.sessAlerted.has(id)) return;
+        this.sessAlerted.add(id);
+        if (cfg.voice) Voice.speak(spoken, false, undefined, "en-US");
+        if (cfg.popup) toast(`${title}: ${body}`);
+        if (Voice.cfg.notify && document.hidden && window.Notification && Notification.permission === "granted") {
+          try { new Notification(title, { body, icon: "favicon.svg" }); } catch { /* not allowed */ }
         }
-        if (left <= 0 && left > -60 && !this.sessAlerted.has(id + ":0")) {
-          this.sessAlerted.add(id + ":0");
-          Voice.alert(`${x.en} session is open`, `${x.icon} Phiên ${x.name} đã mở`, `${vnHM(x.time)} giờ VN · giá hay biến động mạnh đầu phiên`, undefined, "en-US");
+      };
+      for (const x of list) {
+        const left = x.time - nowS, id = x.key + ":" + x.kind + ":" + Math.round(x.time);
+        if (x.kind === "open") {
+          if (cfg.before > 0 && left <= cfg.before * 60 && left > cfg.before * 60 - 60) say(id + ":b", `${x.en} session opens in ${cfg.before} minutes`, `${x.icon} Sắp vào phiên ${x.name}`, `mở lúc ${vnHM(x.time)} (giờ VN) · còn ${cfg.before} phút`);
+          if (left <= 0 && left > -60) say(id + ":0", `${x.en} session is open`, `${x.icon} Phiên ${x.name} đã mở`, `${vnHM(x.time)} giờ VN`);
+        } else if (cfg.endBefore > 0 && left <= cfg.endBefore * 60 && left > cfg.endBefore * 60 - 60) {
+          say(id + ":e", `${x.en} session closes in ${cfg.endBefore} minutes`, `${x.icon} Sắp kết thúc phiên ${x.name}`, `đóng lúc ${vnHM(x.time)} (giờ VN) · còn ${cfg.endBefore} phút`);
         }
       }
-      const x = list.find((e) => e.time > nowS - 900 && e.time - nowS <= 3600);
-      if (!x) return "";
-      const left = x.time - nowS, two = (n) => String(n).padStart(2, "0");
-      const cd = left > 0 ? `còn ${Math.floor(left / 60)}:${two(Math.floor(left % 60))}` : `đã mở ${Math.floor(-left / 60)}′`;
-      return `<div class="ns-sess ${x.key}${left > 0 && left <= 900 ? " soon" : ""}${left <= 0 ? " open" : ""}" title="Phiên ${x.name} mở lúc ${vnHM(x.time)} giờ VN">
-        <span>${x.icon}</span><b>${left > 0 ? "Sắp vào phiên" : "Phiên"} ${x.name}</b><span class="muted">${vnHM(x.time)}</span><span class="cd">${cd}</span></div>`;
+      const two = (n) => String(n).padStart(2, "0"), cdOf = (sec) => `${Math.floor(sec / 60)}:${two(Math.floor(sec % 60))}`;
+      const rows = list.filter((x) => x.kind === "open"
+        ? x.time - nowS <= (cfg.showBefore || 60) * 60 && nowS - x.time < (cfg.after || 5) * 60
+        : cfg.endBefore > 0 && x.time - nowS <= cfg.endBefore * 60 && x.time > nowS).slice(0, 2);
+      return rows.map((x) => {
+        const left = x.time - nowS;
+        if (x.kind === "close") {
+          return `<div class="ns-sess ${x.key} ending" title="Phiên ${x.name} đóng lúc ${vnHM(x.time)} giờ VN">
+            <span>${x.icon}</span><b>Sắp kết thúc phiên ${x.name}</b><span class="muted">${vnHM(x.time)}</span><span class="cd">còn ${cdOf(left)}</span></div>`;
+        }
+        const cd = left > 0 ? `còn ${cdOf(left)}` : `đã mở ${Math.floor(-left / 60)}′`;
+        return `<div class="ns-sess ${x.key}${left > 0 && left <= 900 ? " soon" : ""}${left <= 0 ? " open" : ""}" title="Phiên ${x.name} mở lúc ${vnHM(x.time)} giờ VN">
+          <span>${x.icon}</span><b>${left > 0 ? "Sắp vào phiên" : "Phiên"} ${x.name}</b><span class="muted">${vnHM(x.time)}</span><span class="cd">${cd}</span></div>`;
+      }).join("");
     },
 
     renderNewsStrip() {
@@ -8665,7 +8724,26 @@
       } catch { /* an older server or offline: nothing shared */ } finally { this.drawPulling = false; }
     },
 
+    undoDrawing() {
+      const d = this.drawings;
+      if (!d || !d.undo) return;
+      if (d.undo()) { toast("↶ Đã quay lại bước trước"); this.renderDrawBar(); } else toast("Không còn gì để quay lại", true);
+      this.renderUndo();
+    },
+    redoDrawing() {
+      const d = this.drawings;
+      if (!d || !d.redo) return;
+      if (d.redo()) { toast("↷ Đã làm lại"); this.renderDrawBar(); } else toast("Không còn gì để làm lại", true);
+      this.renderUndo();
+    },
+    renderUndo() {
+      const d = this.drawings, u = $("undoBtn"), r = $("redoBtn");
+      if (u) u.disabled = !(d && d.canUndo && d.canUndo());
+      if (r) r.disabled = !(d && d.canRedo && d.canRedo());
+    },
+
     drawingsChanged(from) {
+      this.renderUndo();
       if (from === this.drawings || !this.drawings) this.renderDrawBar();
       const main = this.drawingsMain;
       if (main && from !== main) main.update();
