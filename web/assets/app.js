@@ -1129,7 +1129,7 @@
 
   /* ---------------- voice alerts, as in the app: TP / SL hit and fills read out ---------------- */
 
-  const VOICE_DEFAULTS = { enabled: true, lang: "vi-VN", voice: "", rate: 0.95, pitch: 1, volume: 1, chime: true, target: "", stop: "", entry: "", buy: "", sell: "", details: false, popup: true, notify: false };
+  const VOICE_DEFAULTS = { enabled: true, lang: "vi-VN", voice: "", rate: 0.95, pitch: 1, volume: 1, chime: true, target: "", stop: "", entry: "", buy: "", sell: "", details: false, popup: true, notify: false, sessions: true };
   /** Default phrases in the voice's own language: an English phrase read by a Vietnamese voice sounds wrong. */
   const VOICE_PHRASES = {
     en: { target: "Target fill", stop: "Stop loss fill", entry: "Order filled", buy: "Buy signal", sell: "Sell signal", closed: "Position closed" },
@@ -2336,6 +2336,8 @@
           + (this.owner ? "" : phraseRow("buy", "Tín hiệu MUA") + phraseRow("sell", "Tín hiệu BÁN"))
           + k.tog("details", "Đọc thêm mã, giá, số tiền lãi/lỗ")
           + `<div class="fr wrap">${["target", "stop", "entry"].map((key) => `<button type="button" class="btn btn-ghost btn-small" data-say="${key}">▶ ${esc(Voice.phrase(key))}</button>`).join("")}</div>`
+          + k.head("Phiên giao dịch")
+          + k.tog("sessions", "Báo sắp vào phiên Á / Âu / New York (trước 15 phút và lúc mở)")
           + k.head("Hiện thông báo")
           + k.tog("popup", "Hiện thông báo trên trang")
           + `<label class="fr"><input type="checkbox" data-p="notify" data-t="bool" data-ask ${c.notify ? "checked" : ""}><span>Thông báo của trình duyệt khi đang mở tab khác</span></label>`
@@ -7903,10 +7905,62 @@
     /** Under the timeframes at the right, one short row per news of the day (red and yellow USD news, or the
      *  next day that has some): time, a short name, its own countdown (or how long ago), and ▲ / ▼ for gold
      *  by the forecast (then the result). The figures are in the tooltip; a tap opens News. */
+    /** The opens of the Asian, European and New York sessions near now (each in its own city's clock, so
+     *  summer time moves them by itself), Monday to Friday there. */
+    sessionOpens(nowS) {
+      const SESS = [
+        { key: "asia", name: "Á", icon: "🌏", tz: "Asia/Tokyo", h: 9, m: 0 },
+        { key: "eu", name: "Âu", icon: "🌍", tz: "Europe/London", h: 8, m: 0 },
+        { key: "ny", name: "New York", icon: "🗽", tz: "America/New_York", h: 8, m: 0 },
+      ];
+      const off = (tz, t) => (window.ICT && window.ICT.offsetSeconds ? window.ICT.offsetSeconds(t, tz) : 0);
+      const out = [];
+      for (const s of SESS) {
+        for (let d = -1; d <= 2; d++) {
+          // That city's calendar day, d days from today there, at its open hour.
+          const local = new Date((nowS + off(s.tz, nowS)) * 1000 + d * 86400000);
+          const wd = local.getUTCDay();
+          if (wd === 0 || wd === 6) continue;
+          const guess = Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), s.h, s.m) / 1000;
+          const t = guess - off(s.tz, guess - off(s.tz, guess));
+          out.push(Object.assign({ time: t }, s));
+        }
+      }
+      return out.filter((x) => x.time > nowS - 900 && x.time < nowS + 86400).sort((a, b) => a.time - b.time);
+    },
+
+    /** The next session open as a row over the news (from an hour before to 15 minutes after), with a
+     *  spoken / shown alert 15 minutes before and at the open. */
+    sessionRow(nowS) {
+      if (Voice.cfg.sessions === false) return "";
+      const vnHM = (t) => new Date((t + 7 * 3600) * 1000).toISOString().slice(11, 16);
+      const list = this.sessionOpens(nowS);
+      this.sessAlerted = this.sessAlerted || new Set();
+      for (const x of list) {
+        const left = x.time - nowS;
+        const id = x.key + ":" + Math.round(x.time);
+        if (left <= 900 && left > 840 && !this.sessAlerted.has(id + ":15")) {
+          this.sessAlerted.add(id + ":15");
+          Voice.alert(`Còn 15 phút nữa vào phiên ${x.name}`, `${x.icon} Sắp vào phiên ${x.name}`, `mở lúc ${vnHM(x.time)} (giờ VN) · còn 15 phút`);
+        }
+        if (left <= 0 && left > -60 && !this.sessAlerted.has(id + ":0")) {
+          this.sessAlerted.add(id + ":0");
+          Voice.alert(`Đã vào phiên ${x.name}`, `${x.icon} Phiên ${x.name} đã mở`, `${vnHM(x.time)} giờ VN · giá hay biến động mạnh đầu phiên`);
+        }
+      }
+      const x = list.find((e) => e.time > nowS - 900 && e.time - nowS <= 3600);
+      if (!x) return "";
+      const left = x.time - nowS, two = (n) => String(n).padStart(2, "0");
+      const cd = left > 0 ? `còn ${Math.floor(left / 60)}:${two(Math.floor(left % 60))}` : `đã mở ${Math.floor(-left / 60)}′`;
+      return `<div class="ns-sess ${x.key}${left > 0 && left <= 900 ? " soon" : ""}${left <= 0 ? " open" : ""}" title="Phiên ${x.name} mở lúc ${vnHM(x.time)} giờ VN">
+        <span>${x.icon}</span><b>${left > 0 ? "Sắp vào phiên" : "Phiên"} ${x.name}</b><span class="muted">${vnHM(x.time)}</span><span class="cd">${cd}</span></div>`;
+    },
+
     renderNewsStrip() {
       const box = $("newsStrip");
       if (!box) return;
       const nowS = Date.now() / 1000;
+      const sess = this.replay ? "" : this.sessionRow(nowS);
       const all = showInd.news && this.news && !this.replay ? this.goldEvents(2) : [];
       const dayOf = (t) => new Date(t * 1000).toDateString();
       // Today's still to come (or out less than 15 minutes ago), else the next day with news; 5 rows at most.
@@ -7920,7 +7974,7 @@
       const live = this.goldEvents(3).find((e) => nowS >= e.time - 60 && nowS <= e.time + 900);
       if (live) list = list.filter((e) => e !== live);
       list = list.slice(0, 5);
-      box.hidden = !list.length && !live;
+      box.hidden = !list.length && !live && !sess;
       if (box.hidden) return;
       const two = (n) => String(n).padStart(2, "0");
       const left = (sec) => { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = Math.floor(sec % 60); return h ? `${h}:${two(m)}:${two(x)}` : `${m}:${two(x)}`; };
@@ -7940,7 +7994,7 @@
         const t = live.time - nowS, when = t > 0 ? `còn ${Math.ceil(t)}s` : `${Math.floor(-t / 60) ? Math.floor(-t / 60) + "′ " : ""}${Math.floor(-t % 60)}s`;
         card = `<div class="ns-live${t > 0 ? " soon" : ""}" title="${esc(live.title)}"><div>📰 <b>${esc(live.title)}</b> <span class="muted">${when}</span></div><div>${line}</div></div>`;
       }
-      box.innerHTML = card + list.map((e) => {
+      box.innerHTML = sess + card + list.map((e) => {
         const v = this.newsVerdict(e), soon = e.time > nowS && e.time - nowS < 900;
         const when = e.time > nowS ? left(e.time - nowS) : `✓ ${Math.max(0, Math.round((nowS - e.time) / 60))}′`;
         const tip = `${e.title} · Dự báo ${e.forecast || "–"} · Trước ${e.previous || "–"}${e.actual ? " · Thực tế " + e.actual : ""}${v ? " · " + v.text : ""}`;
