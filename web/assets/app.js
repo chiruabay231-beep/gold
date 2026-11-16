@@ -6907,7 +6907,7 @@
       if (bar.parentElement !== document.body) document.body.appendChild(bar);
       bar.classList.add("floating");
       const d = this.drawings;
-      bar.innerHTML = `<span class="grip" title="Kéo để di chuyển">⋮⋮</span>` + fav.map((t) => `<button type="button" data-t="${t}" class="${d.tool === t ? "on" : ""}" title="${esc(window.AurumDrawings.tools[t].name)}">${TOOL_ICON[t] || ""}</button>`).join("");
+      bar.innerHTML = `<span class="grip" title="Kéo để di chuyển"><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="fav-sep"></span>` + fav.map((t) => `<button type="button" data-t="${t}" class="${d.tool === t ? "on" : ""}" data-tip="${esc(window.AurumDrawings.tools[t].name)}" aria-label="${esc(window.AurumDrawings.tools[t].name)}">${TOOL_ICON[t] || ""}</button>`).join("");
       bar.querySelectorAll("button").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); d.setTool(d.tool === b.dataset.t ? null : b.dataset.t); }));
       // Where it was left, as a share of the window (kept on resize); at first over the top of the chart.
       let pos = null;

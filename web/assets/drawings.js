@@ -760,7 +760,7 @@
     }
 
     /** A text block at (x, y) with the drawing's font, background and border; returns its box. */
-    textBlock(g, d, text, x, y, align = "left", base = "top", maxWidth = 0) {
+    textBlock(g, d, text, x, y, align = "left", base = "top", maxWidth = 0, dry = false) {
       if (!text) return null;
       g.save();
       g.setLineDash([]);
@@ -770,6 +770,7 @@
       const tw = Math.max(...rows.map((r) => g.measureText(r).width)), th = rows.length * lh;
       const bx = align === "center" ? x - tw / 2 - pad : align === "right" ? x - tw - pad * 2 : x;
       const by = base === "middle" ? y - th / 2 - pad : base === "bottom" ? y - th - pad * 2 : y;
+      if (dry) { g.restore(); return { x: bx, y: by, w: tw + pad * 2, h: th + pad * 2 }; }
       if (d.textBg) { g.fillStyle = d.textBgColor; g.fillRect(bx, by, tw + pad * 2, th + pad * 2); }
       if (d.textBorder) { g.strokeStyle = d.textBorderColor; g.lineWidth = 1; g.strokeRect(bx + 0.5, by + 0.5, tw + pad * 2, th + pad * 2); }
       g.fillStyle = d.textColor || d.color; g.textBaseline = "top"; g.textAlign = "left";
@@ -795,7 +796,16 @@
       // Points on the device pixel grid (centred on a pixel for an odd number of pixels): sharp lines.
       const dpr = this.dpr || 1, odd = Math.round(width * dpr) % 2 === 1;
       const px = (v) => (Math.round(v * dpr - (odd ? 0.5 : 0)) + (odd ? 0.5 : 0)) / dpr;
-      const lineTo = (pp) => { g.beginPath(); g.moveTo(px(pp[0][0]), px(pp[0][1])); pp.slice(1).forEach((p) => g.lineTo(px(p[0]), px(p[1]))); g.stroke(); };
+      // A line with text on it is cut where the text sits (TradingView's look): `gap` is the text's box.
+      let gap = null;
+      const lineTo = (pp) => {
+        const path = () => { g.beginPath(); g.moveTo(px(pp[0][0]), px(pp[0][1])); pp.slice(1).forEach((p) => g.lineTo(px(p[0]), px(p[1]))); };
+        if (!gap) { path(); g.stroke(); return; }
+        g.save();
+        g.beginPath(); g.rect(-1e5, -1e5, 2e5, 2e5); g.rect(gap.x - 5, gap.y - 2, gap.w + 10, gap.h + 4); g.clip("evenodd");
+        path(); g.stroke();
+        g.restore();
+      };
       // A label: rounded, a hair of shadow, the text centred in it. (x, y) = its bottom-left as before.
       const tag = (text, x, y, bg, fg = "#fff", align = "left") => {
         g.save(); g.setLineDash([]); g.font = "600 11px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
@@ -817,12 +827,14 @@
         g.closePath(); g.fill(); g.restore();
       };
       // The drawing's own text, placed by its "Văn bản" options.
-      const caption = (l, t, r, b) => {
-        if (!d.text || d.tool === "text") return;
+      const caption = (l, t, r, b, dry = false) => {
+        if (!d.text || d.tool === "text") return null;
         const x = d.textH === "left" ? l + 4 : d.textH === "right" ? r - 4 : (l + r) / 2;
         const y = d.textV === "bottom" ? b + 4 : d.textV === "middle" ? (t + b) / 2 : t - 4;
-        this.textBlock(g, d, d.text, x, y, d.textH === "left" ? "left" : d.textH === "right" ? "right" : "center", d.textV === "bottom" ? "top" : d.textV === "middle" ? "middle" : "bottom", Math.abs(r - l));
+        return this.textBlock(g, d, d.text, x, y, d.textH === "left" ? "left" : d.textH === "right" ? "right" : "center", d.textV === "bottom" ? "top" : d.textV === "middle" ? "middle" : "bottom", Math.abs(r - l), dry);
       };
+      // The text's box before the line is drawn, so the line leaves room for it.
+      const gapFor = (l, t, r, b) => { gap = caption(l, t, r, b, true); };
       const [p0, p1] = pts;
       switch (d.tool) {
         case "trendLine": case "arrow": case "arrowMarker": {
@@ -832,7 +844,9 @@
             if (d.extend === "left" || d.extend === "both") a = [a[0] - dx * k, a[1] - dy * k];
             if (d.extend === "right" || d.extend === "both") b = [b[0] + dx * k, b[1] + dy * k];
           }
+          gapFor(Math.min(p0[0], p1[0]), Math.min(p0[1], p1[1]), Math.max(p0[0], p1[0]), Math.max(p0[1], p1[1]));
           lineTo([a, b]);
+          gap = null;
           if (d.tool !== "trendLine") arrowHead(p0, p1, d.tool === "arrowMarker" ? 14 : 10);
           if (d.mid) { g.strokeStyle = d.midColor; g.setLineDash(DASH[d.midStyle]); const mx = (p0[0] + p1[0]) / 2, my = (p0[1] + p1[1]) / 2; lineTo([[mx - 6, my], [mx + 6, my]]); }
           caption(Math.min(p0[0], p1[0]), Math.min(p0[1], p1[1]), Math.max(p0[0], p1[0]), Math.max(p0[1], p1[1]));
@@ -840,13 +854,15 @@
         }
         case "trendRay": {
           const dx = p1[0] - p0[0], dy = p1[1] - p0[1], k = dx || dy ? 4000 / Math.hypot(dx, dy) : 0;
+          gapFor(Math.min(p0[0], p1[0]), Math.min(p0[1], p1[1]), Math.max(p0[0], p1[0]), Math.max(p0[1], p1[1]));
           lineTo([p0, [p0[0] + dx * k, p0[1] + dy * k]]);
+          gap = null;
           caption(Math.min(p0[0], p1[0]), Math.min(p0[1], p1[1]), Math.max(p0[0], p1[0]), Math.max(p0[1], p1[1]));
           break;
         }
-        case "horizontalLine": lineTo([[0, p0[1]], [w, p0[1]]]); tag(d.pts[0].p.toFixed(dg), w - 4, p0[1] - 1, color, "#fff", "right"); caption(0, p0[1], w, p0[1]); break;
-        case "horizontalRay": lineTo([p0, [w, p0[1]]]); tag(d.pts[0].p.toFixed(dg), w - 4, p0[1] - 1, color, "#fff", "right"); caption(p0[0], p0[1], w, p0[1]); break;
-        case "verticalLine": lineTo([[p0[0], 0], [p0[0], h]]); caption(p0[0], 20, p0[0], 20); break;
+        case "horizontalLine": gapFor(0, p0[1], w, p0[1]); lineTo([[0, p0[1]], [w, p0[1]]]); gap = null; tag(d.pts[0].p.toFixed(dg), w - 4, p0[1] - 1, color, "#fff", "right"); caption(0, p0[1], w, p0[1]); break;
+        case "horizontalRay": gapFor(p0[0], p0[1], w, p0[1]); lineTo([p0, [w, p0[1]]]); gap = null; tag(d.pts[0].p.toFixed(dg), w - 4, p0[1] - 1, color, "#fff", "right"); caption(p0[0], p0[1], w, p0[1]); break;
+        case "verticalLine": gapFor(p0[0], 20, p0[0], 20); lineTo([[p0[0], 0], [p0[0], h]]); gap = null; caption(p0[0], 20, p0[0], 20); break;
         case "rectangle": {
           let l = Math.min(p0[0], p1[0]), r = Math.max(p0[0], p1[0]);
           const t = Math.min(p0[1], p1[1]), b = Math.max(p0[1], p1[1]);

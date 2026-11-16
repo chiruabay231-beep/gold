@@ -1247,12 +1247,25 @@ struct CandleChart: View {
             context.draw(Text(text).font(.system(size: 10, weight: .semibold)).foregroundColor(labelColor ?? color),
                          at: point, anchor: anchor)
         }
+        // A line with text on it is cut where the text sits (TradingView's look).
+        let gap = lineTextGap(of: d, points: points, layout: layout, in: context)
+        func strokeLine(_ path: Path) {
+            guard let gap else {
+                context.stroke(path, with: .color(color), style: stroke)
+                return
+            }
+            var clipped = context
+            var outside = Path(CGRect(x: -100_000, y: -100_000, width: 200_000, height: 200_000))
+            outside.addRect(gap.insetBy(dx: -5, dy: -2))
+            clipped.clip(to: outside, style: FillStyle(eoFill: true))
+            clipped.stroke(path, with: .color(color), style: stroke)
+        }
         switch d.tool {
         case .horizontalLine, .horizontalRay:
             var path = Path()
             path.move(to: CGPoint(x: d.tool == .horizontalRay ? p0.x : 0, y: p0.y))
             path.addLine(to: CGPoint(x: layout.axisX, y: p0.y))
-            context.stroke(path, with: .color(color), style: stroke)
+            strokeLine(path)
             axisLabels.append(AxisLabel(price: d.points[0].price, text: Self.format(d.points[0].price, decimals),
                                         tag: "", color: color, textColor: .white))
         case .verticalLine:
@@ -1273,7 +1286,7 @@ struct CandleChart: View {
             var path = Path()
             path.move(to: p0)
             path.addLine(to: end)
-            context.stroke(path, with: .color(color), style: stroke)
+            strokeLine(path)
         case .rectangle:
             guard points.count > 1 else { break }
             let rect = CGRect(x: min(p0.x, points[1].x), y: min(p0.y, points[1].y),
@@ -1373,7 +1386,7 @@ struct CandleChart: View {
             guard points.count > 1 else { break }
             var path = Path()
             path.addLines(points)
-            context.stroke(path, with: .color(color), style: stroke)
+            strokeLine(path)
             context.stroke(Self.arrowHead(from: points[points.count - 2], to: points[points.count - 1], size: 10 + width * 2),
                            with: .color(color), style: StrokeStyle(lineWidth: width, lineCap: .round))
         case .curve:
@@ -1841,6 +1854,33 @@ struct CandleChart: View {
         }
     }
 
+    /// Where a line's text sits on the line itself (horizontal lines, trend lines, arrows): its point and anchor.
+    private func lineTextSpot(of d: Drawing, points: [CGPoint], layout: Layout) -> (point: CGPoint, anchor: UnitPoint)? {
+        guard !d.text.isEmpty, let p0 = points.first else { return nil }
+        let anchor: UnitPoint = d.textAlign == .left ? .leading : (d.textAlign == .center ? .center : .trailing)
+        switch d.tool {
+        case .horizontalLine, .horizontalRay:
+            let start = d.tool == .horizontalRay ? p0.x : 0, end = layout.axisX
+            let x: CGFloat = d.textAlign == .left ? start + 6 : (d.textAlign == .center ? (start + end) / 2 : end - 6)
+            return (CGPoint(x: x, y: p0.y), anchor)
+        case .trendLine, .trendRay, .arrow:
+            guard let last = points.last, points.count > 1 else { return nil }
+            let t: CGFloat = d.textAlign == .left ? 0 : (d.textAlign == .center ? 0.5 : 1)
+            return (CGPoint(x: p0.x + (last.x - p0.x) * t, y: p0.y + (last.y - p0.y) * t), anchor)
+        default:
+            return nil
+        }
+    }
+
+    /// The box of a line's text, so the line leaves room for it.
+    private func lineTextGap(of d: Drawing, points: [CGPoint], layout: Layout, in context: GraphicsContext) -> CGRect? {
+        guard let spot = lineTextSpot(of: d, points: points, layout: layout) else { return nil }
+        let size = context.resolve(Text(d.text).font(.system(size: 11, weight: .semibold))).measure(in: CGSize(width: 2000, height: 400))
+        let x: CGFloat
+        if spot.anchor == .leading { x = spot.point.x } else if spot.anchor == .center { x = spot.point.x - size.width / 2 } else { x = spot.point.x - size.width }
+        return CGRect(x: x, y: spot.point.y - size.height / 2, width: size.width, height: size.height)
+    }
+
     /// A drawing's text, placed left / centre / right along it (TradingView's text alignment).
     private func drawText(of d: Drawing, points: [CGPoint], in context: inout GraphicsContext, layout: Layout, color: Color) {
         guard let p0 = points.first else { return }
@@ -1852,6 +1892,11 @@ struct CandleChart: View {
             case .center: return (a + b) / 2
             case .right: return b - 4
             }
+        }
+        if let spot = lineTextSpot(of: d, points: points, layout: layout) {
+            // On the line, in the gap left for it.
+            context.draw(text, at: spot.point, anchor: spot.anchor)
+            return
         }
         switch d.tool {
         case .horizontalLine, .horizontalRay:
