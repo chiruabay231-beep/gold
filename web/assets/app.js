@@ -3655,6 +3655,7 @@
         ${allowed ? '<button class="btn btn-ghost wide" id="ictMore">⚙ Cài đặt chi tiết (phiên, màu, FVG, MSS…)</button><button class="btn btn-ghost wide" id="smcMore">⚙ Macro (giờ biến động mạnh)</button><button class="btn btn-ghost wide" id="liqMore">⚙ Vùng thanh khoản (mạnh / vừa)</button><button class="btn btn-ghost wide" id="planMore">⚙ Kế hoạch giao dịch (trend, breakout, vùng H1/H4, tín hiệu)</button>' : ""}
         <h4>Chỉ báo kỹ thuật</h4>
         <div class="list" id="studyList"></div>
+        <button class="btn btn-ghost wide" id="ema200Std">＋ EMA 200 chuẩn (như TradingView / MT5: giá đóng cửa, mượt từ nến đầu)</button>
         <select id="addStudy" class="add-study"><option value="">＋ Thêm chỉ báo…</option>${Object.entries(window.TA ? window.TA.STUDIES : {}).map(([k, d]) => `<option value="${k}">${esc(d.name)}</option>`).join("")}</select>
         <p class="muted small">Giờ theo New York như bản TradingView. Chuột phải (hoặc giữ lâu) trên biểu đồ để mở menu.</p>`, (el) => {
         const sharkB = el.querySelector("#sharkMore");
@@ -3667,6 +3668,18 @@
         if (liqB) liqB.onclick = () => { sheet.close(); this.liqSettingsSheet(); };
         const plan = el.querySelector("#planMore");
         if (plan) plan.onclick = () => { sheet.close(); this.planSettingsSheet(); };
+        const emaStd = el.querySelector("#ema200Std");
+        if (emaStd) emaStd.onclick = () => {
+          // The standard EMA 200: length 200 on the close, no offset; an EMA 200 already there is set to it.
+          let x = this.studies.find((y) => y.type === "ema" && +y.params.length === 200);
+          if (!x) x = this.addStudy("ema");
+          x.params = Object.assign({}, x.params, { length: 200, source: "close" });
+          if (x.colors[0] === window.TA.STUDIES.ema.colors[0]) x.colors[0] = "#2962ff";
+          x.hidden = false; x.dirty = true;
+          this.saveStudies(); this.applyStudies(); listStudies();
+          toast("EMA 200 chuẩn: 200 nến, giá đóng cửa · đang tải thêm nến cũ cho EMA chính xác");
+          if (this.historyCount() > (this.bars || []).length) this.loadCandles();
+        };
         const listStudies = () => {
           const box = el.querySelector("#studyList");
           box.innerHTML = this.studies.length ? this.studies.map((x) => `<div class="study-row" data-id="${x.id}">
@@ -3772,6 +3785,14 @@
       return this.symbol;
     },
 
+    /** Bars to load: 800, or enough for the longest average to settle before the left of the chart
+     *  (5 × its length: an EMA 200 then starts where TradingView's / MT5's is, to the cent). */
+    historyCount() {
+      const longest = Math.max(0, ...(this.studies || []).filter((x) => !x.hidden).map((x) => Math.max(0, ...Object.entries(x.params || {})
+        .filter(([k, v]) => typeof v === "number" && /length|slow|period/i.test(k)).map(([, v]) => v))));
+      return Math.min(3000, Math.max(800, Math.round(longest * 5)));
+    },
+
     exnessPath(count, before) {
       const extra = before ? `&before=${before}` : "";
       return this.owner
@@ -3866,7 +3887,7 @@
             if (token !== this.loadToken) return;
           }
           try {
-            data = await this.call(this.exnessPath(800));
+            data = await this.call(this.exnessPath(this.historyCount()));
             bars = this.toBars(data.candles || []);
             failure = bars.length < 5 ? new Error("MT5 chưa có nến cho mã này") : null;
             // A stretch missing in the middle: MT5 is still fetching it; ask again shortly.
