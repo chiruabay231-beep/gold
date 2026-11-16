@@ -1254,7 +1254,7 @@
   function defaultChartStyle() {
     return { theme: "dark", up: "#14b88a", down: "#f0455a", wickUp: "#14b88a", wickDown: "#f0455a", border: true, borderV: 2, borderUp: "#14b88a", borderDown: "#f0455a",
       customBg: false, bg: "#151c2a", bgType: "theme", bg2: "#2a3550", bgImgOpacity: 35, vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
-      askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3", pop: false, popV: 2 };
+      askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3", pop: false, popV: 2, tfRing: true };
   }
   /* Candles that stand out: a colour too close to the background is pushed away from it (lighter on a dark or
    * grey background, darker on a light one), and a body still near the background gets a dark or light edge. */
@@ -4548,6 +4548,9 @@
         this.focusChart(1);
         if (e.button > 0 || e.target.closest("#selBar, #posPill, #ticket, #drawBar, #favBar, #draftBar, #btChip, .box-bar, #mascots .mascot")) return;
         if (this.mascotSel) { this.mascotSel = null; document.querySelectorAll("#mascots .sel").forEach((x) => x.classList.remove("sel")); }
+        // A tap on a free spot of the chart opens the timeframe ring; not one that closes it or picks / drops a drawing.
+        { const dr = this.drawings, ringWasOpen = this.closeTfRing();
+          this.tapFree = !ringWasOpen && !(dr && (dr.selected || dr.current || dr.tool || dr.pending || dr.multiCount)) && !this.draft && !this.replayPicking; }
         const { x, y } = rel(e);
         down = { x: e.clientX, y: e.clientY, moved: false, menu: false };
         if (x > paneWidth()) return;
@@ -4654,7 +4657,7 @@
             this.lastTap = { t: now, x, y };
             if (prev && now - prev.t < 320 && Math.hypot(x - prev.x, y - prev.y) < 30 && !this.chartDblBusy(e)) { this.lastTap = null; this.togglePairLayout(); return; }
           }
-          this.tapChart(y, x);
+          this.tapChart(y, x, this.tapFree ? e : null);
         }
       });
       window.addEventListener("pointercancel", (e) => {
@@ -4888,8 +4891,9 @@
     },
 
     /** A tap picks a trade by its entry line (the next one when several share a price). */
-    tapChart(y, x) {
+    tapChart(y, x, ev) {
       if (x > this.chart.timeScale().width()) return;
+      const ring = () => { if (ev && !(this.drawings && (this.drawings.selected || this.drawings.current))) this.tfRingSoon(ev.clientX, ev.clientY); };
       // A news dot: that news, its figures and how gold moved.
       const dot = (this.newsDots || []).find((d) => Math.hypot(d.x - x, d.y - y) < 12);
       if (dot) { this.newsSheet(dot.e); return; }
@@ -4898,7 +4902,7 @@
         if (i != null) this.startReplayAt(i);
         return;
       }
-      if (!this.owner || this.replay) return;
+      if (!this.owner || this.replay) { ring(); return; }
       const near = (this.lineCache || []).filter((w) => /^(pos|ord):\d+:entry$/.test(w.key)).filter((w) => {
         const ly = this.series.priceToCoordinate(w.price);
         return ly != null && Math.abs(ly - y) < 12;
@@ -4911,7 +4915,7 @@
         this.selected = null;
       } else if (!$("pendingBox").hidden) {
         this.togglePending(false);
-      }
+      } else ring();
       this.renderSelBar();
       this.syncLines();
     },
@@ -6678,6 +6682,7 @@
           <div class="fr">${k.chk("vGrid")}<span class="grow">Lưới dọc</span>${k.sw("grid")}</div>
           <div class="fr">${k.chk("hGrid")}<span>Lưới ngang</span></div>
           <div class="fr">${k.chk("crosshairMagnet")}<span>Con trỏ bắt vào nến</span></div>
+          <div class="fr">${k.chk("tfRing")}<span>Bấm 1 lần vào chart: hiện vòng chọn khung thời gian</span></div>
           <div class="fr">${k.chk("seconds")}<span>Hiện giây trên trục thời gian</span></div>
           <div class="fp-sec">Giá</div>
           <div class="fr">${k.chk("askLine")}<span class="grow">Đường Bid / Ask (spread)</span>${k.sw("bidColor")}${k.sw("askColor")}</div>`;
@@ -8061,6 +8066,61 @@
     },
 
     /** A double-click that belongs to something else: a button or panel over the chart, a drawing being made. */
+    /* ----- timeframe ring (MT5's): a tap on the chart, then a tap on a timeframe ----- */
+
+    /** Shown a moment after the tap, so a double click (2 charts) does not open it. */
+    tfRingSoon(cx, cy) {
+      if ((this.chartStyle || {}).tfRing === false) return;
+      clearTimeout(this.tfRingTimer);
+      this.tfRingTimer = setTimeout(() => this.openTfRing(cx, cy), 280);
+    },
+
+    openTfRing(cx, cy) {
+      let el = $("tfRing");
+      if (!el) { el = document.createElement("div"); el.id = "tfRing"; el.className = "tf-ring"; document.body.appendChild(el); }
+      const tfs = [["1m", "M1"], ["5m", "M5"], ["15m", "M15"], ["30m", "M30"], ["1h", "H1"], ["4h", "H4"], ["1d", "D1"]];
+      const R = 68, size = 180, c = size / 2;
+      const at = (deg) => { const r = (deg - 90) * Math.PI / 180; return [c + R * Math.cos(r), c + R * Math.sin(r)]; };
+      // Timeframes over the top from lower left to lower right; the tools at the bottom.
+      const items = tfs.map(([tf, name], i) => { const [x, y] = at(-128 + (256 / (tfs.length - 1)) * i);
+        return `<button type="button" data-tf="${tf}" class="${tf === this.interval ? "on" : ""}" style="left:${x}px;top:${y}px">${name}</button>`; });
+      const tools = [["ind", "ƒ", "Chỉ báo"], ["draw", '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 20 18 6M15 4l5 5"/></svg>', "Công cụ vẽ: đường xu hướng"], ["set", '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 4v16M12 4v16M19 4v16"/><circle cx="5" cy="9" r="2" fill="currentColor"/><circle cx="12" cy="15" r="2" fill="currentColor"/><circle cx="19" cy="8" r="2" fill="currentColor"/></svg>', "Cài đặt biểu đồ"]]
+        .map(([k, icon, title], i) => { const [x, y] = at(152 + i * 28); return `<button type="button" data-k="${k}" class="tool" title="${title}" style="left:${x}px;top:${y}px">${icon}</button>`; });
+      el.innerHTML = items.join("") + tools.join("");
+      const left = Math.max(6, Math.min(window.innerWidth - size - 6, cx - c)), top = Math.max(6, Math.min(window.innerHeight - size - 6, cy - c));
+      el.style.left = left + "px"; el.style.top = top + "px";
+      el.hidden = false;
+      requestAnimationFrame(() => el.classList.add("open"));
+      el.onpointerdown = (e) => e.stopPropagation();
+      el.onclick = (e) => {
+        const b = e.target.closest("button");
+        this.closeTfRing();
+        if (!b) return;
+        if (b.dataset.tf) {
+          if (b.dataset.tf === this.interval) return;
+          if (this.replay && isSecTF(b.dataset.tf)) return;
+          this.interval = b.dataset.tf; store.set("aurum.tf", this.interval); this.loadCandles();
+        } else if (b.dataset.k === "ind") this.indicatorSheet();
+        else if (b.dataset.k === "set") this.chartStyleSheet();
+        else if (b.dataset.k === "draw" && this.drawings) { this.drawings.setTool("trendLine"); if (this.renderToolRail) this.renderToolRail(); }
+      };
+      if (!this.tfRingKeys) {
+        this.tfRingKeys = true;
+        document.addEventListener("keydown", (e) => { if (e.key === "Escape") this.closeTfRing(); });
+        document.addEventListener("pointerdown", (e) => { if (!e.target.closest("#tfRing") && !e.target.closest("#chartWrap")) this.closeTfRing(); }, true);
+        window.addEventListener("wheel", () => this.closeTfRing(), { passive: true });
+      }
+    },
+
+    /** Closes the ring; true when it was open. */
+    closeTfRing() {
+      clearTimeout(this.tfRingTimer);
+      const el = $("tfRing");
+      if (!el || el.hidden) return false;
+      el.hidden = true; el.classList.remove("open");
+      return true;
+    },
+
     chartDblBusy(e) {
       if (e && e.target && e.target.closest && e.target.closest("#ticket, #ticket2, #selBar, #posPill, #drawBar, #favBar, #draftBar, #btChip, .mascot, .c2-head, .quick-trade, button, input, select")) return true;
       const dr = this.drawings;
@@ -8069,6 +8129,7 @@
 
     /** One chart ⇄ two markets (gold / silver) with the SMT on; the 2-chart layout last used comes back. */
     togglePairLayout() {
+      this.closeTfRing();
       if (this.pair()) {
         store.set("aurum.pairMode", this.layout);
         this.setLayout("1");
