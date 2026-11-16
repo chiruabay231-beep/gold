@@ -8218,8 +8218,10 @@
     setupSplits() {
       const box = $("charts"), mode = this.layout;
       box.querySelectorAll(".split").forEach((e) => e.remove());
-      ["--c1", "--r1", "--cols", "--rows"].forEach((k) => box.style.removeProperty(k));
-      if (!mode || mode[0] !== "m") return;
+      ["--c1", "--r1", "--c2", "--r2", "--cols", "--rows"].forEach((k) => box.style.removeProperty(k));
+      // Every layout with more than one chart: 2 symbols side by side (a column divider), one above the
+      // other (a row divider), or 2 / 3 / 4 timeframes.
+      if (!mode || mode === "1") return;
       const sp = this.splitOf(mode);
       const mk = (dir) => {
         const e = document.createElement("div");
@@ -8229,10 +8231,12 @@
         box.appendChild(e);
         return e;
       };
-      const col = mk("col"), row = mode === "m2" ? null : mk("row");
+      const col = mode === "v" ? null : mk("col"), row = mode === "m2" || mode === "h" ? null : mk("row");
       const apply = () => {
         box.style.setProperty("--c1", sp.c);
         box.style.setProperty("--r1", sp.r);
+        box.style.setProperty("--c2", 1 - sp.c);
+        box.style.setProperty("--r2", 1 - sp.r);
         box.style.setProperty("--cols", `minmax(0, ${sp.c}fr) minmax(0, ${1 - sp.c}fr)`);
         box.style.setProperty("--rows", `minmax(0, ${sp.r}fr) minmax(0, ${1 - sp.r}fr)`);
         this.placeSplits();
@@ -8258,7 +8262,7 @@
         });
         el.addEventListener("dblclick", () => { sp[key] = 0.5; apply(); save(); });
       };
-      drag(col, "c");
+      if (col) drag(col, "c");
       if (row) drag(row, "r");
       apply();
       if (!this.splitWatch && window.ResizeObserver) {
@@ -8270,7 +8274,7 @@
     /** The dividers over the gaps between the charts (none on a phone, where the charts are stacked). */
     placeSplits() {
       const box = $("charts"), mode = this.layout;
-      if (!mode || mode[0] !== "m") return;
+      if (!mode || mode === "1") return;
       const w = box.clientWidth, h = box.clientHeight, cs = getComputedStyle(box);
       const gx = parseFloat(cs.columnGap) || 6, gy = parseFloat(cs.rowGap) || 6;
       const sp = this.splitOf(mode);
