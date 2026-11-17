@@ -3152,14 +3152,14 @@
       const el = $("tickBotPanel");
       if (!el) return;
       let st = null, problem = "";
-      try { st = await this.call("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.4 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
+      try { st = await this.call("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.5 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
       this.tickStatus = st;
       if (first || !el.querySelector("#tbForm") || !el.contains(document.activeElement)) this.renderTickBot(st, problem);
       else this.renderTickBotLive(st);
     },
 
     tickSettings() {
-      const c = Object.assign({ symbol: "", interval: "1m", direction: "both", lots: 0.01, step: 0.3, closeProfit: 0.3, maxPositions: 6, basketStop: 30, exitAtClose: true, minLeftPct: 15, maxSpread: 0.5 },
+      const c = Object.assign({ symbol: "", interval: "1m", direction: "both", lots: 0.01, step: 0.3, closeProfit: 0.3, maxPositions: 6, basketStop: 30, exitAtClose: true, minLeftPct: 15, maxSpread: 0.5, noSpread: false },
         (this.tickStatus && this.tickStatus.config) || {});
       const v = (id) => ($(id) ? $(id).value : null);
       if ($("tbSymbol")) {
@@ -3167,6 +3167,7 @@
           symbol: v("tbSymbol").trim(), interval: v("tbInterval"), direction: v("tbDirection"), lots: num(v("tbLots")) || 0.01,
           step: num(v("tbStep")) || 0.3, closeProfit: num(v("tbClose")) || 0.3, maxPositions: Math.max(1, Math.round(num(v("tbMax")) || 6)),
           basketStop: num(v("tbBasket")) ?? 30, exitAtClose: $("tbExit").checked, minLeftPct: num(v("tbLeft")) ?? 15, maxSpread: num(v("tbSpread")) ?? 0.5,
+          noSpread: $("tbNoSpread").checked,
         });
       }
       c.symbol = c.symbol || this.symbol || "XAUUSDm";
@@ -3203,6 +3204,7 @@
             <label>Không vào khi nến còn dưới (%)<input id="tbLeft" inputmode="decimal" value="${c.minLeftPct}"></label>
           </div>
           <label class="check"><input type="checkbox" id="tbExit" ${c.exitAtClose ? "checked" : ""}> Đóng hết lệnh khi hết cây nến</label>
+          <label class="check"><input type="checkbox" id="tbNoSpread" ${c.noSpread ? "checked" : ""}> Chạy trên giá <b>không có spread</b> (MUA và BÁN cùng giá Bid) — chỉ áp dụng cho 🎮 Chạy thử và 🧪 Backtest; tài khoản MT5 thật luôn có spread</label>
           <p class="muted small">Ví dụ vàng: bước 0.3 · chốt lời 0.3 = giá chạy lên 0.3$ thì MUA thêm 1 lệnh, xuống 0.3$ thì BÁN thêm 1 lệnh; lệnh nào lời 0.3$ (0.01 lot ≈ 0.3$) thì đóng. Cần tài khoản MT5 dạng <b>hedging</b> (mặc định của Exness) để giữ MUA và BÁN cùng lúc.</p>
           <div class="row-btns">
             ${!st ? "" : c.running ? '<button class="btn btn-ghost" id="tbStop">■ Tắt bot</button><button class="btn btn-ghost" id="tbSave">Lưu cài đặt</button>' : `<button class="btn btn-gold" id="tbStart">▶ Bật bot nến tick ${c.paper ? "(ẢO · giá Exness)" : "trên MT5"}</button>`}
@@ -3241,7 +3243,7 @@
           <div class="stat"><span>Đang mở</span><b>${(st.positions || []).length}</b></div>
         </div>
         ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
-        ${st.paper ? `<p class="muted small">Tài khoản ẢO: số dư ${money(st.paper.balance)} · lệnh và lãi/lỗ tính theo giá Exness thật, không đặt lệnh lên MT5.</p>` : ""}
+        ${st.paper ? `<p class="muted small">Tài khoản ẢO: số dư ${money(st.paper.balance)} · lệnh và lãi/lỗ tính theo giá Exness thật${(st.config || {}).noSpread ? " (không tính spread)" : ""}, không đặt lệnh lên MT5.</p>` : ""}
         <div class="list">${(st.positions || []).map((o) => `<div class="sig"><div class="bar" style="background:${o.side === "long" ? "#2b6bf3" : "var(--down)"}"></div>
           <div><div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${o.side === "long" ? "buy" : "sell"}">${sideName(o.side)} ${o.lots}</span><span class="muted small">@ ${fmt(o.entry, d(o.symbol))}${o.paper ? " · ảo" : ""}</span></div>
           <div class="lv">SL ${o.stop ? fmt(o.stop, d(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, d(o.symbol)) : "–"}</div></div>
@@ -3315,6 +3317,7 @@
       // Spread: as typed, or the live one when the backtest is on the chart's symbol.
       let spread = num($("btSpread").value);
       if (spread == null) spread = c.symbol === this.symbol && this.bid != null && this.ask != null ? Math.max(0, this.ask - this.bid) : 0;
+      if (bot === "tick" && c.noSpread) spread = 0;
       const sec = TF_SECONDS[c.interval] || 60, from = Date.now() / 1000 - days * 86400;
       const btn = $("btRun"), info = $("btInfo");
       btn.disabled = true;

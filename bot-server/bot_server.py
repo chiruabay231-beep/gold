@@ -23,6 +23,7 @@ import secrets
 import subprocess
 import sys
 import threading
+import types
 import time
 import traceback
 import urllib.parse
@@ -30,7 +31,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "4.4"
+VERSION = "4.5"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2945,6 +2946,8 @@ TICK_MAGIC = 20265
 DEFAULT_TICKBOT = {"running": False, "symbol": "", "interval": "1m", "direction": "both", "lots": 0.01,
                    "step": 0.3, "closeProfit": 0.3, "maxPositions": 6, "basketStop": 30.0,
                    "exitAtClose": True, "minLeftPct": 15, "maxSpread": 0.5,
+                   # Virtual account only: fills at the bid both ways (as if there were no spread).
+                   "noSpread": False,
                    # True: virtual orders on the live Exness price (no order sent to MT5), False: real orders.
                    "paper": True}
 TICK_PAPER_PATH = os.path.join(HERE, "tickbot_paper.json")
@@ -2988,7 +2991,7 @@ class TickBot:
         c = self.cfg
         for key, cast in (("symbol", str), ("interval", str), ("direction", str), ("lots", float), ("step", float),
                           ("closeProfit", float), ("maxPositions", int), ("basketStop", float), ("exitAtClose", bool),
-                          ("minLeftPct", float), ("maxSpread", float), ("paper", bool)):
+                          ("minLeftPct", float), ("maxSpread", float), ("paper", bool), ("noSpread", bool)):
             if key in body:
                 c[key] = cast(body[key])
         if c["interval"] not in SECONDS_OF:
@@ -3111,6 +3114,10 @@ class TickBot:
         rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, 1)
         if tick is None or rates is None or not len(rates):
             return
+        no_spread = c["paper"] and c.get("noSpread")
+        if no_spread:
+            # The virtual account without the spread: buys and sells both at the bid.
+            tick = types.SimpleNamespace(bid=tick.bid, ask=tick.bid, time=tick.time)
         bar_time, bar_open = float(rates[-1]["time"]), float(rates[-1]["open"])
         sec = SECONDS_OF[c["interval"]]
         units = self._units(info, symbol)
@@ -3142,7 +3149,7 @@ class TickBot:
         left = bar_time + sec - float(tick.time)
         if left < sec * c["minLeftPct"] / 100:
             return
-        if c["maxSpread"] > 0 and tick.ask - tick.bid > c["maxSpread"]:
+        if not no_spread and c["maxSpread"] > 0 and tick.ask - tick.bid > c["maxSpread"]:
             return
         # A run of `step` from the last entry: in that way.
         move = tick.bid - self.ref
@@ -3163,7 +3170,7 @@ class TickBot:
                     tick = mt5.symbol_info_tick(p["symbol"])
                     info = mt5.symbol_info(p["symbol"])
                     long = p["side"] == "long"
-                    px = (tick.bid if long else tick.ask) if tick else p["entry"]
+                    px = (tick.bid if long or c.get("noSpread") else tick.ask) if tick else p["entry"]
                     positions.append(dict(p, profit=round((px - p["entry"]) * (1 if long else -1) * p["lots"] * self._units(info, p["symbol"]), 2)))
         except Exception as e:
             c["statusError"] = str(e)
