@@ -1076,6 +1076,72 @@
     return { placed, trades };
   }
 
+  /** The "Nhồi lệnh" grid bot on ticks, as the server's GridBot: a basket of buys and / or of sells; each time
+   *  price goes `gridStep` further against a basket's worst entry it adds the last lot × `multiplier` (at most
+   *  `maxLevels` positions, `maxLot` each); a basket `tpMoney` up is closed whole and starts again; all out
+   *  when the bot is `basketStop` down, then no entries for `cooldownMin` minutes. `value(side, entry, exit, lots)`
+   *  is the money of a position (commission off). Also returns the worst floating loss it went through. */
+  function gridLot(c, n) {
+    // Half up to the 0.01 lot, as the server's grid_lot.
+    const lots = Math.floor(c.lots * Math.pow(c.multiplier || 1, n) * 100 + 0.5 + 1e-9) / 100;
+    return Math.min(+c.maxLot || 99, Math.max(0.01, lots));
+  }
+
+  function gridBotOnTicks(ticks, c, value) {
+    const trades = [];
+    let placed = 0, book = [], pauseUntil = 0, cycles = 0, stops = 0, maxFloat = 0, maxLevel = 0, maxLots = 0;
+    const pv = (p, bid, ask) => value(p.side, p.entry, p.side === "long" ? bid : ask, p.lots);
+    const out = (p, bid, ask, reason, t) => trades.push(Object.assign({}, p, { exit: p.side === "long" ? bid : ask, reason, closeTime: t, profit: pv(p, bid, ask) }));
+    for (const [ms, bid0, ask0] of ticks) {
+      const t = ms / 1000, bid = bid0, ask = c.noSpread ? bid0 : ask0;
+      if (book.length) {
+        const total = book.reduce((a, p) => a + pv(p, bid, ask), 0);
+        if (total < maxFloat) maxFloat = total;
+        if (c.basketStop > 0 && total <= -c.basketStop) {
+          book.forEach((p) => out(p, bid, ask, "stop", t)); book = []; stops++; pauseUntil = t + (c.cooldownMin || 0) * 60; continue;
+        }
+        let closed = false;
+        for (const side of ["long", "short"]) {
+          const ps = book.filter((p) => p.side === side);
+          if (ps.length && ps.reduce((a, p) => a + pv(p, bid, ask), 0) >= c.tpMoney - 1e-9) {
+            ps.forEach((p) => out(p, bid, ask, "basket", t)); book = book.filter((p) => p.side !== side); cycles++; closed = true;
+          }
+        }
+        if (closed) continue;
+      }
+      if (t < pauseUntil) continue;
+      if (!c.noSpread && c.maxSpread > 0 && ask - bid > c.maxSpread) continue;
+      for (const side of ["long", "short"]) {
+        if (c.direction !== "both" && c.direction !== side) continue;
+        const long = side === "long", ps = book.filter((p) => p.side === side), price = long ? ask : bid;
+        let add = !ps.length;
+        if (ps.length && ps.length < c.maxLevels) {
+          const worst = long ? Math.min(...ps.map((p) => p.entry)) : Math.max(...ps.map((p) => p.entry));
+          add = (long ? worst - price : price - worst) >= c.gridStep - 1e-9;
+        }
+        if (!add) continue;
+        placed++;
+        book.push({ side, entry: price, lots: gridLot(c, ps.length), layer: ps.length + 1, stop: null, target: null, openTime: t });
+        maxLevel = Math.max(maxLevel, ps.length + 1);
+      }
+      const lots = book.reduce((a, p) => a + p.lots, 0);
+      if (lots > maxLots) maxLots = lots;
+    }
+    if (book.length && ticks.length) { const [ms, bid, ask] = ticks[ticks.length - 1]; book.forEach((p) => out(p, bid, c.noSpread ? bid : ask, "end", ms / 1000)); }
+    return { placed, trades, grid: { cycles, stops, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
+  }
+
+  /** Bars as a path of prices for the grid bot when no ticks are loaded: open → low → high → close on a
+   *  rising bar, open → high → low → close on a falling one, at the given spread. */
+  function barsAsTicks(bars, spread) {
+    const out = [];
+    bars.forEach((b) => {
+      const path = b.close >= b.open ? [b.open, b.low, b.high, b.close] : [b.open, b.high, b.low, b.close];
+      path.forEach((p, i) => out.push([(b.time + i * 15) * 1000, p, p + spread]));
+    });
+    return out;
+  }
+
   function stopBotBacktest(bars, c, value, spread = 0) {
     const sp = Math.max(+spread || 0, 0);
     const off = Math.max(+c.offset || 0, 0), rr = +c.rr || 0, dir = c.direction || "both";
@@ -2576,7 +2642,7 @@
       if (t === "bot") this.loadBot(first);
       if (t === "autobot") {
         this.applyBotHub();
-        Promise.allSettled([this.loadAutoBot(first), this.loadStopBot(first), this.loadSRBot(first), this.loadTickBot(first)]).then(() => this.applyBotHub());
+        Promise.allSettled([this.loadAutoBot(first), this.loadStopBot(first), this.loadSRBot(first), this.loadTickBot(first), this.loadGridBot(first)]).then(() => this.applyBotHub());
       }
     },
 
@@ -3195,7 +3261,7 @@
     /* ----- the Bot box: one bot at a time, and how it runs ----- */
 
     applyBotHub() {
-      const BOTS = [["strategy", "📈 Chiến lược (ICT / mẫu)"], ["stop", "🎯 Stop theo nến"], ["sr", "🧱 Cản & Hỗ trợ"], ["tick", "⚡ Nến tick"]];
+      const BOTS = [["strategy", "📈 Chiến lược (ICT / mẫu)"], ["stop", "🎯 Stop theo nến"], ["sr", "🧱 Cản & Hỗ trợ"], ["tick", "⚡ Nến tick"], ["grid", "🕸️ Nhồi lệnh (grid)"]];
       const MODES = [["backtest", "🧪 Backtest", "chạy trên nến đã qua"], ["demo", "🎮 Chạy thử", "tiền ảo, không đặt lệnh thật"], ["mt5", "💹 Tài khoản MT5", "Exness demo / thật"]];
       let bot = store.get("aurum.hubBot") || "strategy", mode = store.get("aurum.hubMode") || "demo";
       if (!BOTS.some(([k]) => k === bot)) bot = "strategy";
@@ -3225,11 +3291,12 @@
       }
       // The tick bot's start button says where it will trade (virtual or MT5).
       if (bot === "tick" && this.tickStatus && $("tbForm") && !(this.tickStatus.config || {}).running && !$("tickBotPanel").contains(document.activeElement)) this.renderTickBot(this.tickStatus, "");
+      if (bot === "grid" && this.gridStatus && $("gbForm") && !(this.gridStatus.config || {}).running && !$("gridBotPanel").contains(document.activeElement)) this.renderGridBot(this.gridStatus, "");
       // The backtest box tests the bot picked here.
       const btBot = $("btBot");
-      if (btBot && (bot === "stop" || bot === "sr" || bot === "tick")) { btBot.value = bot; btBot.closest("label").hidden = true; }
+      if (btBot && (bot === "stop" || bot === "sr" || bot === "tick" || bot === "grid")) { btBot.value = bot; btBot.closest("label").hidden = true; }
       if ($("btOptWrap")) $("btOptWrap").hidden = bot !== "tick";
-      if ($("btSrcWrap")) $("btSrcWrap").hidden = bot !== "tick";
+      if ($("btSrcWrap")) $("btSrcWrap").hidden = bot !== "tick" && bot !== "grid";
       const notes = {
         "strategy:backtest": "Backtest chiến lược (ICT, mẫu, tự viết) chạy trong app iPhone: Backtest → chọn chiến lược. Trên web, chọn bot 🎯 Stop theo nến hoặc 🧱 Cản & Hỗ trợ để backtest.",
         "strategy:demo": "Chạy thử: bot chạy trên máy chủ với tài khoản ảo (số dư đặt lại được), không đặt lệnh lên MT5.",
@@ -3238,8 +3305,11 @@
         "sr:demo": "Bot Cản & Hỗ trợ đặt lệnh trực tiếp trên MT5 nên không có tài khoản ảo: để chạy thử, đăng nhập tài khoản DEMO Exness rồi bật bot dưới đây (hoặc chạy 🧪 Backtest).",
         "tick:backtest": "Backtest trên nến Exness đã qua với đúng cài đặt của bot: đường đi giá trong mỗi cây nến lấy từ nến 1 phút (khung 1m: mở → thấp → cao → đóng với nến tăng, ngược lại với nến giảm — chỉ là ước lượng, giá thật còn lên xuống nhiều hơn trong nến). Mua khớp giá Ask, bán ở Bid.",
         "tick:demo": "Chạy thử: bot chạy trên máy chủ theo giá Exness thật từng tick, lệnh và số dư là ẢO (không đặt lệnh lên MT5, kể cả khi đang đăng nhập tài khoản thật).",
+        "grid:backtest": "Backtest bot nhồi lệnh trên tick thật Exness (tối đa 2 ngày) hoặc trên nến 1 phút (ước lượng). Xem kỹ ô 'Âm sâu nhất khi đang gồng': đó là số tiền tài khoản phải chịu được.",
+        "grid:demo": "Chạy thử: bot nhồi lệnh chạy trên máy chủ theo giá Exness thật từng tick, lệnh và số dư là ẢO (không đặt lệnh lên MT5).",
+        "grid:mt5": "Bot nhồi lệnh đặt lệnh THẬT trên tài khoản MT5 đang đăng nhập (bắt buộc có Cắt lỗ chung). Nên chạy trên tài khoản DEMO Exness trước.",
       };
-      const real = t.login && t.mode === "real" && mode !== "backtest" && !(mode === "demo" && (bot === "strategy" || bot === "tick"));
+      const real = t.login && t.mode === "real" && mode !== "backtest" && !(mode === "demo" && (bot === "strategy" || bot === "tick" || bot === "grid"));
       $("hubNote").innerHTML = (notes[key] ? esc(notes[key]) : "") + (real ? `<div class="warn">⚠️ Đang đăng nhập TÀI KHOẢN THẬT: bot sẽ đặt lệnh bằng tiền thật.</div>` : "");
     },
 
@@ -3250,9 +3320,10 @@
       const bot = store.get("aurum.hubBot") || "strategy";
       const norm = (h) => ({ side: h.side, spreadCost: h.spreadCost, entry: h.entry ?? h.entryPrice ?? null, exit: h.exit ?? h.exitPrice ?? null,
         openTime: h.openTime ?? h.entryTime ?? null, closeTime: h.closeTime ?? h.exitTime ?? null, profit: +h.profit || 0, lots: h.lots, reason: h.reason });
-      const pick = (st, name) => st && st.config ? { name, running: !!st.config.running, paper: !!st.config.paper, symbol: st.config.symbol, interval: st.config.interval,
+      const pick = (st, name) => st && st.config ? { name, running: !!st.config.running, paper: !!st.config.paper, symbol: st.config.symbol, interval: st.config.interval || "1m",
         positions: (st.positions || []).map((p) => ({ side: p.side, entry: p.entry ?? p.entryPrice, profit: +p.profit || 0 })), history: (st.history || []).map(norm), stats: st.stats } : null;
       if (bot === "tick") return pick(this.tickStatus, "⚡ Nến tick");
+      if (bot === "grid") return pick(this.gridStatus, "🕸️ Nhồi lệnh");
       if (bot === "sr") return pick(this.srStatus, "🧱 Cản & Hỗ trợ");
       if (bot === "stop") return pick(this.stopStatus, "🎯 Stop theo nến");
       const a = this.autoFull;
@@ -3298,6 +3369,7 @@
     botStatusFor() {
       const bot = store.get("aurum.hubBot") || "strategy";
       if (bot === "tick") return this.tickStatus || {};
+      if (bot === "grid") return this.gridStatus || {};
       if (bot === "sr") return this.srStatus || {};
       if (bot === "stop") return this.stopStatus || {};
       const a = this.autoFull || {}, st = a.st || {}, acc = st.account || {};
@@ -3504,8 +3576,8 @@
       this.renderTickBotLive(st);
     },
 
-    renderTickBotLive(st) {
-      const live = $("tbLive");
+    renderTickBotLive(st, id = "tbLive") {
+      const live = $(id);
       if (!live || !st) { if (live) live.innerHTML = ""; return; }
       const d = (sym) => this.digitsFor(sym), s = st.stats || {};
       live.innerHTML = `<div class="stats">
@@ -3547,10 +3619,156 @@
     watchTickBot() {
       clearInterval(this.tickWatch);
       this.tickWatch = setInterval(async () => {
-        const shown = this.tab === "autobot" && store.get("aurum.hubBot") === "tick" && !document.hidden;
-        if (!shown || !(this.tickStatus && this.tickStatus.config && this.tickStatus.config.running)) return;
-        try { const st = await this.botCall("/tickbot"); this.tickStatus = st; this.renderTickBotLive(st); } catch { /* next time */ }
+        const bot = store.get("aurum.hubBot");
+        if (this.tab !== "autobot" || document.hidden || (bot !== "tick" && bot !== "grid")) return;
+        const st0 = bot === "grid" ? this.gridStatus : this.tickStatus;
+        if (!(st0 && st0.config && st0.config.running)) return;
+        try {
+          const st = await this.botCall(bot === "grid" ? "/gridbot" : "/tickbot");
+          if (bot === "grid") { this.gridStatus = st; this.renderGridBotLive(st); } else { this.tickStatus = st; this.renderTickBotLive(st); }
+        } catch { /* next time */ }
       }, 1500);
+    },
+
+    /* ----- "Nhồi lệnh" grid bot on the server: adds to a losing basket, closes it on a small profit ----- */
+
+    async loadGridBot(first) {
+      const el = $("gridBotPanel");
+      if (!el) return;
+      let st = null, problem = "";
+      try { st = await this.botCall("/gridbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 5.4 (tab Máy chủ → Cập nhật) để chạy bot nhồi lệnh. Backtest vẫn chạy được ngay." : plain(e.message); }
+      this.gridStatus = st;
+      if (!this.tickWatch) this.watchTickBot();
+      if (first || !el.querySelector("#gbForm") || !el.contains(document.activeElement)) this.renderGridBot(st, problem);
+      else this.renderGridBotLive(st);
+    },
+
+    gridSettings() {
+      const c = Object.assign({ symbol: "", direction: "both", lots: 0.01, gridStep: 2, multiplier: 1.5, maxLevels: 6, maxLot: 0.5, tpMoney: 1,
+        basketStop: 60, cooldownMin: 60, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
+      const v = (id) => ($(id) ? $(id).value : null);
+      if ($("gbSymbol")) {
+        Object.assign(c, {
+          symbol: v("gbSymbol").trim(), direction: v("gbDirection"), lots: num(v("gbLots")) || 0.01, gridStep: num(v("gbStep")) || 2,
+          multiplier: Math.max(1, Math.min(3, num(v("gbMult")) || 1)), maxLevels: Math.max(1, Math.min(30, Math.round(num(v("gbLevels")) || 6))),
+          maxLot: num(v("gbMaxLot")) || 0.5, tpMoney: num(v("gbTp")) || 1, basketStop: num(v("gbStop")) ?? 60, cooldownMin: num(v("gbCool")) ?? 60,
+          maxSpread: num(v("gbSpread")) ?? 0.5, noSpread: $("gbNoSpread").checked,
+          simSpread: $("gbAcct").value === "real" ? -1 : (num(v("gbSimSpread")) ?? 0.1), commission: $("gbAcct").value === "real" ? 0 : (num(v("gbComm")) || 0),
+        });
+      }
+      c.symbol = c.symbol || this.symbol || "XAUUSDm";
+      c.maxLot = Math.max(c.lots, c.maxLot);
+      c.interval = "1m"; // the backtest's bars and the bot chart
+      c.paper = c.running ? c.paper !== false : (store.get("aurum.hubMode") || "demo") !== "mt5";
+      return c;
+    },
+
+    /** What the grid risks: each layer's lot, the lots at full depth, and the floating loss when price has
+     *  gone the whole grid against one basket. */
+    gridRisk(c) {
+      const lots = Array.from({ length: c.maxLevels }, (_, i) => gridLot(c, i));
+      const depth = c.gridStep * c.maxLevels, px = this.symbol === c.symbol && this.bid ? this.bid : 2000;
+      const loss = lots.reduce((a, l, i) => a + (this.valueAt(c.symbol, l, "long", px, px - (depth - i * c.gridStep)) || 0), 0);
+      return { lots, total: Math.round(lots.reduce((a, x) => a + x, 0) * 100) / 100, depth, loss };
+    },
+
+    renderGridBot(st, problem) {
+      const el = $("gridBotPanel");
+      const c = this.gridSettings();
+      const opt = (list, v) => list.map(([k, n]) => `<option value="${k}" ${String(k) === String(v) ? "selected" : ""}>${n}</option>`).join("");
+      const runPaper = st && st.config && st.config.paper;
+      el.innerHTML = `<div class="panel-head"><h3>🕸️ Bot nhồi lệnh (grid / gấp lot)</h3>${st ? `<span class="badge ${c.running ? "on" : "off"}">${c.running ? (runPaper ? "Đang chạy ẢO" : "Đang chạy trên MT5") : "Đang tắt"}</span>` : ""}</div>
+        <p class="muted small">Kiểu bot "nhồi lệnh, chốt lời nhỏ": mở 1 lệnh MUA và 1 lệnh BÁN. Bên nào giá chạy <b>ngược</b> thêm một <b>khoảng nhồi</b> thì vào thêm lệnh bên đó với lot × <b>hệ số gấp</b> (1 = không gấp). Khi cả rổ bên đó dương đủ <b>mức chốt rổ</b> thì đóng hết rổ và mở lại từ đầu.</p>
+        <p class="warn small">⚠️ Bot dạng này thắng đều phần lớn thời gian vì giá thường hồi lại, nhưng một đợt chạy một mạch không hồi (tin, xu hướng mạnh) sẽ lấy lại toàn bộ lãi hoặc cháy tài khoản. Luôn đặt <b>Cắt lỗ chung</b>, chạy 🧪 Backtest và 🎮 Chạy thử trước.</p>
+        ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
+        <div id="gbForm">
+          <div class="fields three">
+            <label>Mã<input id="gbSymbol" value="${esc(c.symbol)}"></label>
+            <label>Chiều<select id="gbDirection">${opt([["both", "Cả rổ MUA và rổ BÁN"], ["long", "Chỉ rổ MUA"], ["short", "Chỉ rổ BÁN"]], c.direction)}</select></label>
+            <label>Lot lệnh đầu<input id="gbLots" inputmode="decimal" value="${c.lots}"></label>
+          </div>
+          <div class="fields three">
+            <label>Khoảng nhồi (giá chạy ngược)<input id="gbStep" inputmode="decimal" value="${c.gridStep}"></label>
+            <label>Hệ số gấp lot (1 – 3)<input id="gbMult" inputmode="decimal" value="${c.multiplier}"></label>
+            <label>Tối đa lớp mỗi rổ<input id="gbLevels" inputmode="numeric" value="${c.maxLevels}"></label>
+          </div>
+          <div class="fields three">
+            <label>Lot tối đa mỗi lệnh<input id="gbMaxLot" inputmode="decimal" value="${c.maxLot}"></label>
+            <label>Chốt rổ khi lời ($)<input id="gbTp" inputmode="decimal" value="${c.tpMoney}"></label>
+            <label>Cắt lỗ chung ($, 0 = tắt — chỉ ảo)<input id="gbStop" inputmode="decimal" value="${c.basketStop}"></label>
+          </div>
+          <div class="fields three">
+            <label>Nghỉ sau cắt lỗ (phút)<input id="gbCool" inputmode="decimal" value="${c.cooldownMin}"></label>
+            <label>Spread tối đa (0 = bỏ qua)<input id="gbSpread" inputmode="decimal" value="${c.maxSpread}"></label>
+            <label>&nbsp;<button class="btn btn-ghost" id="gbPreset" type="button">⚙ Cài giống video (0.01 · nhồi 2$ · ×1.5 · chốt 1$)</button></label>
+          </div>
+          <div class="fields three">
+            <label>Tài khoản ảo giả lập loại<select id="gbAcct">${Object.entries(ACCOUNT_SIMS).map(([k, a]) => `<option value="${k}" ${(c.simSpread == null || c.simSpread < 0) ? (k === "real" ? "selected" : "") : (k === "custom" ? "selected" : "")}>${a.name}</option>`).join("")}</select></label>
+            <label>Spread giả lập (giá)<input id="gbSimSpread" inputmode="decimal" value="${c.simSpread != null && c.simSpread >= 0 ? c.simSpread : 0.1}"></label>
+            <label>Phí ($/lot, khứ hồi)<input id="gbComm" inputmode="decimal" value="${c.commission || 0}"></label>
+          </div>
+          <label class="check"><input type="checkbox" id="gbNoSpread" ${c.noSpread ? "checked" : ""}> Chạy trên giá <b>không có spread</b> — chỉ 🎮 Chạy thử và 🧪 Backtest</label>
+          <div class="grid-risk" id="gbRisk"></div>
+          <div class="row-btns">
+            ${!st ? "" : c.running ? '<button class="btn btn-ghost" id="gbStopBtn">■ Tắt bot</button><button class="btn btn-ghost" id="gbSave">Lưu cài đặt</button>' : `<button class="btn btn-gold" id="gbStart">▶ Bật bot nhồi lệnh ${c.paper ? "(ẢO · giá Exness)" : "trên MT5"}</button>`}
+            ${st && c.paper ? '<button class="btn btn-ghost" id="gbReset">Đặt lại tài khoản ảo</button>' : ""}
+          </div>
+        </div>
+        <div id="gbLive"></div>`;
+      const showRisk = () => {
+        const g = this.gridSettings(), r = this.gridRisk(g);
+        $("gbRisk").innerHTML = `<b>Rủi ro của cài đặt này</b> (vàng, 1 rổ):
+          <div class="small">Lot từng lớp: ${r.lots.join(" · ")} → tổng <b>${r.total} lot</b> khi đủ ${g.maxLevels} lớp.</div>
+          <div class="small">Giá chạy ngược một mạch <b>${+r.depth.toFixed(2)}</b> (hết lưới) → rổ âm khoảng <b class="neg">${signed(r.loss)}</b>${g.basketStop > 0 ? ` · bot cắt lỗ chung ở <b>−${money(g.basketStop)}</b>` : ' · <b class="neg">không có cắt lỗ chung</b>'}.</div>
+          <div class="small muted">Mỗi rổ thắng chỉ được khoảng ${money(g.tpMoney)}: một lần cắt lỗ chung ${g.basketStop > 0 ? `= khoảng ${Math.round(g.basketStop / g.tpMoney)} rổ thắng` : "có thể mất cả tài khoản"}.</div>`;
+      };
+      $("gbForm").querySelectorAll("input,select").forEach((x) => x.addEventListener("input", showRisk));
+      showRisk();
+      const send = async (button, extra, done) => {
+        const r = await act(button, () => this.botCall("/gridbot", Object.assign(this.gridSettings(), extra)), done);
+        if (r) { this.gridStatus = r; this.renderGridBot(r, ""); }
+      };
+      const start = $("gbStart"), stop = $("gbStopBtn"), save = $("gbSave");
+      if (start) start.onclick = (e) => {
+        const g = this.gridSettings();
+        if (!g.paper && !confirm(`Bot nhồi lệnh sẽ đặt lệnh THẬT trên tài khoản MT5 đang đăng nhập, gấp lot tới ${this.gridRisk(g).total} lot mỗi rổ. Tiếp tục?`)) return;
+        send(e.currentTarget, { running: true }, "Đã bật bot nhồi lệnh");
+      };
+      if (stop) stop.onclick = (e) => send(e.currentTarget, { running: false }, "Đã tắt bot (lệnh đang mở giữ nguyên)");
+      if (save) save.onclick = (e) => send(e.currentTarget, {}, "Đã lưu");
+      const acct = $("gbAcct"), fillAcct = () => {
+        const a = ACCOUNT_SIMS[acct.value] || ACCOUNT_SIMS.real;
+        if (acct.value !== "custom" && acct.value !== "real") { $("gbSimSpread").value = a.spread; $("gbComm").value = a.commission; }
+        $("gbSimSpread").closest("label").hidden = acct.value === "real";
+        $("gbComm").closest("label").hidden = acct.value === "real";
+      };
+      acct.onchange = () => { fillAcct(); showRisk(); }; fillAcct();
+      $("gbPreset").onclick = () => {
+        // As in the video: 0.01 to start, a new layer every 2$ against, lots × 1.5, the basket out at about +1$.
+        const set = (id, v) => { if ($(id)) $(id).value = v; };
+        set("gbLots", 0.01); set("gbStep", 2); set("gbMult", 1.5); set("gbLevels", 6); set("gbMaxLot", 0.5); set("gbTp", 1); set("gbStop", 60); set("gbCool", 60);
+        set("gbDirection", "both");
+        showRisk();
+        toast("Đã điền cài đặt giống video: chạy 🧪 Backtest trước, rồi Lưu / Bật");
+      };
+      const reset = $("gbReset");
+      if (reset) reset.onclick = (e) => {
+        const v = prompt("Số dư tài khoản ảo mới (USD):", "10000");
+        if (!v || !num(v)) return;
+        send(e.currentTarget, { paperReset: num(v) }, "Đã đặt lại tài khoản ảo");
+      };
+      this.renderGridBotLive(st);
+    },
+
+    renderGridBotLive(st) {
+      this.renderTickBotLive(st, "gbLive");
+      const live = $("gbLive");
+      if (!live || !st || !st.grid) return;
+      const pos = st.positions || [], g = st.grid;
+      const side = (s) => pos.filter((p) => p.side === s);
+      const basket = (s) => { const ps = side(s); return ps.length ? `${ps.length} lớp · ${+ps.reduce((a, p) => a + (+p.lots || 0), 0).toFixed(2)} lot · <b class="${ps.reduce((a, p) => a + (p.profit || 0), 0) >= 0 ? "pos" : "neg"}">${signed(ps.reduce((a, p) => a + (p.profit || 0), 0))}</b>` : "trống"; };
+      const pause = g.pauseUntil && g.pauseUntil * 1000 > Date.now() ? ` · <b class="neg">đang nghỉ sau cắt lỗ tới ${clock(g.pauseUntil)}</b>` : "";
+      live.insertAdjacentHTML("afterbegin", `<p class="small">Rổ MUA: ${basket("long")} · Rổ BÁN: ${basket("short")} · đã chốt ${g.cycles || 0} rổ từ lúc bật${pause}</p>`);
     },
 
     /** The Cản & Hỗ trợ bot's settings as its form shows them. */
@@ -3597,7 +3815,7 @@
       el.innerHTML = `<div class="panel-head"><h3>🧪 Backtest bot</h3></div>
         <p class="muted small">Chạy bot đã chọn với đúng cài đặt ở ô của bot đó (phía trên) trên nến Exness đã qua: xem bot vào lệnh ở đâu, chạm TP hay SL, lời lỗ bao nhiêu. Lệnh MUA khớp ở giá Ask = giá nến + spread, đóng ở Bid; lệnh BÁN ngược lại. Chưa tính trượt giá và phí.</p>
         <div class="fields three">
-          <label>Bot<select id="btBot"><option value="stop" ${bot === "stop" ? "selected" : ""}>🎯 Stop theo nến</option><option value="sr" ${bot === "sr" ? "selected" : ""}>🧱 Cản & Hỗ trợ</option><option value="tick" ${bot === "tick" ? "selected" : ""}>⚡ Nến tick</option></select></label>
+          <label>Bot<select id="btBot"><option value="stop" ${bot === "stop" ? "selected" : ""}>🎯 Stop theo nến</option><option value="sr" ${bot === "sr" ? "selected" : ""}>🧱 Cản & Hỗ trợ</option><option value="tick" ${bot === "tick" ? "selected" : ""}>⚡ Nến tick</option><option value="grid" ${bot === "grid" ? "selected" : ""}>🕸️ Nhồi lệnh</option></select></label>
           <label>Spread (giá, trống = spread hiện tại)<input id="btSpread" inputmode="decimal" placeholder="VD vàng 0.16" value="${esc(store.get("aurum.btSpread") || "")}"></label>
           <label>Thời gian<select id="btDays">${[1, 3, 7, 14, 30, 60].map((d) => `<option value="${d}" ${d === days ? "selected" : ""}>${d} ngày</option>`).join("")}</select></label>
           <label>Vốn ban đầu<input id="btBalance" inputmode="decimal" value="${esc(store.get("aurum.btBalance") || "10000")}"></label>
@@ -3606,7 +3824,7 @@
           <label>Spread giả lập (giá)<input id="btSimSpread" inputmode="decimal" value="${esc(store.get("aurum.btSimSpread") || "0.1")}"></label>
           <label>Phí ($/lot, khứ hồi)<input id="btComm" inputmode="decimal" value="${esc(store.get("aurum.btComm") || "0")}"></label>
           <label>&nbsp;<button class="btn btn-gold" id="btRun" type="button">▶ Chạy backtest</button></label>
-          <label id="btSrcWrap">Dữ liệu (bot nến tick)<select id="btSrc"><option value="ticks" ${store.get("aurum.btSrc") !== "bars" ? "selected" : ""}>Tick thật MT5 (chính xác, tối đa 2 ngày)</option><option value="bars" ${store.get("aurum.btSrc") === "bars" ? "selected" : ""}>Nến (ước lượng, nhanh)</option></select></label>
+          <label id="btSrcWrap">Dữ liệu<select id="btSrc"><option value="ticks" ${store.get("aurum.btSrc") !== "bars" ? "selected" : ""}>Tick thật MT5 (chính xác, tối đa 2 ngày)</option><option value="bars" ${store.get("aurum.btSrc") === "bars" ? "selected" : ""}>Nến (ước lượng, nhanh)</option></select></label>
           <label id="btOptWrap">&nbsp;<button class="btn btn-ghost" id="btOpt" type="button">🔎 Tìm cài đặt tốt nhất</button></label>
         </div>
         <p class="muted small" id="btInfo"></p>
@@ -3626,7 +3844,7 @@
 
     async runStopBt() {
       const bot = $("btBot").value;
-      const c = bot === "sr" ? this.srSettings() : bot === "tick" ? this.tickSettings() : this.stopBotSettings();
+      const c = bot === "sr" ? this.srSettings() : bot === "tick" ? this.tickSettings() : bot === "grid" ? this.gridSettings() : this.stopBotSettings();
       const days = +$("btDays").value, balance = num($("btBalance").value) || 10000;
       store.set("aurum.btDays", String(days)); store.set("aurum.btBalance", String(balance)); store.set("aurum.btBot", bot);
       store.set("aurum.btSpread", $("btSpread").value.trim());
@@ -3634,7 +3852,7 @@
       // Spread: as typed, or the live one when the backtest is on the chart's symbol.
       let spread = num($("btSpread").value);
       if (spread == null) spread = c.symbol === this.symbol && this.bid != null && this.ask != null ? Math.max(0, this.ask - this.bid) : 0;
-      if (bot === "tick" && c.noSpread) spread = 0;
+      if ((bot === "tick" || bot === "grid") && c.noSpread) spread = 0;
       const acct = $("btAcct") ? $("btAcct").value : "real";
       const simSpread = acct === "real" ? null : num($("btSimSpread").value);
       const commission = acct === "real" ? 0 : num($("btComm").value) || 0;
@@ -3659,10 +3877,10 @@
         bars = bars.filter((b) => b.time >= from);
         if (bars.length < 3) throw new Error(`MT5 chỉ trả ${bars.length} nến ${c.symbol} ${c.interval}`);
         // The trade's money, less the account type's commission (per lot, round trip).
-        const value = (side, entry, exit) => this.valueAt(c.symbol, c.lots, side, entry, exit) - commission * c.lots;
+        const value = (side, entry, exit, lots = c.lots) => this.valueAt(c.symbol, lots, side, entry, exit) - commission * lots;
         // The tick bot on real ticks: up to 2 days, 6 hours a call.
         let ticks = null;
-        if (bot === "tick" && $("btSrc") && $("btSrc").value === "ticks") {
+        if ((bot === "tick" || bot === "grid") && $("btSrc") && $("btSrc").value === "ticks") {
           store.set("aurum.btSrc", "ticks");
           const end = Date.now() / 1000, start = Math.max(from, end - 2 * 86400);
           ticks = [];
@@ -3697,10 +3915,10 @@
           }
         }
         this.btData = { key: `${c.symbol}|${c.interval}|${days}|${ticks ? "t" : "b"}`, bars, sub, spread, value, c, ticks };
-        const r = bot === "sr" ? srBacktest(bars, c, value, spread) : bot === "tick" ? (ticks ? tickBotOnTicks(ticks, c, value) : tickBotBacktest(bars, c, value, spread, sub)) : stopBotBacktest(bars, c, value, spread);
+        const r = bot === "grid" ? gridBotOnTicks(ticks || barsAsTicks(bars, spread), c, value) : bot === "sr" ? srBacktest(bars, c, value, spread) : bot === "tick" ? (ticks ? tickBotOnTicks(ticks, c, value) : tickBotBacktest(bars, c, value, spread, sub)) : stopBotBacktest(bars, c, value, spread);
         if (ticks) spread = ticks.reduce((a, x) => a + (x[2] - x[1]), 0) / ticks.length;
         this.btShow = 30;
-        this.btResult = { bot, spread, commission, acct, c, ticks: ticks ? ticks.length : 0, bars: bars.length, from: bars[0].time, to: bars[bars.length - 1].time + sec, balance, placed: r.placed, trades: r.trades, digits: this.digitsFor(c.symbol) };
+        this.btResult = { bot, spread, commission, acct, c, ticks: ticks ? ticks.length : 0, bars: bars.length, from: bars[0].time, to: bars[bars.length - 1].time + sec, balance, placed: r.placed, trades: r.trades, grid: r.grid, digits: this.digitsFor(c.symbol) };
         info.textContent = "";
         this.renderStopBtResult();
       } catch (e) {
@@ -3779,15 +3997,21 @@
       const W = 600, H = 120, lo = Math.min(...curve), hi = Math.max(...curve), span = hi - lo || 1;
       const pts = curve.map((v, i) => `${(i / Math.max(curve.length - 1, 1) * W).toFixed(1)},${(H - 6 - (v - lo) / span * (H - 12)).toFixed(1)}`).join(" ");
       const color = net >= 0 ? "var(--up)" : "var(--down)";
-      const reason = R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", hold: "hết giờ giữ", end: "đóng cuối test", close: "hết nến" }
+      const grid = R.bot === "grid";
+      const reason = grid ? { basket: "chốt rổ", stop: "cắt lỗ chung", end: "đóng cuối test" } : R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", hold: "hết giờ giữ", end: "đóng cuối test", close: "hết nến" }
         : { target: "chạm TP", stop: "chạm SL", trail: "chạm SL đã dời", end: "đóng cuối test", close: "hết nến" };
-      const sr = R.bot === "sr" || R.bot === "tick", tick = R.bot === "tick";
-      el.innerHTML = `<p class="muted small">${tick ? "⚡ Nến tick" : sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · ${tick ? `bước ${R.c.step} · chốt lời ${R.c.closeProfit} · SL ${R.c.sl || "không"}${R.c.withCandle ? " · thuận chiều nến" : ""}${R.c.flipExit ? " · đóng khi nến đảo" : ""} · tối đa ${R.c.maxPositions} lệnh · cắt lỗ chung ${R.c.basketStop ? money(R.c.basketStop) : "tắt"}${R.c.exitAtClose !== false ? " · đóng khi hết nến" : ""}` : `R:R ${R.c.rr}`}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>
+      const sr = R.bot === "sr" || R.bot === "tick" || grid, tick = R.bot === "tick";
+      const G = R.grid || {}, gc = R.c;
+      const gridHead = `<p class="muted small">🕸️ Nhồi lệnh · ${esc(gc.symbol)} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "nến 1m (ước lượng) · spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · lot đầu ${gc.lots} · nhồi mỗi ${gc.gridStep} · ×${gc.multiplier} · tối đa ${gc.maxLevels} lớp · chốt rổ ${money(gc.tpMoney)} · cắt lỗ chung ${gc.basketStop ? money(gc.basketStop) : "tắt"}${gc.direction === "long" ? " · chỉ rổ MUA" : gc.direction === "short" ? " · chỉ rổ BÁN" : ""}</p>`;
+      el.innerHTML = `${grid ? gridHead : `<p class="muted small">${tick ? "⚡ Nến tick" : sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · ${tick ? `bước ${R.c.step} · chốt lời ${R.c.closeProfit} · SL ${R.c.sl || "không"}${R.c.withCandle ? " · thuận chiều nến" : ""}${R.c.flipExit ? " · đóng khi nến đảo" : ""} · tối đa ${R.c.maxPositions} lệnh · cắt lỗ chung ${R.c.basketStop ? money(R.c.basketStop) : "tắt"}${R.c.exitAtClose !== false ? " · đóng khi hết nến" : ""}` : `R:R ${R.c.rr}`}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>`}
         <div class="stats">
           ${stat("Lãi/lỗ ròng", signed(net), net >= 0 ? "pos" : "neg")}
           ${stat("Số lệnh", `${t.length} <span class="muted small">/ ${R.placed} ${sr ? "tín hiệu" : "lệnh chờ đặt"}</span>`)}
           ${stat("Thắng", t.length ? `${wins.length}/${t.length} · ${Math.round(wins.length / t.length * 100)}%` : "–")}
-          ${stat(tick ? "Chốt lời / cắt lỗ chung" : "Chạm TP / SL", `${tp} / ${sl}${tick ? ` <span class="muted small">· ${t.filter((x) => x.reason === "sl").length} cắt lỗ lệnh · ${t.filter((x) => x.reason === "flip").length} nến đảo · ${t.filter((x) => x.reason === "close").length} hết nến</span>` : sr ? ` <span class="muted small">· ${t.filter((x) => x.reason === "trail").length} SL dời</span>` : ""}`)}
+          ${grid ? stat("Rổ đã chốt / cắt lỗ chung", `${G.cycles || 0} / <b class="${G.stops ? "neg" : ""}">${G.stops || 0}</b>`)
+            + stat("Âm sâu nhất khi đang gồng", signed(G.maxFloat || 0), (G.maxFloat || 0) < 0 ? "neg" : "")
+            + stat("Lớp sâu nhất / lot mở nhiều nhất", `${G.maxLevel || 0} lớp · ${G.maxLots || 0} lot`) : ""}
+          ${grid ? "" : stat(tick ? "Chốt lời / cắt lỗ chung" : "Chạm TP / SL", `${tp} / ${sl}${tick ? ` <span class="muted small">· ${t.filter((x) => x.reason === "sl").length} cắt lỗ lệnh · ${t.filter((x) => x.reason === "flip").length} nến đảo · ${t.filter((x) => x.reason === "close").length} hết nến</span>` : sr ? ` <span class="muted small">· ${t.filter((x) => x.reason === "trail").length} SL dời</span>` : ""}`)}
           ${stat("Profit factor", gl > 0 ? (gp / gl).toFixed(2) : gp > 0 ? "∞" : "–")}
           ${stat("Sụt giảm lớn nhất", dd ? "−" + money(dd) : "0", dd ? "neg" : "")}
           ${stat("Lời TB / lỗ TB", `${wins.length ? signed(gp / wins.length) : "–"} / ${losses.length ? signed(-gl / losses.length) : "–"}`)}
@@ -3801,7 +4025,7 @@
         <div class="list bt-trades">${t.length ? t.slice().reverse().slice(0, this.btShow || 30).map((x) => `<div class="sig"><div class="bar" style="background:${x.profit >= 0 ? "var(--up)" : "var(--down)"}"></div>
           <div><div class="top"><span class="side ${x.side === "long" ? "buy" : "sell"}">${sr ? (x.side === "long" ? "BUY" : "SELL") : x.side === "long" ? "BUY STOP" : "SELL STOP"}</span>
             <span class="muted small">${fmt(x.entry, d)} → ${fmt(x.exit, d)}</span></div>
-            <div class="lv">${reason[x.reason]}${x.level != null ? ` · vùng ${fmt(x.level, d)}` : ""} · ${clock(x.openTime)} ${day(x.openTime)} · SL ${fmt(x.stop, d)} · TP ${x.target != null ? fmt(x.target, d) : "–"}</div></div>
+            <div class="lv">${reason[x.reason]}${x.layer ? ` · lớp ${x.layer} · ${x.lots} lot` : ""}${x.level != null ? ` · vùng ${fmt(x.level, d)}` : ""} · ${clock(x.openTime)} ${day(x.openTime)}${grid ? "" : ` · SL ${fmt(x.stop, d)} · TP ${x.target != null ? fmt(x.target, d) : "–"}`}</div></div>
           <div class="right"><div class="move ${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</div></div></div>`).join("") : '<div class="empty">Bot không vào lệnh nào trong khoảng này</div>'}</div>
         ${t.length > (this.btShow || 30) ? `<button class="linkish" id="btMore" type="button">Xem thêm (${t.length - (this.btShow || 30)} lệnh nữa)</button>` : ""}`;
       $("btChart").onclick = () => this.showBtOnChart();

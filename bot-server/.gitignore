@@ -13,5 +13,6 @@ __pycache__/
 stops.json
 drawings.json
 tickbot_paper.json
+gridbot_paper.json
 web.*
 terminals/

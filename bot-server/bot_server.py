@@ -31,7 +31,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "5.3"
+VERSION = "5.4"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3029,6 +3029,19 @@ class TickBot:
     """Buys and sells again and again inside one candle, more on the side price pushes; each position
     closes on its own small profit (no SL / TP), the rest at the candle's close."""
 
+    MAGIC = TICK_MAGIC
+    KEY = "tickbot"
+    LABEL = "⚡ Bot nến tick: "
+    COMMENT = "TickBot"
+
+    @staticmethod
+    def defaults():
+        return DEFAULT_TICKBOT
+
+    @staticmethod
+    def paper_path():
+        return TICK_PAPER_PATH
+
     def __init__(self, server):
         self.server = server
         self.lock = threading.RLock()
@@ -3038,16 +3051,16 @@ class TickBot:
         self.stopped_bar = None  # the candle whose basket stop was hit: no more entries in it
         self.error = ""
         self.started = None
-        self.paper = read_json(TICK_PAPER_PATH, None) or {"balance": 10000.0, "positions": [], "history": []}
+        self.paper = read_json(self.paper_path(), None) or {"balance": 10000.0, "positions": [], "history": []}
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _save_paper(self):
-        write_json(TICK_PAPER_PATH, self.paper)
+        write_json(self.paper_path(), self.paper)
 
     @property
     def cfg(self):
-        c = self.server.config.setdefault("tickbot", {})
-        for k, v in DEFAULT_TICKBOT.items():
+        c = self.server.config.setdefault(self.KEY, {})
+        for k, v in self.defaults().items():
             c.setdefault(k, v)
         return c
 
@@ -3055,10 +3068,38 @@ class TickBot:
         with self.lock:
             self.events.insert(0, {"time": now(), "text": text})
             del self.events[80:]
-        self.server.log("⚡ Bot nến tick: " + text, notify=notify)
+        self.server.log(self.LABEL + text, notify=notify)
 
     def settings(self, body):
         c = self.cfg
+        self._fields(c, body)
+        if body.get("paperReset"):
+            with self.lock:
+                self.paper = {"balance": float(body["paperReset"]), "positions": [], "history": []}
+                self._save_paper()
+            self.event(f"đặt lại tài khoản ảo: {money(float(body['paperReset']))}")
+        if "running" in body:
+            on = bool(body["running"])
+            if on and not c["symbol"]:
+                raise ValueError("Chưa chọn mã")
+            if on and not c["running"]:
+                self._reset()
+                self.error, self.started = "", now()
+                self.event(f"BẬT {'(ẢO, giá Exness)' if c['paper'] else 'trên MT5'} · {c['symbol']} · {self._start_text(c)}", notify=True)
+            if not on and c["running"]:
+                self.event("TẮT (lệnh đang mở giữ nguyên)", notify=True)
+            c["running"] = on
+        self.server.save_config()
+        return self.status()
+
+    def _reset(self):
+        self.bar, self.ref, self.stopped_bar = None, None, None
+
+    def _start_text(self, c):
+        return (f"{c['interval']} · {c['lots']} lot · vào mỗi {c['step']} giá chạy · chốt khi lời {c['closeProfit']} · "
+                f"tối đa {c['maxPositions']} lệnh")
+
+    def _fields(self, c, body):
         for key, cast in (("symbol", str), ("interval", str), ("direction", str), ("lots", float), ("step", float),
                           ("closeProfit", float), ("maxPositions", int), ("basketStop", float), ("burst", int), ("exitAtClose", bool),
                           ("sl", float), ("withCandle", bool), ("flipExit", bool),
@@ -3083,27 +3124,9 @@ class TickBot:
             # breaks most brokers' and IB programs' terms. Only on the virtual account, to see the numbers.
             c["holdSeconds"] = -1.0
             raise ValueError("Chế độ 'vào rồi chốt ngay' chỉ chạy trên tài khoản ẢO (Chạy thử) và Backtest")
-        if body.get("paperReset"):
-            with self.lock:
-                self.paper = {"balance": float(body["paperReset"]), "positions": [], "history": []}
-                self._save_paper()
-            self.event(f"đặt lại tài khoản ảo: {money(float(body['paperReset']))}")
-        if "running" in body:
-            on = bool(body["running"])
-            if on and not c["symbol"]:
-                raise ValueError("Chưa chọn mã")
-            if on and not c["running"]:
-                self.bar, self.ref, self.stopped_bar, self.error, self.started = None, None, None, "", now()
-                self.event(f"BẬT {'(ẢO, giá Exness)' if c['paper'] else 'trên MT5'} · {c['symbol']} {c['interval']} · {c['lots']} lot · "
-                           f"vào mỗi {c['step']} giá chạy · chốt khi lời {c['closeProfit']} · tối đa {c['maxPositions']} lệnh", notify=True)
-            if not on and c["running"]:
-                self.event("TẮT (lệnh đang mở giữ nguyên)", notify=True)
-            c["running"] = on
-        self.server.save_config()
-        return self.status()
 
     def _mine(self, rows):
-        return [r for r in rows or () if getattr(r, "magic", 0) == TICK_MAGIC]
+        return [r for r in rows or () if getattr(r, "magic", 0) == self.MAGIC]
 
     def _loop(self):
         while True:
@@ -3134,24 +3157,25 @@ class TickBot:
                  "lots": p.volume, "entry": p.price_open, "openTime": float(p.time), "raw": p}
                 for p in self._mine(mt5.positions_get(symbol=symbol))]
 
-    def _open(self, mt5, symbol, info, tick, long, why):
+    def _open(self, mt5, symbol, info, tick, long, why, lots=None):
         c = self.cfg
+        lots = round(max(0.01, float(lots if lots is not None else c["lots"])), 2)
         price = tick.ask if long else tick.bid
         if c["paper"]:
             self.seq = getattr(self, "seq", 0) + 1
             # The spread paid on the way in (Exness' own bid / ask at that tick), in money.
-            spread_cost = round((tick.ask - tick.bid) * float(c["lots"]) * self._units(info, symbol), 2)
-            p = {"id": f"P{int(time.time() * 1000)}-{self.seq}", "symbol": symbol, "side": "long" if long else "short", "lots": float(c["lots"]),
+            spread_cost = round((tick.ask - tick.bid) * lots * self._units(info, symbol), 2)
+            p = {"id": f"P{int(time.time() * 1000)}-{self.seq}", "symbol": symbol, "side": "long" if long else "short", "lots": lots,
                  "entry": price, "openTime": float(tick.time), "paper": True, "spreadCost": spread_cost}
             with self.lock:
                 self.paper["positions"].append(p)
                 self._save_paper()
-            self.event(f"ẢO: {'MUA' if long else 'BÁN'} {c['lots']} @ {fmt(price)} ({why})")
+            self.event(f"ẢO: {'MUA' if long else 'BÁN'} {lots} @ {fmt(price)} ({why})")
             return True
-        volume = self.server.mt5_account._volume(mt5, info, float(c["lots"]))
+        volume = self.server.mt5_account._volume(mt5, info, lots)
         request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": volume,
                    "type": mt5.ORDER_TYPE_BUY if long else mt5.ORDER_TYPE_SELL, "price": price, "sl": 0.0, "tp": 0.0,
-                   "magic": TICK_MAGIC, "comment": "TickBot", "type_time": mt5.ORDER_TIME_GTC,
+                   "magic": self.MAGIC, "comment": self.COMMENT, "type_time": mt5.ORDER_TIME_GTC,
                    "deviation": int(self.server.config["mt5"].get("deviation", 30))}
         _, error = mt5_send(mt5, request)
         if error:
@@ -3177,7 +3201,7 @@ class TickBot:
         request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": p["symbol"], "volume": p["lots"],
                    "type": mt5.ORDER_TYPE_SELL if long else mt5.ORDER_TYPE_BUY, "position": p["id"], "price": price,
                    "deviation": int(self.server.config["mt5"].get("deviation", 30)),
-                   "magic": TICK_MAGIC, "comment": "TickBot close", "type_time": mt5.ORDER_TIME_GTC}
+                   "magic": self.MAGIC, "comment": self.COMMENT + " close", "type_time": mt5.ORDER_TIME_GTC}
         _, error = mt5_send(mt5, request)
         if error:
             self.event(f"không đóng được #{p['id']}: {error}")
@@ -3308,17 +3332,153 @@ class TickBot:
                                       "now": getattr(p, "price_current", None), "profit": p.profit + getattr(p, "swap", 0)})
                 since = self.started or now() - 86400
                 for d in mt5.history_deals_get(since + Mt5.offset_seconds - 60, now() + Mt5.offset_seconds + 86400) or ():
-                    if getattr(d, "magic", 0) == TICK_MAGIC and d.entry == mt5.DEAL_ENTRY_OUT:
+                    if getattr(d, "magic", 0) == self.MAGIC and d.entry == mt5.DEAL_ENTRY_OUT:
                         pnl = d.profit + d.commission + d.swap + (getattr(d, "fee", 0) or 0)
                         stats["trades"] += 1
                         stats["wins"] += 1 if pnl > 0 else 0
                         stats["profit"] += pnl
-                history = magic_history(mt5, TICK_MAGIC, now() - 7 * 86400)
+                history = magic_history(mt5, self.MAGIC, now() - 7 * 86400)
         except Exception as e:
             c["statusError"] = str(e)
         with self.lock:
             return {"ok": True, "config": c, "history": history, "positions": positions, "stats": stats,
                     "events": self.events[:40], "error": self.error, "startedAt": self.started}
+
+
+# ---------- "Nhồi lệnh" bot: a grid with an optional lot multiplier (martingale) ----------
+# One basket of buys and / or one of sells. A basket starts with `lots`; each time price goes `gridStep`
+# further against its worst entry it adds a position of the last lot × `multiplier` (1 = same lot), at most
+# `maxLevels` positions and `maxLot` a position. When a basket is `tpMoney` dollars up (after commission)
+# it is all closed ("chốt rổ") and starts again. Safety: everything closed once the bot's open positions are
+# `basketStop` dollars down, then no entries for `cooldownMin` minutes. Small wins most of the time, and one
+# long run against the grid takes them all back: the stop is required on a real account.
+# The website's backtest (web/assets/app.js, gridBotOnTicks) follows the same rules; keep the two in step.
+
+GRID_MAGIC = 20266
+DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 0.01, "gridStep": 2.0,
+                   "multiplier": 1.5, "maxLevels": 6, "maxLot": 0.5, "tpMoney": 1.0, "basketStop": 60.0,
+                   "cooldownMin": 60.0, "maxSpread": 0.5, "noSpread": False, "simSpread": -1.0, "commission": 0.0,
+                   "paper": True}
+GRID_PAPER_PATH = os.path.join(HERE, "gridbot_paper.json")
+
+
+def grid_lot(c, level):
+    """The lot of a basket's position number `level` (0 = the first)."""
+    # Half up to the 0.01 lot, as the website's gridLot (Python's round() would give 0.015 → 0.01).
+    lots = math.floor(float(c["lots"]) * float(c["multiplier"]) ** level * 100 + 0.5 + 1e-9) / 100
+    return min(float(c["maxLot"]), max(0.01, lots))
+
+
+class GridBot(TickBot):
+    """Grid / martingale "nhồi lệnh": adds to a losing basket every gridStep, closes it on a small profit."""
+
+    MAGIC = GRID_MAGIC
+    KEY = "gridbot"
+    LABEL = "🕸️ Bot nhồi lệnh: "
+    COMMENT = "GridBot"
+
+    @staticmethod
+    def defaults():
+        return DEFAULT_GRIDBOT
+
+    @staticmethod
+    def paper_path():
+        return GRID_PAPER_PATH
+
+    def _reset(self):
+        self.pause_until = 0.0
+        self.cycles = 0
+
+    def _start_text(self, c):
+        return (f"{c['lots']} lot · nhồi mỗi {c['gridStep']} giá × {c['multiplier']} · tối đa {c['maxLevels']} lớp · "
+                f"chốt rổ khi lời {money(c['tpMoney'])} · cắt lỗ chung {money(c['basketStop'])}")
+
+    def _fields(self, c, body):
+        for key, cast in (("symbol", str), ("direction", str), ("lots", float), ("gridStep", float), ("multiplier", float),
+                          ("maxLevels", int), ("maxLot", float), ("tpMoney", float), ("basketStop", float),
+                          ("cooldownMin", float), ("maxSpread", float), ("simSpread", float), ("commission", float),
+                          ("paper", bool), ("noSpread", bool)):
+            if key in body:
+                c[key] = cast(body[key])
+        if c["direction"] not in ("both", "long", "short"):
+            raise ValueError("Chiều không hợp lệ")
+        if c["gridStep"] <= 0 or c["tpMoney"] <= 0:
+            raise ValueError("Khoảng nhồi và mức chốt rổ phải lớn hơn 0")
+        c["lots"] = round(max(0.01, c["lots"]), 2)
+        c["multiplier"] = max(1.0, min(3.0, c["multiplier"]))
+        c["maxLevels"] = max(1, min(30, c["maxLevels"]))
+        c["maxLot"] = max(c["lots"], c["maxLot"])
+        c["basketStop"] = max(0.0, c["basketStop"])
+        c["cooldownMin"] = max(0.0, c["cooldownMin"])
+        if not c["paper"] and c["basketStop"] <= 0 and (c["running"] or body.get("running")):
+            raise ValueError("Trên tài khoản MT5 phải đặt Cắt lỗ chung > 0 (nhồi lệnh không cắt lỗ có thể cháy tài khoản)")
+
+    def _tick(self):
+        c = self.cfg
+        mt5 = Mt5.connect(self.server.config["mt5"])
+        if not c["paper"]:
+            self.server.mt5_account._check_trading(mt5)
+        symbol = Mt5.need_symbol(mt5, c["symbol"])
+        info = mt5.symbol_info(symbol)
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            return
+        no_spread = c["paper"] and c.get("noSpread")
+        if no_spread:
+            tick = types.SimpleNamespace(bid=tick.bid, ask=tick.bid, time=tick.time)
+        elif c["paper"] and float(c.get("simSpread", -1)) >= 0:
+            tick = types.SimpleNamespace(bid=tick.bid, ask=tick.bid + float(c["simSpread"]), time=tick.time)
+        units = self._units(info, symbol)
+        comm = float(c.get("commission", 0) or 0) if c["paper"] else 0.0
+
+        def pnl(ps):
+            return sum(((tick.bid - p["entry"]) if p["side"] == "long" else (p["entry"] - tick.ask)) * p["lots"] * units
+                       - comm * p["lots"] for p in ps)
+
+        book = self._book(mt5, symbol)
+        total = pnl(book)
+        if c["basketStop"] > 0 and book and total <= -c["basketStop"]:
+            for p in book:
+                self._close(mt5, p, tick, units, "cắt lỗ chung")
+            self.pause_until = time.time() + c["cooldownMin"] * 60
+            self.event(f"cắt lỗ chung {money(total)}: nghỉ {c['cooldownMin']:g} phút", notify=True)
+            return
+        closed = False
+        for side in ("long", "short"):
+            ps = [p for p in book if p["side"] == side]
+            if ps and pnl(ps) >= c["tpMoney"] - 1e-9:
+                gain = pnl(ps)
+                for p in ps:
+                    self._close(mt5, p, tick, units, "chốt rổ")
+                self.cycles = getattr(self, "cycles", 0) + 1
+                self.event(f"chốt rổ {'MUA' if side == 'long' else 'BÁN'} {len(ps)} lệnh · {money(gain)}")
+                closed = True
+        if closed:
+            return  # the new basket starts at the next tick, on a fresh price
+        if time.time() < getattr(self, "pause_until", 0):
+            return
+        if not no_spread and c["maxSpread"] > 0 and tick.ask - tick.bid > c["maxSpread"]:
+            return
+        for side in ("long", "short"):
+            if c["direction"] not in ("both", side):
+                continue
+            long = side == "long"
+            ps = [p for p in book if p["side"] == side]
+            if not ps:
+                self._open(mt5, symbol, info, tick, long, "mở rổ", grid_lot(c, 0))
+            elif len(ps) < c["maxLevels"]:
+                worst = min(p["entry"] for p in ps) if long else max(p["entry"] for p in ps)
+                price = tick.ask if long else tick.bid
+                if (worst - price if long else price - worst) >= c["gridStep"] - 1e-9:
+                    self._open(mt5, symbol, info, tick, long, f"nhồi lớp {len(ps) + 1}", grid_lot(c, len(ps)))
+
+    def status(self):
+        st = super().status()
+        cfg = st.get("config") or {}
+        levels = [grid_lot(cfg, i) for i in range(int(cfg.get("maxLevels", 1)))] if cfg.get("maxLot") else []
+        st["grid"] = {"cycles": getattr(self, "cycles", 0), "pauseUntil": getattr(self, "pause_until", 0) or None,
+                      "lots": levels, "totalLots": round(sum(levels), 2)}
+        return st
 
 
 class NewsFeed:
@@ -3798,6 +3958,7 @@ class BotServer:
         self.stopbot = StopBot(self)
         self.srbot = SRBot(self)
         self.tickbot = TickBot(self)
+        self.gridbot = GridBot(self)
         self.web_account = WebAccount(self)
         self.telegram = Telegram(self)
         self.tunnel = Tunnel(self) if self.config.get("tunnel") else None
@@ -4144,7 +4305,7 @@ class BotServer:
         """Every bot at once (for the app's bot screen): its settings, open positions, numbers and closed
         trades; with the computer's own account on, its bots too ("own")."""
         out = {"ok": True, "version": VERSION, "instance": INSTANCE,
-               "tick": self.tickbot.status(), "sr": self.srbot.status(), "stop": self.stopbot.status()}
+               "tick": self.tickbot.status(), "grid": self.gridbot.status(), "sr": self.srbot.status(), "stop": self.stopbot.status()}
         st = self.status()
         with self.lock:
             try:
@@ -4418,6 +4579,8 @@ def make_handler(server):
                     return self._send(200, server.srbot.status())
                 if path == "/tickbot":
                     return self._send(200, server.tickbot.status())
+                if path == "/gridbot":
+                    return self._send(200, server.gridbot.status())
                 if path == "/webacct":
                     return self._send(200, server.web_account.status())
                 if path == "/bots":
@@ -4489,6 +4652,8 @@ def make_handler(server):
                     return self._send(200, server.srbot.settings(body))
                 if path == "/tickbot":
                     return self._send(200, server.tickbot.settings(body))
+                if path == "/gridbot":
+                    return self._send(200, server.gridbot.settings(body))
                 if path == "/webacct":
                     if INSTANCE:
                         raise ValueError("Bật / tắt ở máy chủ chính")
@@ -4602,7 +4767,7 @@ def selftest():
 
 
 def main():
-    global INSTANCE, CONFIG_PATH, STATE_PATH, STOPS_PATH, LOG_PATH, TICK_PAPER_PATH
+    global INSTANCE, CONFIG_PATH, STATE_PATH, STOPS_PATH, LOG_PATH, TICK_PAPER_PATH, GRID_PAPER_PATH
     if "--copy-worker" in sys.argv:
         return copy_worker_main()
     if "--instance" in sys.argv:
@@ -4610,6 +4775,7 @@ def main():
         INSTANCE = re.sub(r"[^a-z0-9]", "", sys.argv[sys.argv.index("--instance") + 1].lower()) or "web"
         CONFIG_PATH, STATE_PATH, STOPS_PATH, LOG_PATH = own("config.json"), own("state.json"), own("stops.json"), own("server.log")
         TICK_PAPER_PATH = own("tickbot_paper.json")
+        GRID_PAPER_PATH = own("gridbot_paper.json")
     if "--selftest" in sys.argv:
         sys.exit(selftest())
     if "--after-update" in sys.argv:

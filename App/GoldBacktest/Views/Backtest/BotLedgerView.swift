@@ -139,6 +139,7 @@ private struct BotBookSection: View {
 
 struct BotLedger: Decodable {
     var tick: ServerBot?
+    var grid: ServerBot?
     var sr: ServerBot?
     var stop: ServerBot?
     var strategy: StrategyBot?
@@ -147,6 +148,7 @@ struct BotLedger: Decodable {
     var books: [BotBook] {
         var out: [BotBook] = []
         if let tick { out.append(tick.book(id: "tick", title: "⚡ Nến tick")) }
+        if let grid { out.append(grid.book(id: "grid", title: "🕸️ Nhồi lệnh")) }
         if let sr { out.append(sr.book(id: "sr", title: "🧱 Cản & Hỗ trợ")) }
         if let stop { out.append(stop.book(id: "stop", title: "🎯 Stop theo nến")) }
         if let strategy { out.append(strategy.book) }
@@ -156,12 +158,13 @@ struct BotLedger: Decodable {
 
 struct OwnLedger: Decodable {
     var tick: ServerBot?
+    var grid: ServerBot?
     var sr: ServerBot?
     var stop: ServerBot?
     var strategy: StrategyBot?
     var error: String?
 
-    var books: [BotBook] { BotLedger(tick: tick, sr: sr, stop: stop, strategy: strategy, own: nil).books }
+    var books: [BotBook] { BotLedger(tick: tick, grid: grid, sr: sr, stop: stop, strategy: strategy, own: nil).books }
 }
 
 struct ServerBot: Decodable {
