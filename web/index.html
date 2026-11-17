@@ -331,20 +331,31 @@
 
       <!-- Bot (owner) -->
       <div class="tab" data-tab="autobot" hidden>
-        <div class="panel" id="stopBotPanel"></div>
-        <div class="panel" id="srBotPanel"></div>
-        <div class="panel" id="tickBotPanel"></div>
-        <div class="panel" id="stopBtPanel"></div>
-        <div class="panel" id="autoStatus"></div>
-        <div class="panel" id="autoForm"></div>
-        <div class="panel">
-          <div class="panel-head"><h3 id="botPosTitle">Lệnh của bot</h3><button class="btn btn-ghost btn-small" id="botCloseAll" hidden>Đóng tất cả ✕</button></div>
-          <div id="botPositions" class="list"></div>
-        </div>
-        <div class="panel">
-          <h3>Lịch sử bot</h3>
-          <div class="stats" id="botStats"></div>
-          <div id="botHistory" class="list"></div>
+        <!-- Every bot in one box: pick the bot, then how it runs (backtest, demo on the server, MT5). -->
+        <div class="panel bot-hub" id="botHub">
+          <div class="panel-head"><h3>🤖 Bot</h3><span class="badge" id="hubAcct"></span></div>
+          <div class="hub-label">Chọn bot</div>
+          <div class="hub-seg" id="hubBots"></div>
+          <div class="hub-label">Chạy</div>
+          <div class="hub-seg modes" id="hubModes"></div>
+          <div class="hub-note" id="hubNote"></div>
+          <div class="hub-body">
+            <div class="panel" id="stopBotPanel" data-hub="stop:demo stop:mt5"></div>
+            <div class="panel" id="srBotPanel" data-hub="sr:demo sr:mt5"></div>
+            <div class="panel" id="tickBotPanel" data-hub="tick:demo tick:mt5"></div>
+            <div class="panel" id="stopBtPanel" data-hub="stop:backtest sr:backtest"></div>
+            <div class="panel" id="autoStatus" data-hub="strategy:demo strategy:mt5"></div>
+            <div class="panel" id="autoForm" data-hub="strategy:demo strategy:mt5"></div>
+            <div class="panel" data-hub="strategy:demo strategy:mt5">
+              <div class="panel-head"><h3 id="botPosTitle">Lệnh của bot</h3><button class="btn btn-ghost btn-small" id="botCloseAll" hidden>Đóng tất cả ✕</button></div>
+              <div id="botPositions" class="list"></div>
+            </div>
+            <div class="panel" data-hub="strategy:demo strategy:mt5">
+              <h3>Lịch sử bot</h3>
+              <div class="stats" id="botStats"></div>
+              <div id="botHistory" class="list"></div>
+            </div>
+          </div>
         </div>
       </div>
 

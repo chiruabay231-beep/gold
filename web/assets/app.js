@@ -1763,6 +1763,7 @@
       this.orders = t.orders || [];
       this.watchTrades(t);
       if (this.selected && !this.findSelected()) this.selected = null;
+      this.lastTrading = t;
       $("whoName").textContent = "Chủ máy chủ";
       $("whoRole").style.cursor = "pointer";
       $("whoRole").title = "Đổi / đăng nhập tài khoản MT5";
@@ -2422,7 +2423,10 @@
       if (t === "copy") this.loadCopy(first);
       if (t === "members" && first) this.loadMembers();
       if (t === "bot") this.loadBot(first);
-      if (t === "autobot") { this.loadAutoBot(first); this.loadStopBot(first); this.loadSRBot(first); this.loadTickBot(first); }
+      if (t === "autobot") {
+        this.applyBotHub();
+        Promise.allSettled([this.loadAutoBot(first), this.loadStopBot(first), this.loadSRBot(first), this.loadTickBot(first)]).then(() => this.applyBotHub());
+      }
     },
 
     /* ----- history ----- */
@@ -3037,6 +3041,51 @@
         ${(st.events || []).length ? `<h4>Hoạt động</h4><div class="list log">${st.events.slice(0, 15).map((e) => `<div class="log-row"><span class="muted small">${clock(e.time)}</span> ${esc(e.text)}</div>`).join("")}</div>` : ""}`;
     },
 
+    /* ----- the Bot box: one bot at a time, and how it runs ----- */
+
+    applyBotHub() {
+      const BOTS = [["strategy", "📈 Chiến lược (ICT / mẫu)"], ["stop", "🎯 Stop theo nến"], ["sr", "🧱 Cản & Hỗ trợ"], ["tick", "⚡ Nến tick"]];
+      const MODES = [["backtest", "🧪 Backtest", "chạy trên nến đã qua"], ["demo", "🎮 Chạy thử", "tiền ảo, không đặt lệnh thật"], ["mt5", "💹 Tài khoản MT5", "Exness demo / thật"]];
+      let bot = store.get("aurum.hubBot") || "strategy", mode = store.get("aurum.hubMode") || "demo";
+      if (!BOTS.some(([k]) => k === bot)) bot = "strategy";
+      if (!MODES.some(([k]) => k === mode)) mode = "demo";
+      const bots = $("hubBots"), modes = $("hubModes");
+      if (!bots || !modes) return;
+      bots.innerHTML = BOTS.map(([k, n]) => `<button type="button" data-b="${k}" class="${k === bot ? "on" : ""}">${n}</button>`).join("");
+      modes.innerHTML = MODES.map(([k, n, sub]) => `<button type="button" data-m="${k}" class="${k === mode ? "on" : ""}"><b>${n}</b><span>${sub}</span></button>`).join("");
+      bots.querySelectorAll("[data-b]").forEach((b) => (b.onclick = () => { store.set("aurum.hubBot", b.dataset.b); this.applyBotHub(); }));
+      modes.querySelectorAll("[data-m]").forEach((b) => (b.onclick = () => { store.set("aurum.hubMode", b.dataset.m); this.applyBotHub(); }));
+      // The MT5 account in use: demo or real (from the last trading status).
+      const t = this.lastTrading || {}, acct = $("hubAcct");
+      if (acct) {
+        acct.textContent = t.login ? `MT5 #${t.login} · ${t.mode === "real" ? "TÀI KHOẢN THẬT" : "demo"}` : "MT5 chưa đăng nhập";
+        acct.className = "badge " + (t.login ? (t.mode === "real" ? "real" : "on") : "off");
+      }
+      const key = bot + ":" + mode;
+      document.querySelectorAll("#botHub [data-hub]").forEach((el) => { el.hidden = !el.dataset.hub.split(" ").includes(key); });
+      // The strategy bot: demo on the server or orders on MT5, set from the mode.
+      const broker = $("abBroker"), source = $("abSource");
+      if (bot === "strategy" && broker && mode !== "backtest") {
+        broker.value = mode === "mt5" ? "mt5" : "paper";
+        if (mode === "mt5" && source) { source.value = "mt5"; if (source.onchange) source.onchange(); }
+        broker.closest("label").hidden = true;
+      }
+      // The backtest box tests the bot picked here.
+      const btBot = $("btBot");
+      if (btBot && (bot === "stop" || bot === "sr")) { btBot.value = bot; btBot.closest("label").hidden = true; }
+      const notes = {
+        "strategy:backtest": "Backtest chiến lược (ICT, mẫu, tự viết) chạy trong app iPhone: Backtest → chọn chiến lược. Trên web, chọn bot 🎯 Stop theo nến hoặc 🧱 Cản & Hỗ trợ để backtest.",
+        "strategy:demo": "Chạy thử: bot chạy trên máy chủ với tài khoản ảo (số dư đặt lại được), không đặt lệnh lên MT5.",
+        "strategy:mt5": "Bot đặt lệnh trên tài khoản MT5 đang đăng nhập. Muốn chạy thử an toàn: đăng nhập tài khoản DEMO Exness (bấm tên tài khoản góc trên) rồi bật bot.",
+        "stop:demo": "Bot Stop theo nến đặt lệnh trực tiếp trên MT5 nên không có tài khoản ảo: để chạy thử, đăng nhập tài khoản DEMO Exness rồi bật bot dưới đây (hoặc chạy 🧪 Backtest).",
+        "sr:demo": "Bot Cản & Hỗ trợ đặt lệnh trực tiếp trên MT5 nên không có tài khoản ảo: để chạy thử, đăng nhập tài khoản DEMO Exness rồi bật bot dưới đây (hoặc chạy 🧪 Backtest).",
+        "tick:demo": "Bot nến tick đặt lệnh trực tiếp trên MT5 nên không có tài khoản ảo: để chạy thử, đăng nhập tài khoản DEMO Exness rồi bật bot dưới đây.",
+        "tick:backtest": "Bot nến tick vào lệnh theo từng tick trong cây nến: backtest cần dữ liệu tick, sẽ có ở bản sau. Hãy chạy thử với tài khoản DEMO Exness.",
+      };
+      const real = t.login && t.mode === "real" && mode !== "backtest" && !(bot === "strategy" && mode === "demo");
+      $("hubNote").innerHTML = (notes[key] ? esc(notes[key]) : "") + (real ? `<div class="warn">⚠️ Đang đăng nhập TÀI KHOẢN THẬT: bot sẽ đặt lệnh bằng tiền thật.</div>` : "");
+    },
+
     /* ----- "Nến tick" bot on the server: in on a run from the candle's open, out by its close ----- */
 
     async loadTickBot(first) {
@@ -3176,6 +3225,7 @@
         <p class="muted small" id="btInfo"></p>
         <div id="btResult"></div>`;
       $("btRun").onclick = () => this.runStopBt();
+      this.applyBotHub();
     },
 
     async runStopBt() {
@@ -3403,6 +3453,7 @@
         const ok = await act(e.currentTarget, () => this.call("/start", body), "Bot đã chạy");
         if (ok) this.loadAutoBot(false);
       };
+      this.applyBotHub();
     },
 
     renderBotTrades(st, history) {
