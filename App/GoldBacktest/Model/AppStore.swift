@@ -3,7 +3,7 @@ import Observation
 import BacktestKit
 
 enum AppTab: Hashable {
-    case live, trade, indicators, news, backtest
+    case live, trade, bot, indicators, news, backtest
 }
 
 /// App-wide state: datasets, custom indicators, strategies and the last
@@ -17,6 +17,8 @@ final class AppStore {
     var lastError: String?
     /// Selected tab, so screens can send the user to another tab.
     var selectedTab: AppTab = .live
+    /// The indicator list over any screen (the owner's tab bar has the Bot tab in its place).
+    var showIndicators = false
     /// Chart drawings per symbol key (e.g. "BINANCE:PAXGUSDT").
     private(set) var drawings: [String: [Drawing]] = [:]
 

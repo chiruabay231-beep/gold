@@ -262,7 +262,7 @@ struct LiveView: View {
         }
         .sheet(isPresented: $showIndicatorSheet, onDismiss: runAfterSheet) {
             LiveIndicatorSheet(onKillzoneSettings: { afterSheet = { showKillzoneSettings = true } },
-                               onManage: { afterSheet = { store.selectedTab = .indicators } })
+                               onManage: { afterSheet = { store.showIndicators = true } })
         }
         .sheet(isPresented: $showMoreSheet, onDismiss: runAfterSheet) {
             LiveMoreSheet(onSettings: { afterSheet = { showAppSettings = true } },
@@ -1990,7 +1990,7 @@ struct LiveView: View {
                         PaneChartView(times: times, lines: pane.lines, range: range)
                             .padding(.leading, 4)
                             .padding(.top, 14)
-                        Button { store.selectedTab = .indicators } label: {
+                        Button { store.showIndicators = true } label: {
                             Text(pane.title)
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundColor(theme.primaryText)

@@ -177,6 +177,7 @@ struct BacktestView: View {
             // Strategies no longer have their own tab; they are edited from here.
             ToolbarItem(placement: .primaryAction) {
                 NavigationLink { StrategyListView() } label: { Label("Chiến lược", systemImage: "list.bullet.rectangle") }
+                NavigationLink { IndicatorListView() } label: { Label("Chỉ báo tự viết", systemImage: "function") }
             }
             if !memberFeed.memberMode {
                 ToolbarItem(placement: .topBarLeading) {

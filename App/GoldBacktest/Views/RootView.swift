@@ -32,10 +32,17 @@ struct RootView: View {
                     .tabItem { Label("Giao dịch", systemImage: "briefcase") }
                     .tag(AppTab.trade)
             }
-            if memberFeed.allows(.indicators) {
-                NavigationStack { IndicatorListView() }
-                    .tabItem { Label("Chỉ báo", systemImage: "function") }
-                    .tag(AppTab.indicators)
+            if member {
+                if memberFeed.allows(.indicators) {
+                    NavigationStack { IndicatorListView() }
+                        .tabItem { Label("Chỉ báo", systemImage: "function") }
+                        .tag(AppTab.indicators)
+                }
+            } else {
+                // The owner: the bots on the VPS, their trades and profit at a glance.
+                NavigationStack { BotLedgerView() }
+                    .tabItem { Label("Bot", systemImage: "cpu") }
+                    .tag(AppTab.bot)
             }
             if memberFeed.allows(.news) {
                 NavigationStack { NewsView() }
@@ -49,6 +56,7 @@ struct RootView: View {
             }
         }
         .onChange(of: member) { store.selectedTab = .live }
+        .sheet(isPresented: $store.showIndicators) { NavigationStack { IndicatorListView() } }
         // Watches gold for sudden moves and their news while the app runs.
         .task { await news.monitor() }
         .alert("Lỗi", isPresented: Binding(

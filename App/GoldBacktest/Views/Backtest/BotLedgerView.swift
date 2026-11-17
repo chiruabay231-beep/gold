@@ -34,8 +34,15 @@ struct BotLedgerView: View {
             } else if error == nil {
                 Section { ProgressView("Đang tải…") }
             }
+            Section {
+                NavigationLink { RemoteBotView() } label: {
+                    Label("Kết nối & điều khiển bot trên VPS", systemImage: "slider.horizontal.3")
+                }
+            } footer: {
+                Text("Bot chạy 24/24 trên VPS, kể cả khi tắt app hay web. Bật / tắt và chỉnh bot ở web (tab Bot) hoặc ở mục trên.")
+            }
         }
-        .navigationTitle("Sổ lệnh các bot")
+        .navigationTitle("Bot")
         .task {
             while !Task.isCancelled {
                 await load()
@@ -60,7 +67,7 @@ struct BotLedgerView: View {
 
     private func load() async {
         guard let client = RemoteBotSettings.client() else {
-            error = "Chưa nối máy chủ VPS (Backtest → Bot trên VPS)"
+            error = "Chưa nối máy chủ VPS: bấm \"Kết nối & điều khiển bot trên VPS\" bên dưới"
             return
         }
         do {
