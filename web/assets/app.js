@@ -988,8 +988,14 @@
       let ref = b.open, stopped = false;
       for (const [bid, share] of walk) {
         const time = b.time + Math.round(share * sec);
-        // Each position out on its own profit.
-        book = book.filter((p) => { if (gain(p, bid) >= c.closeProfit - 1e-9) { out(p, bid, "target", time); return false; } return true; });
+        // Each position out on its profit, its stop, or (losing) once the candle has turned against it.
+        book = book.filter((p) => {
+          const g = gain(p, bid);
+          if (g >= c.closeProfit - 1e-9) { out(p, bid, "target", time); return false; }
+          if (c.sl > 0 && g <= -c.sl + 1e-9) { out(p, bid, "sl", time); return false; }
+          if (c.flipExit && g < 0 && (p.side === "long" ? bid < b.open - c.step : bid > b.open + c.step)) { out(p, bid, "flip", time); return false; }
+          return true;
+        });
         // Basket stop.
         const floating = book.reduce((a, p) => a + value(p.side, p.entry, p.side === "long" ? bid : bid + spread), 0);
         if (c.basketStop > 0 && book.length && floating <= -c.basketStop) {
@@ -1001,6 +1007,7 @@
         if (!up && !down) continue;
         ref = bid;
         if ((up && c.direction === "short") || (down && c.direction === "long")) continue;
+        if (c.withCandle && (up ? bid <= b.open : bid >= b.open)) continue;
         for (let q = 0; q < Math.min(c.burst || 1, c.maxPositions - book.length); q++) {
           placed++;
           book.push({ side: up ? "long" : "short", entry: up ? bid + spread : bid, stop: null, target: null, openTime: time });
@@ -3316,7 +3323,7 @@
       const el = $("tickBotPanel");
       if (!el) return;
       let st = null, problem = "";
-      try { st = await this.botCall("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.6 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
+      try { st = await this.botCall("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.9 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
       this.tickStatus = st;
       if (!this.tickWatch) this.watchTickBot();
       if (first || !el.querySelector("#tbForm") || !el.contains(document.activeElement)) this.renderTickBot(st, problem);
@@ -3324,7 +3331,7 @@
     },
 
     tickSettings() {
-      const c = Object.assign({ symbol: "", interval: "1m", direction: "both", lots: 0.01, step: 0.3, closeProfit: 0.3, maxPositions: 6, basketStop: 30, burst: 1, exitAtClose: true, minLeftPct: 15, maxSpread: 0.5, noSpread: false },
+      const c = Object.assign({ symbol: "", interval: "1m", direction: "both", lots: 0.01, step: 0.3, closeProfit: 0.3, maxPositions: 6, basketStop: 30, burst: 1, exitAtClose: true, minLeftPct: 15, maxSpread: 0.5, noSpread: false, sl: 0.3, withCandle: true, flipExit: true },
         (this.tickStatus && this.tickStatus.config) || {});
       const v = (id) => ($(id) ? $(id).value : null);
       if ($("tbSymbol")) {
@@ -3334,6 +3341,7 @@
           basketStop: num(v("tbBasket")) ?? 30, exitAtClose: $("tbExit").checked, minLeftPct: num(v("tbLeft")) ?? 15, maxSpread: num(v("tbSpread")) ?? 0.5,
           noSpread: $("tbNoSpread").checked,
           burst: Math.max(1, Math.min(5, Math.round(num(v("tbBurst")) || 1))),
+          sl: num(v("tbSL")) ?? 0.3, withCandle: $("tbWith").checked, flipExit: $("tbFlip").checked,
         });
       }
       c.symbol = c.symbol || this.symbol || "XAUUSDm";
@@ -3348,7 +3356,7 @@
       const opt = (list, v) => list.map(([k, n]) => `<option value="${k}" ${String(k) === String(v) ? "selected" : ""}>${n}</option>`).join("");
       const runPaper = st && st.config && st.config.paper;
       el.innerHTML = `<div class="panel-head"><h3>⚡ Bot nến tick (bản đầu)</h3>${st ? `<span class="badge ${c.running ? "on" : "off"}">${c.running ? (runPaper ? "Đang chạy ẢO" : "Đang chạy trên MT5") : "Đang tắt"}</span>` : ""}</div>
-        <p class="muted small">Bot <b>MUA / BÁN liên tục</b> theo từng tick trong cây nến: mỗi lần giá chạy thêm một <b>bước</b> từ lệnh trước (lúc đầu từ giá mở nến) thì vào thêm 1 lệnh theo chiều đó (lên = MUA, xuống = BÁN), nên <b>bên nào giá phản ứng mạnh hơn sẽ có nhiều lệnh hơn</b>. Lệnh <b>không có SL / TP</b>: lệnh nào dương đủ mức <b>chốt lời</b> thì đóng ngay, lệnh khác vào tiếp. An toàn: giới hạn số lệnh mở cùng lúc, <b>cắt lỗ chung</b> khi cả rổ lệnh âm quá mức, và đóng hết khi hết cây nến.</p>
+        <p class="muted small">Bot <b>MUA / BÁN liên tục</b> theo từng tick trong cây nến: mỗi lần giá chạy thêm một <b>bước</b> từ lệnh trước (lúc đầu từ giá mở nến) thì vào thêm 1 lệnh theo chiều đó (lên = MUA, xuống = BÁN), nên <b>bên nào giá phản ứng mạnh hơn sẽ có nhiều lệnh hơn</b>. Lệnh nào dương đủ mức <b>chốt lời</b> thì đóng ngay, lệnh khác vào tiếp; lệnh âm tới <b>SL</b> hoặc khi <b>nến đảo chiều</b> thì đóng sớm. An toàn: giới hạn số lệnh mở cùng lúc, <b>cắt lỗ chung</b> khi cả rổ lệnh âm quá mức, và đóng hết khi hết cây nến.</p>
         ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
         <div id="tbForm">
           <div class="fields three">
@@ -3371,6 +3379,11 @@
             <label>Số lệnh mỗi lần vào (1 – 5)<input id="tbBurst" inputmode="numeric" value="${c.burst || 1}"></label>
             <label>&nbsp;<button class="btn btn-ghost" id="tbPreset" type="button">⚙ Cài giống video (XAUUSD 0.01 · chốt ~1$)</button></label>
           </div>
+          <div class="fields three">
+            <label>SL mỗi lệnh (giá, 0 = không SL)<input id="tbSL" inputmode="decimal" value="${c.sl ?? 0.3}"></label>
+          </div>
+          <label class="check"><input type="checkbox" id="tbWith" ${c.withCandle !== false ? "checked" : ""}> Chỉ vào <b>thuận chiều cây nến</b> (giá trên giá mở: chỉ MUA · dưới: chỉ BÁN)</label>
+          <label class="check"><input type="checkbox" id="tbFlip" ${c.flipExit !== false ? "checked" : ""}> Đóng lệnh âm khi <b>cây nến đảo chiều</b> (qua giá mở thêm 1 bước)</label>
           <label class="check"><input type="checkbox" id="tbExit" ${c.exitAtClose ? "checked" : ""}> Đóng hết lệnh khi hết cây nến</label>
           <label class="check"><input type="checkbox" id="tbNoSpread" ${c.noSpread ? "checked" : ""}> Chạy trên giá <b>không có spread</b> (MUA và BÁN cùng giá Bid) — chỉ áp dụng cho 🎮 Chạy thử và 🧪 Backtest; tài khoản MT5 thật luôn có spread</label>
           <p class="muted small">Ví dụ vàng: bước 0.3 · chốt lời 0.3 = giá chạy lên 0.3$ thì MUA thêm 1 lệnh, xuống 0.3$ thì BÁN thêm 1 lệnh; lệnh nào lời 0.3$ (0.01 lot ≈ 0.3$) thì đóng. Cần tài khoản MT5 dạng <b>hedging</b> (mặc định của Exness) để giữ MUA và BÁN cùng lúc.</p>
@@ -3395,7 +3408,7 @@
       if (preset) preset.onclick = () => {
         // As in the video: XAUUSD 0.01 a position, buys and sells side by side, each out at about +1$, 3–4 open.
         const set = (id, v) => { if ($(id)) $(id).value = v; };
-        set("tbLots", 0.01); set("tbStep", 0.5); set("tbClose", 1); set("tbMax", 4); set("tbBurst", 1); set("tbBasket", 20);
+        set("tbLots", 0.01); set("tbStep", 0.5); set("tbClose", 1); set("tbMax", 4); set("tbBurst", 1); set("tbBasket", 20); set("tbSL", 1);
         set("tbInterval", "5m"); set("tbDirection", "both"); set("tbLeft", 5);
         if ($("tbExit")) $("tbExit").checked = false;
         toast("Đã điền cài đặt giống video: bấm Lưu / Bật để dùng");
@@ -3580,15 +3593,15 @@
       const W = 600, H = 120, lo = Math.min(...curve), hi = Math.max(...curve), span = hi - lo || 1;
       const pts = curve.map((v, i) => `${(i / Math.max(curve.length - 1, 1) * W).toFixed(1)},${(H - 6 - (v - lo) / span * (H - 12)).toFixed(1)}`).join(" ");
       const color = net >= 0 ? "var(--up)" : "var(--down)";
-      const reason = R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", end: "đóng cuối test", close: "hết nến" }
+      const reason = R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", end: "đóng cuối test", close: "hết nến" }
         : { target: "chạm TP", stop: "chạm SL", trail: "chạm SL đã dời", end: "đóng cuối test", close: "hết nến" };
       const sr = R.bot === "sr" || R.bot === "tick", tick = R.bot === "tick";
-      el.innerHTML = `<p class="muted small">${tick ? "⚡ Nến tick" : sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · spread ${fmt(R.spread, R.digits)} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · ${tick ? `bước ${R.c.step} · chốt lời ${R.c.closeProfit} · tối đa ${R.c.maxPositions} lệnh · cắt lỗ chung ${R.c.basketStop ? money(R.c.basketStop) : "tắt"}${R.c.exitAtClose !== false ? " · đóng khi hết nến" : ""}` : `R:R ${R.c.rr}`}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>
+      el.innerHTML = `<p class="muted small">${tick ? "⚡ Nến tick" : sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · spread ${fmt(R.spread, R.digits)} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · ${tick ? `bước ${R.c.step} · chốt lời ${R.c.closeProfit} · SL ${R.c.sl || "không"}${R.c.withCandle ? " · thuận chiều nến" : ""}${R.c.flipExit ? " · đóng khi nến đảo" : ""} · tối đa ${R.c.maxPositions} lệnh · cắt lỗ chung ${R.c.basketStop ? money(R.c.basketStop) : "tắt"}${R.c.exitAtClose !== false ? " · đóng khi hết nến" : ""}` : `R:R ${R.c.rr}`}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>
         <div class="stats">
           ${stat("Lãi/lỗ ròng", signed(net), net >= 0 ? "pos" : "neg")}
           ${stat("Số lệnh", `${t.length} <span class="muted small">/ ${R.placed} ${sr ? "tín hiệu" : "lệnh chờ đặt"}</span>`)}
           ${stat("Thắng", t.length ? `${wins.length}/${t.length} · ${Math.round(wins.length / t.length * 100)}%` : "–")}
-          ${stat(tick ? "Chốt lời / cắt lỗ chung" : "Chạm TP / SL", `${tp} / ${sl}${tick ? ` <span class="muted small">· ${t.filter((x) => x.reason === "close").length} hết nến</span>` : sr ? ` <span class="muted small">· ${t.filter((x) => x.reason === "trail").length} SL dời</span>` : ""}`)}
+          ${stat(tick ? "Chốt lời / cắt lỗ chung" : "Chạm TP / SL", `${tp} / ${sl}${tick ? ` <span class="muted small">· ${t.filter((x) => x.reason === "sl").length} cắt lỗ lệnh · ${t.filter((x) => x.reason === "flip").length} nến đảo · ${t.filter((x) => x.reason === "close").length} hết nến</span>` : sr ? ` <span class="muted small">· ${t.filter((x) => x.reason === "trail").length} SL dời</span>` : ""}`)}
           ${stat("Profit factor", gl > 0 ? (gp / gl).toFixed(2) : gp > 0 ? "∞" : "–")}
           ${stat("Sụt giảm lớn nhất", dd ? "−" + money(dd) : "0", dd ? "neg" : "")}
           ${stat("Lời TB / lỗ TB", `${wins.length ? signed(gp / wins.length) : "–"} / ${losses.length ? signed(-gl / losses.length) : "–"}`)}

@@ -31,7 +31,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "4.8"
+VERSION = "4.9"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2981,6 +2981,9 @@ class SRBot:
 TICK_MAGIC = 20265
 DEFAULT_TICKBOT = {"running": False, "symbol": "", "interval": "1m", "direction": "both", "lots": 0.01,
                    "step": 0.3, "closeProfit": 0.3, "maxPositions": 6, "basketStop": 30.0, "burst": 1,
+                   # v3: a stop for each position (price, 0 = none), entries only with the candle (above its open:
+                   # buys, below: sells), and losing positions out once the candle turns the other way past a step.
+                   "sl": 0.3, "withCandle": True, "flipExit": True,
                    "exitAtClose": True, "minLeftPct": 15, "maxSpread": 0.5,
                    # Virtual account only: fills at the bid both ways (as if there were no spread).
                    "noSpread": False,
@@ -3027,6 +3030,7 @@ class TickBot:
         c = self.cfg
         for key, cast in (("symbol", str), ("interval", str), ("direction", str), ("lots", float), ("step", float),
                           ("closeProfit", float), ("maxPositions", int), ("basketStop", float), ("burst", int), ("exitAtClose", bool),
+                          ("sl", float), ("withCandle", bool), ("flipExit", bool),
                           ("minLeftPct", float), ("maxSpread", float), ("paper", bool), ("noSpread", bool)):
             if key in body:
                 c[key] = cast(body[key])
@@ -3168,10 +3172,16 @@ class TickBot:
                 book = self._book(mt5, symbol)
             self.bar, self.ref = bar_time, bar_open
         gain = lambda p: (tick.bid - p["entry"]) if p["side"] == "long" else (p["entry"] - tick.ask)
-        # Each position out on its own profit.
+        # Each position out on its own profit, its own stop, or (losing) when the candle has turned against it.
         for p in book:
-            if gain(p) >= c["closeProfit"] - 1e-9:
+            g = gain(p)
+            if g >= c["closeProfit"] - 1e-9:
                 self._close(mt5, p, tick, units, "chốt lời")
+            elif c.get("sl", 0) > 0 and g <= -c["sl"] + 1e-9:
+                self._close(mt5, p, tick, units, "cắt lỗ lệnh")
+            elif c.get("flipExit") and g < 0 and ((p["side"] == "long" and tick.bid < bar_open - c["step"])
+                                                   or (p["side"] == "short" and tick.bid > bar_open + c["step"])):
+                self._close(mt5, p, tick, units, "nến đảo chiều")
         book = self._book(mt5, symbol)
         # Basket stop: all out when the open positions together are this much down.
         floating = sum(gain(p) * p["lots"] * units for p in book)
@@ -3195,6 +3205,9 @@ class TickBot:
             return
         self.ref = tick.bid
         if (long and c["direction"] == "short") or (short and c["direction"] == "long"):
+            return
+        # With the candle only: no buys while it is below its open, no sells while above.
+        if c.get("withCandle") and ((long and tick.bid <= bar_open) or (short and tick.bid >= bar_open)):
             return
         # `burst` positions at once on each run (as many as the cap leaves room for).
         for _ in range(min(int(c.get("burst", 1)), c["maxPositions"] - len(book))):
