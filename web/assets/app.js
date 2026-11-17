@@ -3823,10 +3823,10 @@
           <div class="kvs"><div class="kv"><span>Phiên bản</span><b>${esc(s.version)}</b></div>
             <div class="kv"><span>Chạy từ</span><b>${s.startedAt ? fullTime(s.startedAt) : "–"}</b></div>
             <div class="kv"><span>MT5</span><b>${s.mt5 && s.mt5.connected ? "Đã kết nối" : esc((s.mt5 && s.mt5.error) || "Chưa kết nối")}</b></div></div>
-          <button class="btn btn-ghost wide" id="srvUpdate">Cập nhật máy chủ lên bản mới nhất</button>
-          <div id="ownAcctBox" class="own-box"></div>`;
+          <button class="btn btn-ghost wide" id="srvUpdate">Cập nhật máy chủ lên bản mới nhất</button>`;
         $("toBot").onclick = () => this.setTab("autobot");
-        this.renderOwnAccount();
+        // Its own box, refreshed every 15 s and only redrawn when something changed (no flicker).
+        if (first || !this.ownAt || Date.now() - this.ownAt > 15000) { this.ownAt = Date.now(); this.renderOwnAccount(); }
         if ($("mt5Login") && !$("mt5Login").innerHTML) this.renderMt5Login();
         $("srvUpdate").onclick = async (e) => {
           if (!confirm("Cập nhật máy chủ? Máy chủ tự khởi động lại trong khoảng 1 phút.")) return;
@@ -3848,7 +3848,7 @@
       let w = null, problem = "";
       try { w = await this.mainCall("/webacct"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.7 để dùng." : plain(e.message); }
       const use = store.get("aurum.useWebAcct") === "1";
-      box.innerHTML = `<h4>🖥️ Tài khoản MT5 riêng cho máy tính</h4>
+      const html = `<h4>🖥️ Tài khoản MT5 riêng cho máy tính</h4>
         <p class="muted small">Máy chủ VPS chạy thêm một MT5 thứ 2 với tài khoản riêng (ví dụ tài khoản <b>demo</b>) <b>chỉ cho bot</b>: tab Bot trên máy tính này xem và chạy bot trên tài khoản đó, còn tab Biểu đồ vẫn trade tay trên <b>tài khoản chính</b> (app cũng vậy) — không cần đăng nhập qua lại. Bot chạy 24/24 trên VPS, tắt web vẫn chạy. Lần đầu bật, máy chủ sao chép MT5 (vài phút).</p>
         ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
         ${w ? `<div class="kvs"><div class="kv"><span>Máy chủ thứ 2</span><b>${w.enabled ? (w.running ? `đang chạy · cổng ${w.port}` : "đang khởi động…") : "đang tắt"}</b></div>
@@ -3860,6 +3860,10 @@
             ${w.enabled ? `<button class="btn ${use ? "btn-ghost" : "btn-gold"}" id="ownUse" type="button">${use ? "Bot về tài khoản chính" : "Bot chạy trên tài khoản riêng"}</button>` : ""}
           </div>
           ${w.enabled ? `<div id="ownLogin"></div>` : ""}` : ""}`;
+      // Same as on screen: leave it (and the login form being typed in) alone.
+      if (html === this.ownHtml && box.innerHTML) return;
+      this.ownHtml = html;
+      box.innerHTML = html;
       if (w && w.enabled && w.running && w.url) this.renderOwnLogin(w.url);
       const toggle = $("ownToggle"), useBtn = $("ownUse");
       if (toggle) toggle.onclick = async (e) => {
