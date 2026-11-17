@@ -3357,6 +3357,8 @@
           ${stat("Đang mở", `${v.positions.length} · ${signed(open)}`, open >= 0 ? "pos" : "neg")}
           ${stat("Thắng", h.length ? `${wins.length}/${h.length} · ${Math.round(wins.length / h.length * 100)}%` : "–")}
           ${stat("Profit factor", gl > 0 ? (gp / gl).toFixed(2) : gp > 0 ? "∞" : "–")}
+          ${(() => { const rb = +store.get("aurum.rebate") || 0; if (!rb) return ""; const lots = h.reduce((a, x) => a + (+x.lots || 0), 0), got = lots * rb;
+            return stat("Backcom ước tính", `${signed(got)} · ${lots.toFixed(2)} lot`, "pos") + stat("Ròng sau backcom", signed(net + got), net + got >= 0 ? "pos" : "neg"); })()}
         </div>
         ${h.length > 1 ? `<svg class="bt-eq" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${net >= 0 ? "var(--up)" : "var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>` : ""}
         ${this.botWhy(h)}
@@ -3568,6 +3570,7 @@
           <label>Spread (giá, trống = spread hiện tại)<input id="btSpread" inputmode="decimal" placeholder="VD vàng 0.16" value="${esc(store.get("aurum.btSpread") || "")}"></label>
           <label>Thời gian<select id="btDays">${[1, 3, 7, 14, 30, 60].map((d) => `<option value="${d}" ${d === days ? "selected" : ""}>${d} ngày</option>`).join("")}</select></label>
           <label>Vốn ban đầu<input id="btBalance" inputmode="decimal" value="${esc(store.get("aurum.btBalance") || "10000")}"></label>
+          <label>Backcom ($ mỗi lot, 0 = không)<input id="btRebate" inputmode="decimal" value="${esc(store.get("aurum.rebate") || "0")}"></label>
           <label>&nbsp;<button class="btn btn-gold" id="btRun" type="button">▶ Chạy backtest</button></label>
           <label id="btSrcWrap">Dữ liệu (bot nến tick)<select id="btSrc"><option value="ticks" ${store.get("aurum.btSrc") !== "bars" ? "selected" : ""}>Tick thật MT5 (chính xác, tối đa 2 ngày)</option><option value="bars" ${store.get("aurum.btSrc") === "bars" ? "selected" : ""}>Nến (ước lượng, nhanh)</option></select></label>
           <label id="btOptWrap">&nbsp;<button class="btn btn-ghost" id="btOpt" type="button">🔎 Tìm cài đặt tốt nhất</button></label>
@@ -3585,6 +3588,7 @@
       const days = +$("btDays").value, balance = num($("btBalance").value) || 10000;
       store.set("aurum.btDays", String(days)); store.set("aurum.btBalance", String(balance)); store.set("aurum.btBot", bot);
       store.set("aurum.btSpread", $("btSpread").value.trim());
+      if ($("btRebate")) store.set("aurum.rebate", String(num($("btRebate").value) || 0));
       // Spread: as typed, or the live one when the backtest is on the chart's symbol.
       let spread = num($("btSpread").value);
       if (spread == null) spread = c.symbol === this.symbol && this.bid != null && this.ask != null ? Math.max(0, this.ask - this.bid) : 0;
@@ -3612,10 +3616,19 @@
           store.set("aurum.btSrc", "ticks");
           const end = Date.now() / 1000, start = Math.max(from, end - 2 * 86400);
           ticks = [];
-          for (let t = start; t < end; t += 6 * 3600) {
+          // An hour a call (a few MB at most), each given 60 s; an hour MT5 has no ticks for is skipped.
+          let failed = 0, lastError = "";
+          for (let t = start; t < end; t += 3600) {
             info.textContent = `Đang tải tick thật ${c.symbol}… ${Math.round((t - start) / (end - start) * 100)}% · ${ticks.length.toLocaleString("vi-VN")} tick`;
-            const r = await this.call(`/mt5/ticks?symbol=${encodeURIComponent(c.symbol)}&from=${Math.floor(t)}&to=${Math.floor(Math.min(end, t + 6 * 3600))}`);
-            ticks = ticks.concat(r.ticks || []);
+            const path = `/mt5/ticks?symbol=${encodeURIComponent(c.symbol)}&from=${Math.floor(t)}&to=${Math.floor(Math.min(end, t + 3600))}`;
+            try {
+              const r = await Promise.race([this.call(path), new Promise((_, no) => setTimeout(() => no(new Error("máy chủ không trả lời sau 60 giây")), 60000))]);
+              ticks = ticks.concat(r.ticks || []);
+            } catch (e) {
+              if (ServerTooOld(e)) throw new Error("Máy chủ VPS chưa có tải tick: vào tab Máy chủ → Cập nhật lên bản 5.1");
+              failed++; lastError = plain(e.message);
+              if (failed >= 3 && !ticks.length) throw new Error("Không tải được tick (" + lastError + "). Thử chọn 'Nến (ước lượng)' hoặc mở MT5 trên VPS để nó tải lịch sử tick.");
+            }
           }
           if (ticks.length < 100) throw new Error("MT5 không trả đủ tick cho khoảng này (cập nhật máy chủ lên 5.1?)");
         } else if ($("btSrc")) store.set("aurum.btSrc", "bars");
@@ -3727,6 +3740,8 @@
           ${stat("Sụt giảm lớn nhất", dd ? "−" + money(dd) : "0", dd ? "neg" : "")}
           ${stat("Lời TB / lỗ TB", `${wins.length ? signed(gp / wins.length) : "–"} / ${losses.length ? signed(-gl / losses.length) : "–"}`)}
           ${stat("Vốn cuối", money(R.balance + net), net >= 0 ? "pos" : "neg")}
+          ${(() => { const rb = +store.get("aurum.rebate") || 0; if (!rb) return ""; const lots = t.reduce((a, x) => a + (x.lots || R.c.lots || 0), 0), got = lots * rb;
+            return stat("Backcom nhận", `${signed(got)} <span class="muted small">· ${lots.toFixed(2)} lot</span>`, "pos") + stat("Ròng sau backcom", signed(net + got), net + got >= 0 ? "pos" : "neg"); })()}
         </div>
         ${t.length ? `<svg class="bt-eq" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>` : ""}
         <div class="row-btns"><button class="btn btn-ghost" id="btChart" type="button" ${t.length ? "" : "disabled"}>📈 Xem các lệnh trên biểu đồ</button></div>
