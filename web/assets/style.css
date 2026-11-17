@@ -1184,3 +1184,8 @@ body.on-chart #chartNote { font-size: 10.5px; line-height: 1.3; padding: 1px 4px
 /* The Bot box's own chart: the bot's market with its trades. */
 .bot-live .bl-head { display: flex; gap: 6px; align-items: baseline; margin-bottom: 6px; }
 .bot-live .bot-chart { position: relative; height: 340px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+
+/* The MT5-like box in the Bot box: under the profit curve, as wide as it. */
+.bl-m5 .m5-view { max-width: none; margin: 8px 0 12px; }
+.bot-live .bl-head .grow { flex: 1; }
+.bot-live .bl-head .check { margin: 0; white-space: nowrap; }

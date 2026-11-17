@@ -3196,6 +3196,17 @@
         positions: (a.st.positions || []).map((p) => ({ side: p.side, entry: p.entryPrice, profit: +p.profit || 0 })), history: (a.hist || []).map(norm) };
     },
 
+    /** The chosen bot's status as the MT5-like view reads it. */
+    botStatusFor() {
+      const bot = store.get("aurum.hubBot") || "strategy";
+      if (bot === "tick") return this.tickStatus || {};
+      if (bot === "sr") return this.srStatus || {};
+      if (bot === "stop") return this.stopStatus || {};
+      const a = this.autoFull || {}, st = a.st || {}, acc = st.account || {};
+      return { config: { symbol: (st.settings || {}).symbol }, positions: (st.positions || []).map((p) => ({ symbol: p.symbol, side: p.side, lots: p.lots, entry: p.entryPrice, profit: +p.profit || 0 })),
+        paper: acc.balance != null ? { balance: acc.balance, equity: acc.equity } : null };
+    },
+
     /** Candles of the bot's market with its entries (▲▼) and exits (●), its open positions as lines,
      *  then its profit: total, win rate, the balance curve and the last trades. Every 4 s while shown. */
     async renderBotLive() {
@@ -3203,6 +3214,12 @@
       if (!box || box.hidden || this.tab !== "autobot" || !window.LightweightCharts) return;
       const v = this.botView();
       $("blTitle").textContent = v ? v.name : "Bot";
+      const mk = $("blMarks");
+      if (mk && !mk.dataset.bound) {
+        mk.dataset.bound = "1";
+        mk.checked = store.get("aurum.botMarks") === "1";
+        mk.onchange = () => { store.set("aurum.botMarks", mk.checked ? "1" : null); this.renderBotLive(); };
+      }
       $("blSub").textContent = v ? ` · ${v.symbol || "–"} ${v.interval || ""} · ${v.running ? (v.paper ? "đang chạy ẢO" : "đang chạy trên MT5") : "đang tắt"}${this.ownAccount ? " · tài khoản riêng" : ""} · chạy 24/24 trên VPS` : " · chưa có dữ liệu";
       if (!v || !v.symbol || !v.interval) return;
       if (!this.botChart) {
@@ -3232,7 +3249,8 @@
           if (h.closeTime && h.closeTime >= first) marks.push({ time: at(h.closeTime), position: long ? "aboveBar" : "belowBar", color: h.profit >= 0 ? "#14b88a" : "#f0455a", shape: "circle", text: (h.profit >= 0 ? "+" : "") + h.profit.toFixed(2) });
         });
         marks.sort((a, b) => a.time - b.time);
-        this.botSeries.setMarkers(marks);
+        // The entries / exits are many with a scalping bot: off unless asked for.
+        this.botSeries.setMarkers(store.get("aurum.botMarks") === "1" ? marks : []);
         (this.botLines || []).forEach((l) => this.botSeries.removePriceLine(l));
         this.botLines = v.positions.filter((p) => p.entry != null).map((p) => this.botSeries.createPriceLine({ price: p.entry, color: p.side === "long" ? "#2b6bf3" : "#f0455a", lineWidth: 1, lineStyle: 2,
           axisLabelVisible: true, title: `${p.side === "long" ? "BUY" : "SELL"} ${p.profit >= 0 ? "+" : ""}${p.profit.toFixed(2)}` }));
@@ -3256,6 +3274,7 @@
           ${stat("Profit factor", gl > 0 ? (gp / gl).toFixed(2) : gp > 0 ? "∞" : "–")}
         </div>
         ${h.length > 1 ? `<svg class="bt-eq" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${net >= 0 ? "var(--up)" : "var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>` : ""}
+        <div class="bl-m5">${this.mt5LikeView(this.botStatusFor())}</div>
         <h4>Lịch sử lệnh của bot (mới nhất trước)</h4>
         <div class="list log">${h.length ? h.slice(0, 25).map((x) => `<div class="log-row"><span class="muted small">${x.closeTime ? clock(x.closeTime) : ""}</span> ${sideName(x.side)}${x.lots ? " " + x.lots : ""} ${x.entry != null ? fmt(x.entry, d) : "–"} → ${x.exit != null ? fmt(x.exit, d) : "–"} · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b></div>`).join("") : '<div class="empty">Chưa có lệnh đã đóng</div>'}</div>`;
     },
@@ -3370,7 +3389,6 @@
           <div class="stat"><span>Đang mở</span><b>${(st.positions || []).length}</b></div>
         </div>
         ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
-        ${this.mt5LikeView(st)}
         ${st.paper ? `<p class="muted small">Tài khoản ẢO: số dư ${money(st.paper.balance)} · lệnh và lãi/lỗ tính theo giá Exness thật${(st.config || {}).noSpread ? " (không tính spread)" : ""}, không đặt lệnh lên MT5.</p>` : ""}
         <div class="list">${(st.positions || []).map((o) => `<div class="sig"><div class="bar" style="background:${o.side === "long" ? "#2b6bf3" : "var(--down)"}"></div>
           <div><div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${o.side === "long" ? "buy" : "sell"}">${sideName(o.side)} ${o.lots}</span><span class="muted small">@ ${fmt(o.entry, d(o.symbol))}${o.paper ? " · ảo" : ""}</span></div>
