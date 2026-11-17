@@ -6751,7 +6751,8 @@
             + `<div class="fr"><span class="grow">Tính từ</span>${time("weekFvgHour")}${selI("weekFvgZone", [["America/New_York", "Giờ New York"], ["Asia/Ho_Chi_Minh", "Giờ Việt Nam"]])}</div>`
             + numf("weekFvgWeeks", "Số tuần gần nhất")
             + note("Mỗi tuần lấy FVG đầu tiên trên khung M1 hình thành trong ngày thứ 2 từ giờ đã chọn (mặc định 9:30 sáng New York, tức 21:30 giờ VN mùa đông / 20:30 mùa hè; New York tự đổi giờ mùa hè), 3 cây nến M1 tạo FVG đều từ giờ đó và cùng ngày thứ 2, dù chart đang ở khung nào; vùng kéo ngang tới hết tuần để xem giá phản ứng. Đường giữa là 50% của FVG. Nến M1 lấy từ máy chủ MT5 (hoặc Binance).")
-            + head("FVG & VI") + tog("fvg", "Hiện FVG") + tog("fvgStrong", "Chỉ FVG mạnh (lọc FVG yếu)") + numf("fvgDisplacement", "Nến tạo FVG ≥ × thân TB", 0.1)
+            + head("FVG & VI") + tog("fvg", "Hiện FVG")
+            + sel("fvgMode", "FVG kéo tới", [["ifvg", "Nến hiện tại · nến đóng phá qua → IFVG"], ["touch", "Lần chạm đầu (cũ)"]]) + tog("fvgStrong", "Chỉ FVG mạnh (lọc FVG yếu)") + numf("fvgDisplacement", "Nến tạo FVG ≥ × thân TB", 0.1)
             + tog("fvgConfluence", "Tô nền khi trùng FVG khung lớn") + tog("fvgMid", "Đường giữa 50%") + tog("fvgHideFilled", "Ẩn FVG đã bị chạm")
             + numf("gapKeep", "Chạm rồi bật ngược: giữ (phút)") + numf("fvgMinSize", "Lọc FVG nhỏ (× biên độ nến)", 0.1) + numf("fvgCount", "Giữ FVG gần nhất")
             + tog("vi", "Hiện VI (Volume Imbalance)") + numf("viCount", "Giữ VI gần nhất") + tog("viKeep", "Giữ VI khi nến chạm / xuyên qua (dừng tại cây đó)") + tog("viHideTouched", "Ẩn VI đã bị chạm")

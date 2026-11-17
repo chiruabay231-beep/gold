@@ -71,6 +71,9 @@
       ],
       fvg: true, fvgFrom: 1, fvgTo: 1440, fvgStrong: true, fvgDisplacement: 1.5, fvgConfluence: true,
       fvgMid: true, fvgHideFilled: false, gapKeep: 15, fvgMinSize: 0, fvgCount: 40,
+      // "ifvg": a gap runs on to the newest candle until a candle CLOSES through it, then it turns into an
+      // inversion FVG (IFVG, the other way) that runs on until a close back through it. "touch": as before.
+      fvgMode: "ifvg",
       fvgBull: "#089981", fvgBear: "#f23645", fvgZone: "#8c8f99", fvgZoneMid: "#9c27b0",
       // viKeep: a VI a candle touches or trades through stays, ending at that candle.
       vi: true, viCount: 20, viHideTouched: false, viKeep: true, viVersion: 2, viColor: "#fa9900",
@@ -275,7 +278,37 @@
     return { bars, first };
   }
 
+  /** A gap's life: on until a candle closes beyond its far edge (then an IFVG from that candle, the other
+   *  way, on until a candle closes back beyond its other edge). */
+  function inversionLife(raw, c) {
+    const n = c.length, formed = raw.start + 1;
+    let touched = false, broke = null, back = null;
+    for (let j = formed + 1; j < n; j++) {
+      if (!touched && (raw.bull ? c[j].low <= raw.top : c[j].high >= raw.bottom)) touched = true;
+      if (raw.bull ? c[j].close < raw.bottom : c[j].close > raw.top) { broke = j; break; }
+    }
+    if (broke != null) {
+      for (let j = broke + 1; j < n; j++) if (raw.bull ? c[j].close > raw.top : c[j].close < raw.bottom) { back = j; break; }
+    }
+    const fvg = Object.assign({}, raw, { end: broke != null ? broke : n - 1, touched, filled: broke != null, running: broke == null });
+    const ifvg = broke == null ? null : { bull: !raw.bull, top: raw.top, bottom: raw.bottom, start: broke, end: back != null ? back : n - 1,
+      inverse: true, running: back == null, touched: true };
+    return { fvg, ifvg };
+  }
+
   function fairValueGaps(c, sec, cfg) {
+    if (cfg.fvgMode !== "touch") {
+      // Running FVGs and IFVGs; an IFVG closed through again goes, with its FVG.
+      const out = [];
+      const raw = rawGaps(c, cfg.fvgMinSize, cfg.fvgStrong ? cfg.fvgDisplacement : null);
+      for (let k = raw.length - 1; k >= 0 && out.length < cfg.fvgCount * 2; k--) {
+        const { fvg, ifvg } = inversionLife(raw[k], c);
+        if (!ifvg) { if (!(fvg.touched && cfg.fvgHideFilled)) out.push(fvg); continue; }
+        if (!ifvg.running) continue;
+        out.push(ifvg, fvg);
+      }
+      return out.reverse();
+    }
     const gaps = [];
     const raw = rawGaps(c, cfg.fvgMinSize, cfg.fvgStrong ? cfg.fvgDisplacement : null);
     for (let k = raw.length - 1; k >= 0 && gaps.length < cfg.fvgCount; k--) {
@@ -736,10 +769,23 @@
       if (a == null || e == null || yt == null || yb == null) return;
       const l = a - half, r = e + half;
       if (r < 0 || l > w) return;
-      const color = alpha(f.bull ? cfg.fvgBull : cfg.fvgBear, f.touched ? 0.6 : 1);
+      const color = alpha(f.bull ? cfg.fvgBull : cfg.fvgBear, f.touched && !f.inverse ? 0.6 : 1);
       if (f.confluence) { g.fillStyle = alpha(cfg.fvgZone, 0.15); g.fillRect(l, yt, r - l, yb - yt); }
-      line(l, r, yt, color, 1.2); line(l, r, yb, color, 1.2);
+      if (f.inverse) {
+        // IFVG: a light fill and dashed edges in its new direction's colour, named at its left.
+        g.fillStyle = alpha(f.bull ? cfg.fvgBull : cfg.fvgBear, 0.12); g.fillRect(l, yt, r - l, yb - yt);
+        line(l, r, yt, color, 1.2, [5, 3]); line(l, r, yb, color, 1.2, [5, 3]);
+      } else {
+        line(l, r, yt, color, 1.2); line(l, r, yb, color, 1.2);
+      }
       if (cfg.fvgMid) line(l, r, (yt + yb) / 2, f.confluence ? cfg.fvgZoneMid : color, 0.8, [3, 3]);
+      if (cfg.fvgMode !== "touch" && (f.running || f.inverse)) {
+        g.save(); g.setLineDash([]);
+        g.font = "600 10px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, Ubuntu, sans-serif";
+        g.fillStyle = color; g.textAlign = "left"; g.textBaseline = "bottom";
+        g.fillText(f.inverse ? "IFVG" : "FVG", Math.max(l, 0) + 3, Math.min(yt, yb) - 1);
+        g.restore();
+      }
     });
     // Monday's first FVG after 09:30 (VN): a band to the end of its week, its middle and its name.
     (o.weekFvgs || []).forEach((f) => {
