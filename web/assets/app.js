@@ -1022,6 +1022,17 @@
   /** The tick bot on REAL Exness ticks ([ms, bid, ask]), step by step as the server runs it: each tick
    *  closes positions on their profit / stop / candle turning, checks the basket stop, then may open
    *  (BUY at the ask, SELL at the bid, the real spread of that moment). */
+  /** Broker account types to try (XAUUSD, rough averages: change them to your broker's figures). spread in
+   *  price, commission in $ per lot round trip; spread null = the real one. */
+  const ACCOUNT_SIMS = {
+    real: { name: "Thực tế (spread tick thật / nến)", spread: null, commission: 0 },
+    standard: { name: "Standard (spread ~0.20, không phí)", spread: 0.20, commission: 0 },
+    pro: { name: "Pro (spread ~0.12, không phí)", spread: 0.12, commission: 0 },
+    raw: { name: "Raw Spread (spread ~0.03 + phí 7$/lot)", spread: 0.03, commission: 7 },
+    zero: { name: "Zero (spread 0 + phí 10$/lot)", spread: 0, commission: 10 },
+    custom: { name: "Tuỳ chỉnh…", spread: 0.1, commission: 0 },
+  };
+
   function tickBotOnTicks(ticks, c, value) {
     const sec = TF_SECONDS[c.interval] || 60, trades = [];
     let placed = 0, book = [], bar = null, open = 0, ref = 0, stopped = false;
@@ -3373,7 +3384,7 @@
       const el = $("tickBotPanel");
       if (!el) return;
       let st = null, problem = "";
-      try { st = await this.botCall("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.9 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
+      try { st = await this.botCall("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 5.2 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
       this.tickStatus = st;
       if (!this.tickWatch) this.watchTickBot();
       if (first || !el.querySelector("#tbForm") || !el.contains(document.activeElement)) this.renderTickBot(st, problem);
@@ -3390,6 +3401,7 @@
           step: num(v("tbStep")) || 0.3, closeProfit: num(v("tbClose")) || 0.3, maxPositions: Math.max(1, Math.round(num(v("tbMax")) || 6)),
           basketStop: num(v("tbBasket")) ?? 30, exitAtClose: $("tbExit").checked, minLeftPct: num(v("tbLeft")) ?? 15, maxSpread: num(v("tbSpread")) ?? 0.5,
           noSpread: $("tbNoSpread").checked,
+          simSpread: $("tbAcct").value === "real" ? -1 : (num(v("tbSimSpread")) ?? 0.1), commission: $("tbAcct").value === "real" ? 0 : (num(v("tbComm")) || 0),
           burst: Math.max(1, Math.min(5, Math.round(num(v("tbBurst")) || 1))),
           sl: num(v("tbSL")) ?? 0.3, withCandle: $("tbWith").checked, flipExit: $("tbFlip").checked,
         });
@@ -3436,6 +3448,11 @@
           <label class="check"><input type="checkbox" id="tbWith" ${c.withCandle !== false ? "checked" : ""}> Chỉ vào <b>thuận chiều cây nến</b> (giá trên giá mở: chỉ MUA · dưới: chỉ BÁN)</label>
           <label class="check"><input type="checkbox" id="tbFlip" ${c.flipExit !== false ? "checked" : ""}> Đóng lệnh âm khi <b>cây nến đảo chiều</b> (qua giá mở thêm 1 bước)</label>
           <label class="check"><input type="checkbox" id="tbExit" ${c.exitAtClose ? "checked" : ""}> Đóng hết lệnh khi hết cây nến</label>
+          <div class="fields three">
+            <label>Tài khoản ảo giả lập loại<select id="tbAcct">${Object.entries(ACCOUNT_SIMS).map(([k, a]) => `<option value="${k}" ${(c.simSpread == null || c.simSpread < 0) ? (k === "real" ? "selected" : "") : (k === "custom" ? "selected" : "")}>${a.name}</option>`).join("")}</select></label>
+            <label>Spread giả lập (giá)<input id="tbSimSpread" inputmode="decimal" value="${c.simSpread != null && c.simSpread >= 0 ? c.simSpread : 0.1}"></label>
+            <label>Phí ($/lot, khứ hồi)<input id="tbComm" inputmode="decimal" value="${c.commission || 0}"></label>
+          </div>
           <label class="check"><input type="checkbox" id="tbNoSpread" ${c.noSpread ? "checked" : ""}> Chạy trên giá <b>không có spread</b> (MUA và BÁN cùng giá Bid) — chỉ áp dụng cho 🎮 Chạy thử và 🧪 Backtest; tài khoản MT5 thật luôn có spread</label>
           <p class="muted small">Ví dụ vàng: bước 0.3 · chốt lời 0.3 = giá chạy lên 0.3$ thì MUA thêm 1 lệnh, xuống 0.3$ thì BÁN thêm 1 lệnh; lệnh nào lời 0.3$ (0.01 lot ≈ 0.3$) thì đóng. Cần tài khoản MT5 dạng <b>hedging</b> (mặc định của Exness) để giữ MUA và BÁN cùng lúc.</p>
           <div class="row-btns">
@@ -3455,6 +3472,16 @@
       };
       if (stop) stop.onclick = (e) => send(e.currentTarget, { running: false }, "Đã tắt bot (lệnh đang mở giữ nguyên)");
       if (save) save.onclick = (e) => send(e.currentTarget, {}, "Đã lưu");
+      const tbAcct = $("tbAcct");
+      if (tbAcct) {
+        const fillAcct = () => {
+          const a = ACCOUNT_SIMS[tbAcct.value] || ACCOUNT_SIMS.real;
+          if (tbAcct.value !== "custom" && tbAcct.value !== "real") { $("tbSimSpread").value = a.spread; $("tbComm").value = a.commission; }
+          $("tbSimSpread").closest("label").hidden = tbAcct.value === "real";
+          $("tbComm").closest("label").hidden = tbAcct.value === "real";
+        };
+        tbAcct.onchange = fillAcct; fillAcct();
+      }
       const preset = $("tbPreset");
       if (preset) preset.onclick = () => {
         // As in the video: XAUUSD 0.01 a position, buys and sells side by side, each out at about +1$, 3–4 open.
@@ -3571,12 +3598,23 @@
           <label>Thời gian<select id="btDays">${[1, 3, 7, 14, 30, 60].map((d) => `<option value="${d}" ${d === days ? "selected" : ""}>${d} ngày</option>`).join("")}</select></label>
           <label>Vốn ban đầu<input id="btBalance" inputmode="decimal" value="${esc(store.get("aurum.btBalance") || "10000")}"></label>
           <label>Backcom ($ mỗi lot, 0 = không)<input id="btRebate" inputmode="decimal" value="${esc(store.get("aurum.rebate") || "0")}"></label>
+          <label>Loại tài khoản (giả lập)<select id="btAcct">${Object.entries(ACCOUNT_SIMS).map(([k, a]) => `<option value="${k}" ${k === (store.get("aurum.btAcct") || "real") ? "selected" : ""}>${a.name}</option>`).join("")}</select></label>
+          <label>Spread giả lập (giá)<input id="btSimSpread" inputmode="decimal" value="${esc(store.get("aurum.btSimSpread") || "0.1")}"></label>
+          <label>Phí ($/lot, khứ hồi)<input id="btComm" inputmode="decimal" value="${esc(store.get("aurum.btComm") || "0")}"></label>
           <label>&nbsp;<button class="btn btn-gold" id="btRun" type="button">▶ Chạy backtest</button></label>
           <label id="btSrcWrap">Dữ liệu (bot nến tick)<select id="btSrc"><option value="ticks" ${store.get("aurum.btSrc") !== "bars" ? "selected" : ""}>Tick thật MT5 (chính xác, tối đa 2 ngày)</option><option value="bars" ${store.get("aurum.btSrc") === "bars" ? "selected" : ""}>Nến (ước lượng, nhanh)</option></select></label>
           <label id="btOptWrap">&nbsp;<button class="btn btn-ghost" id="btOpt" type="button">🔎 Tìm cài đặt tốt nhất</button></label>
         </div>
         <p class="muted small" id="btInfo"></p>
         <div id="btResult"></div>`;
+      // Picking an account type fills its spread and commission (still editable).
+      const acctSel = $("btAcct"), fill = () => {
+        const a = ACCOUNT_SIMS[acctSel.value] || ACCOUNT_SIMS.real;
+        if (acctSel.value !== "custom") { $("btSimSpread").value = a.spread == null ? "" : a.spread; $("btComm").value = a.commission; }
+        $("btSimSpread").closest("label").hidden = acctSel.value === "real";
+        $("btComm").closest("label").hidden = acctSel.value === "real";
+      };
+      acctSel.onchange = fill; fill();
       $("btRun").onclick = () => this.runStopBt();
       $("btOpt").onclick = () => this.optimizeTickBot();
       this.applyBotHub();
@@ -3593,6 +3631,13 @@
       let spread = num($("btSpread").value);
       if (spread == null) spread = c.symbol === this.symbol && this.bid != null && this.ask != null ? Math.max(0, this.ask - this.bid) : 0;
       if (bot === "tick" && c.noSpread) spread = 0;
+      const acct = $("btAcct") ? $("btAcct").value : "real";
+      const simSpread = acct === "real" ? null : num($("btSimSpread").value);
+      const commission = acct === "real" ? 0 : num($("btComm").value) || 0;
+      store.set("aurum.btAcct", acct);
+      if ($("btSimSpread")) store.set("aurum.btSimSpread", $("btSimSpread").value);
+      if ($("btComm")) store.set("aurum.btComm", $("btComm").value);
+      if (simSpread != null) spread = simSpread;
       const sec = TF_SECONDS[c.interval] || 60, from = Date.now() / 1000 - days * 86400;
       const btn = $("btRun"), info = $("btInfo");
       btn.disabled = true;
@@ -3609,7 +3654,8 @@
         }
         bars = bars.filter((b) => b.time >= from);
         if (bars.length < 3) throw new Error(`MT5 chỉ trả ${bars.length} nến ${c.symbol} ${c.interval}`);
-        const value = (side, entry, exit) => this.valueAt(c.symbol, c.lots, side, entry, exit);
+        // The trade's money, less the account type's commission (per lot, round trip).
+        const value = (side, entry, exit) => this.valueAt(c.symbol, c.lots, side, entry, exit) - commission * c.lots;
         // The tick bot on real ticks: up to 2 days, 6 hours a call.
         let ticks = null;
         if (bot === "tick" && $("btSrc") && $("btSrc").value === "ticks") {
@@ -3631,6 +3677,8 @@
             }
           }
           if (ticks.length < 100) throw new Error("MT5 không trả đủ tick cho khoảng này (cập nhật máy chủ lên 5.1?)");
+          // Another account type: its spread over the real bid of every tick.
+          if (simSpread != null) ticks = ticks.map(([t, b]) => [t, b, b + simSpread]);
         } else if ($("btSrc")) store.set("aurum.btSrc", "bars");
         // The tick bot: the 1-minute bars inside its candles show the way price went in each.
         let sub = null;
@@ -3648,7 +3696,7 @@
         const r = bot === "sr" ? srBacktest(bars, c, value, spread) : bot === "tick" ? (ticks ? tickBotOnTicks(ticks, c, value) : tickBotBacktest(bars, c, value, spread, sub)) : stopBotBacktest(bars, c, value, spread);
         if (ticks) spread = ticks.reduce((a, x) => a + (x[2] - x[1]), 0) / ticks.length;
         this.btShow = 30;
-        this.btResult = { bot, spread, c, ticks: ticks ? ticks.length : 0, bars: bars.length, from: bars[0].time, to: bars[bars.length - 1].time + sec, balance, placed: r.placed, trades: r.trades, digits: this.digitsFor(c.symbol) };
+        this.btResult = { bot, spread, commission, acct, c, ticks: ticks ? ticks.length : 0, bars: bars.length, from: bars[0].time, to: bars[bars.length - 1].time + sec, balance, placed: r.placed, trades: r.trades, digits: this.digitsFor(c.symbol) };
         info.textContent = "";
         this.renderStopBtResult();
       } catch (e) {
@@ -3730,7 +3778,7 @@
       const reason = R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", end: "đóng cuối test", close: "hết nến" }
         : { target: "chạm TP", stop: "chạm SL", trail: "chạm SL đã dời", end: "đóng cuối test", close: "hết nến" };
       const sr = R.bot === "sr" || R.bot === "tick", tick = R.bot === "tick";
-      el.innerHTML = `<p class="muted small">${tick ? "⚡ Nến tick" : sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "spread"} ${fmt(R.spread, R.digits)} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · ${tick ? `bước ${R.c.step} · chốt lời ${R.c.closeProfit} · SL ${R.c.sl || "không"}${R.c.withCandle ? " · thuận chiều nến" : ""}${R.c.flipExit ? " · đóng khi nến đảo" : ""} · tối đa ${R.c.maxPositions} lệnh · cắt lỗ chung ${R.c.basketStop ? money(R.c.basketStop) : "tắt"}${R.c.exitAtClose !== false ? " · đóng khi hết nến" : ""}` : `R:R ${R.c.rr}`}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>
+      el.innerHTML = `<p class="muted small">${tick ? "⚡ Nến tick" : sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · ${tick ? `bước ${R.c.step} · chốt lời ${R.c.closeProfit} · SL ${R.c.sl || "không"}${R.c.withCandle ? " · thuận chiều nến" : ""}${R.c.flipExit ? " · đóng khi nến đảo" : ""} · tối đa ${R.c.maxPositions} lệnh · cắt lỗ chung ${R.c.basketStop ? money(R.c.basketStop) : "tắt"}${R.c.exitAtClose !== false ? " · đóng khi hết nến" : ""}` : `R:R ${R.c.rr}`}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>
         <div class="stats">
           ${stat("Lãi/lỗ ròng", signed(net), net >= 0 ? "pos" : "neg")}
           ${stat("Số lệnh", `${t.length} <span class="muted small">/ ${R.placed} ${sr ? "tín hiệu" : "lệnh chờ đặt"}</span>`)}

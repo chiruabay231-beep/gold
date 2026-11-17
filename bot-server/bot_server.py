@@ -31,7 +31,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "5.1"
+VERSION = "5.2"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3012,6 +3012,9 @@ DEFAULT_TICKBOT = {"running": False, "symbol": "", "interval": "1m", "direction"
                    "exitAtClose": True, "minLeftPct": 15, "maxSpread": 0.5,
                    # Virtual account only: fills at the bid both ways (as if there were no spread).
                    "noSpread": False,
+                   # Virtual account only, a broker account type to try: a spread of its own (price, -1 = the real
+                   # one) and a commission in dollars per lot, round trip.
+                   "simSpread": -1.0, "commission": 0.0,
                    # True: virtual orders on the live Exness price (no order sent to MT5), False: real orders.
                    "paper": True}
 TICK_PAPER_PATH = os.path.join(HERE, "tickbot_paper.json")
@@ -3056,6 +3059,7 @@ class TickBot:
         for key, cast in (("symbol", str), ("interval", str), ("direction", str), ("lots", float), ("step", float),
                           ("closeProfit", float), ("maxPositions", int), ("basketStop", float), ("burst", int), ("exitAtClose", bool),
                           ("sl", float), ("withCandle", bool), ("flipExit", bool),
+                          ("simSpread", float), ("commission", float),
                           ("minLeftPct", float), ("maxSpread", float), ("paper", bool), ("noSpread", bool)):
             if key in body:
                 c[key] = cast(body[key])
@@ -3152,6 +3156,7 @@ class TickBot:
         price = tick.bid if long else tick.ask
         profit = (price - p["entry"]) * (1 if long else -1) * p["lots"] * units
         if self.cfg["paper"]:
+            profit -= float(self.cfg.get("commission", 0) or 0) * p["lots"]
             with self.lock:
                 self.paper["positions"] = [x for x in self.paper["positions"] if x["id"] != p["id"]]
                 self.paper["balance"] = round(self.paper["balance"] + profit, 2)
@@ -3186,6 +3191,9 @@ class TickBot:
         if no_spread:
             # The virtual account without the spread: buys and sells both at the bid.
             tick = types.SimpleNamespace(bid=tick.bid, ask=tick.bid, time=tick.time)
+        elif c["paper"] and float(c.get("simSpread", -1)) >= 0:
+            # Another account type tried on the virtual account: its own spread over the real bid.
+            tick = types.SimpleNamespace(bid=tick.bid, ask=tick.bid + float(c["simSpread"]), time=tick.time)
         bar_time, bar_open = float(rates[-1]["time"]), float(rates[-1]["open"])
         sec = SECONDS_OF[c["interval"]]
         units = self._units(info, symbol)
