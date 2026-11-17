@@ -31,7 +31,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "5.0"
+VERSION = "5.1"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -1327,6 +1327,31 @@ class Mt5Account:
             summary["balance"] = a.balance if a else None
             summary["currency"] = a.currency if a else None
             return {"ok": True, "positions": positions, "orders": orders, "deals": deals, "summary": summary}
+
+    def ticks(self, symbol, start, end):
+        """Real bid / ask ticks between two times (UTC seconds, at most 6 hours a call): [[ms, bid, ask], …],
+        for the tick bot's backtest."""
+        import datetime
+        start, end = float(start), float(end)
+        if end <= start:
+            raise ValueError("Khoảng thời gian không hợp lệ")
+        end = min(end, start + 6 * 3600)
+        with Mt5.lock:
+            mt5 = self._mt5()
+            symbol = Mt5.need_symbol(mt5, symbol)
+            offset = Mt5.detect_offset(symbol)
+            utc = datetime.timezone.utc
+            rows = mt5.copy_ticks_range(symbol, datetime.datetime.fromtimestamp(start + offset, tz=utc),
+                                        datetime.datetime.fromtimestamp(end + offset, tz=utc), mt5.COPY_TICKS_INFO)
+            info = mt5.symbol_info(symbol)
+        out, last = [], None
+        for r in rows if rows is not None else ():
+            bid, ask = float(r["bid"]), float(r["ask"])
+            if not bid or not ask or (bid, ask) == last:
+                continue
+            last = (bid, ask)
+            out.append([int(r["time_msc"]) - int(offset * 1000), bid, ask])
+        return {"ok": True, "symbol": symbol, "digits": getattr(info, "digits", 2), "from": start, "to": end, "ticks": out}
 
     def candles(self, symbol, interval, count, before=None):
         if interval not in MT5_TIMEFRAMES:
@@ -4406,6 +4431,9 @@ def make_handler(server):
                 if path == "/mt5/trading":
                     symbol = (params.get("symbol") or [None])[0]
                     return self._send(200, server.mt5_account.trading(symbol))
+                if path == "/mt5/ticks":
+                    return self._send(200, server.mt5_account.ticks((params.get("symbol") or [""])[0],
+                                                                    (params.get("from") or ["0"])[0], (params.get("to") or ["0"])[0]))
                 if path == "/mt5/candles":
                     symbol = (params.get("symbol") or [""])[0]
                     if not symbol:
