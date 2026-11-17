@@ -3196,6 +3196,36 @@
         positions: (a.st.positions || []).map((p) => ({ side: p.side, entry: p.entryPrice, profit: +p.profit || 0 })), history: (a.hist || []).map(norm) };
     },
 
+    /** Why a bot that wins often can still lose: average win against average loss, the win rate it needs
+     *  to break even, and the money by the way trades closed and by side. */
+    botWhy(h) {
+      if (!h.length) return "";
+      const wins = h.filter((x) => x.profit > 0), losses = h.filter((x) => x.profit <= 0);
+      const aw = wins.length ? wins.reduce((a, x) => a + x.profit, 0) / wins.length : 0;
+      const al = losses.length ? -losses.reduce((a, x) => a + x.profit, 0) / losses.length : 0;
+      const need = aw + al > 0 ? al / (aw + al) * 100 : 0, rate = wins.length / h.length * 100;
+      const group = (key) => {
+        const m = new Map();
+        h.forEach((x) => { const k = key(x) || "khác"; const g = m.get(k) || { n: 0, sum: 0 }; g.n++; g.sum += x.profit; m.set(k, g); });
+        return [...m.entries()].sort((a, b) => a[1].sum - b[1].sum);
+      };
+      const row = ([k, g]) => `<div class="log-row"><span>${esc(k)}</span> · ${g.n} lệnh · <b class="${g.sum >= 0 ? "pos" : "neg"}">${signed(g.sum)}</b></div>`;
+      const big = losses.slice().sort((a, b) => a.profit - b.profit).slice(0, 3);
+      return `<div class="bot-why">
+        <h4>Vì sao thắng nhiều mà vẫn lỗ?</h4>
+        <div class="stats">
+          <div class="stat"><span>Lời TB mỗi lệnh thắng</span><b class="pos">${signed(aw)}</b></div>
+          <div class="stat"><span>Lỗ TB mỗi lệnh thua</span><b class="neg">${signed(-al)}</b></div>
+          <div class="stat"><span>Cần thắng tối thiểu</span><b>${need.toFixed(0)}%</b></div>
+          <div class="stat"><span>Đang thắng</span><b class="${rate >= need ? "pos" : "neg"}">${rate.toFixed(0)}%</b></div>
+        </div>
+        <p class="small">${al > aw ? `Mỗi lệnh thua mất trung bình <b>${(al / Math.max(aw, 0.01)).toFixed(1)} lần</b> số lời của một lệnh thắng, nên phải thắng trên <b>${need.toFixed(0)}%</b> mới hoà vốn; bot đang thắng ${rate.toFixed(0)}% → ${rate >= need ? "vẫn lời" : "nên vẫn lỗ"}.` : "Lời TB lớn hơn lỗ TB."}</p>
+        <div class="why-cols"><div><b class="small">Theo cách đóng lệnh</b>${group((x) => x.reason).map(row).join("")}</div>
+          <div><b class="small">Theo chiều</b>${group((x) => (x.side === "long" ? "BUY" : "SELL")).map(row).join("")}</div>
+          <div><b class="small">3 lệnh lỗ nặng nhất</b>${big.map((x) => `<div class="log-row">${sideName(x.side)} · ${esc(x.reason || "")} · <b class="neg">${signed(x.profit)}</b></div>`).join("")}</div></div>
+      </div>`;
+    },
+
     /** The chosen bot's status as the MT5-like view reads it. */
     botStatusFor() {
       const bot = store.get("aurum.hubBot") || "strategy";
@@ -3274,6 +3304,7 @@
           ${stat("Profit factor", gl > 0 ? (gp / gl).toFixed(2) : gp > 0 ? "∞" : "–")}
         </div>
         ${h.length > 1 ? `<svg class="bt-eq" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${net >= 0 ? "var(--up)" : "var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>` : ""}
+        ${this.botWhy(h)}
         <div class="bl-m5">${this.mt5LikeView(this.botStatusFor())}</div>
         <h4>Lịch sử lệnh của bot (mới nhất trước)</h4>
         <div class="list log">${h.length ? h.slice(0, 25).map((x) => `<div class="log-row"><span class="muted small">${x.closeTime ? clock(x.closeTime) : ""}</span> ${sideName(x.side)}${x.lots ? " " + x.lots : ""} ${x.entry != null ? fmt(x.entry, d) : "–"} → ${x.exit != null ? fmt(x.exit, d) : "–"} · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b></div>`).join("") : '<div class="empty">Chưa có lệnh đã đóng</div>'}</div>`;
