@@ -31,7 +31,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "5.5"
+VERSION = "5.6"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3362,16 +3362,33 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    # at the broker), and / or the basket this many dollars down. 0 = off. Then that side rests
                    # `cooldownMin` minutes.
                    "sl": 0.0, "slMoney": 0.0,
+                   # Candle strength: the last closed `biasTf` candle with a body of at least `biasMinBody` % of its
+                   # range sets the side. "only": new baskets only on that side; "more": both, that side's basket
+                   # `biasLotMult` times bigger; "off": both the same.
+                   "bias": "off", "biasTf": "5m", "biasMinBody": 50.0, "biasLotMult": 2.0,
                    "maxSpread": 0.5, "noSpread": False, "simSpread": -1.0, "commission": 0.0,
                    "paper": True}
 GRID_PAPER_PATH = os.path.join(HERE, "gridbot_paper.json")
 
 
-def grid_lot(c, level):
-    """The lot of a basket's position number `level` (0 = the first)."""
+def grid_lot(c, level, factor=1.0):
+    """The lot of a basket's position number `level` (0 = the first); `factor` = the basket's size (the
+    candle-strength side's baskets are bigger)."""
     # Half up to the 0.01 lot, as the website's gridLot (Python's round() would give 0.015 → 0.01).
-    lots = math.floor(float(c["lots"]) * float(c["multiplier"]) ** level * 100 + 0.5 + 1e-9) / 100
+    lots = math.floor(float(c["lots"]) * factor * float(c["multiplier"]) ** level * 100 + 0.5 + 1e-9) / 100
     return min(float(c["maxLot"]), max(0.01, lots))
+
+
+def candle_bias(c, o, h, l, cl):
+    """The side a closed candle pushes ("long" / "short", None when its body is under `biasMinBody` % of its
+    range) and its body as a share of the range (+ up, − down)."""
+    rng = h - l
+    if rng <= 0:
+        return None, 0.0
+    body = (cl - o) / rng
+    if abs(body) * 100 < float(c.get("biasMinBody", 50)) - 1e-9:
+        return None, body
+    return ("long" if body > 0 else "short"), body
 
 
 class GridBot(TickBot):
@@ -3405,12 +3422,21 @@ class GridBot(TickBot):
     def _start_text(self, c):
         return (f"{c['lots']} lot · nhồi mỗi {c['gridStep']} giá × {c['multiplier']} · tối đa {c['maxLevels']} lớp · "
                 f"chốt rổ khi lời {money(c['tpMoney'])} · SL rổ {c['sl'] or 'tắt'} giá / {money(c['slMoney']) if c['slMoney'] else 'tắt'} · "
-                f"cắt lỗ chung {money(c['basketStop'])}")
+                f"cắt lỗ chung {money(c['basketStop'])}"
+                + self._bias_text(c))
+
+    @staticmethod
+    def _bias_text(c):
+        if c.get("bias", "off") == "off":
+            return ""
+        how = "chỉ bên mạnh" if c["bias"] == "only" else f"bên mạnh ×{c['biasLotMult']:g} lot"
+        return f" · lực nến {c['biasTf']} ≥{c['biasMinBody']:g}% ({how})"
 
     def _fields(self, c, body):
         for key, cast in (("symbol", str), ("direction", str), ("lots", float), ("gridStep", float), ("multiplier", float),
                           ("maxLevels", int), ("maxLot", float), ("tpMoney", float), ("basketStop", float),
-                          ("cooldownMin", float), ("sl", float), ("slMoney", float), ("maxSpread", float), ("simSpread", float), ("commission", float),
+                          ("cooldownMin", float), ("sl", float), ("slMoney", float), ("maxSpread", float),
+                          ("bias", str), ("biasTf", str), ("biasMinBody", float), ("biasLotMult", float), ("simSpread", float), ("commission", float),
                           ("paper", bool), ("noSpread", bool)):
             if key in body:
                 c[key] = cast(body[key])
@@ -3425,6 +3451,12 @@ class GridBot(TickBot):
         c["basketStop"] = max(0.0, c["basketStop"])
         c["cooldownMin"] = max(0.0, c["cooldownMin"])
         c["sl"], c["slMoney"] = max(0.0, c["sl"]), max(0.0, c["slMoney"])
+        if c["bias"] not in ("off", "only", "more"):
+            raise ValueError("Kiểu lực nến không hợp lệ")
+        if c["biasTf"] not in SECONDS_OF:
+            raise ValueError("Khung nến của lực nến không hợp lệ (1m – 1h)")
+        c["biasMinBody"] = max(0.0, min(100.0, c["biasMinBody"]))
+        c["biasLotMult"] = max(1.0, min(5.0, c["biasLotMult"]))
         if not c["paper"] and c["basketStop"] <= 0 and c["sl"] <= 0 and c["slMoney"] <= 0 and (c["running"] or body.get("running")):
             raise ValueError("Trên tài khoản MT5 phải đặt SL rổ hoặc Cắt lỗ chung (nhồi lệnh không cắt lỗ có thể cháy tài khoản)")
 
@@ -3487,6 +3519,14 @@ class GridBot(TickBot):
             return
         if not no_spread and c["maxSpread"] > 0 and tick.ask - tick.bid > c["maxSpread"]:
             return
+        strong = None
+        if c.get("bias", "off") != "off":
+            # The last closed candle of the strength timeframe (bid prices, as the chart).
+            rates = mt5.copy_rates_from_pos(symbol, getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[c["biasTf"]]), 1, 1)
+            if rates is not None and len(rates):
+                r = rates[-1]
+                strong, body = candle_bias(c, float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]))
+                self.bias = {"side": strong, "body": round(body * 100), "time": float(r["time"])}
         for side in ("long", "short"):
             if c["direction"] not in ("both", side) or time.time() < pauses.get(side, 0):
                 continue
@@ -3494,20 +3534,27 @@ class GridBot(TickBot):
             ps = [p for p in book if p["side"] == side]
             price = tick.ask if long else tick.bid
             if not ps:
+                if c.get("bias") == "only" and strong != side:
+                    continue  # no basket against (or without) the candle's push
+                factor = float(c["biasLotMult"]) if c.get("bias") == "more" and strong == side else 1.0
                 stop = (price - c["sl"] if long else price + c["sl"]) if c.get("sl") else None
-                self._open(mt5, symbol, info, tick, long, "mở rổ", grid_lot(c, 0), stop)
+                why = "mở rổ" + (f" · lực nến {'MUA' if long else 'BÁN'} {abs(self.bias['body'])}%" if strong == side else "")
+                self._open(mt5, symbol, info, tick, long, why, grid_lot(c, 0, factor), stop)
             elif len(ps) < c["maxLevels"]:
                 worst = min(p["entry"] for p in ps) if long else max(p["entry"] for p in ps)
                 if (worst - price if long else price - worst) >= c["gridStep"] - 1e-9:
-                    # The new layer gets the basket's stop (first entry ± sl), as its other positions.
+                    # The new layer gets the basket's stop (first entry ± sl), as its other positions, and its size.
                     stop = self.sl_level(c, ps, long)
-                    self._open(mt5, symbol, info, tick, long, f"nhồi lớp {len(ps) + 1}", grid_lot(c, len(ps)), stop)
+                    first = min(ps, key=lambda p: p["openTime"])
+                    factor = max(1.0, round(float(first["lots"]) / float(c["lots"]), 2))
+                    self._open(mt5, symbol, info, tick, long, f"nhồi lớp {len(ps) + 1}", grid_lot(c, len(ps), factor), stop)
 
     def status(self):
         st = super().status()
         cfg = st.get("config") or {}
         levels = [grid_lot(cfg, i) for i in range(int(cfg.get("maxLevels", 1)))] if cfg.get("maxLot") else []
         st["grid"] = {"cycles": getattr(self, "cycles", 0), "pauseUntil": getattr(self, "pause_until", 0) or None,
+                      "bias": getattr(self, "bias", None) if cfg.get("bias", "off") != "off" else None,
                       "sidePause": {k: v for k, v in (getattr(self, "side_pause", None) or {}).items() if v > time.time()},
                       "lots": levels, "totalLots": round(sum(levels), 2)}
         return st

@@ -1196,3 +1196,4 @@ body.on-chart #chartNote { font-size: 10.5px; line-height: 1.3; padding: 1px 4px
 /* Grid ("nhồi lệnh") bot: what its settings risk */
 .grid-risk { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line, rgba(255,255,255,.12)); border-left: 3px solid var(--down, #f0455a); border-radius: 10px; background: rgba(240, 69, 90, .06); }
 .grid-risk .small { margin-top: 4px; }
+.fields .grow2 { grid-column: span 2; }
