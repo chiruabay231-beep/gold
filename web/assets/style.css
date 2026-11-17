@@ -1180,3 +1180,7 @@ body.on-chart #chartNote { font-size: 10.5px; line-height: 1.3; padding: 1px 4px
 .own-box { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
 .own-box h4 { margin: 0 0 6px; }
 .own-acct { display: inline-block; padding: 1px 6px; border-radius: 6px; background: rgba(64, 104, 246, .2); color: #8fa8ff; font-size: 11px; font-weight: 700; }
+
+/* The Bot box's own chart: the bot's market with its trades. */
+.bot-live .bl-head { display: flex; gap: 6px; align-items: baseline; margin-bottom: 6px; }
+.bot-live .bot-chart { position: relative; height: 340px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }

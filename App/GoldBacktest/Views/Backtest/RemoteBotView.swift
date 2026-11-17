@@ -63,6 +63,9 @@ struct RemoteBotView: View {
                 }
             }
             Section {
+                NavigationLink { BotLedgerView() } label: {
+                    Label("Sổ lệnh các bot (lệnh & lãi lỗ, chạy 24/24)", systemImage: "list.bullet.rectangle")
+                }
                 if remote.status != nil {
                     NavigationLink { MembersView() } label: {
                         Label("Thành viên & mã mời (chia sẻ tín hiệu)", systemImage: "person.2.badge.key")

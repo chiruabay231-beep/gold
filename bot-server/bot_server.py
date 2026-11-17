@@ -31,7 +31,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "4.7"
+VERSION = "4.8"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2465,6 +2465,25 @@ def publish_address(server):
             pass
 
 
+def magic_history(mt5, magic, since, limit=200):
+    """A bot's closed trades on MT5 (its magic number), newest first: side, entry → exit, times (UTC), profit."""
+    deals = mt5.history_deals_get(since + Mt5.offset_seconds - 60, now() + Mt5.offset_seconds + 86400) or ()
+    opened, out = {}, []
+    for d in deals:
+        if getattr(d, "magic", 0) == magic and d.entry == mt5.DEAL_ENTRY_IN:
+            opened[d.position_id] = d
+    for d in deals:
+        if getattr(d, "magic", 0) != magic or d.entry != mt5.DEAL_ENTRY_OUT:
+            continue
+        i = opened.get(d.position_id)
+        out.append({"symbol": d.symbol, "side": "long" if d.type == mt5.DEAL_TYPE_SELL else "short", "lots": d.volume,
+                    "entry": i.price if i else None, "openTime": float(i.time) - Mt5.offset_seconds if i else None,
+                    "exit": d.price, "closeTime": float(d.time) - Mt5.offset_seconds,
+                    "profit": round(d.profit + d.commission + d.swap + (getattr(d, "fee", 0) or 0), 2)})
+    out.sort(key=lambda x: x["closeTime"], reverse=True)
+    return out[:limit]
+
+
 STOP_MAGIC = 20263
 DEFAULT_STOPBOT = {"running": False, "symbol": "", "interval": "1m", "direction": "both", "offset": 0.0,
                    "stopMode": "candle", "stopDistance": 5.0, "rr": 2.0, "lots": 0.01, "minRange": 0.0,
@@ -2633,6 +2652,7 @@ class StopBot:
 
     def status(self):
         c = dict(self.cfg)
+        history = []
         orders, positions, stats = [], [], {"trades": 0, "wins": 0, "profit": 0.0}
         try:
             with Mt5.lock:
@@ -2652,10 +2672,11 @@ class StopBot:
                         stats["trades"] += 1
                         stats["wins"] += 1 if pnl > 0 else 0
                         stats["profit"] += pnl
+                history = magic_history(mt5, STOP_MAGIC, now() - 7 * 86400)
         except Exception as e:
             c["statusError"] = str(e)
         with self.lock:
-            return {"ok": True, "config": c, "orders": orders, "positions": positions, "stats": stats,
+            return {"ok": True, "config": c, "history": history, "orders": orders, "positions": positions, "stats": stats,
                     "events": self.events[:40], "error": self.error, "startedAt": self.started}
 
 
@@ -2924,6 +2945,7 @@ class SRBot:
 
     def status(self):
         c = dict(self.cfg)
+        history = []
         positions, stats = [], {"trades": 0, "wins": 0, "profit": 0.0}
         try:
             with Mt5.lock:
@@ -2940,10 +2962,11 @@ class SRBot:
                         stats["trades"] += 1
                         stats["wins"] += 1 if pnl > 0 else 0
                         stats["profit"] += pnl
+                history = magic_history(mt5, SR_MAGIC, now() - 7 * 86400)
         except Exception as e:
             c["statusError"] = str(e)
         with self.lock:
-            return {"ok": True, "config": c, "orders": [], "positions": positions, "stats": stats,
+            return {"ok": True, "config": c, "history": history, "orders": [], "positions": positions, "stats": stats,
                     "events": self.events[:40], "error": self.error, "startedAt": self.started}
 
 
@@ -3211,6 +3234,7 @@ class TickBot:
 
     def status(self):
         c = dict(self.cfg)
+        history = []
         if c.get("paper"):
             return self._paper_status(c)
         positions, stats = [], {"trades": 0, "wins": 0, "profit": 0.0}
@@ -3229,10 +3253,11 @@ class TickBot:
                         stats["trades"] += 1
                         stats["wins"] += 1 if pnl > 0 else 0
                         stats["profit"] += pnl
+                history = magic_history(mt5, TICK_MAGIC, now() - 7 * 86400)
         except Exception as e:
             c["statusError"] = str(e)
         with self.lock:
-            return {"ok": True, "config": c, "positions": positions, "stats": stats,
+            return {"ok": True, "config": c, "history": history, "positions": positions, "stats": stats,
                     "events": self.events[:40], "error": self.error, "startedAt": self.started}
 
 
@@ -4055,6 +4080,26 @@ class BotServer:
                     "mt5": {"error": Mt5.error, "connected": Mt5.connected, "tradingEnabled":
                             bool(self.config["mt5"].get("trading_enabled")), "maxLots": self.config["mt5"].get("max_lots")}}
 
+    def bots(self, local=False):
+        """Every bot at once (for the app's bot screen): its settings, open positions, numbers and closed
+        trades; with the computer's own account on, its bots too ("own")."""
+        out = {"ok": True, "version": VERSION, "instance": INSTANCE,
+               "tick": self.tickbot.status(), "sr": self.srbot.status(), "stop": self.stopbot.status()}
+        st = self.status()
+        with self.lock:
+            try:
+                hist = self.broker.history()[:100]
+            except Exception:
+                hist = []
+        out["strategy"] = {"running": st["running"], "settings": st["settings"], "account": st["account"],
+                           "positions": st["positions"], "history": hist}
+        if not local and not INSTANCE and self.web_account.cfg.get("enabled"):
+            try:
+                out["own"] = self.web_account._local("/bots?local=1", timeout=10)
+            except Exception as e:
+                out["own"] = {"ok": False, "error": str(e)}
+        return out
+
     def close_positions(self, position_id=None):
         with self.lock:
             s = self.settings
@@ -4315,6 +4360,8 @@ def make_handler(server):
                     return self._send(200, server.tickbot.status())
                 if path == "/webacct":
                     return self._send(200, server.web_account.status())
+                if path == "/bots":
+                    return self._send(200, server.bots(local=(params.get("local") or [""])[0] == "1"))
                 if path == "/status":
                     return self._send(200, server.status())
                 if path == "/log":
