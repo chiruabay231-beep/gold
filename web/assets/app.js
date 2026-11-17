@@ -1089,7 +1089,10 @@
 
   function gridBotOnTicks(ticks, c, value) {
     const trades = [];
-    let placed = 0, book = [], pauseUntil = 0, cycles = 0, stops = 0, maxFloat = 0, maxLevel = 0, maxLots = 0;
+    let placed = 0, book = [], pauseUntil = 0, cycles = 0, stops = 0, sls = 0, maxFloat = 0, maxLevel = 0, maxLots = 0;
+    const sidePause = { long: 0, short: 0 };
+    // The basket's stop: `sl` in price past its first (best) entry.
+    const slLevel = (ps, long) => (c.sl > 0 && ps.length ? (long ? Math.max(...ps.map((p) => p.entry)) - c.sl : Math.min(...ps.map((p) => p.entry)) + c.sl) : null);
     const pv = (p, bid, ask) => value(p.side, p.entry, p.side === "long" ? bid : ask, p.lots);
     const out = (p, bid, ask, reason, t) => trades.push(Object.assign({}, p, { exit: p.side === "long" ? bid : ask, reason, closeTime: t, profit: pv(p, bid, ask) }));
     for (const [ms, bid0, ask0] of ticks) {
@@ -1103,7 +1106,13 @@
         let closed = false;
         for (const side of ["long", "short"]) {
           const ps = book.filter((p) => p.side === side);
-          if (ps.length && ps.reduce((a, p) => a + pv(p, bid, ask), 0) >= c.tpMoney - 1e-9) {
+          if (!ps.length) continue;
+          const sum = ps.reduce((a, p) => a + pv(p, bid, ask), 0), lv = slLevel(ps, side === "long");
+          const hit = lv != null && (side === "long" ? bid <= lv + 1e-9 : ask >= lv - 1e-9);
+          if (hit || (c.slMoney > 0 && sum <= -c.slMoney + 1e-9)) {
+            ps.forEach((p) => out(p, bid, ask, "sl", t)); book = book.filter((p) => p.side !== side); sls++; sidePause[side] = t + (c.cooldownMin || 0) * 60; closed = true; continue;
+          }
+          if (sum >= c.tpMoney - 1e-9) {
             ps.forEach((p) => out(p, bid, ask, "basket", t)); book = book.filter((p) => p.side !== side); cycles++; closed = true;
           }
         }
@@ -1112,7 +1121,7 @@
       if (t < pauseUntil) continue;
       if (!c.noSpread && c.maxSpread > 0 && ask - bid > c.maxSpread) continue;
       for (const side of ["long", "short"]) {
-        if (c.direction !== "both" && c.direction !== side) continue;
+        if ((c.direction !== "both" && c.direction !== side) || t < sidePause[side]) continue;
         const long = side === "long", ps = book.filter((p) => p.side === side), price = long ? ask : bid;
         let add = !ps.length;
         if (ps.length && ps.length < c.maxLevels) {
@@ -1121,14 +1130,14 @@
         }
         if (!add) continue;
         placed++;
-        book.push({ side, entry: price, lots: gridLot(c, ps.length), layer: ps.length + 1, stop: null, target: null, openTime: t });
+        book.push({ side, entry: price, lots: gridLot(c, ps.length), layer: ps.length + 1, stop: ps.length ? slLevel(ps, long) : (c.sl > 0 ? (long ? price - c.sl : price + c.sl) : null), target: null, openTime: t });
         maxLevel = Math.max(maxLevel, ps.length + 1);
       }
       const lots = book.reduce((a, p) => a + p.lots, 0);
       if (lots > maxLots) maxLots = lots;
     }
     if (book.length && ticks.length) { const [ms, bid, ask] = ticks[ticks.length - 1]; book.forEach((p) => out(p, bid, c.noSpread ? bid : ask, "end", ms / 1000)); }
-    return { placed, trades, grid: { cycles, stops, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
+    return { placed, trades, grid: { cycles, stops, sls, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
   }
 
   /** Bars as a path of prices for the grid bot when no ticks are loaded: open → low → high → close on a
@@ -3307,7 +3316,7 @@
         "tick:demo": "Chạy thử: bot chạy trên máy chủ theo giá Exness thật từng tick, lệnh và số dư là ẢO (không đặt lệnh lên MT5, kể cả khi đang đăng nhập tài khoản thật).",
         "grid:backtest": "Backtest bot nhồi lệnh trên tick thật Exness (tối đa 2 ngày) hoặc trên nến 1 phút (ước lượng). Xem kỹ ô 'Âm sâu nhất khi đang gồng': đó là số tiền tài khoản phải chịu được.",
         "grid:demo": "Chạy thử: bot nhồi lệnh chạy trên máy chủ theo giá Exness thật từng tick, lệnh và số dư là ẢO (không đặt lệnh lên MT5).",
-        "grid:mt5": "Bot nhồi lệnh đặt lệnh THẬT trên tài khoản MT5 đang đăng nhập (bắt buộc có Cắt lỗ chung). Nên chạy trên tài khoản DEMO Exness trước.",
+        "grid:mt5": "Bot nhồi lệnh đặt lệnh THẬT trên tài khoản MT5 đang đăng nhập (bắt buộc có SL rổ hoặc Cắt lỗ chung). Nên chạy trên tài khoản DEMO Exness trước.",
       };
       const real = t.login && t.mode === "real" && mode !== "backtest" && !(mode === "demo" && (bot === "strategy" || bot === "tick" || bot === "grid"));
       $("hubNote").innerHTML = (notes[key] ? esc(notes[key]) : "") + (real ? `<div class="warn">⚠️ Đang đăng nhập TÀI KHOẢN THẬT: bot sẽ đặt lệnh bằng tiền thật.</div>` : "");
@@ -3636,7 +3645,7 @@
       const el = $("gridBotPanel");
       if (!el) return;
       let st = null, problem = "";
-      try { st = await this.botCall("/gridbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 5.4 (tab Máy chủ → Cập nhật) để chạy bot nhồi lệnh. Backtest vẫn chạy được ngay." : plain(e.message); }
+      try { st = await this.botCall("/gridbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 5.5 (tab Máy chủ → Cập nhật) để chạy bot nhồi lệnh. Backtest vẫn chạy được ngay." : plain(e.message); }
       this.gridStatus = st;
       if (!this.tickWatch) this.watchTickBot();
       if (first || !el.querySelector("#gbForm") || !el.contains(document.activeElement)) this.renderGridBot(st, problem);
@@ -3645,13 +3654,14 @@
 
     gridSettings() {
       const c = Object.assign({ symbol: "", direction: "both", lots: 0.01, gridStep: 2, multiplier: 1.5, maxLevels: 6, maxLot: 0.5, tpMoney: 1,
-        basketStop: 60, cooldownMin: 60, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
+        basketStop: 60, cooldownMin: 60, sl: 0, slMoney: 0, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
       const v = (id) => ($(id) ? $(id).value : null);
       if ($("gbSymbol")) {
         Object.assign(c, {
           symbol: v("gbSymbol").trim(), direction: v("gbDirection"), lots: num(v("gbLots")) || 0.01, gridStep: num(v("gbStep")) || 2,
           multiplier: Math.max(1, Math.min(3, num(v("gbMult")) || 1)), maxLevels: Math.max(1, Math.min(30, Math.round(num(v("gbLevels")) || 6))),
           maxLot: num(v("gbMaxLot")) || 0.5, tpMoney: num(v("gbTp")) || 1, basketStop: num(v("gbStop")) ?? 60, cooldownMin: num(v("gbCool")) ?? 60,
+          sl: Math.max(0, num(v("gbSL")) || 0), slMoney: Math.max(0, num(v("gbSLMoney")) || 0),
           maxSpread: num(v("gbSpread")) ?? 0.5, noSpread: $("gbNoSpread").checked,
           simSpread: $("gbAcct").value === "real" ? -1 : (num(v("gbSimSpread")) ?? 0.1), commission: $("gbAcct").value === "real" ? 0 : (num(v("gbComm")) || 0),
         });
@@ -3667,9 +3677,13 @@
      *  gone the whole grid against one basket. */
     gridRisk(c) {
       const lots = Array.from({ length: c.maxLevels }, (_, i) => gridLot(c, i));
-      const depth = c.gridStep * c.maxLevels, px = this.symbol === c.symbol && this.bid ? this.bid : 2000;
-      const loss = lots.reduce((a, l, i) => a + (this.valueAt(c.symbol, l, "long", px, px - (depth - i * c.gridStep)) || 0), 0);
-      return { lots, total: Math.round(lots.reduce((a, x) => a + x, 0) * 100) / 100, depth, loss };
+      // Price can go the whole grid against the basket, or only to its SL.
+      const full = c.gridStep * c.maxLevels, depth = c.sl > 0 ? Math.min(c.sl, full) : full;
+      const px = this.symbol === c.symbol && this.bid ? this.bid : 2000;
+      const used = lots.filter((_, i) => i * c.gridStep < depth - 1e-9);
+      let loss = used.reduce((a, l, i) => a + (this.valueAt(c.symbol, l, "long", px, px - (depth - i * c.gridStep)) || 0), 0);
+      if (c.slMoney > 0) loss = Math.max(loss, -c.slMoney);
+      return { lots, total: Math.round(lots.reduce((a, x) => a + x, 0) * 100) / 100, depth, loss, layers: used.length };
     },
 
     renderGridBot(st, problem) {
@@ -3677,6 +3691,7 @@
       const c = this.gridSettings();
       const opt = (list, v) => list.map(([k, n]) => `<option value="${k}" ${String(k) === String(v) ? "selected" : ""}>${n}</option>`).join("");
       const runPaper = st && st.config && st.config.paper;
+      if (st && st.config && st.config.sl === undefined) problem = (problem ? problem + " " : "") + "Máy chủ VPS chưa có SL rổ: vào tab Máy chủ → Cập nhật lên bản 5.5 (Backtest vẫn dùng SL được ngay).";
       el.innerHTML = `<div class="panel-head"><h3>🕸️ Bot nhồi lệnh (grid / gấp lot)</h3>${st ? `<span class="badge ${c.running ? "on" : "off"}">${c.running ? (runPaper ? "Đang chạy ẢO" : "Đang chạy trên MT5") : "Đang tắt"}</span>` : ""}</div>
         <p class="muted small">Kiểu bot "nhồi lệnh, chốt lời nhỏ": mở 1 lệnh MUA và 1 lệnh BÁN. Bên nào giá chạy <b>ngược</b> thêm một <b>khoảng nhồi</b> thì vào thêm lệnh bên đó với lot × <b>hệ số gấp</b> (1 = không gấp). Khi cả rổ bên đó dương đủ <b>mức chốt rổ</b> thì đóng hết rổ và mở lại từ đầu.</p>
         <p class="warn small">⚠️ Bot dạng này thắng đều phần lớn thời gian vì giá thường hồi lại, nhưng một đợt chạy một mạch không hồi (tin, xu hướng mạnh) sẽ lấy lại toàn bộ lãi hoặc cháy tài khoản. Luôn đặt <b>Cắt lỗ chung</b>, chạy 🧪 Backtest và 🎮 Chạy thử trước.</p>
@@ -3695,10 +3710,15 @@
           <div class="fields three">
             <label>Lot tối đa mỗi lệnh<input id="gbMaxLot" inputmode="decimal" value="${c.maxLot}"></label>
             <label>Chốt rổ khi lời ($)<input id="gbTp" inputmode="decimal" value="${c.tpMoney}"></label>
-            <label>Cắt lỗ chung ($, 0 = tắt — chỉ ảo)<input id="gbStop" inputmode="decimal" value="${c.basketStop}"></label>
+            <label>Cắt lỗ chung cả bot ($, 0 = tắt)<input id="gbStop" inputmode="decimal" value="${c.basketStop}"></label>
           </div>
           <div class="fields three">
-            <label>Nghỉ sau cắt lỗ (phút)<input id="gbCool" inputmode="decimal" value="${c.cooldownMin}"></label>
+            <label>SL rổ theo giá (tính từ lệnh đầu, 0 = tắt)<input id="gbSL" inputmode="decimal" placeholder="VD 12" value="${c.sl || 0}"></label>
+            <label>SL rổ theo tiền ($ mỗi rổ, 0 = tắt)<input id="gbSLMoney" inputmode="decimal" placeholder="VD 30" value="${c.slMoney || 0}"></label>
+            <label>&nbsp;<span class="muted small">Chạm SL: đóng cả rổ bên đó, bên đó nghỉ như sau cắt lỗ. Trên MT5, SL theo giá được đặt luôn vào từng lệnh trên sàn (vẫn cắt khi máy chủ mất kết nối).</span></label>
+          </div>
+          <div class="fields three">
+            <label>Nghỉ sau cắt lỗ / SL (phút)<input id="gbCool" inputmode="decimal" value="${c.cooldownMin}"></label>
             <label>Spread tối đa (0 = bỏ qua)<input id="gbSpread" inputmode="decimal" value="${c.maxSpread}"></label>
             <label>&nbsp;<button class="btn btn-ghost" id="gbPreset" type="button">⚙ Cài giống video (0.01 · nhồi 2$ · ×1.5 · chốt 1$)</button></label>
           </div>
@@ -3719,8 +3739,9 @@
         const g = this.gridSettings(), r = this.gridRisk(g);
         $("gbRisk").innerHTML = `<b>Rủi ro của cài đặt này</b> (vàng, 1 rổ):
           <div class="small">Lot từng lớp: ${r.lots.join(" · ")} → tổng <b>${r.total} lot</b> khi đủ ${g.maxLevels} lớp.</div>
-          <div class="small">Giá chạy ngược một mạch <b>${+r.depth.toFixed(2)}</b> (hết lưới) → rổ âm khoảng <b class="neg">${signed(r.loss)}</b>${g.basketStop > 0 ? ` · bot cắt lỗ chung ở <b>−${money(g.basketStop)}</b>` : ' · <b class="neg">không có cắt lỗ chung</b>'}.</div>
-          <div class="small muted">Mỗi rổ thắng chỉ được khoảng ${money(g.tpMoney)}: một lần cắt lỗ chung ${g.basketStop > 0 ? `= khoảng ${Math.round(g.basketStop / g.tpMoney)} rổ thắng` : "có thể mất cả tài khoản"}.</div>`;
+          <div class="small">${g.sl > 0 || g.slMoney > 0 ? `Chạm SL rổ (${g.sl > 0 ? `giá chạy ngược <b>${+r.depth.toFixed(2)}</b>, đã nhồi ${r.layers} lớp` : ""}${g.sl > 0 && g.slMoney > 0 ? " hoặc " : ""}${g.slMoney > 0 ? `rổ âm ${money(g.slMoney)}` : ""}) → mất khoảng <b class="neg">${signed(r.loss)}</b> mỗi lần.`
+            : `Không có SL rổ: giá chạy ngược một mạch <b>${+r.depth.toFixed(2)}</b> (hết lưới) → rổ âm khoảng <b class="neg">${signed(r.loss)}</b> và vẫn gồng tiếp.`}${g.basketStop > 0 ? ` · Cắt lỗ chung cả bot ở <b>−${money(g.basketStop)}</b>.` : g.sl > 0 || g.slMoney > 0 ? "" : ' · <b class="neg">Không có cắt lỗ nào.</b>'}</div>
+          <div class="small muted">Mỗi rổ thắng chỉ được khoảng ${money(g.tpMoney)}: ${g.sl > 0 || g.slMoney > 0 ? `một lần chạm SL rổ ≈ ${Math.max(1, Math.round(-r.loss / g.tpMoney))} rổ thắng` : g.basketStop > 0 ? `một lần cắt lỗ chung ≈ ${Math.round(g.basketStop / g.tpMoney)} rổ thắng` : "một lần thua có thể mất cả tài khoản"}.</div>`;
       };
       $("gbForm").querySelectorAll("input,select").forEach((x) => x.addEventListener("input", showRisk));
       showRisk();
@@ -3767,7 +3788,8 @@
       const pos = st.positions || [], g = st.grid;
       const side = (s) => pos.filter((p) => p.side === s);
       const basket = (s) => { const ps = side(s); return ps.length ? `${ps.length} lớp · ${+ps.reduce((a, p) => a + (+p.lots || 0), 0).toFixed(2)} lot · <b class="${ps.reduce((a, p) => a + (p.profit || 0), 0) >= 0 ? "pos" : "neg"}">${signed(ps.reduce((a, p) => a + (p.profit || 0), 0))}</b>` : "trống"; };
-      const pause = g.pauseUntil && g.pauseUntil * 1000 > Date.now() ? ` · <b class="neg">đang nghỉ sau cắt lỗ tới ${clock(g.pauseUntil)}</b>` : "";
+      let pause = g.pauseUntil && g.pauseUntil * 1000 > Date.now() ? ` · <b class="neg">đang nghỉ sau cắt lỗ tới ${clock(g.pauseUntil)}</b>` : "";
+      Object.entries(g.sidePause || {}).forEach(([k, v]) => { if (v * 1000 > Date.now()) pause += ` · <b class="neg">rổ ${k === "long" ? "MUA" : "BÁN"} nghỉ sau SL tới ${clock(v)}</b>`; });
       live.insertAdjacentHTML("afterbegin", `<p class="small">Rổ MUA: ${basket("long")} · Rổ BÁN: ${basket("short")} · đã chốt ${g.cycles || 0} rổ từ lúc bật${pause}</p>`);
     },
 
@@ -3998,17 +4020,17 @@
       const pts = curve.map((v, i) => `${(i / Math.max(curve.length - 1, 1) * W).toFixed(1)},${(H - 6 - (v - lo) / span * (H - 12)).toFixed(1)}`).join(" ");
       const color = net >= 0 ? "var(--up)" : "var(--down)";
       const grid = R.bot === "grid";
-      const reason = grid ? { basket: "chốt rổ", stop: "cắt lỗ chung", end: "đóng cuối test" } : R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", hold: "hết giờ giữ", end: "đóng cuối test", close: "hết nến" }
+      const reason = grid ? { basket: "chốt rổ", sl: "SL rổ", stop: "cắt lỗ chung", end: "đóng cuối test" } : R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", hold: "hết giờ giữ", end: "đóng cuối test", close: "hết nến" }
         : { target: "chạm TP", stop: "chạm SL", trail: "chạm SL đã dời", end: "đóng cuối test", close: "hết nến" };
       const sr = R.bot === "sr" || R.bot === "tick" || grid, tick = R.bot === "tick";
       const G = R.grid || {}, gc = R.c;
-      const gridHead = `<p class="muted small">🕸️ Nhồi lệnh · ${esc(gc.symbol)} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "nến 1m (ước lượng) · spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · lot đầu ${gc.lots} · nhồi mỗi ${gc.gridStep} · ×${gc.multiplier} · tối đa ${gc.maxLevels} lớp · chốt rổ ${money(gc.tpMoney)} · cắt lỗ chung ${gc.basketStop ? money(gc.basketStop) : "tắt"}${gc.direction === "long" ? " · chỉ rổ MUA" : gc.direction === "short" ? " · chỉ rổ BÁN" : ""}</p>`;
+      const gridHead = `<p class="muted small">🕸️ Nhồi lệnh · ${esc(gc.symbol)} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "nến 1m (ước lượng) · spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · lot đầu ${gc.lots} · nhồi mỗi ${gc.gridStep} · ×${gc.multiplier} · tối đa ${gc.maxLevels} lớp · chốt rổ ${money(gc.tpMoney)}${gc.sl > 0 ? ` · SL rổ ${gc.sl} giá` : ""}${gc.slMoney > 0 ? ` · SL rổ ${money(gc.slMoney)}` : ""} · cắt lỗ chung ${gc.basketStop ? money(gc.basketStop) : "tắt"}${gc.direction === "long" ? " · chỉ rổ MUA" : gc.direction === "short" ? " · chỉ rổ BÁN" : ""}</p>`;
       el.innerHTML = `${grid ? gridHead : `<p class="muted small">${tick ? "⚡ Nến tick" : sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · ${tick ? `bước ${R.c.step} · chốt lời ${R.c.closeProfit} · SL ${R.c.sl || "không"}${R.c.withCandle ? " · thuận chiều nến" : ""}${R.c.flipExit ? " · đóng khi nến đảo" : ""} · tối đa ${R.c.maxPositions} lệnh · cắt lỗ chung ${R.c.basketStop ? money(R.c.basketStop) : "tắt"}${R.c.exitAtClose !== false ? " · đóng khi hết nến" : ""}` : `R:R ${R.c.rr}`}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>`}
         <div class="stats">
           ${stat("Lãi/lỗ ròng", signed(net), net >= 0 ? "pos" : "neg")}
           ${stat("Số lệnh", `${t.length} <span class="muted small">/ ${R.placed} ${sr ? "tín hiệu" : "lệnh chờ đặt"}</span>`)}
           ${stat("Thắng", t.length ? `${wins.length}/${t.length} · ${Math.round(wins.length / t.length * 100)}%` : "–")}
-          ${grid ? stat("Rổ đã chốt / cắt lỗ chung", `${G.cycles || 0} / <b class="${G.stops ? "neg" : ""}">${G.stops || 0}</b>`)
+          ${grid ? stat("Rổ chốt lời / SL rổ / cắt lỗ chung", `${G.cycles || 0} / <b class="${G.sls ? "neg" : ""}">${G.sls || 0}</b> / <b class="${G.stops ? "neg" : ""}">${G.stops || 0}</b>`)
             + stat("Âm sâu nhất khi đang gồng", signed(G.maxFloat || 0), (G.maxFloat || 0) < 0 ? "neg" : "")
             + stat("Lớp sâu nhất / lot mở nhiều nhất", `${G.maxLevel || 0} lớp · ${G.maxLots || 0} lot`) : ""}
           ${grid ? "" : stat(tick ? "Chốt lời / cắt lỗ chung" : "Chạm TP / SL", `${tp} / ${sl}${tick ? ` <span class="muted small">· ${t.filter((x) => x.reason === "sl").length} cắt lỗ lệnh · ${t.filter((x) => x.reason === "flip").length} nến đảo · ${t.filter((x) => x.reason === "close").length} hết nến</span>` : sr ? ` <span class="muted small">· ${t.filter((x) => x.reason === "trail").length} SL dời</span>` : ""}`)}
