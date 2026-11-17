@@ -1709,6 +1709,7 @@
       if (!this.owner) {
         try { await this.refreshMe(); } catch (e) { if (this.handleAuth(e)) return; }
       }
+      if (this.owner) await this.pickAccountServer();
       this.renderTabs();
       this.buildChart();
       await this.refresh();
@@ -1762,12 +1763,34 @@
     },
 
     /** One call; when the address moved, find the new one and try again. */
+    /** "Tài khoản riêng" on this computer: its calls go to the server's second copy (its own MT5 account,
+     *  bots, tick feed); the app and other computers stay on the main one. */
+    async pickAccountServer() {
+      this.mainBase = this.mainBase || this.base;
+      this.ownAccount = false;
+      if (store.get("aurum.useWebAcct") !== "1") return;
+      try {
+        const st = await api(this.mainBase, this.secret, "/status");
+        const w = st.webAccount;
+        if (w && w.enabled && w.running && w.url) { this.base = w.url; this.ownAccount = true; }
+        else toast("Tài khoản riêng cho máy tính chưa chạy: đang dùng tài khoản chính", true);
+      } catch { /* main server unreachable: stay on it, the usual lookup follows */ }
+    },
+    mainCall(path, body) { return api(this.mainBase || this.base, this.secret, path, body); },
+
     async call(path, body) {
       try {
         return await api(this.base, this.secret, path, body);
       } catch (e) {
         if (!(e instanceof Unreachable) || Date.now() - this.lastLookup < 20000) throw e;
         this.lastLookup = Date.now();
+        if (this.ownAccount) {
+          // The second copy's address changed (its tunnel restarted): ask the main server again.
+          const before = this.base;
+          await this.pickAccountServer();
+          if (this.base === before) throw e;
+          return api(this.base, this.secret, path, body);
+        }
         const moved = await lookupAddress(this.secret, this.owner).catch(() => null);
         if (!moved || moved === this.base) throw e;
         this.base = moved;
@@ -1828,9 +1851,9 @@
       $("whoRole").style.cursor = "pointer";
       $("whoRole").title = "Đổi / đăng nhập tài khoản MT5";
       $("whoRole").onclick = () => { this.setTab("bot"); const b = $("mt5Login"); if (b) { if (!b.innerHTML) this.renderMt5Login(); b.scrollIntoView({ behavior: "smooth" }); } };
-      $("whoRole").innerHTML = t.login
+      $("whoRole").innerHTML = (this.ownAccount ? '<span class="own-acct" title="Máy tính này dùng tài khoản MT5 riêng (app dùng tài khoản chính)">🖥️ TK riêng</span> ' : "") + (t.login
         ? `#${t.login} · ${esc(t.server || "")} <span class="acct ${t.mode === "real" ? "real" : ""}" title="${t.mode === "real" ? "Tài khoản thật" : "Tài khoản demo"}">✦</span>`
-        : "MT5 chưa đăng nhập";
+        : "MT5 chưa đăng nhập");
       const floating = this.floating();
       if (!sym && !this.symbol) await this.ownerSymbol();
       this.renderPill(floating);
@@ -3645,8 +3668,10 @@
           <div class="kvs"><div class="kv"><span>Phiên bản</span><b>${esc(s.version)}</b></div>
             <div class="kv"><span>Chạy từ</span><b>${s.startedAt ? fullTime(s.startedAt) : "–"}</b></div>
             <div class="kv"><span>MT5</span><b>${s.mt5 && s.mt5.connected ? "Đã kết nối" : esc((s.mt5 && s.mt5.error) || "Chưa kết nối")}</b></div></div>
-          <button class="btn btn-ghost wide" id="srvUpdate">Cập nhật máy chủ lên bản mới nhất</button>`;
+          <button class="btn btn-ghost wide" id="srvUpdate">Cập nhật máy chủ lên bản mới nhất</button>
+          <div id="ownAcctBox" class="own-box"></div>`;
         $("toBot").onclick = () => this.setTab("autobot");
+        this.renderOwnAccount();
         if ($("mt5Login") && !$("mt5Login").innerHTML) this.renderMt5Login();
         $("srvUpdate").onclick = async (e) => {
           if (!confirm("Cập nhật máy chủ? Máy chủ tự khởi động lại trong khoảng 1 phút.")) return;
@@ -3658,6 +3683,39 @@
       } catch (e) {
         if (first) $("botPanel").innerHTML = `<div class="empty">${esc(e.message)}</div>`;
       }
+    },
+
+    /** "Tài khoản MT5 riêng cho máy tính": a second copy of the server on the VPS with its own MT5 login, so
+     *  this computer (e.g. a demo account for the bots) and the app (the main account) do not share one. */
+    async renderOwnAccount() {
+      const box = $("ownAcctBox");
+      if (!box) return;
+      let w = null, problem = "";
+      try { w = await this.mainCall("/webacct"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.7 để dùng." : plain(e.message); }
+      const use = store.get("aurum.useWebAcct") === "1";
+      box.innerHTML = `<h4>🖥️ Tài khoản MT5 riêng cho máy tính</h4>
+        <p class="muted small">Máy chủ VPS chạy thêm một MT5 thứ 2 với tài khoản riêng (ví dụ tài khoản <b>demo</b> để thử bot). Máy tính bật "dùng tài khoản riêng" sẽ xem chart, đặt lệnh và chạy bot trên tài khoản đó; <b>app vẫn dùng tài khoản chính</b>. Lần đầu bật, máy chủ sao chép MT5 (vài phút).</p>
+        ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
+        ${w ? `<div class="kvs"><div class="kv"><span>Máy chủ thứ 2</span><b>${w.enabled ? (w.running ? `đang chạy · cổng ${w.port}` : "đang khởi động…") : "đang tắt"}</b></div>
+          <div class="kv"><span>MT5 của nó</span><b>${w.info && w.info.mt5 ? (w.info.mt5.connected ? "đã kết nối" : esc(w.info.mt5.error || "chưa đăng nhập")) : "–"}</b></div>
+          <div class="kv"><span>Máy tính này</span><b>${this.ownAccount ? "🖥️ đang dùng tài khoản riêng" : "dùng tài khoản chính"}</b></div></div>
+          ${w.error ? `<p class="warn">${esc(w.error)}</p>` : ""}
+          <div class="row-btns">
+            <button class="btn ${w.enabled ? "btn-ghost" : "btn-gold"}" id="ownToggle" type="button">${w.enabled ? "■ Tắt máy chủ thứ 2" : "▶ Bật tài khoản riêng cho máy tính"}</button>
+            ${w.enabled ? `<button class="btn ${use ? "btn-ghost" : "btn-gold"}" id="ownUse" type="button">${use ? "Máy tính này về tài khoản chính" : "Máy tính này dùng tài khoản riêng"}</button>` : ""}
+          </div>
+          ${this.ownAccount ? '<p class="muted small">Đăng nhập tài khoản MT5 (demo) cho máy tính ở mục <b>Đăng nhập MT5</b> bên dưới: chỉ đổi tài khoản riêng, không đụng tài khoản của app.</p>' : ""}` : ""}`;
+      const toggle = $("ownToggle"), useBtn = $("ownUse");
+      if (toggle) toggle.onclick = async (e) => {
+        const on = !w.enabled;
+        const r = await act(e.currentTarget, () => this.mainCall("/webacct", { enabled: on }), on ? "Đang bật máy chủ thứ 2 (lần đầu vài phút)…" : "Đã tắt");
+        if (r) { if (!on && use) { store.set("aurum.useWebAcct", null); location.reload(); return; } this.renderOwnAccount(); }
+      };
+      if (useBtn) useBtn.onclick = () => {
+        store.set("aurum.useWebAcct", use ? null : "1");
+        toast(use ? "Máy tính về tài khoản chính" : "Máy tính dùng tài khoản riêng");
+        setTimeout(() => location.reload(), 600);
+      };
     },
 
     /** The MT5 accounts, like the app's "Đăng nhập sàn": the saved accounts kept on the VPS (shared with the

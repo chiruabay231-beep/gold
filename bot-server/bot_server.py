@@ -31,11 +31,20 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "4.6"
+VERSION = "4.7"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
 HERE = os.path.dirname(os.path.abspath(__file__))
+# A second copy of the server (for the website's own MT5 account) runs with `--instance web`: its own
+# config / state / log / tunnel files ("web.config.json"…), its own port and its own MT5 terminal.
+INSTANCE = ""
+
+
+def own(name):
+    return os.path.join(HERE, f"{INSTANCE}.{name}" if INSTANCE else name)
+
+
 CONFIG_PATH = os.path.join(HERE, "config.json")
 STATE_PATH = os.path.join(HERE, "state.json")
 # SL / TP of the MT5 positions as seen (set on opening, or dragged later): MT5's history keeps neither.
@@ -341,6 +350,8 @@ class Mt5:
             kwargs = {}
             if cfg.get("path"):
                 kwargs["path"] = cfg["path"]
+                if cfg.get("portable"):
+                    kwargs["portable"] = True
             if cfg.get("login"):
                 kwargs.update(login=int(cfg["login"]), password=str(cfg.get("password", "")),
                               server=str(cfg.get("server", "")))
@@ -2334,12 +2345,12 @@ class Tunnel:
 
     def _adopt(self):
         """Right after an update the old cloudflared is still running: keep it and its address."""
-        flag = os.path.join(HERE, "update.flag")
+        flag = own("update.flag")
         try:
             fresh = now() - os.path.getmtime(flag) < 300
             os.remove(flag)
-            pid = int(open(os.path.join(HERE, "tunnel.pid")).read().strip())
-            url = open(os.path.join(HERE, "tunnel.txt"), encoding="utf-8").read().strip()
+            pid = int(open(own("tunnel.pid")).read().strip())
+            url = open(own("tunnel.txt"), encoding="utf-8").read().strip()
         except (OSError, ValueError):
             return
         if not fresh or not url or not pid_alive(pid):
@@ -2364,7 +2375,7 @@ class Tunnel:
                 self.error = "Không tìm thấy cloudflared"
                 return
             try:
-                with open(os.path.join(HERE, "tunnel.pid"), "w") as f:
+                with open(own("tunnel.pid"), "w") as f:
                     f.write(str(self.process.pid))
             except OSError:
                 pass
@@ -2436,6 +2447,8 @@ def publish_address(server):
     """Posts the tunnel address to ntfy.sh, so the app finds the server again after
     the address changes (VPS restart) without Telegram. Repeated every 6 hours, as
     ntfy keeps messages 12 hours."""
+    if INSTANCE:
+        return  # the main server's address is the one the app and the website look up
     url = server.tunnel_url
     relay = (server.config.get("url_relay") or "").rstrip("/")
     if not url or not relay:
@@ -3555,6 +3568,116 @@ class Members:
             self.server.save_state()
 
 
+class WebAccount:
+    """The website's own MT5 account: a second copy of this server (`--instance web`) on the next port, with
+    its own portable MT5 terminal (terminals/web), its own login, bots and tunnel. The app keeps the main
+    server and its account; a computer that turns "Tài khoản riêng" on talks to the second one."""
+
+    def __init__(self, server):
+        self.server = server
+        self.process = None
+        self.error = ""
+        if self.cfg.get("enabled") and not INSTANCE:
+            threading.Thread(target=self._supervise, daemon=True).start()
+
+    @property
+    def cfg(self):
+        return self.server.config.setdefault("webAccount", {"enabled": False})
+
+    @property
+    def port(self):
+        return int(self.server.config.get("port", 8787)) + 1
+
+    def _local(self, path, body=None, timeout=5):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=json.dumps(body).encode() if body is not None else None,
+                                     headers={"Authorization": "Bearer " + self.server.config["password"], "Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return json.loads(r.read().decode("utf-8") or "{}")
+
+    def _write_config(self):
+        """The instance's config: this one's, on the next port, with the web terminal and nothing shared that
+        must run once (Telegram, copy trading, members)."""
+        main = self.server.config
+        path = os.path.join(HERE, "web.config.json")
+        cfg = read_json(path, {}) or {}
+        exe = clone_terminal("web", main["mt5"])
+        mt5 = dict(cfg.get("mt5") or {})
+        mt5.update({"path": exe, "portable": True})
+        for k in ("trading_enabled", "max_lots", "deviation"):
+            mt5.setdefault(k, main["mt5"].get(k))
+        cfg.update({"password": main["password"], "port": self.port, "mt5": mt5, "tunnel": main.get("tunnel"),
+                    "cloudflared": main.get("cloudflared", ""), "url_relay": "", "telegram": {}, "copy": {}, "members": [],
+                    "webAccount": {"enabled": False}})
+        write_json(path, cfg)
+
+    def _spawn(self):
+        try:
+            self._local("/shutdown", {})  # an older copy (before an update): out of the way
+            time.sleep(3)
+        except Exception:
+            pass
+        self._write_config()
+        args = [sys.executable, os.path.join(HERE, "bot_server.py"), "--instance", "web"]
+        if "--public" in sys.argv:
+            args.append("--public")
+        self.process = subprocess.Popen(args, cwd=HERE, creationflags=NO_WINDOW,
+                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.server.log(f"🖥️ Tài khoản riêng cho máy tính: đã chạy máy chủ thứ 2 (cổng {self.port})")
+
+    def _supervise(self):
+        while self.cfg.get("enabled"):
+            try:
+                if self.process is None or self.process.poll() is not None:
+                    self._spawn()
+                self.error = ""
+            except Exception as e:
+                self.error = str(e)
+            time.sleep(15)
+        self.stop()
+
+    def stop(self):
+        try:
+            self._local("/shutdown", {})
+        except Exception:
+            pass
+        if self.process and self.process.poll() is None:
+            try:
+                self.process.terminate()
+            except OSError:
+                pass
+        self.process = None
+
+    def url(self):
+        try:
+            return open(os.path.join(HERE, "web.tunnel.txt"), encoding="utf-8").read().strip()
+        except OSError:
+            return ""
+
+    def status(self):
+        running, info = False, {}
+        if self.cfg.get("enabled"):
+            try:
+                st = self._local("/status", timeout=3)
+                running = True
+                info = {"version": st.get("version"), "mt5": st.get("mt5"), "url": st.get("tunnelURL") or self.url()}
+            except Exception:
+                pass
+        return {"enabled": bool(self.cfg.get("enabled")), "running": running, "port": self.port,
+                "url": info.get("url") or (self.url() if running else ""), "info": info, "error": self.error}
+
+    def settings(self, body):
+        on = bool(body.get("enabled"))
+        was = bool(self.cfg.get("enabled"))
+        self.cfg["enabled"] = on
+        self.server.save_config()
+        if on and not was:
+            threading.Thread(target=self._supervise, daemon=True).start()
+        if not on and was:
+            self.stop()
+            self.server.log("🖥️ Đã tắt tài khoản riêng cho máy tính")
+        return self.status()
+
+
 class BotServer:
     def __init__(self):
         self.lock = threading.RLock()
@@ -3590,6 +3713,7 @@ class BotServer:
         self.stopbot = StopBot(self)
         self.srbot = SRBot(self)
         self.tickbot = TickBot(self)
+        self.web_account = WebAccount(self)
         self.telegram = Telegram(self)
         self.tunnel = Tunnel(self) if self.config.get("tunnel") else None
         threading.Thread(target=self._relay_loop, daemon=True).start()
@@ -3629,7 +3753,7 @@ class BotServer:
     def on_tunnel(self, url):
         self.tunnel_url = url
         try:
-            with open(os.path.join(HERE, "tunnel.txt"), "w", encoding="utf-8") as f:
+            with open(own("tunnel.txt"), "w", encoding="utf-8") as f:
                 f.write(url + "\n")
         except OSError:
             pass
@@ -3924,7 +4048,8 @@ class BotServer:
             return {"ok": True, "version": VERSION, "running": bool(s.get("running")), "settings": settings,
                     "price": self.prices.get(s["symbol"]), "bars": len(self.candles),
                     "lastBarTime": self.candles[-1][0] if self.candles else None, "lastPoll": self.last_poll,
-                    "error": self.error, "tunnelURL": self.tunnel_url, "startedAt": self.started_at,
+                    "error": self.error, "tunnelURL": self.tunnel_url, "startedAt": self.started_at, "instance": INSTANCE,
+                    "webAccount": None if INSTANCE else self.web_account.status(),
                     "account": account, "positions": positions,
                     "telegram": {"configured": bool(self.telegram.token), "linked": bool(self.telegram.chat_id)},
                     "mt5": {"error": Mt5.error, "connected": Mt5.connected, "tradingEnabled":
@@ -3946,6 +4071,13 @@ class BotServer:
     def self_update(self):
         """Downloads the latest bot (bot-latest release), replaces the files and restarts
         through run.ps1, keeping config.json, state.json and the tunnel address."""
+        if INSTANCE:
+            # The second copy: the main server updates the files and starts this one again.
+            port = int(self.config.get("port", 8788)) - 1
+            req = urllib.request.Request(f"http://127.0.0.1:{port}/update", data=b"{}",
+                                         headers={"Authorization": "Bearer " + self.config["password"], "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=240) as r:
+                return json.loads(r.read().decode("utf-8") or "{}")
         import io
         import zipfile
         with urllib.request.urlopen(RELEASE_ZIP, timeout=180) as response:
@@ -4181,6 +4313,8 @@ def make_handler(server):
                     return self._send(200, server.srbot.status())
                 if path == "/tickbot":
                     return self._send(200, server.tickbot.status())
+                if path == "/webacct":
+                    return self._send(200, server.web_account.status())
                 if path == "/status":
                     return self._send(200, server.status())
                 if path == "/log":
@@ -4245,6 +4379,17 @@ def make_handler(server):
                     return self._send(200, server.srbot.settings(body))
                 if path == "/tickbot":
                     return self._send(200, server.tickbot.settings(body))
+                if path == "/webacct":
+                    if INSTANCE:
+                        raise ValueError("Bật / tắt ở máy chủ chính")
+                    return self._send(200, server.web_account.settings(body))
+                if path == "/shutdown" and INSTANCE:
+                    self._send(200, {"ok": True})
+                    server.save_state()
+                    if server.tunnel:
+                        server.tunnel.stop()
+                    threading.Thread(target=lambda: (time.sleep(0.5), os._exit(0)), daemon=True).start()
+                    return
                 if path == "/members/save":
                     return self._send(200, server.members.save(body))
                 if path == "/members/code":
@@ -4347,8 +4492,14 @@ def selftest():
 
 
 def main():
+    global INSTANCE, CONFIG_PATH, STATE_PATH, STOPS_PATH, LOG_PATH, TICK_PAPER_PATH
     if "--copy-worker" in sys.argv:
         return copy_worker_main()
+    if "--instance" in sys.argv:
+        # The website's own account: every file of its own ("web.config.json"…).
+        INSTANCE = re.sub(r"[^a-z0-9]", "", sys.argv[sys.argv.index("--instance") + 1].lower()) or "web"
+        CONFIG_PATH, STATE_PATH, STOPS_PATH, LOG_PATH = own("config.json"), own("state.json"), own("stops.json"), own("server.log")
+        TICK_PAPER_PATH = own("tickbot_paper.json")
     if "--selftest" in sys.argv:
         sys.exit(selftest())
     if "--after-update" in sys.argv:
