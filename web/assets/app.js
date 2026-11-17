@@ -991,6 +991,7 @@
         // Each position out on its profit, its stop, or (losing) once the candle has turned against it.
         book = book.filter((p) => {
           const g = gain(p, bid);
+          if (c.holdSeconds >= 0 && time - p.openTime >= c.holdSeconds) { out(p, bid, "hold", time); return false; }
           if (g >= c.closeProfit - 1e-9) { out(p, bid, "target", time); return false; }
           if (c.sl > 0 && g <= -c.sl + 1e-9) { out(p, bid, "sl", time); return false; }
           if (c.flipExit && g < 0 && (p.side === "long" ? bid < b.open - c.step : bid > b.open + c.step)) { out(p, bid, "flip", time); return false; }
@@ -1050,6 +1051,7 @@
       const gain = (p) => (p.side === "long" ? bid - p.entry : p.entry - ask);
       book = book.filter((p) => {
         const g = gain(p);
+        if (c.holdSeconds >= 0 && t - p.openTime >= c.holdSeconds) { out(p, bid, ask, "hold", t); return false; }
         if (g >= c.closeProfit - 1e-9) { out(p, bid, ask, "target", t); return false; }
         if (c.sl > 0 && g <= -c.sl + 1e-9) { out(p, bid, ask, "sl", t); return false; }
         if (c.flipExit && g < 0 && (p.side === "long" ? bid < open - c.step : bid > open + c.step)) { out(p, bid, ask, "flip", t); return false; }
@@ -3384,7 +3386,7 @@
       const el = $("tickBotPanel");
       if (!el) return;
       let st = null, problem = "";
-      try { st = await this.botCall("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 5.2 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
+      try { st = await this.botCall("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 5.3 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
       this.tickStatus = st;
       if (!this.tickWatch) this.watchTickBot();
       if (first || !el.querySelector("#tbForm") || !el.contains(document.activeElement)) this.renderTickBot(st, problem);
@@ -3404,6 +3406,7 @@
           simSpread: $("tbAcct").value === "real" ? -1 : (num(v("tbSimSpread")) ?? 0.1), commission: $("tbAcct").value === "real" ? 0 : (num(v("tbComm")) || 0),
           burst: Math.max(1, Math.min(5, Math.round(num(v("tbBurst")) || 1))),
           sl: num(v("tbSL")) ?? 0.3, withCandle: $("tbWith").checked, flipExit: $("tbFlip").checked,
+          holdSeconds: v("tbHold") === "" || v("tbHold") == null ? -1 : Math.max(0, num(v("tbHold")) ?? -1),
         });
       }
       c.symbol = c.symbol || this.symbol || "XAUUSDm";
@@ -3444,6 +3447,7 @@
           </div>
           <div class="fields three">
             <label>SL mỗi lệnh (giá, 0 = không SL)<input id="tbSL" inputmode="decimal" value="${c.sl ?? 0.3}"></label>
+            <label>🧪 Vào rồi chốt sau (giây, trống = tắt) — chỉ thử ảo / backtest<input id="tbHold" inputmode="decimal" placeholder="VD 0, 5, 30" value="${c.holdSeconds != null && c.holdSeconds >= 0 ? c.holdSeconds : ""}"></label>
           </div>
           <label class="check"><input type="checkbox" id="tbWith" ${c.withCandle !== false ? "checked" : ""}> Chỉ vào <b>thuận chiều cây nến</b> (giá trên giá mở: chỉ MUA · dưới: chỉ BÁN)</label>
           <label class="check"><input type="checkbox" id="tbFlip" ${c.flipExit !== false ? "checked" : ""}> Đóng lệnh âm khi <b>cây nến đảo chiều</b> (qua giá mở thêm 1 bước)</label>
@@ -3775,7 +3779,7 @@
       const W = 600, H = 120, lo = Math.min(...curve), hi = Math.max(...curve), span = hi - lo || 1;
       const pts = curve.map((v, i) => `${(i / Math.max(curve.length - 1, 1) * W).toFixed(1)},${(H - 6 - (v - lo) / span * (H - 12)).toFixed(1)}`).join(" ");
       const color = net >= 0 ? "var(--up)" : "var(--down)";
-      const reason = R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", end: "đóng cuối test", close: "hết nến" }
+      const reason = R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", hold: "hết giờ giữ", end: "đóng cuối test", close: "hết nến" }
         : { target: "chạm TP", stop: "chạm SL", trail: "chạm SL đã dời", end: "đóng cuối test", close: "hết nến" };
       const sr = R.bot === "sr" || R.bot === "tick", tick = R.bot === "tick";
       el.innerHTML = `<p class="muted small">${tick ? "⚡ Nến tick" : sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · ${tick ? `bước ${R.c.step} · chốt lời ${R.c.closeProfit} · SL ${R.c.sl || "không"}${R.c.withCandle ? " · thuận chiều nến" : ""}${R.c.flipExit ? " · đóng khi nến đảo" : ""} · tối đa ${R.c.maxPositions} lệnh · cắt lỗ chung ${R.c.basketStop ? money(R.c.basketStop) : "tắt"}${R.c.exitAtClose !== false ? " · đóng khi hết nến" : ""}` : `R:R ${R.c.rr}`}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>

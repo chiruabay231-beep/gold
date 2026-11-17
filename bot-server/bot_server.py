@@ -31,7 +31,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "5.2"
+VERSION = "5.3"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3015,6 +3015,9 @@ DEFAULT_TICKBOT = {"running": False, "symbol": "", "interval": "1m", "direction"
                    # Virtual account only, a broker account type to try: a spread of its own (price, -1 = the real
                    # one) and a commission in dollars per lot, round trip.
                    "simSpread": -1.0, "commission": 0.0,
+                   # Test mode (virtual account only): every position out after this many seconds, profit or loss
+                   # (-1 = off; 0 = at the next tick).
+                   "holdSeconds": -1.0,
                    # True: virtual orders on the live Exness price (no order sent to MT5), False: real orders.
                    "paper": True}
 TICK_PAPER_PATH = os.path.join(HERE, "tickbot_paper.json")
@@ -3060,6 +3063,7 @@ class TickBot:
                           ("closeProfit", float), ("maxPositions", int), ("basketStop", float), ("burst", int), ("exitAtClose", bool),
                           ("sl", float), ("withCandle", bool), ("flipExit", bool),
                           ("simSpread", float), ("commission", float),
+                          ("holdSeconds", float),
                           ("minLeftPct", float), ("maxSpread", float), ("paper", bool), ("noSpread", bool)):
             if key in body:
                 c[key] = cast(body[key])
@@ -3074,6 +3078,11 @@ class TickBot:
         c["burst"] = max(1, min(5, c["burst"]))
         c["basketStop"] = max(0.0, c["basketStop"])
         c["minLeftPct"] = max(0.0, min(90.0, c["minLeftPct"]))
+        if c.get("holdSeconds", -1) >= 0 and not c["paper"]:
+            # Opening only to close at once on a real account is churning: costs the spread every time and
+            # breaks most brokers' and IB programs' terms. Only on the virtual account, to see the numbers.
+            c["holdSeconds"] = -1.0
+            raise ValueError("Chế độ 'vào rồi chốt ngay' chỉ chạy trên tài khoản ẢO (Chạy thử) và Backtest")
         if body.get("paperReset"):
             with self.lock:
                 self.paper = {"balance": float(body["paperReset"]), "positions": [], "history": []}
@@ -3208,9 +3217,12 @@ class TickBot:
             self.bar, self.ref = bar_time, bar_open
         gain = lambda p: (tick.bid - p["entry"]) if p["side"] == "long" else (p["entry"] - tick.ask)
         # Each position out on its own profit, its own stop, or (losing) when the candle has turned against it.
+        hold = float(c.get("holdSeconds", -1)) if c["paper"] else -1
         for p in book:
             g = gain(p)
-            if g >= c["closeProfit"] - 1e-9:
+            if hold >= 0 and float(tick.time) - p["openTime"] >= hold:
+                self._close(mt5, p, tick, units, "hết giờ giữ")
+            elif g >= c["closeProfit"] - 1e-9:
                 self._close(mt5, p, tick, units, "chốt lời")
             elif c.get("sl", 0) > 0 and g <= -c["sl"] + 1e-9:
                 self._close(mt5, p, tick, units, "cắt lỗ lệnh")
