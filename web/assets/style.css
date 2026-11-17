@@ -1162,3 +1162,17 @@ body.on-chart #chartNote { font-size: 10.5px; line-height: 1.3; padding: 1px 4px
 .bot-hub .hub-body > .panel { border: 0; border-top: 1px solid var(--line); border-radius: 0; background: none; padding: 12px 0 4px; margin-top: 8px; }
 .bot-hub .hub-body > .panel[hidden] { display: none; }
 .badge.real { background: var(--down); color: #fff; }
+
+/* The tick bot's positions as MT5's Trade screen. */
+.m5-view { margin: 12px 0; padding: 12px 14px; border-radius: 14px; background: #fff; color: #1d1d22; max-width: 420px; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+.m5-view .m5-total { text-align: center; font-size: 17px; font-weight: 700; color: #2f55e8; margin-bottom: 8px; }
+.m5-view .m5-total.neg { color: #d6334a; }
+.m5-view .m5-line { display: flex; justify-content: space-between; font-size: 12.5px; color: #5c6170; padding: 1px 0; }
+.m5-view .m5-line b { color: #1d1d22; font-weight: 500; font-variant-numeric: tabular-nums; }
+.m5-view .m5-head { font-size: 12px; font-weight: 700; margin: 10px 0 4px; color: #1d1d22; }
+.m5-view .m5-pos { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-top: 1px solid #eceef2; font-size: 13px; }
+.m5-view .m5-buy { color: #2f55e8; } .m5-view .m5-sell { color: #d6334a; }
+.m5-view .m5-px { color: #6b7080; font-size: 12px; font-variant-numeric: tabular-nums; }
+.m5-view .m5-pl { font-weight: 600; font-variant-numeric: tabular-nums; color: #2f55e8; }
+.m5-view .m5-pl.neg { color: #d6334a; }
+.m5-view .m5-empty { color: #8b8f9b; font-size: 12.5px; padding: 6px 0; }

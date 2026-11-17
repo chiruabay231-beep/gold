@@ -1001,8 +1001,10 @@
         if (!up && !down) continue;
         ref = bid;
         if ((up && c.direction === "short") || (down && c.direction === "long")) continue;
-        placed++;
-        book.push({ side: up ? "long" : "short", entry: up ? bid + spread : bid, stop: null, target: null, openTime: time });
+        for (let q = 0; q < Math.min(c.burst || 1, c.maxPositions - book.length); q++) {
+          placed++;
+          book.push({ side: up ? "long" : "short", entry: up ? bid + spread : bid, stop: null, target: null, openTime: time });
+        }
       }
       if (c.exitAtClose !== false && book.length) { book.forEach((p) => out(p, b.close, "close", b.time + sec)); book = []; }
     });
@@ -3152,14 +3154,15 @@
       const el = $("tickBotPanel");
       if (!el) return;
       let st = null, problem = "";
-      try { st = await this.call("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.5 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
+      try { st = await this.call("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.6 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
       this.tickStatus = st;
+      if (!this.tickWatch) this.watchTickBot();
       if (first || !el.querySelector("#tbForm") || !el.contains(document.activeElement)) this.renderTickBot(st, problem);
       else this.renderTickBotLive(st);
     },
 
     tickSettings() {
-      const c = Object.assign({ symbol: "", interval: "1m", direction: "both", lots: 0.01, step: 0.3, closeProfit: 0.3, maxPositions: 6, basketStop: 30, exitAtClose: true, minLeftPct: 15, maxSpread: 0.5, noSpread: false },
+      const c = Object.assign({ symbol: "", interval: "1m", direction: "both", lots: 0.01, step: 0.3, closeProfit: 0.3, maxPositions: 6, basketStop: 30, burst: 1, exitAtClose: true, minLeftPct: 15, maxSpread: 0.5, noSpread: false },
         (this.tickStatus && this.tickStatus.config) || {});
       const v = (id) => ($(id) ? $(id).value : null);
       if ($("tbSymbol")) {
@@ -3168,6 +3171,7 @@
           step: num(v("tbStep")) || 0.3, closeProfit: num(v("tbClose")) || 0.3, maxPositions: Math.max(1, Math.round(num(v("tbMax")) || 6)),
           basketStop: num(v("tbBasket")) ?? 30, exitAtClose: $("tbExit").checked, minLeftPct: num(v("tbLeft")) ?? 15, maxSpread: num(v("tbSpread")) ?? 0.5,
           noSpread: $("tbNoSpread").checked,
+          burst: Math.max(1, Math.min(5, Math.round(num(v("tbBurst")) || 1))),
         });
       }
       c.symbol = c.symbol || this.symbol || "XAUUSDm";
@@ -3202,6 +3206,8 @@
           </div>
           <div class="fields three">
             <label>Không vào khi nến còn dưới (%)<input id="tbLeft" inputmode="decimal" value="${c.minLeftPct}"></label>
+            <label>Số lệnh mỗi lần vào (1 – 5)<input id="tbBurst" inputmode="numeric" value="${c.burst || 1}"></label>
+            <label>&nbsp;<button class="btn btn-ghost" id="tbPreset" type="button">⚙ Cài giống video (XAUUSD 0.01 · chốt ~1$)</button></label>
           </div>
           <label class="check"><input type="checkbox" id="tbExit" ${c.exitAtClose ? "checked" : ""}> Đóng hết lệnh khi hết cây nến</label>
           <label class="check"><input type="checkbox" id="tbNoSpread" ${c.noSpread ? "checked" : ""}> Chạy trên giá <b>không có spread</b> (MUA và BÁN cùng giá Bid) — chỉ áp dụng cho 🎮 Chạy thử và 🧪 Backtest; tài khoản MT5 thật luôn có spread</label>
@@ -3223,6 +3229,15 @@
       };
       if (stop) stop.onclick = (e) => send(e.currentTarget, { running: false }, "Đã tắt bot (lệnh đang mở giữ nguyên)");
       if (save) save.onclick = (e) => send(e.currentTarget, {}, "Đã lưu");
+      const preset = $("tbPreset");
+      if (preset) preset.onclick = () => {
+        // As in the video: XAUUSD 0.01 a position, buys and sells side by side, each out at about +1$, 3–4 open.
+        const set = (id, v) => { if ($(id)) $(id).value = v; };
+        set("tbLots", 0.01); set("tbStep", 0.5); set("tbClose", 1); set("tbMax", 4); set("tbBurst", 1); set("tbBasket", 20);
+        set("tbInterval", "5m"); set("tbDirection", "both"); set("tbLeft", 5);
+        if ($("tbExit")) $("tbExit").checked = false;
+        toast("Đã điền cài đặt giống video: bấm Lưu / Bật để dùng");
+      };
       const reset = $("tbReset");
       if (reset) reset.onclick = (e) => {
         const v = prompt("Số dư tài khoản ảo mới (USD):", "10000");
@@ -3243,6 +3258,7 @@
           <div class="stat"><span>Đang mở</span><b>${(st.positions || []).length}</b></div>
         </div>
         ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
+        ${this.mt5LikeView(st)}
         ${st.paper ? `<p class="muted small">Tài khoản ẢO: số dư ${money(st.paper.balance)} · lệnh và lãi/lỗ tính theo giá Exness thật${(st.config || {}).noSpread ? " (không tính spread)" : ""}, không đặt lệnh lên MT5.</p>` : ""}
         <div class="list">${(st.positions || []).map((o) => `<div class="sig"><div class="bar" style="background:${o.side === "long" ? "#2b6bf3" : "var(--down)"}"></div>
           <div><div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${o.side === "long" ? "buy" : "sell"}">${sideName(o.side)} ${o.lots}</span><span class="muted small">@ ${fmt(o.entry, d(o.symbol))}${o.paper ? " · ảo" : ""}</span></div>
@@ -3250,6 +3266,35 @@
           <div class="right"><div class="move ${(o.profit || 0) >= 0 ? "pos" : "neg"}">${signed(o.profit || 0)}</div></div></div>`).join("")}</div>
         ${(st.history || []).length ? `<h4>Lệnh ảo đã đóng</h4><div class="list log">${st.history.slice(0, 20).map((x) => `<div class="log-row"><span class="muted small">${clock(x.closeTime)}</span> ${sideName(x.side)} ${fmt(x.entry, d(x.symbol))} → ${fmt(x.exit, d(x.symbol))} · ${esc(x.reason)} · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b></div>`).join("")}</div>` : ""}
         ${(st.events || []).length ? `<h4>Hoạt động</h4><div class="list log">${st.events.slice(0, 15).map((e) => `<div class="log-row"><span class="muted small">${clock(e.time)}</span> ${esc(e.text)}</div>`).join("")}</div>` : ""}`;
+    },
+
+    /** The bot's open positions as MT5's Trade screen shows them: the floating total on top, the account
+     *  lines, then "XAUUSD buy 0.01 / entry → now / profit" for each. */
+    mt5LikeView(st) {
+      const pos = st.positions || [], d = (sym) => this.digitsFor(sym);
+      const floating = pos.reduce((a, p) => a + (p.profit || 0), 0);
+      const acc = st.paper || null;
+      const line = (k, v) => `<div class="m5-line"><span>${k}</span><b>${v}</b></div>`;
+      return `<div class="m5-view">
+        <div class="m5-total ${floating >= 0 ? "pos" : "neg"}">${floating >= 0 ? "" : "−"}${Math.abs(floating).toFixed(2)} USD</div>
+        ${acc ? line("Balance:", acc.balance.toFixed(2)) + line("Equity:", (acc.equity ?? acc.balance + floating).toFixed(2)) : ""}
+        ${st.price ? line("Giá Bid / Ask:", `${fmt(st.price.bid, d((st.config || {}).symbol))} / ${fmt(st.price.ask, d((st.config || {}).symbol))}`) : ""}
+        <div class="m5-head">Positions</div>
+        ${pos.length ? pos.map((p) => `<div class="m5-pos">
+          <div><div><b>${esc((p.symbol || "").replace(/m$/, ""))}</b> <span class="${p.side === "long" ? "m5-buy" : "m5-sell"}">${p.side === "long" ? "buy" : "sell"} ${p.lots}</span></div>
+            <div class="m5-px">${fmt(p.entry, d(p.symbol))} → ${p.now != null ? fmt(p.now, d(p.symbol)) : "…"}</div></div>
+          <div class="m5-pl ${(p.profit || 0) >= 0 ? "pos" : "neg"}">${(p.profit || 0).toFixed(2)}</div></div>`).join("") : '<div class="m5-empty">Chưa có lệnh đang mở</div>'}
+      </div>`;
+    },
+
+    /** While the tick bot runs and its box is shown: its view again every 1.5 s. */
+    watchTickBot() {
+      clearInterval(this.tickWatch);
+      this.tickWatch = setInterval(async () => {
+        const shown = this.tab === "autobot" && store.get("aurum.hubBot") === "tick" && !document.hidden;
+        if (!shown || !(this.tickStatus && this.tickStatus.config && this.tickStatus.config.running)) return;
+        try { const st = await this.call("/tickbot"); this.tickStatus = st; this.renderTickBotLive(st); } catch { /* next time */ }
+      }, 1500);
     },
 
     /** The Cản & Hỗ trợ bot's settings as its form shows them. */

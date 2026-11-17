@@ -31,7 +31,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "4.5"
+VERSION = "4.6"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2944,7 +2944,7 @@ class SRBot:
 
 TICK_MAGIC = 20265
 DEFAULT_TICKBOT = {"running": False, "symbol": "", "interval": "1m", "direction": "both", "lots": 0.01,
-                   "step": 0.3, "closeProfit": 0.3, "maxPositions": 6, "basketStop": 30.0,
+                   "step": 0.3, "closeProfit": 0.3, "maxPositions": 6, "basketStop": 30.0, "burst": 1,
                    "exitAtClose": True, "minLeftPct": 15, "maxSpread": 0.5,
                    # Virtual account only: fills at the bid both ways (as if there were no spread).
                    "noSpread": False,
@@ -2990,7 +2990,7 @@ class TickBot:
     def settings(self, body):
         c = self.cfg
         for key, cast in (("symbol", str), ("interval", str), ("direction", str), ("lots", float), ("step", float),
-                          ("closeProfit", float), ("maxPositions", int), ("basketStop", float), ("exitAtClose", bool),
+                          ("closeProfit", float), ("maxPositions", int), ("basketStop", float), ("burst", int), ("exitAtClose", bool),
                           ("minLeftPct", float), ("maxSpread", float), ("paper", bool), ("noSpread", bool)):
             if key in body:
                 c[key] = cast(body[key])
@@ -3002,6 +3002,7 @@ class TickBot:
             raise ValueError("Bước vào lệnh và mức chốt lời phải lớn hơn 0")
         c["lots"] = max(0.01, c["lots"])
         c["maxPositions"] = max(1, min(50, c["maxPositions"]))
+        c["burst"] = max(1, min(5, c["burst"]))
         c["basketStop"] = max(0.0, c["basketStop"])
         c["minLeftPct"] = max(0.0, min(90.0, c["minLeftPct"]))
         if body.get("paperReset"):
@@ -3159,7 +3160,10 @@ class TickBot:
         self.ref = tick.bid
         if (long and c["direction"] == "short") or (short and c["direction"] == "long"):
             return
-        self._open(mt5, symbol, info, tick, long, f"giá chạy {move:+.2f}")
+        # `burst` positions at once on each run (as many as the cap leaves room for).
+        for _ in range(min(int(c.get("burst", 1)), c["maxPositions"] - len(book))):
+            if not self._open(mt5, symbol, info, tick, long, f"giá chạy {move:+.2f}"):
+                break
 
     def _paper_status(self, c):
         positions = []
@@ -3171,15 +3175,26 @@ class TickBot:
                     info = mt5.symbol_info(p["symbol"])
                     long = p["side"] == "long"
                     px = (tick.bid if long or c.get("noSpread") else tick.ask) if tick else p["entry"]
-                    positions.append(dict(p, profit=round((px - p["entry"]) * (1 if long else -1) * p["lots"] * self._units(info, p["symbol"]), 2)))
+                    positions.append(dict(p, now=px, profit=round((px - p["entry"]) * (1 if long else -1) * p["lots"] * self._units(info, p["symbol"]), 2)))
         except Exception as e:
             c["statusError"] = str(e)
             positions = [dict(p, profit=0.0) for p in self.paper["positions"]]
         hist = self.paper["history"]
         stats = {"trades": len(hist), "wins": sum(1 for h in hist if h["profit"] > 0), "profit": round(sum(h["profit"] for h in hist), 2)}
+        price = None
+        try:
+            with Mt5.lock:
+                mt5 = Mt5.connect(self.server.config["mt5"])
+                t = mt5.symbol_info_tick(Mt5.need_symbol(mt5, c["symbol"])) if c.get("symbol") else None
+                if t is not None:
+                    price = {"bid": t.bid, "ask": t.bid if c.get("noSpread") else t.ask}
+        except Exception:
+            pass
+        floating = round(sum(p["profit"] for p in positions), 2)
         with self.lock:
-            return {"ok": True, "config": c, "positions": positions, "stats": stats, "history": hist[:40],
-                    "paper": {"balance": self.paper["balance"]}, "events": self.events[:40], "error": self.error, "startedAt": self.started}
+            return {"ok": True, "config": c, "positions": positions, "stats": stats, "history": hist[:40], "price": price,
+                    "paper": {"balance": self.paper["balance"], "equity": round(self.paper["balance"] + floating, 2), "floating": floating},
+                    "events": self.events[:40], "error": self.error, "startedAt": self.started}
 
     def status(self):
         c = dict(self.cfg)
@@ -3193,7 +3208,7 @@ class TickBot:
                 for p in self._mine(mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()):
                     positions.append({"ticket": int(p.ticket), "symbol": p.symbol, "side": "long" if p.type == mt5.POSITION_TYPE_BUY else "short",
                                       "lots": p.volume, "entry": p.price_open, "stop": None, "target": None,
-                                      "profit": p.profit + getattr(p, "swap", 0)})
+                                      "now": getattr(p, "price_current", None), "profit": p.profit + getattr(p, "swap", 0)})
                 since = self.started or now() - 86400
                 for d in mt5.history_deals_get(since + Mt5.offset_seconds - 60, now() + Mt5.offset_seconds + 86400) or ():
                     if getattr(d, "magic", 0) == TICK_MAGIC and d.entry == mt5.DEAL_ENTRY_OUT:
