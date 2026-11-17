@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "4.1"
+VERSION = "4.2"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2933,6 +2933,190 @@ class SRBot:
                     "events": self.events[:40], "error": self.error, "startedAt": self.started}
 
 
+# ---------------------------------------------------------------------------
+# "Nến tick" bot: watches every tick of the forming candle; when price has run `trigger` away from the
+# candle's open it enters that way at market (up = BUY, down = SELL), with SL / TP a fixed distance away,
+# and closes what is still open when the candle ends. One trade per candle. A first version, to tune.
+
+TICK_MAGIC = 20265
+DEFAULT_TICKBOT = {"running": False, "symbol": "", "interval": "1m", "direction": "both", "lots": 0.01,
+                   "trigger": 0.5, "tp": 1.0, "sl": 1.0, "exitAtClose": True, "minLeftPct": 25, "maxSpread": 0.5}
+SECONDS_OF = {"1m": 60, "2m": 120, "3m": 180, "4m": 240, "5m": 300, "6m": 360, "10m": 600, "12m": 720,
+              "15m": 900, "20m": 1200, "30m": 1800, "1h": 3600}
+
+
+class TickBot:
+    """Trades inside one candle on its ticks: in on a run of `trigger` from the open, out at TP / SL or
+    at the candle's close."""
+
+    def __init__(self, server):
+        self.server = server
+        self.lock = threading.RLock()
+        self.events = []
+        self.traded_bar = None   # the candle already traded (one trade per candle)
+        self.known = set()
+        self.error = ""
+        self.started = None
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    @property
+    def cfg(self):
+        c = self.server.config.setdefault("tickbot", {})
+        for k, v in DEFAULT_TICKBOT.items():
+            c.setdefault(k, v)
+        return c
+
+    def event(self, text, notify=False):
+        with self.lock:
+            self.events.insert(0, {"time": now(), "text": text})
+            del self.events[80:]
+        self.server.log("⚡ Bot nến tick: " + text, notify=notify)
+
+    def settings(self, body):
+        c = self.cfg
+        for key, cast in (("symbol", str), ("interval", str), ("direction", str), ("lots", float), ("trigger", float),
+                          ("tp", float), ("sl", float), ("exitAtClose", bool), ("minLeftPct", float), ("maxSpread", float)):
+            if key in body:
+                c[key] = cast(body[key])
+        if c["interval"] not in SECONDS_OF:
+            raise ValueError("Khung không hợp lệ (1m – 1h)")
+        if c["direction"] not in ("both", "long", "short"):
+            raise ValueError("Chiều không hợp lệ")
+        if c["trigger"] <= 0 or c["sl"] <= 0 or c["tp"] < 0:
+            raise ValueError("Khoảng kích hoạt và SL phải lớn hơn 0")
+        c["lots"] = max(0.01, c["lots"])
+        c["minLeftPct"] = max(0.0, min(90.0, c["minLeftPct"]))
+        if "running" in body:
+            on = bool(body["running"])
+            if on and not c["symbol"]:
+                raise ValueError("Chưa chọn mã")
+            if on and not c["running"]:
+                self.traded_bar, self.known, self.error, self.started = None, set(), "", now()
+                self.event(f"BẬT · {c['symbol']} {c['interval']} · {c['lots']} lot · vào khi chạy {c['trigger']} · "
+                           f"TP {c['tp']} · SL {c['sl']}", notify=True)
+            if not on and c["running"]:
+                self.event("TẮT (lệnh đang mở giữ nguyên)", notify=True)
+            c["running"] = on
+        self.server.save_config()
+        return self.status()
+
+    def _mine(self, rows):
+        return [r for r in rows or () if getattr(r, "magic", 0) == TICK_MAGIC]
+
+    def _loop(self):
+        while True:
+            time.sleep(0.25)
+            if not self.cfg["running"]:
+                continue
+            try:
+                with Mt5.lock:
+                    self._tick()
+                self.error = ""
+            except Exception as e:
+                if str(e) != self.error:
+                    self.event(f"lỗi: {e}")
+                self.error = str(e)
+                time.sleep(2)
+
+    def _close(self, mt5, p, why):
+        buy = p.type == mt5.POSITION_TYPE_BUY
+        tick = mt5.symbol_info_tick(p.symbol)
+        if tick is None:
+            return
+        request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": p.symbol, "volume": p.volume,
+                   "type": mt5.ORDER_TYPE_SELL if buy else mt5.ORDER_TYPE_BUY, "position": p.ticket,
+                   "price": tick.bid if buy else tick.ask, "deviation": int(self.server.config["mt5"].get("deviation", 30)),
+                   "magic": TICK_MAGIC, "comment": "TickBot close", "type_time": mt5.ORDER_TIME_GTC}
+        _, error = mt5_send(mt5, request)
+        if error:
+            self.event(f"không đóng được #{p.ticket}: {error}")
+        else:
+            self.event(f"đóng #{p.ticket} ({why}) · lãi/lỗ {money(p.profit)}", notify=True)
+
+    def _tick(self):
+        c = self.cfg
+        mt5 = Mt5.connect(self.server.config["mt5"])
+        self.server.mt5_account._check_trading(mt5)
+        symbol = Mt5.need_symbol(mt5, c["symbol"])
+        info = mt5.symbol_info(symbol)
+        tick = mt5.symbol_info_tick(symbol)
+        timeframe = getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[c["interval"]])
+        rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, 1)
+        if tick is None or rates is None or not len(rates):
+            return
+        bar_time, bar_open = float(rates[-1]["time"]), float(rates[-1]["open"])
+        sec = SECONDS_OF[c["interval"]]
+        positions = self._mine(mt5.positions_get(symbol=symbol))
+        tickets = {int(p.ticket) for p in positions}
+        for gone in self.known - tickets:
+            self.event(f"lệnh #{gone} đã đóng (TP / SL)")
+        self.known = tickets
+        # Out when its candle has closed.
+        if c["exitAtClose"]:
+            for p in positions:
+                if float(p.time) < bar_time:
+                    self._close(mt5, p, "hết nến")
+                    self.known.discard(int(p.ticket))
+            positions = [p for p in positions if float(p.time) >= bar_time]
+        if positions or self.traded_bar == bar_time:
+            return
+        # Not in the last part of the candle: too little time left to reach the TP.
+        left = bar_time + sec - float(tick.time)
+        if left < sec * c["minLeftPct"] / 100:
+            return
+        if c["maxSpread"] > 0 and tick.ask - tick.bid > c["maxSpread"]:
+            return
+        move = tick.bid - bar_open
+        long = move >= c["trigger"]
+        short = -move >= c["trigger"]
+        if (long and c["direction"] == "short") or (short and c["direction"] == "long") or not (long or short):
+            return
+        d = info.digits
+        price = tick.ask if long else tick.bid
+        stop = price - c["sl"] if long else price + c["sl"]
+        target = (price + c["tp"] if long else price - c["tp"]) if c["tp"] > 0 else 0.0
+        volume = self.server.mt5_account._volume(mt5, info, float(c["lots"]))
+        request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": volume,
+                   "type": mt5.ORDER_TYPE_BUY if long else mt5.ORDER_TYPE_SELL, "price": price,
+                   "sl": round(stop, d), "tp": round(target, d) if target else 0.0,
+                   "magic": TICK_MAGIC, "comment": "TickBot", "type_time": mt5.ORDER_TIME_GTC,
+                   "deviation": int(self.server.config["mt5"].get("deviation", 30))}
+        self.traded_bar = bar_time  # one try per candle, filled or not
+        result, error = mt5_send(mt5, request)
+        what = f"{'MUA' if long else 'BÁN'} {volume} @ {fmt(price)} (nến mở {fmt(bar_open)}, chạy {move:+.2f}; SL {fmt(stop)}, TP {fmt(target) if target else '–'})"
+        if error:
+            self.event(f"không vào được {what}: {error}")
+            return
+        ticket = int(getattr(result, "order", 0) or 0)
+        if ticket:
+            self.known.add(ticket)
+        self.event(f"vào {what}", notify=True)
+
+    def status(self):
+        c = dict(self.cfg)
+        positions, stats = [], {"trades": 0, "wins": 0, "profit": 0.0}
+        try:
+            with Mt5.lock:
+                mt5 = Mt5.connect(self.server.config["mt5"])
+                symbol = c["symbol"] or None
+                for p in self._mine(mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()):
+                    positions.append({"ticket": int(p.ticket), "symbol": p.symbol, "side": "long" if p.type == mt5.POSITION_TYPE_BUY else "short",
+                                      "lots": p.volume, "entry": p.price_open, "stop": p.sl or None, "target": p.tp or None,
+                                      "profit": p.profit + getattr(p, "swap", 0)})
+                since = self.started or now() - 86400
+                for d in mt5.history_deals_get(since + Mt5.offset_seconds - 60, now() + Mt5.offset_seconds + 86400) or ():
+                    if getattr(d, "magic", 0) == TICK_MAGIC and d.entry == mt5.DEAL_ENTRY_OUT:
+                        pnl = d.profit + d.commission + d.swap + (getattr(d, "fee", 0) or 0)
+                        stats["trades"] += 1
+                        stats["wins"] += 1 if pnl > 0 else 0
+                        stats["profit"] += pnl
+        except Exception as e:
+            c["statusError"] = str(e)
+        with self.lock:
+            return {"ok": True, "config": c, "positions": positions, "stats": stats,
+                    "events": self.events[:40], "error": self.error, "startedAt": self.started}
+
+
 class NewsFeed:
     """This week's economic calendar (Forex Factory mirror) and gold headlines (Google
     News), fetched for the website: browsers cannot read those feeds themselves (CORS).
@@ -3299,6 +3483,7 @@ class BotServer:
         self.news = NewsFeed()
         self.stopbot = StopBot(self)
         self.srbot = SRBot(self)
+        self.tickbot = TickBot(self)
         self.telegram = Telegram(self)
         self.tunnel = Tunnel(self) if self.config.get("tunnel") else None
         threading.Thread(target=self._relay_loop, daemon=True).start()
@@ -3888,6 +4073,8 @@ def make_handler(server):
                     return self._send(200, server.stopbot.status())
                 if path == "/srbot":
                     return self._send(200, server.srbot.status())
+                if path == "/tickbot":
+                    return self._send(200, server.tickbot.status())
                 if path == "/status":
                     return self._send(200, server.status())
                 if path == "/log":
@@ -3950,6 +4137,8 @@ def make_handler(server):
                     return self._send(200, server.stopbot.settings(body))
                 if path == "/srbot":
                     return self._send(200, server.srbot.settings(body))
+                if path == "/tickbot":
+                    return self._send(200, server.tickbot.settings(body))
                 if path == "/members/save":
                     return self._send(200, server.members.save(body))
                 if path == "/members/code":

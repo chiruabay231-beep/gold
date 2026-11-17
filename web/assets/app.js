@@ -2422,7 +2422,7 @@
       if (t === "copy") this.loadCopy(first);
       if (t === "members" && first) this.loadMembers();
       if (t === "bot") this.loadBot(first);
-      if (t === "autobot") { this.loadAutoBot(first); this.loadStopBot(first); this.loadSRBot(first); }
+      if (t === "autobot") { this.loadAutoBot(first); this.loadStopBot(first); this.loadSRBot(first); this.loadTickBot(first); }
     },
 
     /* ----- history ----- */
@@ -3021,6 +3021,92 @@
 
     renderSRBotLive(st) {
       const live = $("srLive");
+      if (!live || !st) { if (live) live.innerHTML = ""; return; }
+      const d = (sym) => this.digitsFor(sym), s = st.stats || {};
+      live.innerHTML = `<div class="stats">
+          <div class="stat"><span>Lệnh đã đóng</span><b>${s.trades || 0}</b></div>
+          <div class="stat"><span>Thắng</span><b>${s.wins || 0}${s.trades ? ` (${Math.round(s.wins / s.trades * 100)}%)` : ""}</b></div>
+          <div class="stat"><span>Lãi/lỗ</span><b class="${(s.profit || 0) >= 0 ? "pos" : "neg"}">${signed(s.profit || 0)}</b></div>
+          <div class="stat"><span>Đang mở</span><b>${(st.positions || []).length}</b></div>
+        </div>
+        ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
+        <div class="list">${(st.positions || []).map((o) => `<div class="sig"><div class="bar" style="background:${o.side === "long" ? "#2b6bf3" : "var(--down)"}"></div>
+          <div><div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${o.side === "long" ? "buy" : "sell"}">${sideName(o.side)} ${o.lots}</span><span class="muted small">@ ${fmt(o.entry, d(o.symbol))}</span></div>
+          <div class="lv">SL ${o.stop ? fmt(o.stop, d(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, d(o.symbol)) : "–"}</div></div>
+          <div class="right"><div class="move ${(o.profit || 0) >= 0 ? "pos" : "neg"}">${signed(o.profit || 0)}</div></div></div>`).join("")}</div>
+        ${(st.events || []).length ? `<h4>Hoạt động</h4><div class="list log">${st.events.slice(0, 15).map((e) => `<div class="log-row"><span class="muted small">${clock(e.time)}</span> ${esc(e.text)}</div>`).join("")}</div>` : ""}`;
+    },
+
+    /* ----- "Nến tick" bot on the server: in on a run from the candle's open, out by its close ----- */
+
+    async loadTickBot(first) {
+      const el = $("tickBotPanel");
+      if (!el) return;
+      let st = null, problem = "";
+      try { st = await this.call("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.2 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
+      this.tickStatus = st;
+      if (first || !el.querySelector("#tbForm") || !el.contains(document.activeElement)) this.renderTickBot(st, problem);
+      else this.renderTickBotLive(st);
+    },
+
+    tickSettings() {
+      const c = Object.assign({ symbol: "", interval: "1m", direction: "both", lots: 0.01, trigger: 0.5, tp: 1, sl: 1, exitAtClose: true, minLeftPct: 25, maxSpread: 0.5 },
+        (this.tickStatus && this.tickStatus.config) || {});
+      const v = (id) => ($(id) ? $(id).value : null);
+      if ($("tbSymbol")) {
+        Object.assign(c, {
+          symbol: v("tbSymbol").trim(), interval: v("tbInterval"), direction: v("tbDirection"), lots: num(v("tbLots")) || 0.01,
+          trigger: num(v("tbTrigger")) || 0.5, tp: num(v("tbTP")) ?? 1, sl: num(v("tbSL")) || 1,
+          exitAtClose: $("tbExit").checked, minLeftPct: num(v("tbLeft")) ?? 25, maxSpread: num(v("tbSpread")) ?? 0.5,
+        });
+      }
+      c.symbol = c.symbol || this.symbol || "XAUUSDm";
+      return c;
+    },
+
+    renderTickBot(st, problem) {
+      const el = $("tickBotPanel");
+      const c = this.tickSettings();
+      const opt = (list, v) => list.map(([k, n]) => `<option value="${k}" ${String(k) === String(v) ? "selected" : ""}>${n}</option>`).join("");
+      el.innerHTML = `<div class="panel-head"><h3>⚡ Bot nến tick (bản đầu)</h3>${st ? `<span class="badge ${c.running ? "on" : "off"}">${c.running ? "Đang chạy" : "Đang tắt"}</span>` : ""}</div>
+        <p class="muted small">Bot theo dõi <b>từng tick của cây nến đang chạy</b>. Khi giá chạy khỏi giá mở cửa của nến một khoảng <b>kích hoạt</b> thì vào lệnh theo chiều đó ngay (lên = MUA, xuống = BÁN), SL / TP cách giá vào một khoảng cố định, và <b>đóng lệnh khi hết cây nến</b> nếu chưa chạm TP / SL. Mỗi cây nến tối đa 1 lệnh; không vào khi nến sắp hết hoặc spread quá rộng.</p>
+        ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
+        <div id="tbForm">
+          <div class="fields three">
+            <label>Mã<input id="tbSymbol" value="${esc(c.symbol)}"></label>
+            <label>Khung nến<select id="tbInterval">${opt(["1m", "3m", "5m", "15m", "30m", "1h"].map((t) => [t, t]), c.interval)}</select></label>
+            <label>Chiều<select id="tbDirection">${opt([["both", "Cả MUA và BÁN"], ["long", "Chỉ MUA"], ["short", "Chỉ BÁN"]], c.direction)}</select></label>
+          </div>
+          <div class="fields three">
+            <label>Lot<input id="tbLots" inputmode="decimal" value="${c.lots}"></label>
+            <label>Kích hoạt: giá chạy khỏi giá mở (giá)<input id="tbTrigger" inputmode="decimal" value="${c.trigger}"></label>
+            <label>Spread tối đa (0 = bỏ qua)<input id="tbSpread" inputmode="decimal" value="${c.maxSpread}"></label>
+          </div>
+          <div class="fields three">
+            <label>TP (giá, 0 = không TP)<input id="tbTP" inputmode="decimal" value="${c.tp}"></label>
+            <label>SL (giá)<input id="tbSL" inputmode="decimal" value="${c.sl}"></label>
+            <label>Không vào khi nến còn dưới (%)<input id="tbLeft" inputmode="decimal" value="${c.minLeftPct}"></label>
+          </div>
+          <label class="check"><input type="checkbox" id="tbExit" ${c.exitAtClose ? "checked" : ""}> Đóng lệnh khi hết cây nến (chốt theo cây nến)</label>
+          <p class="muted small">Ví dụ vàng: kích hoạt 0.5 · TP 1.0 · SL 1.0 = giá chạy 0.5$ khỏi giá mở thì vào, chốt lời khi chạy thêm 1$, cắt lỗ khi ngược 1$.</p>
+          <div class="row-btns">
+            ${!st ? "" : c.running ? '<button class="btn btn-ghost" id="tbStop">■ Tắt bot</button><button class="btn btn-ghost" id="tbSave">Lưu cài đặt</button>' : '<button class="btn btn-gold" id="tbStart">▶ Bật bot nến tick</button>'}
+          </div>
+        </div>
+        <div id="tbLive"></div>`;
+      const send = async (button, extra, done) => {
+        const r = await act(button, () => this.call("/tickbot", Object.assign(this.tickSettings(), extra)), done);
+        if (r) { this.tickStatus = r; this.renderTickBot(r, ""); }
+      };
+      const start = $("tbStart"), stop = $("tbStop"), save = $("tbSave");
+      if (start) start.onclick = (e) => send(e.currentTarget, { running: true }, "Đã bật bot nến tick");
+      if (stop) stop.onclick = (e) => send(e.currentTarget, { running: false }, "Đã tắt bot (lệnh đang mở giữ nguyên)");
+      if (save) save.onclick = (e) => send(e.currentTarget, {}, "Đã lưu");
+      this.renderTickBotLive(st);
+    },
+
+    renderTickBotLive(st) {
+      const live = $("tbLive");
       if (!live || !st) { if (live) live.innerHTML = ""; return; }
       const d = (sym) => this.digitsFor(sym), s = st.stats || {};
       live.innerHTML = `<div class="stats">
