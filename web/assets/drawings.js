@@ -780,7 +780,7 @@
     }
 
     font(d, size) {
-      return `${d.italic ? "italic " : ""}${d.bold ? "700 " : "600 "}${size || d.fontSize || 12}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`;
+      return `${d.italic ? "italic " : ""}${d.bold ? "700 " : "500 "}${size || d.fontSize || 12}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`;
     }
 
     /** Lines of `text` that fit `max` pixels when wrapping. */
@@ -813,18 +813,10 @@
       if (d.textBg) { g.fillStyle = d.textBgColor; g.fillRect(bx, by, tw + pad * 2, th + pad * 2); }
       if (d.textBorder) { g.strokeStyle = d.textBorderColor; g.lineWidth = 1; g.strokeRect(bx + 0.5, by + 0.5, tw + pad * 2, th + pad * 2); }
       g.textBaseline = "top"; g.textAlign = "left";
-      // On whole device pixels (no letter smeared over two), with a thin halo in the chart's background
-      // colour so the words stay sharp over lines, zones and candles.
+      // On whole device pixels: no letter smeared over two.
       const dpr = this.dpr || 1, snap = (v) => Math.round(v * dpr) / dpr;
-      const light = document.documentElement.dataset.theme === "light";
       rows.forEach((r, i) => {
         const tx = snap(bx + pad), ty = snap(by + pad + i * lh + (lh - size) / 2);
-        if (!d.textBg) {
-          g.lineJoin = "round"; g.miterLimit = 2;
-          g.strokeStyle = light ? "rgba(255, 255, 255, .9)" : "rgba(0, 0, 0, .55)";
-          g.lineWidth = Math.max(2, size / 6);
-          g.strokeText(r, tx, ty);
-        }
         g.fillStyle = d.textColor || d.color;
         g.fillText(r, tx, ty);
       });
