@@ -3189,7 +3189,7 @@
     /** The chosen bot as the chart needs it: market, timeframe, open positions and closed trades. */
     botView() {
       const bot = store.get("aurum.hubBot") || "strategy";
-      const norm = (h) => ({ side: h.side, entry: h.entry ?? h.entryPrice ?? null, exit: h.exit ?? h.exitPrice ?? null,
+      const norm = (h) => ({ side: h.side, spreadCost: h.spreadCost, entry: h.entry ?? h.entryPrice ?? null, exit: h.exit ?? h.exitPrice ?? null,
         openTime: h.openTime ?? h.entryTime ?? null, closeTime: h.closeTime ?? h.exitTime ?? null, profit: +h.profit || 0, lots: h.lots, reason: h.reason });
       const pick = (st, name) => st && st.config ? { name, running: !!st.config.running, paper: !!st.config.paper, symbol: st.config.symbol, interval: st.config.interval,
         positions: (st.positions || []).map((p) => ({ side: p.side, entry: p.entry ?? p.entryPrice, profit: +p.profit || 0 })), history: (st.history || []).map(norm), stats: st.stats } : null;
@@ -3225,7 +3225,9 @@
           <div class="stat"><span>Lỗ TB mỗi lệnh thua</span><b class="neg">${signed(-al)}</b></div>
           <div class="stat"><span>Cần thắng tối thiểu</span><b>${need.toFixed(0)}%</b></div>
           <div class="stat"><span>Đang thắng</span><b class="${rate >= need ? "pos" : "neg"}">${rate.toFixed(0)}%</b></div>
+          ${h.some((x) => x.spreadCost != null) ? `<div class="stat"><span>Phí spread Exness đã trả</span><b class="neg">${signed(-h.reduce((a, x) => a + (x.spreadCost || 0), 0))}</b></div>` : ""}
         </div>
+        <p class="muted small">Tính trên ${h.length} lệnh đóng gần nhất.</p>
         <p class="small">${al > aw ? `Mỗi lệnh thua mất trung bình <b>${(al / Math.max(aw, 0.01)).toFixed(1)} lần</b> số lời của một lệnh thắng, nên phải thắng trên <b>${need.toFixed(0)}%</b> mới hoà vốn; bot đang thắng ${rate.toFixed(0)}% → ${rate >= need ? "vẫn lời" : "nên vẫn lỗ"}.` : "Lời TB lớn hơn lỗ TB."}</p>
         <div class="why-cols"><div><b class="small">Theo cách đóng lệnh</b>${group((x) => x.reason).map(row).join("")}</div>
           <div><b class="small">Theo chiều</b>${group((x) => (x.side === "long" ? "BUY" : "SELL")).map(row).join("")}</div>
@@ -3355,6 +3357,7 @@
       const c = this.tickSettings();
       const opt = (list, v) => list.map(([k, n]) => `<option value="${k}" ${String(k) === String(v) ? "selected" : ""}>${n}</option>`).join("");
       const runPaper = st && st.config && st.config.paper;
+      if (st && st.config && st.config.sl === undefined) problem = (problem ? problem + " " : "") + "Máy chủ VPS còn bản cũ: chưa có SL mỗi lệnh / thuận chiều nến / đóng khi nến đảo. Vào tab Máy chủ → Cập nhật (bản 5.0) rồi đặt lại tài khoản ảo để chạy lại từ đầu.";
       el.innerHTML = `<div class="panel-head"><h3>⚡ Bot nến tick (bản đầu)</h3>${st ? `<span class="badge ${c.running ? "on" : "off"}">${c.running ? (runPaper ? "Đang chạy ẢO" : "Đang chạy trên MT5") : "Đang tắt"}</span>` : ""}</div>
         <p class="muted small">Bot <b>MUA / BÁN liên tục</b> theo từng tick trong cây nến: mỗi lần giá chạy thêm một <b>bước</b> từ lệnh trước (lúc đầu từ giá mở nến) thì vào thêm 1 lệnh theo chiều đó (lên = MUA, xuống = BÁN), nên <b>bên nào giá phản ứng mạnh hơn sẽ có nhiều lệnh hơn</b>. Lệnh nào dương đủ mức <b>chốt lời</b> thì đóng ngay, lệnh khác vào tiếp; lệnh âm tới <b>SL</b> hoặc khi <b>nến đảo chiều</b> thì đóng sớm. An toàn: giới hạn số lệnh mở cùng lúc, <b>cắt lỗ chung</b> khi cả rổ lệnh âm quá mức, và đóng hết khi hết cây nến.</p>
         ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
@@ -8564,7 +8567,8 @@
       }
       // The red news from 1 minute before it comes out until 15 minutes after: a card on top with the
       // countdown, then how gold took it (TỐT / XẤU from the move since the release).
-      const live = this.goldEvents(3).find((e) => nowS >= e.time - 60 && nowS <= e.time + 900);
+      // The card from 1 minute before the release until 1 minute after it, then gone.
+      const live = this.goldEvents(3).find((e) => nowS >= e.time - 60 && nowS <= e.time + 60);
       if (live) list = list.filter((e) => e !== live);
       list = list.slice(0, 5);
       box.hidden = !list.length && !live && !sess;

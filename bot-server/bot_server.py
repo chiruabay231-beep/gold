@@ -31,7 +31,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "4.9"
+VERSION = "5.0"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3101,8 +3101,10 @@ class TickBot:
         price = tick.ask if long else tick.bid
         if c["paper"]:
             self.seq = getattr(self, "seq", 0) + 1
+            # The spread paid on the way in (Exness' own bid / ask at that tick), in money.
+            spread_cost = round((tick.ask - tick.bid) * float(c["lots"]) * self._units(info, symbol), 2)
             p = {"id": f"P{int(time.time() * 1000)}-{self.seq}", "symbol": symbol, "side": "long" if long else "short", "lots": float(c["lots"]),
-                 "entry": price, "openTime": float(tick.time), "paper": True}
+                 "entry": price, "openTime": float(tick.time), "paper": True, "spreadCost": spread_cost}
             with self.lock:
                 self.paper["positions"].append(p)
                 self._save_paper()
@@ -3241,7 +3243,7 @@ class TickBot:
             pass
         floating = round(sum(p["profit"] for p in positions), 2)
         with self.lock:
-            return {"ok": True, "config": c, "positions": positions, "stats": stats, "history": hist[:40], "price": price,
+            return {"ok": True, "config": c, "positions": positions, "stats": stats, "history": hist[:300], "price": price,
                     "paper": {"balance": self.paper["balance"], "equity": round(self.paper["balance"] + floating, 2), "floating": floating},
                     "events": self.events[:40], "error": self.error, "startedAt": self.started}
 
