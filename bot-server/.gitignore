@@ -12,3 +12,4 @@ cloudflared.exe
 __pycache__/
 stops.json
 drawings.json
+tickbot_paper.json

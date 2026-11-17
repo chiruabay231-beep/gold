@@ -952,6 +952,78 @@
   /** The bot over past bars, the same rules as CandleStopBot.backtest in the app: the orders of each
    * closed bar wait during the next one (open, the extreme reached first, the other one, close),
    * fill at their stop price, SL/TP at their price, no spread; unfilled orders live one bar. */
+  /** The "Nến tick" bot on past Exness bars. Inside each candle the price path is its 1-minute bars (when the
+   *  candle is longer than a minute) or open → low → high → close for a rising candle (open → high → low →
+   *  close for a falling one). In when the bid has run `trigger` from the candle's open (BUY at the ask,
+   *  SELL at the bid), out at TP / SL (a BUY closes at the bid, a SELL at the ask) or at the candle's close. */
+  function tickBotBacktest(bars, c, value, spread, subBars) {
+    const sec = TF_SECONDS[c.interval] || 60, trades = [];
+    let placed = 0, open = null, si = 0;
+    if (c.maxSpread > 0 && spread > c.maxSpread) return { placed: 0, trades };
+    const path = (b) => (b.close >= b.open ? [b.open, b.low, b.high, b.close] : [b.open, b.high, b.low, b.close]);
+    const exitOf = (pos, bid) => {
+      const px = pos.side === "long" ? bid : bid + spread;
+      if (pos.side === "long" ? px <= pos.stop : px >= pos.stop) return ["stop", pos.stop];
+      if (pos.target != null && (pos.side === "long" ? px >= pos.target : px <= pos.target)) return ["target", pos.target];
+      return null;
+    };
+    const close = (pos, exit, reason, time) => {
+      trades.push(Object.assign({}, pos, { exit, reason, closeTime: time, profit: value(pos.side, pos.entry, exit) }));
+    };
+    bars.forEach((b) => {
+      // The candle's pieces in time order: its minute bars, or the candle itself.
+      let pieces = [b];
+      if (subBars && sec > 60) {
+        while (si < subBars.length && subBars[si].time < b.time) si++;
+        const list = [];
+        for (let k = si; k < subBars.length && subBars[k].time < b.time + sec; k++) list.push(subBars[k]);
+        if (list.length) pieces = list;
+      }
+      let traded = false;
+      pieces.forEach((pc, pi) => {
+        const pts = path(pc);
+        for (let k = 0; k < 3; k++) {
+          const a = pts[k], z = pts[k + 1];
+          // Time of this stretch, as a share of the candle (for "no entry near the end").
+          const t0 = (pi + k / 3) / pieces.length;
+          if (open) {
+            // TP / SL on the way: the level reached first along this stretch.
+            const lo = Math.min(a, z), hi = Math.max(a, z), pos = open;
+            const ask = (v) => v + spread;
+            let hit = null;
+            if (pos.side === "long") {
+              const s = lo <= pos.stop, t = pos.target != null && hi >= pos.target;
+              if (s && t) hit = z < a ? ["stop", pos.stop] : ["target", pos.target]; else if (s) hit = ["stop", pos.stop]; else if (t) hit = ["target", pos.target];
+            } else {
+              const s = ask(hi) >= pos.stop, t = pos.target != null && ask(lo) <= pos.target;
+              if (s && t) hit = z > a ? ["stop", pos.stop] : ["target", pos.target]; else if (s) hit = ["stop", pos.stop]; else if (t) hit = ["target", pos.target];
+            }
+            if (hit) { close(pos, hit[1], hit[0], b.time + Math.round(t0 * sec)); open = null; }
+            continue;
+          }
+          if (traded || t0 > 1 - (c.minLeftPct || 0) / 100) continue;
+          const up = b.open + c.trigger, down = b.open - c.trigger;
+          const goesUp = c.direction !== "short" && Math.max(a, z) >= up && Math.min(a, z) < up + 1e-9 && z >= a;
+          const goesDown = c.direction !== "long" && Math.min(a, z) <= down && Math.max(a, z) > down - 1e-9 && z <= a;
+          if (!goesUp && !goesDown) continue;
+          const long = goesUp;
+          const entry = long ? up + spread : down;
+          placed++; traded = true;
+          open = { side: long ? "long" : "short", entry, stop: long ? entry - c.sl : entry + c.sl, target: c.tp > 0 ? (long ? entry + c.tp : entry - c.tp) : null, openTime: b.time + Math.round(t0 * sec) };
+          // The rest of this stretch after the entry: TP / SL could already be met.
+          const hit = exitOf(open, z);
+          if (hit) { close(open, hit[1], hit[0], b.time + Math.round(t0 * sec)); open = null; }
+        }
+      });
+      if (open && c.exitAtClose !== false) {
+        close(open, open.side === "long" ? b.close : b.close + spread, "close", b.time + sec);
+        open = null;
+      }
+    });
+    if (open) { const b = bars[bars.length - 1]; close(open, open.side === "long" ? b.close : b.close + spread, "end", b.time + sec); }
+    return { placed, trades };
+  }
+
   function stopBotBacktest(bars, c, value, spread = 0) {
     const sp = Math.max(+spread || 0, 0);
     const off = Math.max(+c.offset || 0, 0), rr = +c.rr || 0, dir = c.direction || "both";
@@ -3070,19 +3142,21 @@
         if (mode === "mt5" && source) { source.value = "mt5"; if (source.onchange) source.onchange(); }
         broker.closest("label").hidden = true;
       }
+      // The tick bot's start button says where it will trade (virtual or MT5).
+      if (bot === "tick" && this.tickStatus && $("tbForm") && !(this.tickStatus.config || {}).running && !$("tickBotPanel").contains(document.activeElement)) this.renderTickBot(this.tickStatus, "");
       // The backtest box tests the bot picked here.
       const btBot = $("btBot");
-      if (btBot && (bot === "stop" || bot === "sr")) { btBot.value = bot; btBot.closest("label").hidden = true; }
+      if (btBot && (bot === "stop" || bot === "sr" || bot === "tick")) { btBot.value = bot; btBot.closest("label").hidden = true; }
       const notes = {
         "strategy:backtest": "Backtest chiến lược (ICT, mẫu, tự viết) chạy trong app iPhone: Backtest → chọn chiến lược. Trên web, chọn bot 🎯 Stop theo nến hoặc 🧱 Cản & Hỗ trợ để backtest.",
         "strategy:demo": "Chạy thử: bot chạy trên máy chủ với tài khoản ảo (số dư đặt lại được), không đặt lệnh lên MT5.",
         "strategy:mt5": "Bot đặt lệnh trên tài khoản MT5 đang đăng nhập. Muốn chạy thử an toàn: đăng nhập tài khoản DEMO Exness (bấm tên tài khoản góc trên) rồi bật bot.",
         "stop:demo": "Bot Stop theo nến đặt lệnh trực tiếp trên MT5 nên không có tài khoản ảo: để chạy thử, đăng nhập tài khoản DEMO Exness rồi bật bot dưới đây (hoặc chạy 🧪 Backtest).",
         "sr:demo": "Bot Cản & Hỗ trợ đặt lệnh trực tiếp trên MT5 nên không có tài khoản ảo: để chạy thử, đăng nhập tài khoản DEMO Exness rồi bật bot dưới đây (hoặc chạy 🧪 Backtest).",
-        "tick:demo": "Bot nến tick đặt lệnh trực tiếp trên MT5 nên không có tài khoản ảo: để chạy thử, đăng nhập tài khoản DEMO Exness rồi bật bot dưới đây.",
-        "tick:backtest": "Bot nến tick vào lệnh theo từng tick trong cây nến: backtest cần dữ liệu tick, sẽ có ở bản sau. Hãy chạy thử với tài khoản DEMO Exness.",
+        "tick:backtest": "Backtest trên nến Exness đã qua với đúng cài đặt của bot: đường đi giá trong mỗi cây nến lấy từ nến 1 phút (khung 1m: mở → thấp → cao → đóng với nến tăng, ngược lại với nến giảm). Mua khớp giá Ask, bán ở Bid.",
+        "tick:demo": "Chạy thử: bot chạy trên máy chủ theo giá Exness thật từng tick, lệnh và số dư là ẢO (không đặt lệnh lên MT5, kể cả khi đang đăng nhập tài khoản thật).",
       };
-      const real = t.login && t.mode === "real" && mode !== "backtest" && !(bot === "strategy" && mode === "demo");
+      const real = t.login && t.mode === "real" && mode !== "backtest" && !(mode === "demo" && (bot === "strategy" || bot === "tick"));
       $("hubNote").innerHTML = (notes[key] ? esc(notes[key]) : "") + (real ? `<div class="warn">⚠️ Đang đăng nhập TÀI KHOẢN THẬT: bot sẽ đặt lệnh bằng tiền thật.</div>` : "");
     },
 
@@ -3092,7 +3166,7 @@
       const el = $("tickBotPanel");
       if (!el) return;
       let st = null, problem = "";
-      try { st = await this.call("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.2 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
+      try { st = await this.call("/tickbot"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.3 (tab Máy chủ → Cập nhật) để chạy bot này." : plain(e.message); }
       this.tickStatus = st;
       if (first || !el.querySelector("#tbForm") || !el.contains(document.activeElement)) this.renderTickBot(st, problem);
       else this.renderTickBotLive(st);
@@ -3110,6 +3184,8 @@
         });
       }
       c.symbol = c.symbol || this.symbol || "XAUUSDm";
+      // "Chạy thử" in the Bot box: virtual orders on the live Exness price; "Tài khoản MT5": real orders.
+      c.paper = c.running ? c.paper !== false : (store.get("aurum.hubMode") || "demo") !== "mt5";
       return c;
     },
 
@@ -3117,7 +3193,8 @@
       const el = $("tickBotPanel");
       const c = this.tickSettings();
       const opt = (list, v) => list.map(([k, n]) => `<option value="${k}" ${String(k) === String(v) ? "selected" : ""}>${n}</option>`).join("");
-      el.innerHTML = `<div class="panel-head"><h3>⚡ Bot nến tick (bản đầu)</h3>${st ? `<span class="badge ${c.running ? "on" : "off"}">${c.running ? "Đang chạy" : "Đang tắt"}</span>` : ""}</div>
+      const runPaper = st && st.config && st.config.paper;
+      el.innerHTML = `<div class="panel-head"><h3>⚡ Bot nến tick (bản đầu)</h3>${st ? `<span class="badge ${c.running ? "on" : "off"}">${c.running ? (runPaper ? "Đang chạy ẢO" : "Đang chạy trên MT5") : "Đang tắt"}</span>` : ""}</div>
         <p class="muted small">Bot theo dõi <b>từng tick của cây nến đang chạy</b>. Khi giá chạy khỏi giá mở cửa của nến một khoảng <b>kích hoạt</b> thì vào lệnh theo chiều đó ngay (lên = MUA, xuống = BÁN), SL / TP cách giá vào một khoảng cố định, và <b>đóng lệnh khi hết cây nến</b> nếu chưa chạm TP / SL. Mỗi cây nến tối đa 1 lệnh; không vào khi nến sắp hết hoặc spread quá rộng.</p>
         ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
         <div id="tbForm">
@@ -3139,7 +3216,8 @@
           <label class="check"><input type="checkbox" id="tbExit" ${c.exitAtClose ? "checked" : ""}> Đóng lệnh khi hết cây nến (chốt theo cây nến)</label>
           <p class="muted small">Ví dụ vàng: kích hoạt 0.5 · TP 1.0 · SL 1.0 = giá chạy 0.5$ khỏi giá mở thì vào, chốt lời khi chạy thêm 1$, cắt lỗ khi ngược 1$.</p>
           <div class="row-btns">
-            ${!st ? "" : c.running ? '<button class="btn btn-ghost" id="tbStop">■ Tắt bot</button><button class="btn btn-ghost" id="tbSave">Lưu cài đặt</button>' : '<button class="btn btn-gold" id="tbStart">▶ Bật bot nến tick</button>'}
+            ${!st ? "" : c.running ? '<button class="btn btn-ghost" id="tbStop">■ Tắt bot</button><button class="btn btn-ghost" id="tbSave">Lưu cài đặt</button>' : `<button class="btn btn-gold" id="tbStart">▶ Bật bot nến tick ${c.paper ? "(ẢO · giá Exness)" : "trên MT5"}</button>`}
+            ${st && c.paper ? '<button class="btn btn-ghost" id="tbReset">Đặt lại tài khoản ảo</button>' : ""}
           </div>
         </div>
         <div id="tbLive"></div>`;
@@ -3148,9 +3226,18 @@
         if (r) { this.tickStatus = r; this.renderTickBot(r, ""); }
       };
       const start = $("tbStart"), stop = $("tbStop"), save = $("tbSave");
-      if (start) start.onclick = (e) => send(e.currentTarget, { running: true }, "Đã bật bot nến tick");
+      if (start) start.onclick = (e) => {
+        if (!this.tickSettings().paper && !confirm("Bot sẽ đặt lệnh THẬT trên tài khoản MT5 đang đăng nhập. Tiếp tục?")) return;
+        send(e.currentTarget, { running: true }, "Đã bật bot nến tick");
+      };
       if (stop) stop.onclick = (e) => send(e.currentTarget, { running: false }, "Đã tắt bot (lệnh đang mở giữ nguyên)");
       if (save) save.onclick = (e) => send(e.currentTarget, {}, "Đã lưu");
+      const reset = $("tbReset");
+      if (reset) reset.onclick = (e) => {
+        const v = prompt("Số dư tài khoản ảo mới (USD):", "10000");
+        if (!v || !num(v)) return;
+        send(e.currentTarget, { paperReset: num(v) }, "Đã đặt lại tài khoản ảo");
+      };
       this.renderTickBotLive(st);
     },
 
@@ -3165,10 +3252,12 @@
           <div class="stat"><span>Đang mở</span><b>${(st.positions || []).length}</b></div>
         </div>
         ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
+        ${st.paper ? `<p class="muted small">Tài khoản ẢO: số dư ${money(st.paper.balance)} · lệnh và lãi/lỗ tính theo giá Exness thật, không đặt lệnh lên MT5.</p>` : ""}
         <div class="list">${(st.positions || []).map((o) => `<div class="sig"><div class="bar" style="background:${o.side === "long" ? "#2b6bf3" : "var(--down)"}"></div>
-          <div><div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${o.side === "long" ? "buy" : "sell"}">${sideName(o.side)} ${o.lots}</span><span class="muted small">@ ${fmt(o.entry, d(o.symbol))}</span></div>
+          <div><div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${o.side === "long" ? "buy" : "sell"}">${sideName(o.side)} ${o.lots}</span><span class="muted small">@ ${fmt(o.entry, d(o.symbol))}${o.paper ? " · ảo" : ""}</span></div>
           <div class="lv">SL ${o.stop ? fmt(o.stop, d(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, d(o.symbol)) : "–"}</div></div>
           <div class="right"><div class="move ${(o.profit || 0) >= 0 ? "pos" : "neg"}">${signed(o.profit || 0)}</div></div></div>`).join("")}</div>
+        ${(st.history || []).length ? `<h4>Lệnh ảo đã đóng</h4><div class="list log">${st.history.slice(0, 20).map((x) => `<div class="log-row"><span class="muted small">${clock(x.closeTime)}</span> ${sideName(x.side)} ${fmt(x.entry, d(x.symbol))} → ${fmt(x.exit, d(x.symbol))} · ${esc(x.reason)} · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b></div>`).join("")}</div>` : ""}
         ${(st.events || []).length ? `<h4>Hoạt động</h4><div class="list log">${st.events.slice(0, 15).map((e) => `<div class="log-row"><span class="muted small">${clock(e.time)}</span> ${esc(e.text)}</div>`).join("")}</div>` : ""}`;
     },
 
@@ -3216,7 +3305,7 @@
       el.innerHTML = `<div class="panel-head"><h3>🧪 Backtest bot</h3></div>
         <p class="muted small">Chạy bot đã chọn với đúng cài đặt ở ô của bot đó (phía trên) trên nến Exness đã qua: xem bot vào lệnh ở đâu, chạm TP hay SL, lời lỗ bao nhiêu. Lệnh MUA khớp ở giá Ask = giá nến + spread, đóng ở Bid; lệnh BÁN ngược lại. Chưa tính trượt giá và phí.</p>
         <div class="fields three">
-          <label>Bot<select id="btBot"><option value="stop" ${bot === "stop" ? "selected" : ""}>🎯 Stop theo nến</option><option value="sr" ${bot === "sr" ? "selected" : ""}>🧱 Cản & Hỗ trợ</option></select></label>
+          <label>Bot<select id="btBot"><option value="stop" ${bot === "stop" ? "selected" : ""}>🎯 Stop theo nến</option><option value="sr" ${bot === "sr" ? "selected" : ""}>🧱 Cản & Hỗ trợ</option><option value="tick" ${bot === "tick" ? "selected" : ""}>⚡ Nến tick</option></select></label>
           <label>Spread (giá, trống = spread hiện tại)<input id="btSpread" inputmode="decimal" placeholder="VD vàng 0.16" value="${esc(store.get("aurum.btSpread") || "")}"></label>
           <label>Thời gian<select id="btDays">${[1, 3, 7, 14, 30, 60].map((d) => `<option value="${d}" ${d === days ? "selected" : ""}>${d} ngày</option>`).join("")}</select></label>
           <label>Vốn ban đầu<input id="btBalance" inputmode="decimal" value="${esc(store.get("aurum.btBalance") || "10000")}"></label>
@@ -3230,7 +3319,7 @@
 
     async runStopBt() {
       const bot = $("btBot").value;
-      const c = bot === "sr" ? this.srSettings() : this.stopBotSettings();
+      const c = bot === "sr" ? this.srSettings() : bot === "tick" ? this.tickSettings() : this.stopBotSettings();
       const days = +$("btDays").value, balance = num($("btBalance").value) || 10000;
       store.set("aurum.btDays", String(days)); store.set("aurum.btBalance", String(balance)); store.set("aurum.btBot", bot);
       store.set("aurum.btSpread", $("btSpread").value.trim());
@@ -3254,7 +3343,19 @@
         bars = bars.filter((b) => b.time >= from);
         if (bars.length < 3) throw new Error(`MT5 chỉ trả ${bars.length} nến ${c.symbol} ${c.interval}`);
         const value = (side, entry, exit) => this.valueAt(c.symbol, c.lots, side, entry, exit);
-        const r = bot === "sr" ? srBacktest(bars, c, value, spread) : stopBotBacktest(bars, c, value, spread);
+        // The tick bot: the 1-minute bars inside its candles show the way price went in each.
+        let sub = null;
+        if (bot === "tick" && sec > 60) {
+          info.textContent = `Đang tải nến 1m ${c.symbol} cho đường đi giá trong từng cây nến…`;
+          const p1 = (before) => `/mt5/candles?symbol=${encodeURIComponent(c.symbol)}&interval=1m&count=5000${before ? `&before=${before}` : ""}`;
+          sub = this.toBars((await this.call(p1())).candles || []);
+          for (let k = 0; k < 40 && sub.length && sub[0].time > from; k++) {
+            const older = this.toBars((await this.call(p1(sub[0].time))).candles || []).filter((b) => b.time < sub[0].time);
+            if (!older.length) break;
+            sub = older.concat(sub);
+          }
+        }
+        const r = bot === "sr" ? srBacktest(bars, c, value, spread) : bot === "tick" ? tickBotBacktest(bars, c, value, spread, sub) : stopBotBacktest(bars, c, value, spread);
         this.btShow = 30;
         this.btResult = { bot, spread, c, bars: bars.length, from: bars[0].time, to: bars[bars.length - 1].time + sec, balance, placed: r.placed, trades: r.trades, digits: this.digitsFor(c.symbol) };
         info.textContent = "";
@@ -3281,14 +3382,14 @@
       const W = 600, H = 120, lo = Math.min(...curve), hi = Math.max(...curve), span = hi - lo || 1;
       const pts = curve.map((v, i) => `${(i / Math.max(curve.length - 1, 1) * W).toFixed(1)},${(H - 6 - (v - lo) / span * (H - 12)).toFixed(1)}`).join(" ");
       const color = net >= 0 ? "var(--up)" : "var(--down)";
-      const reason = { target: "chạm TP", stop: "chạm SL", trail: "chạm SL đã dời", end: "đóng cuối test" };
-      const sr = R.bot === "sr";
-      el.innerHTML = `<p class="muted small">${sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · spread ${fmt(R.spread, R.digits)} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · R:R ${R.c.rr}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>
+      const reason = { target: "chạm TP", stop: "chạm SL", trail: "chạm SL đã dời", end: "đóng cuối test", close: "hết nến" };
+      const sr = R.bot === "sr" || R.bot === "tick", tick = R.bot === "tick";
+      el.innerHTML = `<p class="muted small">${tick ? "⚡ Nến tick" : sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · spread ${fmt(R.spread, R.digits)} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · ${tick ? `kích hoạt ${R.c.trigger} · TP ${R.c.tp} · SL ${R.c.sl}${R.c.exitAtClose !== false ? " · đóng khi hết nến" : ""}` : `R:R ${R.c.rr}`}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>
         <div class="stats">
           ${stat("Lãi/lỗ ròng", signed(net), net >= 0 ? "pos" : "neg")}
           ${stat("Số lệnh", `${t.length} <span class="muted small">/ ${R.placed} ${sr ? "tín hiệu" : "lệnh chờ đặt"}</span>`)}
           ${stat("Thắng", t.length ? `${wins.length}/${t.length} · ${Math.round(wins.length / t.length * 100)}%` : "–")}
-          ${stat("Chạm TP / SL", `${tp} / ${sl}${sr ? ` <span class="muted small">· ${t.filter((x) => x.reason === "trail").length} SL dời</span>` : ""}`)}
+          ${stat("Chạm TP / SL", `${tp} / ${sl}${tick ? ` <span class="muted small">· ${t.filter((x) => x.reason === "close").length} hết nến</span>` : sr ? ` <span class="muted small">· ${t.filter((x) => x.reason === "trail").length} SL dời</span>` : ""}`)}
           ${stat("Profit factor", gl > 0 ? (gp / gl).toFixed(2) : gp > 0 ? "∞" : "–")}
           ${stat("Sụt giảm lớn nhất", dd ? "−" + money(dd) : "0", dd ? "neg" : "")}
           ${stat("Lời TB / lỗ TB", `${wins.length ? signed(gp / wins.length) : "–"} / ${losses.length ? signed(-gl / losses.length) : "–"}`)}
