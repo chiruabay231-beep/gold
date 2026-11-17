@@ -30,7 +30,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "4.3"
+VERSION = "4.4"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2934,13 +2934,17 @@ class SRBot:
 
 
 # ---------------------------------------------------------------------------
-# "Nến tick" bot: watches every tick of the forming candle; when price has run `trigger` away from the
-# candle's open it enters that way at market (up = BUY, down = SELL), with SL / TP a fixed distance away,
-# and closes what is still open when the candle ends. One trade per candle. A first version, to tune.
+# "Nến tick" bot v2: scalps inside each candle on its ticks. Every time price runs `step` from the last
+# entry (or the candle's open) it opens a position that way (up = BUY, down = SELL), so the side price
+# pushes harder gets more positions. No SL / TP at the broker: a position closes as soon as it is
+# `closeProfit` in profit, and the next one can come in. Safety: at most `maxPositions` open, the whole
+# basket closed if it is `basketStop` dollars down, and (by default) everything closed at the candle's end.
+# The website's backtest (web/assets/app.js, tickBotBacktest) follows the same rules; keep the two in step.
 
 TICK_MAGIC = 20265
 DEFAULT_TICKBOT = {"running": False, "symbol": "", "interval": "1m", "direction": "both", "lots": 0.01,
-                   "trigger": 0.5, "tp": 1.0, "sl": 1.0, "exitAtClose": True, "minLeftPct": 25, "maxSpread": 0.5,
+                   "step": 0.3, "closeProfit": 0.3, "maxPositions": 6, "basketStop": 30.0,
+                   "exitAtClose": True, "minLeftPct": 15, "maxSpread": 0.5,
                    # True: virtual orders on the live Exness price (no order sent to MT5), False: real orders.
                    "paper": True}
 TICK_PAPER_PATH = os.path.join(HERE, "tickbot_paper.json")
@@ -2949,15 +2953,16 @@ SECONDS_OF = {"1m": 60, "2m": 120, "3m": 180, "4m": 240, "5m": 300, "6m": 360, "
 
 
 class TickBot:
-    """Trades inside one candle on its ticks: in on a run of `trigger` from the open, out at TP / SL or
-    at the candle's close."""
+    """Buys and sells again and again inside one candle, more on the side price pushes; each position
+    closes on its own small profit (no SL / TP), the rest at the candle's close."""
 
     def __init__(self, server):
         self.server = server
         self.lock = threading.RLock()
         self.events = []
-        self.traded_bar = None   # the candle already traded (one trade per candle)
-        self.known = set()
+        self.bar = None          # the candle being traded
+        self.ref = None          # price of the last entry in it (the candle's open at first)
+        self.stopped_bar = None  # the candle whose basket stop was hit: no more entries in it
         self.error = ""
         self.started = None
         self.paper = read_json(TICK_PAPER_PATH, None) or {"balance": 10000.0, "positions": [], "history": []}
@@ -2981,18 +2986,20 @@ class TickBot:
 
     def settings(self, body):
         c = self.cfg
-        for key, cast in (("symbol", str), ("interval", str), ("direction", str), ("lots", float), ("trigger", float),
-                          ("tp", float), ("sl", float), ("exitAtClose", bool), ("minLeftPct", float), ("maxSpread", float),
-                          ("paper", bool)):
+        for key, cast in (("symbol", str), ("interval", str), ("direction", str), ("lots", float), ("step", float),
+                          ("closeProfit", float), ("maxPositions", int), ("basketStop", float), ("exitAtClose", bool),
+                          ("minLeftPct", float), ("maxSpread", float), ("paper", bool)):
             if key in body:
                 c[key] = cast(body[key])
         if c["interval"] not in SECONDS_OF:
             raise ValueError("Khung không hợp lệ (1m – 1h)")
         if c["direction"] not in ("both", "long", "short"):
             raise ValueError("Chiều không hợp lệ")
-        if c["trigger"] <= 0 or c["sl"] <= 0 or c["tp"] < 0:
-            raise ValueError("Khoảng kích hoạt và SL phải lớn hơn 0")
+        if c["step"] <= 0 or c["closeProfit"] <= 0:
+            raise ValueError("Bước vào lệnh và mức chốt lời phải lớn hơn 0")
         c["lots"] = max(0.01, c["lots"])
+        c["maxPositions"] = max(1, min(50, c["maxPositions"]))
+        c["basketStop"] = max(0.0, c["basketStop"])
         c["minLeftPct"] = max(0.0, min(90.0, c["minLeftPct"]))
         if body.get("paperReset"):
             with self.lock:
@@ -3004,9 +3011,9 @@ class TickBot:
             if on and not c["symbol"]:
                 raise ValueError("Chưa chọn mã")
             if on and not c["running"]:
-                self.traded_bar, self.known, self.error, self.started = None, set(), "", now()
+                self.bar, self.ref, self.stopped_bar, self.error, self.started = None, None, None, "", now()
                 self.event(f"BẬT {'(ẢO, giá Exness)' if c['paper'] else 'trên MT5'} · {c['symbol']} {c['interval']} · {c['lots']} lot · "
-                           f"vào khi chạy {c['trigger']} · TP {c['tp']} · SL {c['sl']}", notify=True)
+                           f"vào mỗi {c['step']} giá chạy · chốt khi lời {c['closeProfit']} · tối đa {c['maxPositions']} lệnh", notify=True)
             if not on and c["running"]:
                 self.event("TẮT (lệnh đang mở giữ nguyên)", notify=True)
             c["running"] = on
@@ -3031,73 +3038,66 @@ class TickBot:
                 self.error = str(e)
                 time.sleep(2)
 
-    def _close(self, mt5, p, why):
-        buy = p.type == mt5.POSITION_TYPE_BUY
-        tick = mt5.symbol_info_tick(p.symbol)
-        if tick is None:
-            return
-        request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": p.symbol, "volume": p.volume,
-                   "type": mt5.ORDER_TYPE_SELL if buy else mt5.ORDER_TYPE_BUY, "position": p.ticket,
-                   "price": tick.bid if buy else tick.ask, "deviation": int(self.server.config["mt5"].get("deviation", 30)),
-                   "magic": TICK_MAGIC, "comment": "TickBot close", "type_time": mt5.ORDER_TIME_GTC}
-        _, error = mt5_send(mt5, request)
-        if error:
-            self.event(f"không đóng được #{p.ticket}: {error}")
-        else:
-            self.event(f"đóng #{p.ticket} ({why}) · lãi/lỗ {money(p.profit)}", notify=True)
-
-    def _units(self, info, symbol):
+    @staticmethod
+    def _units(info, symbol):
         size = float(getattr(info, "trade_contract_size", 0) or 0)
         return size if size > 0 else contract_size(symbol)
 
-    def _paper_close(self, p, exit_price, why, units):
-        long = p["side"] == "long"
-        profit = (exit_price - p["entry"]) * (1 if long else -1) * p["lots"] * units
-        with self.lock:
-            self.paper["positions"] = [x for x in self.paper["positions"] if x["id"] != p["id"]]
-            self.paper["balance"] = round(self.paper["balance"] + profit, 2)
-            self.paper["history"].insert(0, dict(p, exit=exit_price, reason=why, closeTime=now(), profit=round(profit, 2)))
-            del self.paper["history"][300:]
-            self._save_paper()
-        self.event(f"ẢO: đóng {'MUA' if long else 'BÁN'} @ {fmt(exit_price)} ({why}) · lãi/lỗ {money(profit)}", notify=True)
+    # ----- the book: the bot's positions as dicts, on MT5 or virtual -----
 
-    def _paper_tick(self, c, mt5, symbol, info, tick, bar_time, bar_open, sec):
-        """Virtual orders on the live price: a BUY fills at the ask and closes at the bid, a SELL the other way."""
-        units = self._units(info, symbol)
-        for p in list(self.paper["positions"]):
-            if p["symbol"] != symbol:
-                continue
-            long = p["side"] == "long"
-            px = tick.bid if long else tick.ask
-            if (px <= p["stop"]) if long else (px >= p["stop"]):
-                self._paper_close(p, px, "chạm SL", units)
-            elif p.get("target") and ((px >= p["target"]) if long else (px <= p["target"])):
-                self._paper_close(p, px, "chạm TP", units)
-            elif c["exitAtClose"] and p["barTime"] < bar_time:
-                self._paper_close(p, px, "hết nến", units)
-        if any(p["symbol"] == symbol for p in self.paper["positions"]) or self.traded_bar == bar_time:
-            return
-        left = bar_time + sec - float(tick.time)
-        if left < sec * c["minLeftPct"] / 100:
-            return
-        if c["maxSpread"] > 0 and tick.ask - tick.bid > c["maxSpread"]:
-            return
-        move = tick.bid - bar_open
-        long, short = move >= c["trigger"], -move >= c["trigger"]
-        if (long and c["direction"] == "short") or (short and c["direction"] == "long") or not (long or short):
-            return
-        d = info.digits
+    def _book(self, mt5, symbol):
+        if self.cfg["paper"]:
+            return [p for p in self.paper["positions"] if p["symbol"] == symbol]
+        return [{"id": int(p.ticket), "symbol": p.symbol, "side": "long" if p.type == mt5.POSITION_TYPE_BUY else "short",
+                 "lots": p.volume, "entry": p.price_open, "openTime": float(p.time), "raw": p}
+                for p in self._mine(mt5.positions_get(symbol=symbol))]
+
+    def _open(self, mt5, symbol, info, tick, long, why):
+        c = self.cfg
         price = tick.ask if long else tick.bid
-        stop = round(price - c["sl"] if long else price + c["sl"], d)
-        target = round(price + c["tp"] if long else price - c["tp"], d) if c["tp"] > 0 else None
-        self.traded_bar = bar_time
-        p = {"id": f"P{int(time.time() * 1000)}", "symbol": symbol, "side": "long" if long else "short", "lots": float(c["lots"]),
-             "entry": price, "stop": stop, "target": target, "openTime": now(), "barTime": bar_time, "paper": True}
-        with self.lock:
-            self.paper["positions"].append(p)
-            self._save_paper()
-        self.event(f"ẢO: vào {'MUA' if long else 'BÁN'} {c['lots']} @ {fmt(price)} (nến mở {fmt(bar_open)}, chạy {move:+.2f}; "
-                   f"SL {fmt(stop)}, TP {fmt(target) if target else '–'})", notify=True)
+        if c["paper"]:
+            self.seq = getattr(self, "seq", 0) + 1
+            p = {"id": f"P{int(time.time() * 1000)}-{self.seq}", "symbol": symbol, "side": "long" if long else "short", "lots": float(c["lots"]),
+                 "entry": price, "openTime": float(tick.time), "paper": True}
+            with self.lock:
+                self.paper["positions"].append(p)
+                self._save_paper()
+            self.event(f"ẢO: {'MUA' if long else 'BÁN'} {c['lots']} @ {fmt(price)} ({why})")
+            return True
+        volume = self.server.mt5_account._volume(mt5, info, float(c["lots"]))
+        request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": volume,
+                   "type": mt5.ORDER_TYPE_BUY if long else mt5.ORDER_TYPE_SELL, "price": price, "sl": 0.0, "tp": 0.0,
+                   "magic": TICK_MAGIC, "comment": "TickBot", "type_time": mt5.ORDER_TIME_GTC,
+                   "deviation": int(self.server.config["mt5"].get("deviation", 30))}
+        _, error = mt5_send(mt5, request)
+        if error:
+            self.event(f"không vào được {'MUA' if long else 'BÁN'} @ {fmt(price)}: {error}")
+            return False
+        self.event(f"{'MUA' if long else 'BÁN'} {volume} @ {fmt(price)} ({why})")
+        return True
+
+    def _close(self, mt5, p, tick, units, why):
+        long = p["side"] == "long"
+        price = tick.bid if long else tick.ask
+        profit = (price - p["entry"]) * (1 if long else -1) * p["lots"] * units
+        if self.cfg["paper"]:
+            with self.lock:
+                self.paper["positions"] = [x for x in self.paper["positions"] if x["id"] != p["id"]]
+                self.paper["balance"] = round(self.paper["balance"] + profit, 2)
+                self.paper["history"].insert(0, dict({k: v for k, v in p.items() if k != "raw"}, exit=price, reason=why, closeTime=now(), profit=round(profit, 2)))
+                del self.paper["history"][500:]
+                self._save_paper()
+            self.event(f"ẢO: đóng {'MUA' if long else 'BÁN'} {fmt(p['entry'])} → {fmt(price)} ({why}) · {money(profit)}")
+            return
+        request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": p["symbol"], "volume": p["lots"],
+                   "type": mt5.ORDER_TYPE_SELL if long else mt5.ORDER_TYPE_BUY, "position": p["id"], "price": price,
+                   "deviation": int(self.server.config["mt5"].get("deviation", 30)),
+                   "magic": TICK_MAGIC, "comment": "TickBot close", "type_time": mt5.ORDER_TIME_GTC}
+        _, error = mt5_send(mt5, request)
+        if error:
+            self.event(f"không đóng được #{p['id']}: {error}")
+        else:
+            self.event(f"đóng #{p['id']} {fmt(p['entry'])} → {fmt(price)} ({why}) · ~{money(profit)}")
 
     def _tick(self):
         c = self.cfg
@@ -3113,54 +3113,46 @@ class TickBot:
             return
         bar_time, bar_open = float(rates[-1]["time"]), float(rates[-1]["open"])
         sec = SECONDS_OF[c["interval"]]
-        if c["paper"]:
-            self._paper_tick(c, mt5, symbol, info, tick, bar_time, bar_open, sec)
+        units = self._units(info, symbol)
+        book = self._book(mt5, symbol)
+        if bar_time != self.bar:
+            # A new candle: what is still open from the last one goes (by default), the count starts again.
+            if c["exitAtClose"]:
+                for p in book:
+                    if p["openTime"] < bar_time:
+                        self._close(mt5, p, tick, units, "hết nến")
+                book = self._book(mt5, symbol)
+            self.bar, self.ref = bar_time, bar_open
+        gain = lambda p: (tick.bid - p["entry"]) if p["side"] == "long" else (p["entry"] - tick.ask)
+        # Each position out on its own profit.
+        for p in book:
+            if gain(p) >= c["closeProfit"] - 1e-9:
+                self._close(mt5, p, tick, units, "chốt lời")
+        book = self._book(mt5, symbol)
+        # Basket stop: all out when the open positions together are this much down.
+        floating = sum(gain(p) * p["lots"] * units for p in book)
+        if c["basketStop"] > 0 and book and floating <= -c["basketStop"]:
+            for p in book:
+                self._close(mt5, p, tick, units, "cắt lỗ chung")
+            self.stopped_bar = bar_time
+            self.event(f"cắt lỗ chung {money(floating)}: dừng vào lệnh tới hết cây nến", notify=True)
             return
-        positions = self._mine(mt5.positions_get(symbol=symbol))
-        tickets = {int(p.ticket) for p in positions}
-        for gone in self.known - tickets:
-            self.event(f"lệnh #{gone} đã đóng (TP / SL)")
-        self.known = tickets
-        # Out when its candle has closed.
-        if c["exitAtClose"]:
-            for p in positions:
-                if float(p.time) < bar_time:
-                    self._close(mt5, p, "hết nến")
-                    self.known.discard(int(p.ticket))
-            positions = [p for p in positions if float(p.time) >= bar_time]
-        if positions or self.traded_bar == bar_time:
+        if self.stopped_bar == bar_time or len(book) >= c["maxPositions"]:
             return
-        # Not in the last part of the candle: too little time left to reach the TP.
         left = bar_time + sec - float(tick.time)
         if left < sec * c["minLeftPct"] / 100:
             return
         if c["maxSpread"] > 0 and tick.ask - tick.bid > c["maxSpread"]:
             return
-        move = tick.bid - bar_open
-        long = move >= c["trigger"]
-        short = -move >= c["trigger"]
-        if (long and c["direction"] == "short") or (short and c["direction"] == "long") or not (long or short):
+        # A run of `step` from the last entry: in that way.
+        move = tick.bid - self.ref
+        long, short = move >= c["step"] - 1e-9, -move >= c["step"] - 1e-9
+        if not (long or short):
             return
-        d = info.digits
-        price = tick.ask if long else tick.bid
-        stop = price - c["sl"] if long else price + c["sl"]
-        target = (price + c["tp"] if long else price - c["tp"]) if c["tp"] > 0 else 0.0
-        volume = self.server.mt5_account._volume(mt5, info, float(c["lots"]))
-        request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": symbol, "volume": volume,
-                   "type": mt5.ORDER_TYPE_BUY if long else mt5.ORDER_TYPE_SELL, "price": price,
-                   "sl": round(stop, d), "tp": round(target, d) if target else 0.0,
-                   "magic": TICK_MAGIC, "comment": "TickBot", "type_time": mt5.ORDER_TIME_GTC,
-                   "deviation": int(self.server.config["mt5"].get("deviation", 30))}
-        self.traded_bar = bar_time  # one try per candle, filled or not
-        result, error = mt5_send(mt5, request)
-        what = f"{'MUA' if long else 'BÁN'} {volume} @ {fmt(price)} (nến mở {fmt(bar_open)}, chạy {move:+.2f}; SL {fmt(stop)}, TP {fmt(target) if target else '–'})"
-        if error:
-            self.event(f"không vào được {what}: {error}")
+        self.ref = tick.bid
+        if (long and c["direction"] == "short") or (short and c["direction"] == "long"):
             return
-        ticket = int(getattr(result, "order", 0) or 0)
-        if ticket:
-            self.known.add(ticket)
-        self.event(f"vào {what}", notify=True)
+        self._open(mt5, symbol, info, tick, long, f"giá chạy {move:+.2f}")
 
     def _paper_status(self, c):
         positions = []
@@ -3172,8 +3164,7 @@ class TickBot:
                     info = mt5.symbol_info(p["symbol"])
                     long = p["side"] == "long"
                     px = (tick.bid if long else tick.ask) if tick else p["entry"]
-                    units = self._units(info, p["symbol"])
-                    positions.append(dict(p, profit=round((px - p["entry"]) * (1 if long else -1) * p["lots"] * units, 2)))
+                    positions.append(dict(p, profit=round((px - p["entry"]) * (1 if long else -1) * p["lots"] * self._units(info, p["symbol"]), 2)))
         except Exception as e:
             c["statusError"] = str(e)
             positions = [dict(p, profit=0.0) for p in self.paper["positions"]]
@@ -3194,7 +3185,7 @@ class TickBot:
                 symbol = c["symbol"] or None
                 for p in self._mine(mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()):
                     positions.append({"ticket": int(p.ticket), "symbol": p.symbol, "side": "long" if p.type == mt5.POSITION_TYPE_BUY else "short",
-                                      "lots": p.volume, "entry": p.price_open, "stop": p.sl or None, "target": p.tp or None,
+                                      "lots": p.volume, "entry": p.price_open, "stop": None, "target": None,
                                       "profit": p.profit + getattr(p, "swap", 0)})
                 since = self.started or now() - 86400
                 for d in mt5.history_deals_get(since + Mt5.offset_seconds - 60, now() + Mt5.offset_seconds + 86400) or ():
