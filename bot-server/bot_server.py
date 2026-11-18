@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "6.4"
+VERSION = "6.5"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3387,6 +3387,9 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    # Signal entry: a basket is closed when the signal turns the other way (then that side's basket
                    # opens), so a basket that never reaches its target or stop does not block the other side.
                    "flipClose": True,
+                   # Signal entry: after a sigTf candle closes, no new basket (nor a turn) for `waitSec` seconds; then
+                   # only if price still holds over that candle's close (a buy) or under it (a sell). 0 = off.
+                   "waitSec": 15.0,
                    # More signal filters, on the closed `structTf` candles (the last `structBars`):
                    #   sigSwing — a reversal candle (pin bar / engulfing) at an earlier swing low (buy) or high (sell),
                    #              swings over `swingK` bars each side, within `swingZone`;
@@ -3616,6 +3619,8 @@ class GridBot(TickBot):
             parts.append(f"{kind} ({c['srBars']} nến, vùng {c['srZone']:g})")
         if c.get("sigTick"):
             parts.append(f"tick {c['tickMove']:g}/{c['tickSec']:g}s")
+        if float(c.get("waitSec", 0)) > 0:
+            parts.append(f"chờ {c['waitSec']:g}s sau khi nến đóng")
         if c.get("sigSwing"):
             parts.append(f"nến đảo chiều ở đỉnh/đáy {c['structTf']}")
         if c.get("sigZone", "off") != "off":
@@ -3659,7 +3664,7 @@ class GridBot(TickBot):
                           ("srZone", float), ("sigTick", bool), ("tickSec", float), ("tickMove", float), ("confirmAdd", bool),
                           ("trailOn", bool), ("trailStart", float), ("trailDist", float),
                           ("sigSwing", bool), ("swingK", int), ("swingZone", float), ("sigZone", str), ("structTf", str), ("structBars", int),
-                          ("addMode", str), ("flipClose", bool), ("paper", bool), ("noSpread", bool)):
+                          ("addMode", str), ("flipClose", bool), ("waitSec", float), ("paper", bool), ("noSpread", bool)):
             if key in body:
                 c[key] = cast(body[key])
         if c["direction"] not in ("both", "long", "short"):
@@ -3699,6 +3704,7 @@ class GridBot(TickBot):
         if c["entry"] == "signal" and not (c["sigCandle"] or c["sigSr"] != "off" or c["sigTick"] or c["sigSwing"] or c["sigZone"] != "off"):
             raise ValueError("Vào theo tín hiệu: bật ít nhất một trong nến / cản / tick")
         c["trailStart"], c["trailDist"] = max(0.01, c["trailStart"]), max(0.01, c["trailDist"])
+        c["waitSec"] = max(0.0, min(float(SECONDS_OF.get(c.get("sigTf", "1m"), 60)) - 1, c["waitSec"]))
         if c["sigZone"] not in ("off", "fvg", "ob", "both"):
             raise ValueError("Kiểu vùng FVG / OB không hợp lệ")
         if c["structTf"] not in SECONDS_OF:
@@ -3788,11 +3794,11 @@ class GridBot(TickBot):
             return
         signal = None
         if c.get("entry") == "signal":
-            candle = None
+            candle, bar_t = None, None
             rates = mt5.copy_rates_from_pos(symbol, getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[c["sigTf"]]), 1, 1)
             if rates is not None and len(rates):
                 r = rates[-1]
-                candle = (float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]))
+                candle, bar_t = (float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"])), float(r["time"])
             sup = res = None
             if c.get("sigSr", "off") != "off":
                 bars = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 1, int(c["srBars"]))
@@ -3814,7 +3820,15 @@ class GridBot(TickBot):
                         extra[name] = struct[name][0]
             parts = {}
             signal = grid_signal(c, float(tick.bid), candle, sup, res, move, parts, extra)
-            self.signal = {"side": signal, "candle": candle_bias(c, *candle, min_body=float(c["sigBody"])) if candle else None,
+            gate, wait_left = None, 0.0
+            if float(c.get("waitSec", 0)) > 0 and bar_t is not None:
+                # Seconds since that candle closed, on the broker's clock (the tick's and the bars' times are both).
+                since = float(tick.time) - (bar_t + SECONDS_OF[c["sigTf"]])
+                if since < float(c["waitSec"]):
+                    gate, wait_left, signal = "waiting", round(float(c["waitSec"]) - since, 1), None
+                elif signal and ((signal == "long" and tick.bid < candle[3]) or (signal == "short" and tick.bid > candle[3])):
+                    gate, signal = "notHeld", None
+            self.signal = {"gate": gate, "waitLeft": wait_left, "close": candle[3] if candle else None, "side": signal, "candle": candle_bias(c, *candle, min_body=float(c["sigBody"])) if candle else None,
                            "sup": sup, "res": res, "move": None if move is None else round(move, 3), "time": now(), "parts": parts,
                            "swingLevel": (struct.get("swing") or (None, None))[1], "zone": (struct.get("zone") or (None, None))[1]}
         strong = None
@@ -3840,7 +3854,8 @@ class GridBot(TickBot):
             self.state = {"kind": "holding", "sides": sorted({p["side"] for p in book}), "count": len(book), "sidePause": rest,
                           "signal": signal, "parts": (getattr(self, "signal", None) or {}).get("parts", {}) if c.get("entry") == "signal" else {}}
         elif c.get("entry") == "signal":
-            self.state = {"kind": "wait" if not signal else "open", "side": signal, "parts": self.signal.get("parts", {}), "sidePause": rest}
+            self.state = {"kind": "wait" if not signal else "open", "side": signal, "parts": self.signal.get("parts", {}), "sidePause": rest,
+                          "gate": self.signal.get("gate"), "waitLeft": self.signal.get("waitLeft"), "close": self.signal.get("close")}
         else:
             self.state = {"kind": "open", "sidePause": rest}
         for side in ("long", "short"):
