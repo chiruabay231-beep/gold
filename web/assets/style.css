@@ -1197,3 +1197,7 @@ body.on-chart #chartNote { font-size: 10.5px; line-height: 1.3; padding: 1px 4px
 .grid-risk { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line, rgba(255,255,255,.12)); border-left: 3px solid var(--down, #f0455a); border-radius: 10px; background: rgba(240, 69, 90, .06); }
 .grid-risk .small { margin-top: 4px; }
 .fields .grow2 { grid-column: span 2; }
+
+/* Grid bot: what it is doing now (resting, waiting for a signal…) */
+.grid-state { margin: 4px 0 8px; padding: 7px 10px; border-radius: 9px; background: var(--chip, rgba(255,255,255,.05)); font-size: 12.5px; line-height: 1.5; }
+.grid-state .btn-small { margin-left: 8px; padding: 3px 9px; font-size: 12px; }

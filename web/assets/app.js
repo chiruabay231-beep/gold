@@ -3475,6 +3475,12 @@
         mk.onchange = () => { store.set("aurum.botMarks", mk.checked ? "1" : null); this.renderBotLive(); };
       }
       $("blSub").textContent = v ? ` · ${v.symbol || "–"} ${v.interval || ""} · ${v.running ? (v.paper ? "đang chạy ẢO" : "đang chạy trên MT5") : "đang tắt"}${this.ownAccount ? " · tài khoản riêng" : ""} · chạy 24/24 trên VPS` : " · chưa có dữ liệu";
+      // The grid bot: what it is doing now, over its chart (resting after a stop, waiting for a signal…).
+      const gs = $("blState");
+      if (gs) {
+        const txt = store.get("aurum.hubBot") === "grid" && this.gridStatus ? this.gridStateText(this.gridStatus) : "";
+        gs.hidden = !txt; gs.innerHTML = txt ? "🤖 " + txt : "";
+      }
       if (!v || !v.symbol || !v.interval) return;
       if (!this.botChart) {
         const el = $("botChart");
@@ -3775,7 +3781,8 @@
       const runPaper = st && st.config && st.config.paper;
       if (st && st.config && st.config.sl === undefined) problem = (problem ? problem + " " : "") + "Máy chủ VPS chưa có SL rổ: vào tab Máy chủ → Cập nhật lên bản 5.7 (Backtest vẫn dùng được ngay).";
       else if (st && st.config && st.config.bias === undefined) problem = (problem ? problem + " " : "") + "Máy chủ VPS chưa có lực nến: vào tab Máy chủ → Cập nhật lên bản 5.7 (Backtest vẫn dùng được ngay).";
-      else if (st && st.config && st.config.entry === undefined) problem = (problem ? problem + " " : "") + "Máy chủ VPS chưa có vào lệnh theo tín hiệu (nến / cản M1 / tick): vào tab Máy chủ → Cập nhật lên bản 5.7 (Backtest dùng được ngay).";
+      else if (st && st.config && st.config.entry === undefined) problem = (problem ? problem + " " : "") + "Máy chủ VPS chưa có vào lệnh theo tín hiệu (nến / cản M1 / tick): vào tab Máy chủ → Cập nhật lên bản 5.8 (Backtest dùng được ngay).";
+      else if (st && st.grid && st.config.running && st.grid.state === undefined) problem = (problem ? problem + " " : "") + "Cập nhật máy chủ lên bản 5.8 để xem bot đang làm gì (đang nghỉ / chờ tín hiệu) và nút Chạy lại ngay.";
       el.innerHTML = `<div class="panel-head"><h3>🕸️ Bot nhồi lệnh (grid / gấp lot)</h3>${st ? `<span class="badge ${c.running ? "on" : "off"}">${c.running ? (runPaper ? "Đang chạy ẢO" : "Đang chạy trên MT5") : "Đang tắt"}</span>` : ""}</div>
         <p class="muted small">Kiểu bot "nhồi lệnh, chốt lời nhỏ": mở 1 lệnh MUA và 1 lệnh BÁN. Bên nào giá chạy <b>ngược</b> thêm một <b>khoảng nhồi</b> thì vào thêm lệnh bên đó với lot × <b>hệ số gấp</b> (1 = không gấp). Khi cả rổ bên đó dương đủ <b>mức chốt rổ</b> thì đóng hết rổ và mở lại từ đầu.</p>
         <p class="warn small">⚠️ Bot dạng này thắng đều phần lớn thời gian vì giá thường hồi lại, nhưng một đợt chạy một mạch không hồi (tin, xu hướng mạnh) sẽ lấy lại toàn bộ lãi hoặc cháy tài khoản. Luôn đặt <b>Cắt lỗ chung</b>, chạy 🧪 Backtest và 🎮 Chạy thử trước.</p>
@@ -3901,6 +3908,26 @@
       this.renderGridBotLive(st);
     },
 
+    /** What the grid bot is doing now, in words: resting until when (and why), waiting for which signal,
+     *  holding a basket, spread too wide. */
+    gridStateText(st) {
+      const g = (st && st.grid) || {}, s = g.state, cfg = (st && st.config) || {};
+      if (!s) return cfg.running ? "đang khởi động…" : "";
+      const sideName2 = (x) => (x === "long" ? "MUA" : "BÁN");
+      const rest = Object.entries(s.sidePause || {}).map(([k, v]) => `rổ ${sideName2(k)} nghỉ sau SL tới ${clock(v)}`).join(" · ");
+      const tag = (ok) => (ok && ok.length ? `<b class="pos">✓ ${ok.map(sideName2).join("/")}</b>` : '<b class="neg">✗</b>');
+      let txt = "";
+      if (s.kind === "off") txt = "bot đang tắt";
+      else if (s.kind === "pause") txt = `<b class="neg">đang nghỉ sau ${esc(s.why || "cắt lỗ")} tới ${clock(s.until)}</b> (còn ${Math.max(0, Math.ceil((s.until * 1000 - Date.now()) / 60000))} phút) — không vào lệnh mới`;
+      else if (s.kind === "spread") txt = `<b class="neg">spread đang ${s.spread} &gt; mức tối đa ${s.max}</b> — chờ spread hạ`;
+      else if (s.kind === "holding") txt = `đang giữ ${s.count} lệnh (rổ ${s.sides.map(sideName2).join(" + ")}) — chờ chốt rổ / nhồi`;
+      else if (s.kind === "wait") {
+        const p = s.parts || {};
+        txt = `<b>đang chờ tín hiệu</b>: ${[cfg.sigCandle ? `nến ${tag(p.candle)}` : "", cfg.sigSr && cfg.sigSr !== "off" ? `cản ${tag(p.sr)}` : "", cfg.sigTick ? `tick ${tag(p.tick)}` : ""].filter(Boolean).join(" · ")} — cần tất cả cùng một chiều`;
+      } else if (s.kind === "open") txt = "sẵn sàng vào lệnh";
+      return txt + (rest ? ` · <b class="neg">${rest}</b>` : "");
+    },
+
     renderGridBotLive(st) {
       this.renderTickBotLive(st, "gbLive");
       const live = $("gbLive");
@@ -3913,7 +3940,13 @@
       const sg = g.signal, cfg = st.config || {}, sd = (x) => (x === "long" ? '<b class="pos">MUA</b>' : x === "short" ? '<b class="neg">BÁN</b>' : "—");
       const sigTxt = sg ? ` · tín hiệu: ${sg.side ? sd(sg.side) : "<b>chờ</b>"}${cfg.sigCandle && sg.candle ? ` (nến ${esc(cfg.sigTf || "")} ${sd(sg.candle[0])} ${Math.round(sg.candle[1] * 100)}%` : " ("}${sg.sup != null ? ` · hỗ trợ ${fmt(sg.sup, this.digitsFor(cfg.symbol))} / cản ${fmt(sg.res, this.digitsFor(cfg.symbol))}` : ""}${sg.move != null ? ` · tick ${sg.move > 0 ? "+" : ""}${sg.move}/${cfg.tickSec}s` : ""})` : "";
       const b = g.bias, bias = sigTxt || (b ? ` · lực nến ${esc((st.config || {}).biasTf || "")}: ${b.side ? `<b class="${b.side === "long" ? "pos" : "neg"}">${b.side === "long" ? "MUA" : "BÁN"} mạnh</b>` : "<b>yếu</b>"} (thân ${b.body > 0 ? "+" : ""}${b.body}%)` : "");
-      live.insertAdjacentHTML("afterbegin", `<p class="small">Rổ MUA: ${basket("long")} · Rổ BÁN: ${basket("short")} · đã chốt ${g.cycles || 0} rổ từ lúc bật${bias}${pause}</p>`);
+      const stTxt = this.gridStateText(st), resting = g.state && (g.state.kind === "pause" || Object.keys(g.state.sidePause || {}).length);
+      live.insertAdjacentHTML("afterbegin", `${stTxt ? `<p class="grid-state">🤖 ${stTxt}${resting ? ' <button class="btn btn-ghost btn-small" id="gbResume" type="button">▶ Chạy lại ngay</button>' : ""}</p>` : ""}<p class="small">Rổ MUA: ${basket("long")} · Rổ BÁN: ${basket("short")} · đã chốt ${g.cycles || 0} rổ từ lúc bật${bias}${pause}</p>`);
+      const resume = $("gbResume");
+      if (resume) resume.onclick = async (e) => {
+        const r = await act(e.currentTarget, () => this.botCall("/gridbot", { resume: true }), "Bot vào lệnh lại ngay khi có tín hiệu");
+        if (r) { this.gridStatus = r; this.renderGridBotLive(r); }
+      };
     },
 
     /** The Cản & Hỗ trợ bot's settings as its form shows them. */

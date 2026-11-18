@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "5.7"
+VERSION = "5.8"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3402,7 +3402,7 @@ def candle_bias(c, o, h, l, cl, min_body=None):
     return ("long" if body > 0 else "short"), body
 
 
-def grid_signal(c, bid, candle, sup, res, move):
+def grid_signal(c, bid, candle, sup, res, move, detail=None):
     """The side the grid bot's signal entry allows now: each filter that is on gives the sides it allows and the
     answer is the one side they all allow (None when none, both, or no filter is on). `candle` = the last closed
     sigTf candle (open, high, low, close), `sup` / `res` = the M1 support / resistance, `move` = the bid's move
@@ -3412,6 +3412,8 @@ def grid_signal(c, bid, candle, sup, res, move):
         used = True
         side = candle_bias(c, *candle, min_body=float(c.get("sigBody", 50)))[0] if candle else None
         sides &= {side} if side else set()
+        if detail is not None:
+            detail["candle"] = [side] if side else []
     if c.get("sigSr", "off") != "off":
         used = True
         z, ok = float(c.get("srZone", 1.0)), set()
@@ -3427,6 +3429,8 @@ def grid_signal(c, bid, candle, sup, res, move):
                 if sup - z <= bid < sup:
                     ok.add("short")
         sides &= ok
+        if detail is not None:
+            detail["sr"] = sorted(ok)
     if c.get("sigTick"):
         used = True
         ok = set()
@@ -3436,6 +3440,8 @@ def grid_signal(c, bid, candle, sup, res, move):
             if move <= -float(c["tickMove"]) + 1e-9:
                 ok.add("short")
         sides &= ok
+        if detail is not None:
+            detail["tick"] = sorted(ok)
     return sides.pop() if used and len(sides) == 1 else None
 
 
@@ -3543,6 +3549,10 @@ class GridBot(TickBot):
         c["tickMove"] = max(0.01, c["tickMove"])
         if c["entry"] == "signal" and not (c["sigCandle"] or c["sigSr"] != "off" or c["sigTick"]):
             raise ValueError("Vào theo tín hiệu: bật ít nhất một trong nến / cản / tick")
+        if body.get("resume"):
+            # "Chạy lại ngay": no more resting after a stop.
+            self.pause_until, self.side_pause = 0.0, {}
+            self.event("bỏ thời gian nghỉ: vào lệnh lại ngay khi có tín hiệu")
         if not c["paper"] and c["basketStop"] <= 0 and c["sl"] <= 0 and c["slMoney"] <= 0 and (c["running"] or body.get("running")):
             raise ValueError("Trên tài khoản MT5 phải đặt SL rổ hoặc Cắt lỗ chung (nhồi lệnh không cắt lỗ có thể cháy tài khoản)")
 
@@ -3583,6 +3593,7 @@ class GridBot(TickBot):
                 self._close(mt5, p, tick, units, "cắt lỗ chung")
             self.pause_until = time.time() + c["cooldownMin"] * 60
             self.event(f"cắt lỗ chung {money(total)}: nghỉ {c['cooldownMin']:g} phút", notify=True)
+            self.state = {"kind": "pause", "until": self.pause_until, "why": "cắt lỗ chung"}
             return
         closed = False
         pauses = getattr(self, "side_pause", None)
@@ -3610,8 +3621,10 @@ class GridBot(TickBot):
         if closed:
             return  # the new basket starts at the next tick, on a fresh price
         if time.time() < getattr(self, "pause_until", 0):
+            self.state = {"kind": "pause", "until": self.pause_until, "why": "cắt lỗ chung"}
             return
         if not no_spread and c["maxSpread"] > 0 and tick.ask - tick.bid > c["maxSpread"]:
+            self.state = {"kind": "spread", "spread": round(tick.ask - tick.bid, 3), "max": c["maxSpread"]}
             return
         signal = None
         if c.get("entry") == "signal":
@@ -3625,9 +3638,10 @@ class GridBot(TickBot):
                 bars = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 1, int(c["srBars"]))
                 if bars is not None and len(bars):
                     sup, res = float(min(b["low"] for b in bars)), float(max(b["high"] for b in bars))
-            signal = grid_signal(c, float(tick.bid), candle, sup, res, move)
+            parts = {}
+            signal = grid_signal(c, float(tick.bid), candle, sup, res, move, parts)
             self.signal = {"side": signal, "candle": candle_bias(c, *candle, min_body=float(c["sigBody"])) if candle else None,
-                           "sup": sup, "res": res, "move": None if move is None else round(move, 3), "time": now()}
+                           "sup": sup, "res": res, "move": None if move is None else round(move, 3), "time": now(), "parts": parts}
         strong = None
         if c.get("entry") != "signal" and c.get("bias", "off") != "off":
             # The last closed candle of the strength timeframe (bid prices, as the chart).
@@ -3636,6 +3650,14 @@ class GridBot(TickBot):
                 r = rates[-1]
                 strong, body = candle_bias(c, float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]))
                 self.bias = {"side": strong, "body": round(body * 100), "time": float(r["time"])}
+        # What the bot is doing now, for the website ("why does it not trade?").
+        rest = {k: v for k, v in pauses.items() if v > time.time()}
+        if book:
+            self.state = {"kind": "holding", "sides": sorted({p["side"] for p in book}), "count": len(book), "sidePause": rest}
+        elif c.get("entry") == "signal":
+            self.state = {"kind": "wait" if not signal else "open", "side": signal, "parts": self.signal.get("parts", {}), "sidePause": rest}
+        else:
+            self.state = {"kind": "open", "sidePause": rest}
         for side in ("long", "short"):
             if c["direction"] not in ("both", side) or time.time() < pauses.get(side, 0):
                 continue
@@ -3671,6 +3693,7 @@ class GridBot(TickBot):
         st["grid"] = {"cycles": getattr(self, "cycles", 0), "pauseUntil": getattr(self, "pause_until", 0) or None,
                       "bias": getattr(self, "bias", None) if cfg.get("bias", "off") != "off" and cfg.get("entry") != "signal" else None,
                       "signal": getattr(self, "signal", None) if cfg.get("entry") == "signal" else None,
+                      "state": (getattr(self, "state", None) if cfg.get("running") else {"kind": "off"}),
                       "sidePause": {k: v for k, v in (getattr(self, "side_pause", None) or {}).items() if v > time.time()},
                       "lots": levels, "totalLots": round(sum(levels), 2)}
         return st
