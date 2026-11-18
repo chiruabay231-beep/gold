@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "6.2"
+VERSION = "6.3"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3381,6 +3381,9 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    # Trailing stop for each position: once it is `trailStart` in profit (price), its stop follows the
                    # best price at `trailDist` behind (on MT5 as the position's own SL at the broker). Off by default.
                    "trailOn": False, "trailStart": 1.0, "trailDist": 0.5,
+                   # Where layers go: "with" (nhồi dương) — another position each time price goes gridStep further the
+                   # basket's way past its best entry; "against" (nhồi âm) — each gridStep against it past its worst.
+                   "addMode": "with",
                    # More signal filters, on the closed `structTf` candles (the last `structBars`):
                    #   sigSwing — a reversal candle (pin bar / engulfing) at an earlier swing low (buy) or high (sell),
                    #              swings over `swingK` bars each side, within `swingZone`;
@@ -3595,8 +3598,8 @@ class GridBot(TickBot):
         return max(p["entry"] for p in ps) - c["sl"] if long else min(p["entry"] for p in ps) + c["sl"]
 
     def _start_text(self, c):
-        return (f"{c['lots']} lot · nhồi mỗi {c['gridStep']} giá × {c['multiplier']} · tối đa {c['maxLevels']} lớp · "
-                f"chốt rổ khi lời {money(c['tpMoney'])} · SL rổ {c['sl'] or 'tắt'} giá / {money(c['slMoney']) if c['slMoney'] else 'tắt'} · "
+        return (f"{c['lots']} lot · nhồi {'dương' if c.get('addMode') == 'with' else 'âm'} mỗi {c['gridStep']} giá × {c['multiplier']} · "
+                f"tối đa {c['maxLevels']} lớp · chốt rổ {money(c['tpMoney']) if c['tpMoney'] > 0 else 'tắt (trailing)'} · SL rổ {c['sl'] or 'tắt'} giá / {money(c['slMoney']) if c['slMoney'] else 'tắt'} · "
                 f"cắt lỗ chung {money(c['basketStop'])}"
                 + (self._signal_text(c) if c.get("entry") == "signal" else self._bias_text(c)))
 
@@ -3653,13 +3656,17 @@ class GridBot(TickBot):
                           ("srZone", float), ("sigTick", bool), ("tickSec", float), ("tickMove", float), ("confirmAdd", bool),
                           ("trailOn", bool), ("trailStart", float), ("trailDist", float),
                           ("sigSwing", bool), ("swingK", int), ("swingZone", float), ("sigZone", str), ("structTf", str), ("structBars", int),
-                          ("paper", bool), ("noSpread", bool)):
+                          ("addMode", str), ("paper", bool), ("noSpread", bool)):
             if key in body:
                 c[key] = cast(body[key])
         if c["direction"] not in ("both", "long", "short"):
             raise ValueError("Chiều không hợp lệ")
-        if c["gridStep"] <= 0 or c["tpMoney"] <= 0:
-            raise ValueError("Khoảng nhồi và mức chốt rổ phải lớn hơn 0")
+        if c["addMode"] not in ("with", "against"):
+            raise ValueError("Kiểu nhồi không hợp lệ")
+        if c["gridStep"] <= 0 or c["tpMoney"] < 0:
+            raise ValueError("Khoảng nhồi phải lớn hơn 0, mức chốt rổ không âm")
+        if c["tpMoney"] == 0 and not c.get("trailOn") and not body.get("trailOn"):
+            raise ValueError("Chốt rổ = 0 (tắt) thì phải bật Trailing stop để bot có chỗ chốt lời")
         c["lots"] = round(max(0.01, c["lots"]), 2)
         c["multiplier"] = max(1.0, min(3.0, c["multiplier"]))
         c["maxLevels"] = max(1, min(30, c["maxLevels"]))
@@ -3761,7 +3768,7 @@ class GridBot(TickBot):
                 self.event(f"SL rổ {'MUA' if side == 'long' else 'BÁN'} {len(ps)} lệnh · {money(loss)} · bên này nghỉ {c['cooldownMin']:g} phút", notify=True)
                 closed = True
                 continue
-            if ps and pnl(ps) >= c["tpMoney"] - 1e-9:
+            if ps and c["tpMoney"] > 0 and pnl(ps) >= c["tpMoney"] - 1e-9:
                 gain = pnl(ps)
                 for p in ps:
                     self._close(mt5, p, tick, units, "chốt rổ")
@@ -3842,14 +3849,17 @@ class GridBot(TickBot):
                 self._open(mt5, symbol, info, tick, long, why, grid_lot(c, 0, factor), stop)
             elif len(ps) < c["maxLevels"]:
                 worst = min(p["entry"] for p in ps) if long else max(p["entry"] for p in ps)
+                best = max(p["entry"] for p in ps) if long else min(p["entry"] for p in ps)
+                # Nhồi dương: price gridStep further the basket's way than its best entry; nhồi âm: against its worst.
+                gone = (price - best if long else best - price) if c.get("addMode") == "with" else (worst - price if long else price - worst)
                 turned = not (c.get("entry") == "signal" and c.get("confirmAdd")) or (
                     move is not None and (move if long else -move) >= float(c["tickMove"]) / 2 - 1e-9)
-                if (worst - price if long else price - worst) >= c["gridStep"] - 1e-9 and turned:
+                if gone >= c["gridStep"] - 1e-9 and turned:
                     # The new layer gets the basket's stop (first entry ± sl), as its other positions, and its size.
                     stop = self.sl_level(c, ps, long)
                     first = min(ps, key=lambda p: p["openTime"])
                     factor = max(1.0, round(float(first["lots"]) / float(c["lots"]), 2))
-                    self._open(mt5, symbol, info, tick, long, f"nhồi lớp {len(ps) + 1}", grid_lot(c, len(ps), factor), stop)
+                    self._open(mt5, symbol, info, tick, long, f"nhồi {'dương' if c.get('addMode') == 'with' else 'âm'} lớp {len(ps) + 1}", grid_lot(c, len(ps), factor), stop)
 
     def _trail(self, mt5, c, book, tick, units, info):
         """Trailing stop for each position: the best price since it opened, and once the position is trailStart in
