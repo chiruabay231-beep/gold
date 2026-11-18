@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "5.9"
+VERSION = "6.0"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3376,7 +3376,7 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    #           "break" buys just over the resistance and sells just under the support;
                    #   sigTick — price has moved `tickMove` that way in the last `tickSec` seconds.
                    # confirmAdd: a new layer only once price turns back the basket's way (half a tickMove in tickSec).
-                   "entry": "signal", "sigCandle": True, "sigTf": "1m", "sigBody": 50.0, "sigSr": "bounce",
+                   "entry": "signal", "sigCandle": True, "sigTf": "1m", "sigBody": 50.0, "sigSr": "auto", "sigNeed": "two",
                    "srBars": 30, "srZone": 1.0, "sigTick": True, "tickSec": 10.0, "tickMove": 0.3, "confirmAdd": True,
                    "maxSpread": 0.5, "noSpread": False, "simSpread": -1.0, "commission": 0.0,
                    "paper": True}
@@ -3404,19 +3404,25 @@ def candle_bias(c, o, h, l, cl, min_body=None):
 
 
 def grid_signal(c, bid, candle, sup, res, move, detail=None):
-    """The side the grid bot's signal entry allows now: each filter that is on gives the sides it allows and the
-    answer is the one side they all allow (None when none, both, or no filter is on). `candle` = the last closed
-    sigTf candle (open, high, low, close), `sup` / `res` = the M1 support / resistance, `move` = the bid's move
-    over the last tickSec seconds. The website's gridSignal follows the same rules."""
-    sides, used = {"long", "short"}, False
-    if c.get("sigCandle"):
-        used = True
-        side = candle_bias(c, *candle, min_body=float(c.get("sigBody", 50)))[0] if candle else None
-        sides &= {side} if side else set()
+    """The side the grid bot's signal entry allows now. Each filter that is on votes for the sides it allows; with
+    `sigNeed` "all" a side needs every filter's vote, with "two" at least two (all of them when fewer are on) and more
+    votes than the other side. None when no side qualifies or no filter is on. `candle` = the last closed sigTf candle
+    (open, high, low, close), `sup` / `res` = the M1 support / resistance, `move` = the bid's move over the last
+    tickSec seconds. The website's gridSignal follows the same rules."""
+    votes, used = {"long": 0, "short": 0}, 0
+
+    def vote(name, ok):
+        nonlocal used
+        used += 1
+        for x in ok:
+            votes[x] += 1
         if detail is not None:
-            detail["candle"] = [side] if side else []
+            detail[name] = sorted(ok)
+
+    if c.get("sigCandle"):
+        side = candle_bias(c, *candle, min_body=float(c.get("sigBody", 50)))[0] if candle else None
+        vote("candle", {side} if side else set())
     if c.get("sigSr", "off") != "off":
-        used = True
         z, ok = float(c.get("srZone", 1.0)), set()
         if sup is not None and res is not None:
             if c["sigSr"] == "bounce":
@@ -3424,26 +3430,28 @@ def grid_signal(c, bid, candle, sup, res, move, detail=None):
                     ok.add("long")
                 if res - z <= bid <= res + z:
                     ok.add("short")
-            else:
+            elif c["sigSr"] == "break":
                 if res < bid <= res + z:
                     ok.add("long")
                 if sup - z <= bid < sup:
                     ok.add("short")
-        sides &= ok
-        if detail is not None:
-            detail["sr"] = sorted(ok)
+            elif sup - z <= bid <= sup + z or res - z <= bid <= res + z:
+                # "auto": price at a level; the candle and the ticks say whether it breaks or bounces.
+                ok = {"long", "short"}
+        vote("sr", ok)
     if c.get("sigTick"):
-        used = True
         ok = set()
         if move is not None:
             if move >= float(c["tickMove"]) - 1e-9:
                 ok.add("long")
             if move <= -float(c["tickMove"]) + 1e-9:
                 ok.add("short")
-        sides &= ok
-        if detail is not None:
-            detail["tick"] = sorted(ok)
-    return sides.pop() if used and len(sides) == 1 else None
+        vote("tick", ok)
+    if not used:
+        return None
+    need = used if c.get("sigNeed", "all") == "all" else min(2, used)
+    good = [x for x in ("long", "short") if votes[x] >= need and votes[x] > votes["short" if x == "long" else "long"]]
+    return good[0] if len(good) == 1 else None
 
 
 class GridBot(TickBot):
@@ -3461,6 +3469,15 @@ class GridBot(TickBot):
     @staticmethod
     def paper_path():
         return GRID_PAPER_PATH
+
+    @property
+    def cfg(self):
+        c = self.server.config.setdefault(self.KEY, {})
+        if "entry" in c and "sigNeed" not in c and c.get("sigSr") == "bounce":
+            # Saved by 5.7 – 5.9, where "bounce" was the default and needed all three filters (it hardly ever
+            # traded: the candle into a support points down while the bounce points up): now "auto", 2 of 3.
+            c["sigSr"] = "auto"
+        return TickBot.cfg.fget(self)
 
     def _reset(self):
         self.pause_until = 0.0
@@ -3486,19 +3503,22 @@ class GridBot(TickBot):
         if c.get("sigCandle"):
             parts.append(f"nến {c['sigTf']} ≥{c['sigBody']:g}%")
         if c.get("sigSr", "off") != "off":
-            parts.append(f"{'bật' if c['sigSr'] == 'bounce' else 'phá'} cản M1 ({c['srBars']} nến, vùng {c['srZone']:g})")
+            kind = {"auto": "cản M1 tự động", "bounce": "bật cản M1", "break": "phá cản M1"}[c["sigSr"]]
+            parts.append(f"{kind} ({c['srBars']} nến, vùng {c['srZone']:g})")
         if c.get("sigTick"):
             parts.append(f"tick {c['tickMove']:g}/{c['tickSec']:g}s")
-        return " · vào 1 bên theo " + " + ".join(parts) + (" · nhồi khi giá quay đầu" if c.get("confirmAdd") else "")
+        return (" · vào 1 bên theo " + " + ".join(parts) + (" (cần đủ)" if c.get("sigNeed", "all") == "all" else " (cần 2 đồng ý)")) + (" · nhồi khi giá quay đầu" if c.get("confirmAdd") else "")
 
     def _signal_why(self, c, side):
         sg, parts = getattr(self, "signal", None) or {}, []
         if c.get("sigCandle") and sg.get("candle"):
             parts.append(f"nến {c['sigTf']} {'tăng' if side == 'long' else 'giảm'} {abs(round(sg['candle'][1] * 100))}%")
-        if c.get("sigSr", "off") != "off":
-            at_sup = (side == "long") == (c["sigSr"] == "bounce")
-            lv = sg.get("sup") if at_sup else sg.get("res")
-            parts.append(f"{'chạm' if c['sigSr'] == 'bounce' else 'phá'} {'hỗ trợ' if at_sup else 'cản'} {fmt(lv) if lv is not None else ''}")
+        if c.get("sigSr", "off") != "off" and sg.get("sup") is not None:
+            bid = (getattr(self, "bids", None) or [(0, 0, "")])[-1][1]
+            at_sup = abs(bid - sg["sup"]) <= abs(bid - sg["res"])
+            lv = sg["sup"] if at_sup else sg["res"]
+            how = "bật" if (side == "long") == at_sup else "phá"
+            parts.append(f"{how} {'hỗ trợ' if at_sup else 'kháng cự'} {fmt(lv)}")
         if c.get("sigTick") and sg.get("move") is not None:
             parts.append(f"tick {sg['move']:+.2f}/{c['tickSec']:g}s")
         return (": " + ", ".join(parts)) if parts else ""
@@ -3515,7 +3535,7 @@ class GridBot(TickBot):
                           ("maxLevels", int), ("maxLot", float), ("tpMoney", float), ("basketStop", float),
                           ("cooldownMin", float), ("sl", float), ("slMoney", float), ("maxSpread", float),
                           ("bias", str), ("biasTf", str), ("biasMinBody", float), ("biasLotMult", float), ("simSpread", float), ("commission", float),
-                          ("entry", str), ("sigCandle", bool), ("sigTf", str), ("sigBody", float), ("sigSr", str), ("srBars", int),
+                          ("entry", str), ("sigCandle", bool), ("sigTf", str), ("sigBody", float), ("sigSr", str), ("sigNeed", str), ("srBars", int),
                           ("srZone", float), ("sigTick", bool), ("tickSec", float), ("tickMove", float), ("confirmAdd", bool),
                           ("paper", bool), ("noSpread", bool)):
             if key in body:
@@ -3541,8 +3561,10 @@ class GridBot(TickBot):
             raise ValueError("Cách vào lệnh không hợp lệ")
         if c["sigTf"] not in SECONDS_OF:
             raise ValueError("Khung nến tín hiệu không hợp lệ (1m – 1h)")
-        if c["sigSr"] not in ("off", "bounce", "break"):
+        if c["sigSr"] not in ("off", "auto", "bounce", "break"):
             raise ValueError("Kiểu cản không hợp lệ")
+        if c["sigNeed"] not in ("all", "two"):
+            raise ValueError("Số bộ lọc cần đồng ý không hợp lệ")
         c["sigBody"] = max(0.0, min(100.0, c["sigBody"]))
         c["srBars"] = max(5, min(500, c["srBars"]))
         c["srZone"] = max(0.01, c["srZone"])

@@ -1099,29 +1099,33 @@
    *  closed candle, the M1 support / resistance, the tick move) gives the sides it allows; the answer is the one
    *  side all allow, else null. */
   function gridSignal(c, bid, candle, sup, res, move) {
-    let sides = new Set(["long", "short"]), used = false;
-    const keep = (ok) => { sides = new Set([...sides].filter((x) => ok.has(x))); };
+    // Each filter that is on votes for the sides it allows; "all": a side needs every vote, "two": at least two
+    // (all when fewer are on) and more than the other side.
+    const votes = { long: 0, short: 0 };
+    let used = 0;
+    const vote = (ok) => { used++; ok.forEach((x) => votes[x]++); };
     if (c.sigCandle) {
-      used = true;
       const side = candle ? candleBias({ biasMinBody: c.sigBody ?? 50 }, candle.o, candle.h, candle.l, candle.c).side : null;
-      keep(new Set(side ? [side] : []));
+      vote(side ? [side] : []);
     }
     if (c.sigSr && c.sigSr !== "off") {
-      used = true;
       const z = c.srZone ?? 1, ok = new Set();
       if (sup != null && res != null) {
         if (c.sigSr === "bounce") { if (bid >= sup - z && bid <= sup + z) ok.add("long"); if (bid >= res - z && bid <= res + z) ok.add("short"); }
-        else { if (bid > res && bid <= res + z) ok.add("long"); if (bid >= sup - z && bid < sup) ok.add("short"); }
+        else if (c.sigSr === "break") { if (bid > res && bid <= res + z) ok.add("long"); if (bid >= sup - z && bid < sup) ok.add("short"); }
+        else if ((bid >= sup - z && bid <= sup + z) || (bid >= res - z && bid <= res + z)) { ok.add("long"); ok.add("short"); }
       }
-      keep(ok);
+      vote([...ok]);
     }
     if (c.sigTick) {
-      used = true;
-      const ok = new Set();
-      if (move != null) { if (move >= c.tickMove - 1e-9) ok.add("long"); if (move <= -c.tickMove + 1e-9) ok.add("short"); }
-      keep(ok);
+      const ok = [];
+      if (move != null) { if (move >= c.tickMove - 1e-9) ok.push("long"); if (move <= -c.tickMove + 1e-9) ok.push("short"); }
+      vote(ok);
     }
-    return used && sides.size === 1 ? [...sides][0] : null;
+    if (!used) return null;
+    const need = (c.sigNeed || "all") === "all" ? used : Math.min(2, used);
+    const good = ["long", "short"].filter((x) => votes[x] >= need && votes[x] > votes[x === "long" ? "short" : "long"]);
+    return good.length === 1 ? good[0] : null;
   }
 
   function gridBotOnTicks(ticks, c, value) {
@@ -3736,7 +3740,7 @@
     gridSettings() {
       const c = Object.assign({ symbol: "", direction: "both", lots: 0.01, gridStep: 2, multiplier: 1.5, maxLevels: 6, maxLot: 0.5, tpMoney: 1,
         basketStop: 60, cooldownMin: 60, sl: 0, slMoney: 0, bias: "off", biasTf: "5m", biasMinBody: 50, biasLotMult: 2,
-        entry: "signal", sigCandle: true, sigTf: "1m", sigBody: 50, sigSr: "bounce", srBars: 30, srZone: 1, sigTick: true, tickSec: 10, tickMove: 0.3, confirmAdd: true, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
+        entry: "signal", sigCandle: true, sigTf: "1m", sigBody: 50, sigSr: "auto", sigNeed: "two", srBars: 30, srZone: 1, sigTick: true, tickSec: 10, tickMove: 0.3, confirmAdd: true, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
       const v = (id) => ($(id) ? $(id).value : null);
       if ($("gbSymbol")) {
         Object.assign(c, {
@@ -3747,7 +3751,7 @@
           bias: v("gbBias"), biasTf: v("gbBiasTf"), biasMinBody: Math.max(0, Math.min(100, num(v("gbBiasBody")) ?? 50)),
           biasLotMult: Math.max(1, Math.min(5, num(v("gbBiasMult")) || 2)),
           entry: v("gbEntry"), sigCandle: $("gbSigCandle").checked, sigTf: v("gbSigTf"), sigBody: Math.max(0, Math.min(100, num(v("gbSigBody")) ?? 50)),
-          sigSr: v("gbSigSr"), srBars: Math.max(5, Math.min(500, Math.round(num(v("gbSrBars")) || 30))), srZone: Math.max(0.01, num(v("gbSrZone")) || 1),
+          sigSr: v("gbSigSr"), sigNeed: v("gbSigNeed"), srBars: Math.max(5, Math.min(500, Math.round(num(v("gbSrBars")) || 30))), srZone: Math.max(0.01, num(v("gbSrZone")) || 1),
           sigTick: $("gbSigTick").checked, tickSec: Math.max(1, Math.min(300, num(v("gbTickSec")) || 10)), tickMove: Math.max(0.01, num(v("gbTickMove")) || 0.3),
           confirmAdd: $("gbConfirm").checked,
           maxSpread: num(v("gbSpread")) ?? 0.5, noSpread: $("gbNoSpread").checked,
@@ -3817,12 +3821,12 @@
             <div class="fields three">
               <label>Khung nến<select id="gbSigTf">${opt(["1m", "3m", "5m", "15m"].map((t) => [t, t]), c.sigTf || "1m")}</select></label>
               <label>Thân nến ≥ (%)<input id="gbSigBody" inputmode="decimal" value="${c.sigBody ?? 50}"></label>
-              <label>Cản M1<select id="gbSigSr">${opt([["bounce", "Bật cản: MUA ở hỗ trợ, BÁN ở kháng cự"], ["break", "Phá cản: MUA khi vượt kháng cự, BÁN khi thủng hỗ trợ"], ["off", "Tắt"]], c.sigSr || "bounce")}</select></label>
+              <label>Cản M1<select id="gbSigSr">${opt([["auto", "Tự động: giá ở sát cản, nến / tick chọn phá hay bật"], ["bounce", "Bật cản: MUA ở hỗ trợ, BÁN ở kháng cự"], ["break", "Phá cản: MUA khi vượt kháng cự, BÁN khi thủng hỗ trợ"], ["off", "Tắt"]], c.sigSr || "auto")}</select></label>
             </div>
             <div class="fields three">
               <label>Cản = đỉnh / đáy của (số nến M1 vừa đóng)<input id="gbSrBars" inputmode="numeric" value="${c.srBars ?? 30}"></label>
               <label>Vùng quanh cản (giá)<input id="gbSrZone" inputmode="decimal" value="${c.srZone ?? 1}"></label>
-              <label>&nbsp;</label>
+              <label>Cần bao nhiêu bộ lọc đồng ý<select id="gbSigNeed">${opt([["two", "2 trong 3 (vào lệnh nhiều hơn)"], ["all", "Tất cả (chặt, ít lệnh)"]], c.sigNeed || "all")}</select></label>
             </div>
             <label class="check"><input type="checkbox" id="gbSigTick" ${c.sigTick !== false ? "checked" : ""}> <b>Tick</b>: giá vừa chạy đủ mạnh theo chiều đó</label>
             <div class="fields three">
@@ -3930,7 +3934,7 @@
       else if (s.kind === "holding") txt = `đang giữ ${s.count} lệnh (rổ ${s.sides.map(sideName2).join(" + ")}) — chờ chốt rổ / nhồi`;
       else if (s.kind === "wait") {
         const p = s.parts || {};
-        txt = `<b>đang chờ tín hiệu</b>: ${[cfg.sigCandle ? `nến ${tag(p.candle)}` : "", cfg.sigSr && cfg.sigSr !== "off" ? `cản ${tag(p.sr)}` : "", cfg.sigTick ? `tick ${tag(p.tick)}` : ""].filter(Boolean).join(" · ")} — cần tất cả cùng một chiều`;
+        txt = `<b>đang chờ tín hiệu</b>: ${[cfg.sigCandle ? `nến ${tag(p.candle)}` : "", cfg.sigSr && cfg.sigSr !== "off" ? `cản ${tag(p.sr)}` : "", cfg.sigTick ? `tick ${tag(p.tick)}` : ""].filter(Boolean).join(" · ")} — ${(cfg.sigNeed || "all") === "all" ? "cần tất cả cùng một chiều" : "cần 2 bộ lọc cùng một chiều"}${cfg.sigSr === "bounce" && cfg.sigCandle ? ' · <span class="muted">mẹo: "Bật cản" + nến hay ngược nhau, thử cản "Tự động"</span>' : ""}`;
       } else if (s.kind === "open") txt = "sẵn sàng vào lệnh";
       return txt + (rest ? ` · <b class="neg">${rest}</b>` : "");
     },
@@ -4187,7 +4191,7 @@
         : { target: "chạm TP", stop: "chạm SL", trail: "chạm SL đã dời", end: "đóng cuối test", close: "hết nến" };
       const sr = R.bot === "sr" || R.bot === "tick" || grid, tick = R.bot === "tick";
       const G = R.grid || {}, gc = R.c;
-      const gridHead = `<p class="muted small">🕸️ Nhồi lệnh · ${esc(gc.symbol)} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "nến 1m (ước lượng) · spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · lot đầu ${gc.lots} · nhồi mỗi ${gc.gridStep} · ×${gc.multiplier} · tối đa ${gc.maxLevels} lớp · chốt rổ ${money(gc.tpMoney)}${gc.sl > 0 ? ` · SL rổ ${gc.sl} giá` : ""}${gc.slMoney > 0 ? ` · SL rổ ${money(gc.slMoney)}` : ""}${gc.entry === "signal" ? ` · <b>vào 1 bên theo tín hiệu</b>: ${[gc.sigCandle ? `nến ${gc.sigTf} ≥${gc.sigBody}%` : "", gc.sigSr !== "off" ? `${gc.sigSr === "bounce" ? "bật" : "phá"} cản M1 ${gc.srBars} nến ±${gc.srZone}` : "", gc.sigTick ? `tick ${gc.tickMove}/${gc.tickSec}s` : ""].filter(Boolean).join(" + ")}${gc.confirmAdd ? " · nhồi khi giá quay đầu" : ""}` : ""}${gc.entry !== "signal" && gc.bias && gc.bias !== "off" ? ` · lực nến ${gc.biasTf} ≥${gc.biasMinBody}% (${gc.bias === "only" ? "chỉ bên mạnh" : `bên mạnh ×${gc.biasLotMult} lot`})` : ""} · cắt lỗ chung ${gc.basketStop ? money(gc.basketStop) : "tắt"}${gc.direction === "long" ? " · chỉ rổ MUA" : gc.direction === "short" ? " · chỉ rổ BÁN" : ""}</p>`;
+      const gridHead = `<p class="muted small">🕸️ Nhồi lệnh · ${esc(gc.symbol)} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "nến 1m (ước lượng) · spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · lot đầu ${gc.lots} · nhồi mỗi ${gc.gridStep} · ×${gc.multiplier} · tối đa ${gc.maxLevels} lớp · chốt rổ ${money(gc.tpMoney)}${gc.sl > 0 ? ` · SL rổ ${gc.sl} giá` : ""}${gc.slMoney > 0 ? ` · SL rổ ${money(gc.slMoney)}` : ""}${gc.entry === "signal" ? ` · <b>vào 1 bên theo tín hiệu</b>: ${[gc.sigCandle ? `nến ${gc.sigTf} ≥${gc.sigBody}%` : "", gc.sigSr !== "off" ? `${{ auto: "cản M1 tự động", bounce: "bật cản M1", break: "phá cản M1" }[gc.sigSr] || "cản M1"} ${gc.srBars} nến ±${gc.srZone}` : "", gc.sigTick ? `tick ${gc.tickMove}/${gc.tickSec}s` : ""].filter(Boolean).join(" + ")} (${(gc.sigNeed || "all") === "all" ? "cần đủ" : "cần 2 đồng ý"})${gc.confirmAdd ? " · nhồi khi giá quay đầu" : ""}` : ""}${gc.entry !== "signal" && gc.bias && gc.bias !== "off" ? ` · lực nến ${gc.biasTf} ≥${gc.biasMinBody}% (${gc.bias === "only" ? "chỉ bên mạnh" : `bên mạnh ×${gc.biasLotMult} lot`})` : ""} · cắt lỗ chung ${gc.basketStop ? money(gc.basketStop) : "tắt"}${gc.direction === "long" ? " · chỉ rổ MUA" : gc.direction === "short" ? " · chỉ rổ BÁN" : ""}</p>`;
       el.innerHTML = `${grid ? gridHead : `<p class="muted small">${tick ? "⚡ Nến tick" : sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · ${tick ? `bước ${R.c.step} · chốt lời ${R.c.closeProfit} · SL ${R.c.sl || "không"}${R.c.withCandle ? " · thuận chiều nến" : ""}${R.c.flipExit ? " · đóng khi nến đảo" : ""} · tối đa ${R.c.maxPositions} lệnh · cắt lỗ chung ${R.c.basketStop ? money(R.c.basketStop) : "tắt"}${R.c.exitAtClose !== false ? " · đóng khi hết nến" : ""}` : `R:R ${R.c.rr}`}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>`}
         <div class="stats">
           ${stat("Lãi/lỗ ròng", signed(net), net >= 0 ? "pos" : "neg")}
