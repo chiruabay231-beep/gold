@@ -8751,12 +8751,16 @@
     fitChart() {
       const charts = $("charts");
       if (!charts || $("dashView").hidden || this.tab !== "chart") return;
-      // From the charts' top on the page (not the scrolled view) to the window's bottom, less the grip.
-      const top = charts.getBoundingClientRect().top + window.scrollY;
-      const avail = window.innerHeight - top - 16;
-      const h = Math.max(300, Math.round(avail + (this.chartExtra || 0)));
+      // From the charts' top on the page (not the scrolled view) to the window's bottom, less what the page has
+      // under them (the grip, the note, the paddings), so the chart tab fits the window with nothing to scroll.
+      const box = charts.getBoundingClientRect(), dash = $("dashView").getBoundingClientRect();
+      const top = box.top + window.scrollY, below = Math.max(0, dash.bottom - box.bottom);
+      const avail = window.innerHeight - top - below;
+      // The grip only makes the chart smaller than the window (taller would bring the page scroll back).
+      if ((this.chartExtra || 0) > 0) { this.chartExtra = 0; store.set("aurum.chartExtra", "0"); }
+      const h = Math.max(300, Math.floor(avail + (this.chartExtra || 0)));
       // Never less than 300 px: drags past that are not kept.
-      if (avail + (this.chartExtra || 0) < 300) this.chartExtra = 300 - avail;
+      if (avail + (this.chartExtra || 0) < 300) this.chartExtra = Math.min(0, 300 - avail);
       document.documentElement.style.setProperty("--ch", h + "px");
     },
 

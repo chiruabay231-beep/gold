@@ -892,7 +892,7 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .fav-bar.dragging { opacity: .92; box-shadow: 0 16px 36px rgba(0, 0, 0, .4); }
 
 /* the day's news under the timeframes at the right, one row each */
-.news-strip { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; margin-left: auto; padding: 2px 0 6px; }
+.news-strip { display: flex; flex-direction: row; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 4px; margin-left: auto; padding: 2px 0 4px; max-width: 72%; }
 .news-strip[hidden] { display: none; }
 .news-strip .ns { pointer-events: auto; display: inline-flex; align-items: center; gap: 6px; height: 22px; padding: 0 7px; border-radius: 7px; cursor: pointer; white-space: nowrap;
   background: var(--glass); border: 1px solid var(--line); color: var(--text2); font: 600 11px/1 var(--font); font-variant-numeric: tabular-nums; }
@@ -968,7 +968,7 @@ body.in-member .nav { padding-left: max(16px, calc((100% - 1680px) / 2)); paddin
 .acct-add summary { cursor: pointer; font-weight: 600; padding: 8px 0; color: var(--gold, #f2c14e); }
 
 /* Chart tab: the whole width of the window, thin edges */
-body.on-chart .dash { max-width: none; padding: 6px 6px 16px; gap: 6px; }
+body.on-chart .dash { max-width: none; padding: 6px 6px 4px; gap: 6px; }
 body.on-chart .chart-panel { padding: 6px; }
 body.in-member .nav { padding-left: 12px; padding-right: 12px; }
 #fullBtn .fs-out { display: none; }
