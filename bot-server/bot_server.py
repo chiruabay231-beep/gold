@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "6.3"
+VERSION = "6.4"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3384,6 +3384,9 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    # Where layers go: "with" (nhồi dương) — another position each time price goes gridStep further the
                    # basket's way past its best entry; "against" (nhồi âm) — each gridStep against it past its worst.
                    "addMode": "with",
+                   # Signal entry: a basket is closed when the signal turns the other way (then that side's basket
+                   # opens), so a basket that never reaches its target or stop does not block the other side.
+                   "flipClose": True,
                    # More signal filters, on the closed `structTf` candles (the last `structBars`):
                    #   sigSwing — a reversal candle (pin bar / engulfing) at an earlier swing low (buy) or high (sell),
                    #              swings over `swingK` bars each side, within `swingZone`;
@@ -3656,7 +3659,7 @@ class GridBot(TickBot):
                           ("srZone", float), ("sigTick", bool), ("tickSec", float), ("tickMove", float), ("confirmAdd", bool),
                           ("trailOn", bool), ("trailStart", float), ("trailDist", float),
                           ("sigSwing", bool), ("swingK", int), ("swingZone", float), ("sigZone", str), ("structTf", str), ("structBars", int),
-                          ("addMode", str), ("paper", bool), ("noSpread", bool)):
+                          ("addMode", str), ("flipClose", bool), ("paper", bool), ("noSpread", bool)):
             if key in body:
                 c[key] = cast(body[key])
         if c["direction"] not in ("both", "long", "short"):
@@ -3822,10 +3825,20 @@ class GridBot(TickBot):
                 r = rates[-1]
                 strong, body = candle_bias(c, float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"]))
                 self.bias = {"side": strong, "body": round(body * 100), "time": float(r["time"])}
+        if c.get("entry") == "signal" and c.get("flipClose") and signal and any(p["side"] != signal for p in book):
+            # The signal turned: out of the basket the other way; the new one opens at the next tick.
+            other = [p for p in book if p["side"] != signal]
+            loss = pnl(other)
+            for p in other:
+                self._close(mt5, p, tick, units, "tín hiệu ngược")
+            self.event(f"tín hiệu đảo sang {'MUA' if signal == 'long' else 'BÁN'}: đóng rổ {'BÁN' if signal == 'long' else 'MUA'} {len(other)} lệnh · {money(loss)}")
+            self.state = {"kind": "flip", "side": signal}
+            return
         # What the bot is doing now, for the website ("why does it not trade?").
         rest = {k: v for k, v in pauses.items() if v > time.time()}
         if book:
-            self.state = {"kind": "holding", "sides": sorted({p["side"] for p in book}), "count": len(book), "sidePause": rest}
+            self.state = {"kind": "holding", "sides": sorted({p["side"] for p in book}), "count": len(book), "sidePause": rest,
+                          "signal": signal, "parts": (getattr(self, "signal", None) or {}).get("parts", {}) if c.get("entry") == "signal" else {}}
         elif c.get("entry") == "signal":
             self.state = {"kind": "wait" if not signal else "open", "side": signal, "parts": self.signal.get("parts", {}), "sidePause": rest}
         else:
