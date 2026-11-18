@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "6.5"
+VERSION = "6.6"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2491,6 +2491,26 @@ def publish_address(server):
             pass
 
 
+# Why a bot closed a position, as a short code in the closing order's comment on MT5 (comments are short, ASCII
+# is safest), read back by magic_history.
+CLOSE_CODES = {"chốt rổ": "tp", "trailing": "trail", "SL rổ": "sl", "cắt lỗ chung": "stop", "tín hiệu ngược": "flip",
+               "chốt lời": "tp1", "cắt lỗ lệnh": "sl1", "nến đảo chiều": "rev", "hết nến": "bar", "hết giờ giữ": "hold"}
+CLOSE_REASONS = {v: k for k, v in CLOSE_CODES.items()}
+
+
+def deal_reason(mt5, d):
+    """Why an MT5 deal closed a position: the broker's SL / TP / stop out, else the bot's code in its comment."""
+    r = getattr(d, "reason", None)
+    if r is not None and r == getattr(mt5, "DEAL_REASON_SL", -1):
+        return "SL trên sàn"
+    if r is not None and r == getattr(mt5, "DEAL_REASON_TP", -1):
+        return "TP trên sàn"
+    if r is not None and r == getattr(mt5, "DEAL_REASON_SO", -1):
+        return "cháy (stop out)"
+    code = (getattr(d, "comment", "") or "").split(" ")[-1]
+    return CLOSE_REASONS.get(code)
+
+
 def magic_history(mt5, magic, since, limit=200):
     """A bot's closed trades on MT5 (its magic number), newest first: side, entry → exit, times (UTC), profit."""
     deals = mt5.history_deals_get(since + Mt5.offset_seconds - 60, now() + Mt5.offset_seconds + 86400) or ()
@@ -2504,7 +2524,7 @@ def magic_history(mt5, magic, since, limit=200):
         i = opened.get(d.position_id)
         out.append({"symbol": d.symbol, "side": "long" if d.type == mt5.DEAL_TYPE_SELL else "short", "lots": d.volume,
                     "entry": i.price if i else None, "openTime": float(i.time) - Mt5.offset_seconds if i else None,
-                    "exit": d.price, "closeTime": float(d.time) - Mt5.offset_seconds,
+                    "exit": d.price, "closeTime": float(d.time) - Mt5.offset_seconds, "reason": deal_reason(mt5, d),
                     "profit": round(d.profit + d.commission + d.swap + (getattr(d, "fee", 0) or 0), 2)})
     out.sort(key=lambda x: x["closeTime"], reverse=True)
     return out[:limit]
@@ -3203,7 +3223,7 @@ class TickBot:
         request = {"action": mt5.TRADE_ACTION_DEAL, "symbol": p["symbol"], "volume": p["lots"],
                    "type": mt5.ORDER_TYPE_SELL if long else mt5.ORDER_TYPE_BUY, "position": p["id"], "price": price,
                    "deviation": int(self.server.config["mt5"].get("deviation", 30)),
-                   "magic": self.MAGIC, "comment": self.COMMENT + " close", "type_time": mt5.ORDER_TIME_GTC}
+                   "magic": self.MAGIC, "comment": f"{self.COMMENT} {CLOSE_CODES.get(why, 'close')}", "type_time": mt5.ORDER_TIME_GTC}
         _, error = mt5_send(mt5, request)
         if error:
             self.event(f"không đóng được #{p['id']}: {error}")

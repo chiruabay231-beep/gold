@@ -3527,6 +3527,14 @@
         positions: (a.st.positions || []).map((p) => ({ side: p.side, entry: p.entryPrice, profit: +p.profit || 0 })), history: (a.hist || []).map(norm) };
     },
 
+    /** Why a closed trade closed, as a tag coloured by its result. */
+    closeTag(reason, profit) {
+      if (!reason) return "";
+      const r = String(reason), good = profit > 0, bad = profit < 0;
+      const label = { target: "chốt lời", stop: "cắt lỗ", trail: "trailing", flip: "tín hiệu ngược", basket: "chốt rổ", sl: "SL", end: "cuối test" }[r] || r;
+      return ` <span class="close-tag ${good ? "good" : bad ? "bad" : ""}">${esc(label)}</span>`;
+    },
+
     /** Why a bot that wins often can still lose: average win against average loss, the win rate it needs
      *  to break even, and the money by the way trades closed and by side. */
     /** The grid bot's trades read as baskets (positions closed together), and what to change: the stop against the
@@ -3645,6 +3653,13 @@
         (this.botLines || []).forEach((l) => this.botSeries.removePriceLine(l));
         this.botLines = v.positions.filter((p) => p.entry != null).map((p) => this.botSeries.createPriceLine({ price: p.entry, color: p.side === "long" ? "#2b6bf3" : "#f0455a", lineWidth: 1, lineStyle: 2,
           axisLabelVisible: true, title: `${p.side === "long" ? "BUY" : "SELL"} ${p.profit >= 0 ? "+" : ""}${p.profit.toFixed(2)}` }));
+        // The spread, as MT5 draws it: the candles are Bid, the Ask line over them (buys fill there, sells close there).
+        const st0 = this.botStatusFor(), live = st0.price || (v.symbol === this.symbol && this.bid != null && this.ask != null ? { bid: this.bid, ask: this.ask } : null);
+        if (live && live.ask != null && live.bid != null && live.ask > live.bid) {
+          const sp = live.ask - live.bid, dd = this.digitsFor(v.symbol);
+          this.botLines.push(this.botSeries.createPriceLine({ price: live.ask, color: "#f0455a", lineWidth: 1, lineStyle: 0, axisLabelVisible: true, title: `Ask · spread ${sp.toFixed(Math.min(dd, 3))}` }));
+          this.botLines.push(this.botSeries.createPriceLine({ price: live.bid, color: "#8b93a7", lineWidth: 1, lineStyle: 0, axisLabelVisible: true, title: "Bid" }));
+        }
       } catch (e) {
         $("blSub").textContent += " · " + plain(e.message);
       }
@@ -3670,7 +3685,7 @@
         ${this.botWhy(h)}${store.get("aurum.hubBot") === "grid" ? this.gridAdvice(h) : ""}
         <div class="bl-m5">${this.mt5LikeView(this.botStatusFor())}</div>
         <h4>Lịch sử lệnh của bot (mới nhất trước)</h4>
-        <div class="list log">${h.length ? h.slice(0, 25).map((x) => `<div class="log-row"><span class="muted small">${x.closeTime ? clock(x.closeTime) : ""}</span> ${sideName(x.side)}${x.lots ? " " + x.lots : ""} ${x.entry != null ? fmt(x.entry, d) : "–"} → ${x.exit != null ? fmt(x.exit, d) : "–"} · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b></div>`).join("") : '<div class="empty">Chưa có lệnh đã đóng</div>'}</div>`;
+        <div class="list log">${h.length ? h.slice(0, 25).map((x) => `<div class="log-row"><span class="muted small">${x.closeTime ? clock(x.closeTime) : ""}</span> ${sideName(x.side)}${x.lots ? " " + x.lots : ""} ${x.entry != null ? fmt(x.entry, d) : "–"} → ${x.exit != null ? fmt(x.exit, d) : "–"} · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b>${this.closeTag(x.reason, x.profit)}</div>`).join("") : '<div class="empty">Chưa có lệnh đã đóng</div>'}</div>`;
     },
 
     /* ----- "Nến tick" bot on the server: in on a run from the candle's open, out by its close ----- */
