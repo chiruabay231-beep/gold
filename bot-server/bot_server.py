@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "6.1"
+VERSION = "6.2"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3381,6 +3381,12 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    # Trailing stop for each position: once it is `trailStart` in profit (price), its stop follows the
                    # best price at `trailDist` behind (on MT5 as the position's own SL at the broker). Off by default.
                    "trailOn": False, "trailStart": 1.0, "trailDist": 0.5,
+                   # More signal filters, on the closed `structTf` candles (the last `structBars`):
+                   #   sigSwing — a reversal candle (pin bar / engulfing) at an earlier swing low (buy) or high (sell),
+                   #              swings over `swingK` bars each side, within `swingZone`;
+                   #   sigZone — price dipping into an unbroken FVG / OB ("fvg", "ob", "both") and the candle closing
+                   #             back out the zone's way.
+                   "sigSwing": False, "swingK": 3, "swingZone": 0.5, "sigZone": "off", "structTf": "1m", "structBars": 120,
                    "maxSpread": 0.5, "noSpread": False, "simSpread": -1.0, "commission": 0.0,
                    "paper": True}
 GRID_PAPER_PATH = os.path.join(HERE, "gridbot_paper.json")
@@ -3406,7 +3412,99 @@ def candle_bias(c, o, h, l, cl, min_body=None):
     return ("long" if body > 0 else "short"), body
 
 
-def grid_signal(c, bid, candle, sup, res, move, detail=None):
+def swing_points(bars, k):
+    """Confirmed swing highs and lows of closed bars (open, high, low, close): a high over the k bars before it and
+    not under the k after it (lows the same way)."""
+    highs, lows = [], []
+    for i in range(k, len(bars) - k):
+        h, l = bars[i][1], bars[i][2]
+        if h > max(b[1] for b in bars[i - k:i]) and h >= max(b[1] for b in bars[i + 1:i + k + 1]):
+            highs.append(h)
+        if l < min(b[2] for b in bars[i - k:i]) and l <= min(b[2] for b in bars[i + 1:i + k + 1]):
+            lows.append(l)
+    return highs, lows
+
+
+def reversal_candle(prev, last):
+    """"long" / "short" when the last closed bar is a reversal: a pin bar (its wick on one side at least half the
+    bar and twice its body, closing in the other half) or an engulfing of the bar before."""
+    o, h, l, c = last
+    rng = h - l
+    if rng <= 0:
+        return None
+    body, lower, upper = abs(c - o), min(o, c) - l, h - max(o, c)
+    po, _, _, pc = prev
+    bull = (lower >= 2 * body and lower >= 0.5 * rng and c >= l + 0.5 * rng) or (c > o and pc < po and c >= po and o <= pc)
+    bear = (upper >= 2 * body and upper >= 0.5 * rng and c <= h - 0.5 * rng) or (c < o and pc > po and c <= po and o >= pc)
+    return "long" if bull and not bear else "short" if bear and not bull else None
+
+
+def swing_vote(c, bars):
+    """The swing filter: a reversal candle that just closed at an earlier swing low (buy) or high (sell), within
+    swingZone. Returns (sides, the level)."""
+    k, z = int(c.get("swingK", 3)), float(c.get("swingZone", 0.5))
+    if len(bars) < 2 * k + 3:
+        return set(), None
+    highs, lows = swing_points(bars[:-1], k)
+    rev, last = reversal_candle(bars[-2], bars[-1]), bars[-1]
+    if rev == "long":
+        near = [x for x in lows if abs(last[2] - x) <= z]
+        if near:
+            return {"long"}, near[-1]
+    if rev == "short":
+        near = [x for x in highs if abs(last[1] - x) <= z]
+        if near:
+            return {"short"}, near[-1]
+    return set(), None
+
+
+def fvg_ob_zones(bars, kinds):
+    """Unbroken fair value gaps and order blocks of closed bars: a bullish FVG where a bar's low is over the high of
+    the bar two before it (its OB: the last down bar before the move), a bearish one the other way; broken once a
+    later bar closes through it. `kinds`: "fvg", "ob" or "both". [(kind, side, low, high, index)]"""
+    zones, n = [], len(bars)
+    for i in range(2, n):
+        a, d = bars[i - 2], bars[i]
+        for side, gap in (("long", a[1] < d[2]), ("short", a[2] > d[1])):
+            if not gap:
+                continue
+            if kinds in ("fvg", "both"):
+                zones.append(("fvg", side, a[1], d[2], i) if side == "long" else ("fvg", side, d[1], a[2], i))
+            if kinds in ("ob", "both"):
+                for j in range(i - 2, max(-1, i - 6), -1):
+                    o, h, l, cl = bars[j]
+                    if (cl < o) if side == "long" else (cl > o):
+                        zones.append(("ob", side, l, h, i))
+                        break
+    out = []
+    for z in zones:
+        later = bars[z[4] + 1:]
+        if z[1] == "long" and any(b[3] < z[2] for b in later):
+            continue
+        if z[1] == "short" and any(b[3] > z[3] for b in later):
+            continue
+        out.append(z)
+    return out
+
+
+def zone_vote(c, bars):
+    """The FVG / OB filter: the last closed bar dipped into an unbroken bullish zone and closed up out of it in the
+    zone or above (buy), or the other way at a bearish zone (sell). Returns (sides, the zone)."""
+    if len(bars) < 4:
+        return set(), None
+    o, h, l, cl = bars[-1]
+    for z in reversed(fvg_ob_zones(bars, c.get("sigZone", "both"))):
+        kind, side, lo, hi, i = z
+        if i >= len(bars) - 1:
+            continue  # formed by the last bar itself
+        if side == "long" and l <= hi and cl > o and cl >= lo:
+            return {"long"}, {"kind": kind, "side": side, "lo": lo, "hi": hi}
+        if side == "short" and h >= lo and cl < o and cl <= hi:
+            return {"short"}, {"kind": kind, "side": side, "lo": lo, "hi": hi}
+    return set(), None
+
+
+def grid_signal(c, bid, candle, sup, res, move, detail=None, extra=None):
     """The side the grid bot's signal entry allows now. Each filter that is on votes for the sides it allows; with
     `sigNeed` "all" a side needs every filter's vote, with "two" at least two (all of them when fewer are on) and more
     votes than the other side. None when no side qualifies or no filter is on. `candle` = the last closed sigTf candle
@@ -3450,6 +3548,8 @@ def grid_signal(c, bid, candle, sup, res, move, detail=None):
             if move <= -float(c["tickMove"]) + 1e-9:
                 ok.add("short")
         vote("tick", ok)
+    for name, ok in (extra or {}).items():
+        vote(name, ok)
     if not used:
         return None
     need = used if c.get("sigNeed", "all") == "all" else min(2, used)
@@ -3510,6 +3610,10 @@ class GridBot(TickBot):
             parts.append(f"{kind} ({c['srBars']} nến, vùng {c['srZone']:g})")
         if c.get("sigTick"):
             parts.append(f"tick {c['tickMove']:g}/{c['tickSec']:g}s")
+        if c.get("sigSwing"):
+            parts.append(f"nến đảo chiều ở đỉnh/đáy {c['structTf']}")
+        if c.get("sigZone", "off") != "off":
+            parts.append(f"phản ứng {'FVG + OB' if c['sigZone'] == 'both' else c['sigZone'].upper()} {c['structTf']}")
         if c.get("trailOn"):
             parts.append(f"trailing {c['trailDist']:g} sau khi lời {c['trailStart']:g}")
         return (" · vào 1 bên theo " + " + ".join(parts) + (" (cần đủ)" if c.get("sigNeed", "all") == "all" else " (cần 2 đồng ý)")) + (" · nhồi khi giá quay đầu" if c.get("confirmAdd") else "")
@@ -3526,6 +3630,11 @@ class GridBot(TickBot):
             parts.append(f"{how} {'hỗ trợ' if at_sup else 'kháng cự'} {fmt(lv)}")
         if c.get("sigTick") and sg.get("move") is not None:
             parts.append(f"tick {sg['move']:+.2f}/{c['tickSec']:g}s")
+        if c.get("sigSwing") and sg.get("swingLevel") is not None:
+            parts.append(f"nến đảo chiều tại {'đáy' if side == 'long' else 'đỉnh'} {fmt(sg['swingLevel'])}")
+        if c.get("sigZone", "off") != "off" and sg.get("zone"):
+            z = sg["zone"]
+            parts.append(f"phản ứng {z['kind'].upper()} {fmt(z['lo'])}–{fmt(z['hi'])}")
         return (": " + ", ".join(parts)) if parts else ""
 
     @staticmethod
@@ -3543,6 +3652,7 @@ class GridBot(TickBot):
                           ("entry", str), ("sigCandle", bool), ("sigTf", str), ("sigBody", float), ("sigSr", str), ("sigNeed", str), ("srBars", int),
                           ("srZone", float), ("sigTick", bool), ("tickSec", float), ("tickMove", float), ("confirmAdd", bool),
                           ("trailOn", bool), ("trailStart", float), ("trailDist", float),
+                          ("sigSwing", bool), ("swingK", int), ("swingZone", float), ("sigZone", str), ("structTf", str), ("structBars", int),
                           ("paper", bool), ("noSpread", bool)):
             if key in body:
                 c[key] = cast(body[key])
@@ -3576,9 +3686,16 @@ class GridBot(TickBot):
         c["srZone"] = max(0.01, c["srZone"])
         c["tickSec"] = max(1.0, min(300.0, c["tickSec"]))
         c["tickMove"] = max(0.01, c["tickMove"])
-        if c["entry"] == "signal" and not (c["sigCandle"] or c["sigSr"] != "off" or c["sigTick"]):
+        if c["entry"] == "signal" and not (c["sigCandle"] or c["sigSr"] != "off" or c["sigTick"] or c["sigSwing"] or c["sigZone"] != "off"):
             raise ValueError("Vào theo tín hiệu: bật ít nhất một trong nến / cản / tick")
         c["trailStart"], c["trailDist"] = max(0.01, c["trailStart"]), max(0.01, c["trailDist"])
+        if c["sigZone"] not in ("off", "fvg", "ob", "both"):
+            raise ValueError("Kiểu vùng FVG / OB không hợp lệ")
+        if c["structTf"] not in SECONDS_OF:
+            raise ValueError("Khung nến đỉnh đáy / FVG không hợp lệ (1m – 1h)")
+        c["swingK"] = max(1, min(10, c["swingK"]))
+        c["swingZone"] = max(0.01, c["swingZone"])
+        c["structBars"] = max(20, min(500, c["structBars"]))
         if body.get("resume"):
             # "Chạy lại ngay": no more resting after a stop.
             self.pause_until, self.side_pause = 0.0, {}
@@ -3671,10 +3788,25 @@ class GridBot(TickBot):
                 bars = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 1, int(c["srBars"]))
                 if bars is not None and len(bars):
                     sup, res = float(min(b["low"] for b in bars)), float(max(b["high"] for b in bars))
+            extra, struct = {}, {}
+            if c.get("sigSwing") or c.get("sigZone", "off") != "off":
+                # Swings and FVG / OB of the closed structTf candles, worked out again only on a new candle.
+                rates = mt5.copy_rates_from_pos(symbol, getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[c["structTf"]]), 1, int(c["structBars"]))
+                if rates is not None and len(rates):
+                    key = (symbol, c["structTf"], float(rates[-1]["time"]), c.get("sigSwing"), c.get("sigZone"), c.get("swingK"), c.get("swingZone"))
+                    if getattr(self, "struct_key", None) != key:
+                        bars = [(float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"])) for r in rates]
+                        self.struct_key, self.struct = key, {"swing": swing_vote(c, bars) if c.get("sigSwing") else None,
+                                                             "zone": zone_vote(c, bars) if c.get("sigZone", "off") != "off" else None}
+                    struct = self.struct
+                for name in ("swing", "zone"):
+                    if struct.get(name) is not None:
+                        extra[name] = struct[name][0]
             parts = {}
-            signal = grid_signal(c, float(tick.bid), candle, sup, res, move, parts)
+            signal = grid_signal(c, float(tick.bid), candle, sup, res, move, parts, extra)
             self.signal = {"side": signal, "candle": candle_bias(c, *candle, min_body=float(c["sigBody"])) if candle else None,
-                           "sup": sup, "res": res, "move": None if move is None else round(move, 3), "time": now(), "parts": parts}
+                           "sup": sup, "res": res, "move": None if move is None else round(move, 3), "time": now(), "parts": parts,
+                           "swingLevel": (struct.get("swing") or (None, None))[1], "zone": (struct.get("zone") or (None, None))[1]}
         strong = None
         if c.get("entry") != "signal" and c.get("bias", "off") != "off":
             # The last closed candle of the strength timeframe (bid prices, as the chart).
