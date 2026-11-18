@@ -3423,6 +3423,27 @@
 
     /** Why a bot that wins often can still lose: average win against average loss, the win rate it needs
      *  to break even, and the money by the way trades closed and by side. */
+    /** The grid bot's trades read as baskets (positions closed together), and what to change: the stop against the
+     *  basket target, the spread's share, a side losing against the trend, stops right after the 2nd layer. */
+    gridAdvice(h) {
+      const groups = new Map();
+      h.forEach((x) => { const k = `${x.reason}|${Math.round(x.closeTime || 0)}|${x.side}`; const g = groups.get(k) || { reason: x.reason, side: x.side, n: 0, sum: 0, lots: 0 }; g.n++; g.sum += x.profit; g.lots += +x.lots || 0; groups.set(k, g); });
+      const all = [...groups.values()], wins = all.filter((g) => g.reason === "chốt rổ"), stops = all.filter((g) => g.reason === "cắt lỗ chung" || g.reason === "SL rổ");
+      if (!wins.length && !stops.length) return "";
+      const aw = wins.length ? wins.reduce((a, g) => a + g.sum, 0) / wins.length : 0, al = stops.length ? -stops.reduce((a, g) => a + g.sum, 0) / stops.length : 0;
+      const need = aw + al > 0 ? al / (aw + al) * 100 : 0, rate = (wins.length / Math.max(1, wins.length + stops.length)) * 100;
+      const spread = h.reduce((a, x) => a + (x.spreadCost || 0), 0), gross = h.filter((x) => x.profit > 0).reduce((a, x) => a + x.profit, 0);
+      const bySide = (sd) => h.filter((x) => x.side === sd).reduce((a, x) => a + x.profit, 0);
+      const buy = bySide("long"), sell = bySide("short"), shallow = stops.filter((g) => g.n <= 2).length;
+      const tips = [];
+      if (stops.length && al > aw * 1.5) tips.push(`Mỗi lần cắt lỗ mất TB <b class="neg">${signed(-al)}</b> = ${(al / Math.max(aw, 0.01)).toFixed(1)} rổ thắng (${signed(aw)}), nên phải chốt được ${need.toFixed(0)}% số rổ; bot đang được <b>${rate.toFixed(0)}%</b>. → Tăng <b>Chốt rổ</b> (VD ${money(Math.max(2, Math.round(aw * 2)))}) hoặc giảm lot gấp để mỗi lần cắt nhẹ hơn.`);
+      if (stops.length && shallow / stops.length >= 0.5) tips.push(`${shallow}/${stops.length} lần cắt lỗ xảy ra khi rổ mới có 1–2 lệnh: <b>Cắt lỗ chung quá sát</b>, lưới chưa kịp nhồi đã bị cắt. → Nới Cắt lỗ chung (theo ô "Rủi ro của cài đặt này") hoặc tăng Khoảng nhồi; nếu muốn cắt sớm thì dùng SL rổ theo giá và tắt nhồi (Tối đa lớp = 1).`);
+      if (gross > 0 && spread / gross > 0.12) tips.push(`Spread đã ăn <b>${Math.round(spread / gross * 100)}%</b> tiền lời (${signed(-spread)}). → Chốt rổ lớn hơn (spread ~0.17$ mỗi 0.01 lot mỗi lần vào) hoặc thử tài khoản Raw / Zero ở ô giả lập.`);
+      if (Math.min(buy, sell) < -3 && Math.max(buy, sell) > Math.min(buy, sell) + 5) tips.push(`${buy < sell ? "BUY" : "SELL"} lỗ <b class="neg">${signed(Math.min(buy, sell))}</b> trong khi ${buy < sell ? "SELL" : "BUY"} ${signed(Math.max(buy, sell))}: bot vào <b>ngược chiều giá đang chạy</b>, phần lỗ nằm ở một bên.`);
+      if (!tips.length) tips.push("Chưa thấy lỗi rõ ràng; chạy thêm để có nhiều rổ hơn rồi xem lại.");
+      return `<div class="grid-advice"><b>🔎 Bot nhồi lệnh sai ở đâu</b> <span class="muted small">(${wins.length} rổ chốt lời · ${stops.length} lần cắt lỗ · tính theo rổ, không theo từng lệnh)</span><ol>${tips.map((x) => `<li>${x}</li>`).join("")}</ol></div>`;
+    },
+
     botWhy(h) {
       if (!h.length) return "";
       const wins = h.filter((x) => x.profit > 0), losses = h.filter((x) => x.profit <= 0);
@@ -3540,7 +3561,7 @@
             return stat("Backcom ước tính", `${signed(got)} · ${lots.toFixed(2)} lot`, "pos") + stat("Ròng sau backcom", signed(net + got), net + got >= 0 ? "pos" : "neg"); })()}
         </div>
         ${h.length > 1 ? `<svg class="bt-eq" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${net >= 0 ? "var(--up)" : "var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>` : ""}
-        ${this.botWhy(h)}
+        ${this.botWhy(h)}${store.get("aurum.hubBot") === "grid" ? this.gridAdvice(h) : ""}
         <div class="bl-m5">${this.mt5LikeView(this.botStatusFor())}</div>
         <h4>Lịch sử lệnh của bot (mới nhất trước)</h4>
         <div class="list log">${h.length ? h.slice(0, 25).map((x) => `<div class="log-row"><span class="muted small">${x.closeTime ? clock(x.closeTime) : ""}</span> ${sideName(x.side)}${x.lots ? " " + x.lots : ""} ${x.entry != null ? fmt(x.entry, d) : "–"} → ${x.exit != null ? fmt(x.exit, d) : "–"} · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b></div>`).join("") : '<div class="empty">Chưa có lệnh đã đóng</div>'}</div>`;
