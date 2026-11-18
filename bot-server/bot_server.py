@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "6.0"
+VERSION = "6.1"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3378,6 +3378,9 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    # confirmAdd: a new layer only once price turns back the basket's way (half a tickMove in tickSec).
                    "entry": "signal", "sigCandle": True, "sigTf": "1m", "sigBody": 50.0, "sigSr": "auto", "sigNeed": "two",
                    "srBars": 30, "srZone": 1.0, "sigTick": True, "tickSec": 10.0, "tickMove": 0.3, "confirmAdd": True,
+                   # Trailing stop for each position: once it is `trailStart` in profit (price), its stop follows the
+                   # best price at `trailDist` behind (on MT5 as the position's own SL at the broker). Off by default.
+                   "trailOn": False, "trailStart": 1.0, "trailDist": 0.5,
                    "maxSpread": 0.5, "noSpread": False, "simSpread": -1.0, "commission": 0.0,
                    "paper": True}
 GRID_PAPER_PATH = os.path.join(HERE, "gridbot_paper.json")
@@ -3507,6 +3510,8 @@ class GridBot(TickBot):
             parts.append(f"{kind} ({c['srBars']} nến, vùng {c['srZone']:g})")
         if c.get("sigTick"):
             parts.append(f"tick {c['tickMove']:g}/{c['tickSec']:g}s")
+        if c.get("trailOn"):
+            parts.append(f"trailing {c['trailDist']:g} sau khi lời {c['trailStart']:g}")
         return (" · vào 1 bên theo " + " + ".join(parts) + (" (cần đủ)" if c.get("sigNeed", "all") == "all" else " (cần 2 đồng ý)")) + (" · nhồi khi giá quay đầu" if c.get("confirmAdd") else "")
 
     def _signal_why(self, c, side):
@@ -3537,6 +3542,7 @@ class GridBot(TickBot):
                           ("bias", str), ("biasTf", str), ("biasMinBody", float), ("biasLotMult", float), ("simSpread", float), ("commission", float),
                           ("entry", str), ("sigCandle", bool), ("sigTf", str), ("sigBody", float), ("sigSr", str), ("sigNeed", str), ("srBars", int),
                           ("srZone", float), ("sigTick", bool), ("tickSec", float), ("tickMove", float), ("confirmAdd", bool),
+                          ("trailOn", bool), ("trailStart", float), ("trailDist", float),
                           ("paper", bool), ("noSpread", bool)):
             if key in body:
                 c[key] = cast(body[key])
@@ -3572,6 +3578,7 @@ class GridBot(TickBot):
         c["tickMove"] = max(0.01, c["tickMove"])
         if c["entry"] == "signal" and not (c["sigCandle"] or c["sigSr"] != "off" or c["sigTick"]):
             raise ValueError("Vào theo tín hiệu: bật ít nhất một trong nến / cản / tick")
+        c["trailStart"], c["trailDist"] = max(0.01, c["trailStart"]), max(0.01, c["trailDist"])
         if body.get("resume"):
             # "Chạy lại ngay": no more resting after a stop.
             self.pause_until, self.side_pause = 0.0, {}
@@ -3611,6 +3618,8 @@ class GridBot(TickBot):
                        - comm * p["lots"] for p in ps)
 
         book = self._book(mt5, symbol)
+        if c.get("trailOn") and book and self._trail(mt5, c, book, tick, units, info):
+            book = self._book(mt5, symbol)
         total = pnl(book)
         if c["basketStop"] > 0 and book and total <= -c["basketStop"]:
             for p in book:
@@ -3709,6 +3718,57 @@ class GridBot(TickBot):
                     first = min(ps, key=lambda p: p["openTime"])
                     factor = max(1.0, round(float(first["lots"]) / float(c["lots"]), 2))
                     self._open(mt5, symbol, info, tick, long, f"nhồi lớp {len(ps) + 1}", grid_lot(c, len(ps), factor), stop)
+
+    def _trail(self, mt5, c, book, tick, units, info):
+        """Trailing stop for each position: the best price since it opened, and once the position is trailStart in
+        profit a stop trailDist behind it. Closes what crossed its stop; on MT5 also moves the position's own SL.
+        True when something was closed."""
+        peaks = getattr(self, "peaks", None)
+        if peaks is None:
+            peaks = self.peaks = {}
+        start, dist, closed, dirty = float(c["trailStart"]), float(c["trailDist"]), False, False
+        for p in book:
+            long = p["side"] == "long"
+            now_px = tick.bid if long else tick.ask
+            peak = p.get("peak") if p.get("paper") else peaks.get(p["id"])
+            peak = now_px if peak is None else (max(peak, now_px) if long else min(peak, now_px))
+            if p.get("paper"):
+                if p.get("peak") != peak:
+                    p["peak"] = peak
+            else:
+                peaks[p["id"]] = peak
+            if (peak - p["entry"] if long else p["entry"] - peak) < start - 1e-9:
+                continue
+            stop = peak - dist if long else peak + dist
+            if (now_px <= stop + 1e-9) if long else (now_px >= stop - 1e-9):
+                self._close(mt5, p, tick, units, "trailing")
+                peaks.pop(p["id"], None)
+                closed = True
+                continue
+            if p.get("paper"):
+                if p.get("trail") is None or (stop > p["trail"] + 1e-9 if long else stop < p["trail"] - 1e-9):
+                    for x in self.paper["positions"]:
+                        if x["id"] == p["id"]:
+                            x["trail"], x["peak"] = round(stop, 3), peak
+                    dirty = True
+            else:
+                raw = p.get("raw")
+                cur = float(getattr(raw, "sl", 0) or 0)
+                point = float(getattr(info, "point", 0.01) or 0.01)
+                if cur == 0 or (stop > cur + point if long else stop < cur - point):
+                    digits = int(getattr(info, "digits", 2) or 2)
+                    _, error = mt5_send(mt5, {"action": mt5.TRADE_ACTION_SLTP, "symbol": p["symbol"], "position": p["id"],
+                                              "sl": round(stop, digits), "tp": float(getattr(raw, "tp", 0) or 0)})
+                    if error and getattr(self, "trail_error", "") != error:
+                        self.event(f"không dời được SL trailing #{p['id']}: {error}")
+                    self.trail_error = error or ""
+        if dirty:
+            with self.lock:
+                self._save_paper()
+        live = {p["id"] for p in book}
+        for k in [k for k in peaks if k not in live]:
+            peaks.pop(k, None)
+        return closed
 
     def status(self):
         st = super().status()

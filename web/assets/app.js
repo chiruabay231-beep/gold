@@ -1130,7 +1130,7 @@
 
   function gridBotOnTicks(ticks, c, value) {
     const trades = [];
-    let placed = 0, book = [], pauseUntil = 0, cycles = 0, stops = 0, sls = 0, maxFloat = 0, maxLevel = 0, maxLots = 0;
+    let trails = 0, placed = 0, book = [], pauseUntil = 0, cycles = 0, stops = 0, sls = 0, maxFloat = 0, maxLevel = 0, maxLots = 0;
     const sidePause = { long: 0, short: 0 };
     // Candle strength: the candles of `biasTf` built from the ticks' bid; `strong` = the last closed one's side.
     const useBias = c.bias && c.bias !== "off", bsec = TF_SECONDS[c.biasTf] || 300;
@@ -1165,6 +1165,18 @@
         } else { mCur.h = Math.max(mCur.h, bid); mCur.l = Math.min(mCur.l, bid); }
         while (back + 1 < ticks.length && ticks[back + 1][0] / 1000 <= t - (c.tickSec || 10)) back++;
         if (ticks[back][0] / 1000 <= t - (c.tickSec || 10)) move = bid - ticks[back][1];
+      }
+      if (book.length && c.trailOn) {
+        // Trailing stop for each position: the best price since it opened; once trailStart in profit, out when price
+        // comes back trailDist from it.
+        book = book.filter((p) => {
+          const long = p.side === "long", px = long ? bid : ask;
+          p.peak = p.peak == null ? px : long ? Math.max(p.peak, px) : Math.min(p.peak, px);
+          if ((long ? p.peak - p.entry : p.entry - p.peak) < c.trailStart - 1e-9) return true;
+          const stop = long ? p.peak - c.trailDist : p.peak + c.trailDist;
+          if (long ? px <= stop + 1e-9 : px >= stop - 1e-9) { out(p, bid, ask, "trail", t); trails++; return false; }
+          return true;
+        });
       }
       if (book.length) {
         const total = book.reduce((a, p) => a + pv(p, bid, ask), 0);
@@ -1216,7 +1228,7 @@
       if (lots > maxLots) maxLots = lots;
     }
     if (book.length && ticks.length) { const [ms, bid, ask] = ticks[ticks.length - 1]; book.forEach((p) => out(p, bid, c.noSpread ? bid : ask, "end", ms / 1000)); }
-    return { placed, trades, grid: { cycles, stops, sls, signals, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
+    return { placed, trades, grid: { cycles, stops, sls, trails, signals, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
   }
 
   /** Bars as a path of prices for the grid bot when no ticks are loaded: open → low → high → close on a
@@ -3255,7 +3267,7 @@
       const rows = (list, pending) => list.map((o) => `<div class="sig"><div class="bar" style="background:${o.side === "long" ? "#2b6bf3" : "var(--down)"};${pending ? "opacity:.5" : ""}"></div>
         <div><div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${o.side === "long" ? "buy" : "sell"}">${pending ? (o.side === "long" ? "BUY STOP" : "SELL STOP") : sideName(o.side)} ${o.lots}</span>
           <span class="muted small">@ ${fmt(o.entry, d(o.symbol))}</span></div>
-          <div class="lv">SL ${o.stop ? fmt(o.stop, d(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, d(o.symbol)) : "–"}</div></div>
+          <div class="lv">SL ${o.stop ? fmt(o.stop, d(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, d(o.symbol)) : "–"}${o.trail != null ? ` · <b class="pos">trailing ${fmt(o.trail, d(o.symbol))}</b>` : ""}</div></div>
         <div class="right">${pending ? '<span class="muted small">chờ khớp</span>' : `<div class="move ${(o.profit || 0) >= 0 ? "pos" : "neg"}">${signed(o.profit || 0)}</div>`}</div></div>`).join("");
       live.innerHTML = `<div class="stats">
           <div class="stat"><span>Lệnh đã đóng</span><b>${s.trades || 0}</b></div>
@@ -3341,7 +3353,7 @@
         ${st.error ? `<p class="warn">${esc(st.error)}</p>` : ""}
         <div class="list">${(st.positions || []).map((o) => `<div class="sig"><div class="bar" style="background:${o.side === "long" ? "#2b6bf3" : "var(--down)"}"></div>
           <div><div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${o.side === "long" ? "buy" : "sell"}">${sideName(o.side)} ${o.lots}</span><span class="muted small">@ ${fmt(o.entry, d(o.symbol))}</span></div>
-          <div class="lv">SL ${o.stop ? fmt(o.stop, d(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, d(o.symbol)) : "–"}</div></div>
+          <div class="lv">SL ${o.stop ? fmt(o.stop, d(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, d(o.symbol)) : "–"}${o.trail != null ? ` · <b class="pos">trailing ${fmt(o.trail, d(o.symbol))}</b>` : ""}</div></div>
           <div class="right"><div class="move ${(o.profit || 0) >= 0 ? "pos" : "neg"}">${signed(o.profit || 0)}</div></div></div>`).join("")}</div>
         ${(st.events || []).length ? `<h4>Hoạt động</h4><div class="list log">${st.events.slice(0, 15).map((e) => `<div class="log-row"><span class="muted small">${clock(e.time)}</span> ${esc(e.text)}</div>`).join("")}</div>` : ""}`;
     },
@@ -3428,7 +3440,7 @@
     gridAdvice(h) {
       const groups = new Map();
       h.forEach((x) => { const k = `${x.reason}|${Math.round(x.closeTime || 0)}|${x.side}`; const g = groups.get(k) || { reason: x.reason, side: x.side, n: 0, sum: 0, lots: 0 }; g.n++; g.sum += x.profit; g.lots += +x.lots || 0; groups.set(k, g); });
-      const all = [...groups.values()], wins = all.filter((g) => g.reason === "chốt rổ"), stops = all.filter((g) => g.reason === "cắt lỗ chung" || g.reason === "SL rổ");
+      const all = [...groups.values()], wins = all.filter((g) => g.reason === "chốt rổ" || (g.reason === "trailing" && g.sum > 0)), stops = all.filter((g) => g.reason === "cắt lỗ chung" || g.reason === "SL rổ");
       if (!wins.length && !stops.length) return "";
       const aw = wins.length ? wins.reduce((a, g) => a + g.sum, 0) / wins.length : 0, al = stops.length ? -stops.reduce((a, g) => a + g.sum, 0) / stops.length : 0;
       const need = aw + al > 0 ? al / (aw + al) * 100 : 0, rate = (wins.length / Math.max(1, wins.length + stops.length)) * 100;
@@ -3705,7 +3717,7 @@
         ${st.paper ? `<p class="muted small">Tài khoản ẢO: số dư ${money(st.paper.balance)} · lệnh và lãi/lỗ tính theo giá Exness thật${(st.config || {}).noSpread ? " (không tính spread)" : ""}, không đặt lệnh lên MT5.</p>` : ""}
         <div class="list">${(st.positions || []).map((o) => `<div class="sig"><div class="bar" style="background:${o.side === "long" ? "#2b6bf3" : "var(--down)"}"></div>
           <div><div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${o.side === "long" ? "buy" : "sell"}">${sideName(o.side)} ${o.lots}</span><span class="muted small">@ ${fmt(o.entry, d(o.symbol))}${o.paper ? " · ảo" : ""}</span></div>
-          <div class="lv">SL ${o.stop ? fmt(o.stop, d(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, d(o.symbol)) : "–"}</div></div>
+          <div class="lv">SL ${o.stop ? fmt(o.stop, d(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, d(o.symbol)) : "–"}${o.trail != null ? ` · <b class="pos">trailing ${fmt(o.trail, d(o.symbol))}</b>` : ""}</div></div>
           <div class="right"><div class="move ${(o.profit || 0) >= 0 ? "pos" : "neg"}">${signed(o.profit || 0)}</div></div></div>`).join("")}</div>
         ${(st.history || []).length ? `<h4>Lệnh ảo đã đóng</h4><div class="list log">${st.history.slice(0, 20).map((x) => `<div class="log-row"><span class="muted small">${clock(x.closeTime)}</span> ${sideName(x.side)} ${fmt(x.entry, d(x.symbol))} → ${fmt(x.exit, d(x.symbol))} · ${esc(x.reason)} · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b></div>`).join("")}</div>` : ""}
         ${(st.events || []).length ? `<h4>Hoạt động</h4><div class="list log">${st.events.slice(0, 15).map((e) => `<div class="log-row"><span class="muted small">${clock(e.time)}</span> ${esc(e.text)}</div>`).join("")}</div>` : ""}`;
@@ -3761,7 +3773,7 @@
     gridSettings() {
       const c = Object.assign({ symbol: "", direction: "both", lots: 0.01, gridStep: 2, multiplier: 1.5, maxLevels: 6, maxLot: 0.5, tpMoney: 1,
         basketStop: 60, cooldownMin: 60, sl: 0, slMoney: 0, bias: "off", biasTf: "5m", biasMinBody: 50, biasLotMult: 2,
-        entry: "signal", sigCandle: true, sigTf: "1m", sigBody: 50, sigSr: "auto", sigNeed: "two", srBars: 30, srZone: 1, sigTick: true, tickSec: 10, tickMove: 0.3, confirmAdd: true, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
+        entry: "signal", sigCandle: true, sigTf: "1m", sigBody: 50, sigSr: "auto", sigNeed: "two", trailOn: false, trailStart: 1, trailDist: 0.5, srBars: 30, srZone: 1, sigTick: true, tickSec: 10, tickMove: 0.3, confirmAdd: true, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
       const v = (id) => ($(id) ? $(id).value : null);
       if ($("gbSymbol")) {
         Object.assign(c, {
@@ -3772,6 +3784,7 @@
           bias: v("gbBias"), biasTf: v("gbBiasTf"), biasMinBody: Math.max(0, Math.min(100, num(v("gbBiasBody")) ?? 50)),
           biasLotMult: Math.max(1, Math.min(5, num(v("gbBiasMult")) || 2)),
           entry: v("gbEntry"), sigCandle: $("gbSigCandle").checked, sigTf: v("gbSigTf"), sigBody: Math.max(0, Math.min(100, num(v("gbSigBody")) ?? 50)),
+          trailOn: $("gbTrail").checked, trailStart: Math.max(0.01, num(v("gbTrailStart")) || 1), trailDist: Math.max(0.01, num(v("gbTrailDist")) || 0.5),
           sigSr: v("gbSigSr"), sigNeed: v("gbSigNeed"), srBars: Math.max(5, Math.min(500, Math.round(num(v("gbSrBars")) || 30))), srZone: Math.max(0.01, num(v("gbSrZone")) || 1),
           sigTick: $("gbSigTick").checked, tickSec: Math.max(1, Math.min(300, num(v("gbTickSec")) || 10)), tickMove: Math.max(0.01, num(v("gbTickMove")) || 0.3),
           confirmAdd: $("gbConfirm").checked,
@@ -3832,6 +3845,12 @@
             <label>SL rổ theo giá (tính từ lệnh đầu, 0 = tắt)<input id="gbSL" inputmode="decimal" placeholder="VD 12" value="${c.sl || 0}"></label>
             <label>SL rổ theo tiền ($ mỗi rổ, 0 = tắt)<input id="gbSLMoney" inputmode="decimal" placeholder="VD 30" value="${c.slMoney || 0}"></label>
             <label>&nbsp;<span class="muted small">Chạm SL: đóng cả rổ bên đó, bên đó nghỉ như sau cắt lỗ. Trên MT5, SL theo giá được đặt luôn vào từng lệnh trên sàn (vẫn cắt khi máy chủ mất kết nối).</span></label>
+          </div>
+          <label class="check"><input type="checkbox" id="gbTrail" ${c.trailOn ? "checked" : ""}> <b>Trailing stop từng lệnh</b>: lệnh nào lời đủ mức bắt đầu thì SL bám theo giá tốt nhất (trên MT5 dời luôn SL trên sàn) — nên tăng Chốt rổ để trailing có chỗ chạy</label>
+          <div class="fields three">
+            <label>Bắt đầu trailing khi lời (giá)<input id="gbTrailStart" inputmode="decimal" value="${c.trailStart ?? 1}"></label>
+            <label>Khoảng cách trailing (giá)<input id="gbTrailDist" inputmode="decimal" value="${c.trailDist ?? 0.5}"></label>
+            <label>&nbsp;<span class="muted small">VD vàng: lời 1.0 thì bật, SL cách giá cao nhất 0.5 → giá quay xuống 0.5 là chốt.</span></label>
           </div>
           <div class="fields three">
             <label>Cách vào lệnh<select id="gbEntry">${opt([["signal", "🎯 Theo tín hiệu — 1 bên mỗi lần"], ["both", "Mở cả rổ MUA và rổ BÁN"]], c.entry || "both")}</select></label>
@@ -4208,17 +4227,17 @@
       const pts = curve.map((v, i) => `${(i / Math.max(curve.length - 1, 1) * W).toFixed(1)},${(H - 6 - (v - lo) / span * (H - 12)).toFixed(1)}`).join(" ");
       const color = net >= 0 ? "var(--up)" : "var(--down)";
       const grid = R.bot === "grid";
-      const reason = grid ? { basket: "chốt rổ", sl: "SL rổ", stop: "cắt lỗ chung", end: "đóng cuối test" } : R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", hold: "hết giờ giữ", end: "đóng cuối test", close: "hết nến" }
+      const reason = grid ? { basket: "chốt rổ", trail: "trailing", sl: "SL rổ", stop: "cắt lỗ chung", end: "đóng cuối test" } : R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", hold: "hết giờ giữ", end: "đóng cuối test", close: "hết nến" }
         : { target: "chạm TP", stop: "chạm SL", trail: "chạm SL đã dời", end: "đóng cuối test", close: "hết nến" };
       const sr = R.bot === "sr" || R.bot === "tick" || grid, tick = R.bot === "tick";
       const G = R.grid || {}, gc = R.c;
-      const gridHead = `<p class="muted small">🕸️ Nhồi lệnh · ${esc(gc.symbol)} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "nến 1m (ước lượng) · spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · lot đầu ${gc.lots} · nhồi mỗi ${gc.gridStep} · ×${gc.multiplier} · tối đa ${gc.maxLevels} lớp · chốt rổ ${money(gc.tpMoney)}${gc.sl > 0 ? ` · SL rổ ${gc.sl} giá` : ""}${gc.slMoney > 0 ? ` · SL rổ ${money(gc.slMoney)}` : ""}${gc.entry === "signal" ? ` · <b>vào 1 bên theo tín hiệu</b>: ${[gc.sigCandle ? `nến ${gc.sigTf} ≥${gc.sigBody}%` : "", gc.sigSr !== "off" ? `${{ auto: "cản M1 tự động", bounce: "bật cản M1", break: "phá cản M1" }[gc.sigSr] || "cản M1"} ${gc.srBars} nến ±${gc.srZone}` : "", gc.sigTick ? `tick ${gc.tickMove}/${gc.tickSec}s` : ""].filter(Boolean).join(" + ")} (${(gc.sigNeed || "all") === "all" ? "cần đủ" : "cần 2 đồng ý"})${gc.confirmAdd ? " · nhồi khi giá quay đầu" : ""}` : ""}${gc.entry !== "signal" && gc.bias && gc.bias !== "off" ? ` · lực nến ${gc.biasTf} ≥${gc.biasMinBody}% (${gc.bias === "only" ? "chỉ bên mạnh" : `bên mạnh ×${gc.biasLotMult} lot`})` : ""} · cắt lỗ chung ${gc.basketStop ? money(gc.basketStop) : "tắt"}${gc.direction === "long" ? " · chỉ rổ MUA" : gc.direction === "short" ? " · chỉ rổ BÁN" : ""}</p>`;
+      const gridHead = `<p class="muted small">🕸️ Nhồi lệnh · ${esc(gc.symbol)} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "nến 1m (ước lượng) · spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · lot đầu ${gc.lots} · nhồi mỗi ${gc.gridStep} · ×${gc.multiplier} · tối đa ${gc.maxLevels} lớp · chốt rổ ${money(gc.tpMoney)}${gc.sl > 0 ? ` · SL rổ ${gc.sl} giá` : ""}${gc.slMoney > 0 ? ` · SL rổ ${money(gc.slMoney)}` : ""}${gc.trailOn ? ` · trailing ${gc.trailDist} sau khi lời ${gc.trailStart}` : ""}${gc.entry === "signal" ? ` · <b>vào 1 bên theo tín hiệu</b>: ${[gc.sigCandle ? `nến ${gc.sigTf} ≥${gc.sigBody}%` : "", gc.sigSr !== "off" ? `${{ auto: "cản M1 tự động", bounce: "bật cản M1", break: "phá cản M1" }[gc.sigSr] || "cản M1"} ${gc.srBars} nến ±${gc.srZone}` : "", gc.sigTick ? `tick ${gc.tickMove}/${gc.tickSec}s` : ""].filter(Boolean).join(" + ")} (${(gc.sigNeed || "all") === "all" ? "cần đủ" : "cần 2 đồng ý"})${gc.confirmAdd ? " · nhồi khi giá quay đầu" : ""}` : ""}${gc.entry !== "signal" && gc.bias && gc.bias !== "off" ? ` · lực nến ${gc.biasTf} ≥${gc.biasMinBody}% (${gc.bias === "only" ? "chỉ bên mạnh" : `bên mạnh ×${gc.biasLotMult} lot`})` : ""} · cắt lỗ chung ${gc.basketStop ? money(gc.basketStop) : "tắt"}${gc.direction === "long" ? " · chỉ rổ MUA" : gc.direction === "short" ? " · chỉ rổ BÁN" : ""}</p>`;
       el.innerHTML = `${grid ? gridHead : `<p class="muted small">${tick ? "⚡ Nến tick" : sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · ${tick ? `bước ${R.c.step} · chốt lời ${R.c.closeProfit} · SL ${R.c.sl || "không"}${R.c.withCandle ? " · thuận chiều nến" : ""}${R.c.flipExit ? " · đóng khi nến đảo" : ""} · tối đa ${R.c.maxPositions} lệnh · cắt lỗ chung ${R.c.basketStop ? money(R.c.basketStop) : "tắt"}${R.c.exitAtClose !== false ? " · đóng khi hết nến" : ""}` : `R:R ${R.c.rr}`}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>`}
         <div class="stats">
           ${stat("Lãi/lỗ ròng", signed(net), net >= 0 ? "pos" : "neg")}
           ${stat("Số lệnh", `${t.length} <span class="muted small">/ ${R.placed} ${sr ? "tín hiệu" : "lệnh chờ đặt"}</span>`)}
           ${stat("Thắng", t.length ? `${wins.length}/${t.length} · ${Math.round(wins.length / t.length * 100)}%` : "–")}
-          ${grid ? stat("Rổ chốt lời / SL rổ / cắt lỗ chung", `${G.cycles || 0} / <b class="${G.sls ? "neg" : ""}">${G.sls || 0}</b> / <b class="${G.stops ? "neg" : ""}">${G.stops || 0}</b>`)
+          ${grid ? (gc.trailOn ? stat("Lệnh chốt bằng trailing", `${G.trails || 0} · <b class="${t.filter((x) => x.reason === "trail").reduce((a, x) => a + x.profit, 0) >= 0 ? "pos" : "neg"}">${signed(t.filter((x) => x.reason === "trail").reduce((a, x) => a + x.profit, 0))}</b>`) : "") + stat("Rổ chốt lời / SL rổ / cắt lỗ chung", `${G.cycles || 0} / <b class="${G.sls ? "neg" : ""}">${G.sls || 0}</b> / <b class="${G.stops ? "neg" : ""}">${G.stops || 0}</b>`)
             + stat("Âm sâu nhất khi đang gồng", signed(G.maxFloat || 0), (G.maxFloat || 0) < 0 ? "neg" : "")
             + (gc.entry === "signal" ? stat("Rổ mở theo tín hiệu", `${t.filter((x) => x.layer === 1).length}`) : "")
             + stat("Lớp sâu nhất / lot mở nhiều nhất", `${G.maxLevel || 0} lớp · ${G.maxLots || 0} lot`) : ""}
