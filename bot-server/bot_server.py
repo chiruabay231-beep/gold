@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "5.8"
+VERSION = "5.9"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3142,6 +3142,7 @@ class TickBot:
                 if str(e) != self.error:
                     self.event(f"lỗi: {e}")
                 self.error = str(e)
+                self.state = {"kind": "error", "error": str(e)}
                 time.sleep(2)
 
     @staticmethod
@@ -3565,6 +3566,7 @@ class GridBot(TickBot):
         info = mt5.symbol_info(symbol)
         tick = mt5.symbol_info_tick(symbol)
         if tick is None:
+            self.state = {"kind": "noprice", "symbol": symbol}
             return
         no_spread = c["paper"] and c.get("noSpread")
         if no_spread:
@@ -3693,7 +3695,7 @@ class GridBot(TickBot):
         st["grid"] = {"cycles": getattr(self, "cycles", 0), "pauseUntil": getattr(self, "pause_until", 0) or None,
                       "bias": getattr(self, "bias", None) if cfg.get("bias", "off") != "off" and cfg.get("entry") != "signal" else None,
                       "signal": getattr(self, "signal", None) if cfg.get("entry") == "signal" else None,
-                      "state": (getattr(self, "state", None) if cfg.get("running") else {"kind": "off"}),
+                      "state": ((getattr(self, "state", None) or {"kind": "starting"}) if cfg.get("running") else {"kind": "off"}),
                       "sidePause": {k: v for k, v in (getattr(self, "side_pause", None) or {}).items() if v > time.time()},
                       "lots": levels, "totalLots": round(sum(levels), 2)}
         return st

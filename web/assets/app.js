@@ -3912,12 +3912,19 @@
      *  holding a basket, spread too wide. */
     gridStateText(st) {
       const g = (st && st.grid) || {}, s = g.state, cfg = (st && st.config) || {};
+      if (s === undefined || (!s && cfg.running && !("state" in g))) {
+        // A server before 5.8 sends no state at all.
+        return cfg.running ? `bot đang bật nhưng máy chủ VPS chưa gửi trạng thái: vào tab <b>Máy chủ → Cập nhật</b> lên bản mới nhất${st.error ? ` · <b class="neg">lỗi: ${esc(st.error)}</b>` : ""}` : "";
+      }
       if (!s) return cfg.running ? "đang khởi động…" : "";
       const sideName2 = (x) => (x === "long" ? "MUA" : "BÁN");
       const rest = Object.entries(s.sidePause || {}).map(([k, v]) => `rổ ${sideName2(k)} nghỉ sau SL tới ${clock(v)}`).join(" · ");
       const tag = (ok) => (ok && ok.length ? `<b class="pos">✓ ${ok.map(sideName2).join("/")}</b>` : '<b class="neg">✗</b>');
       let txt = "";
       if (s.kind === "off") txt = "bot đang tắt";
+      else if (s.kind === "starting") txt = "bot vừa bật, đang đọc giá…";
+      else if (s.kind === "error") txt = `<b class="neg">bot đang gặp lỗi: ${esc(s.error || st.error || "")}</b> — bot tự thử lại mỗi 2 giây`;
+      else if (s.kind === "noprice") txt = `<b class="neg">MT5 không trả giá ${esc(s.symbol || "")}</b> — kiểm tra MT5 trên VPS đã đăng nhập và mã đúng`;
       else if (s.kind === "pause") txt = `<b class="neg">đang nghỉ sau ${esc(s.why || "cắt lỗ")} tới ${clock(s.until)}</b> (còn ${Math.max(0, Math.ceil((s.until * 1000 - Date.now()) / 60000))} phút) — không vào lệnh mới`;
       else if (s.kind === "spread") txt = `<b class="neg">spread đang ${s.spread} &gt; mức tối đa ${s.max}</b> — chờ spread hạ`;
       else if (s.kind === "holding") txt = `đang giữ ${s.count} lệnh (rổ ${s.sides.map(sideName2).join(" + ")}) — chờ chốt rổ / nhồi`;
