@@ -1193,9 +1193,33 @@
     return good.length === 1 ? good[0] : null;
   }
 
+  /** New York's offset from UTC (−4 summer time, −5 winter), as the server's ny_offset_hours. */
+  function nyOffsetHours(ts) {
+    const y = new Date(ts * 1000).getUTCFullYear();
+    const sunday = (m, n) => { const first = new Date(Date.UTC(y, m - 1, 1)); return Date.UTC(y, m - 1, 1 + ((7 - first.getUTCDay()) % 7) + 7 * (n - 1)) / 1000; };
+    const start = sunday(3, 2) + 7 * 3600, end = sunday(11, 1) + 6 * 3600;
+    return ts >= start && ts < end ? -4 : -5;
+  }
+
+  /** The grid bot's fast-market guard, as the server's grid_guard: [why, until] inside the New York window
+   *  (weekdays, NY time) or around a high-impact USD event, else null. */
+  function gridGuard(c, ts, events) {
+    const hm = (x) => { const [h, m] = String(x || "0:0").split(":"); return Math.max(0, Math.min(1439, (+h || 0) * 60 + (+m || 0))); };
+    if (c.nyGuard) {
+      const local = ts + nyOffsetHours(ts) * 3600, mins = ((local % 86400) + 86400) % 86400 / 60, wd = (Math.floor(local / 86400) + 3) % 7;
+      const a = hm(c.nyFrom || "08:15"), b = hm(c.nyTo || "10:30");
+      if (wd < 5 && mins >= a && mins < b) return ["giờ mở cửa Mỹ", ts + (b - mins) * 60];
+    }
+    if (c.newsGuard) {
+      const before = (c.newsBefore ?? 15) * 60, after = (c.newsAfter ?? 15) * 60;
+      for (const e of events || []) if (e.country === "USD" && e.impact === "High" && ts >= e.time - before && ts <= e.time + after) return ["tin " + e.title, e.time + after];
+    }
+    return null;
+  }
+
   function gridBotOnTicks(ticks, c, value) {
     const trades = [];
-    let flips = 0, trails = 0, placed = 0, book = [], pauseUntil = 0, cycles = 0, stops = 0, sls = 0, maxFloat = 0, maxLevel = 0, maxLots = 0;
+    let guards = 0, flips = 0, trails = 0, placed = 0, book = [], pauseUntil = 0, cycles = 0, stops = 0, sls = 0, maxFloat = 0, maxLevel = 0, maxLots = 0;
     const sidePause = { long: 0, short: 0 };
     // Candle strength: the candles of `biasTf` built from the ticks' bid; `strong` = the last closed one's side.
     const useBias = c.bias && c.bias !== "off", bsec = TF_SECONDS[c.biasTf] || 300;
@@ -1280,6 +1304,10 @@
         }
         if (closed) continue;
       }
+      if ((c.nyGuard || c.newsGuard) && gridGuard(c, t, c._news)) {
+        if (c.guardAction === "close" && book.length) { book.forEach((p) => out(p, bid, ask, "guard", t)); book = []; guards++; }
+        continue;
+      }
       if (t < pauseUntil) continue;
       if (!c.noSpread && c.maxSpread > 0 && ask - bid > c.maxSpread) continue;
       let signal = sig ? gridSignal(c, bid, sPrev, m1.length ? sup : null, m1.length ? res : null, move, useStruct ? extra : null) : null;
@@ -1322,7 +1350,7 @@
       if (lots > maxLots) maxLots = lots;
     }
     if (book.length && ticks.length) { const [ms, bid, ask] = ticks[ticks.length - 1]; book.forEach((p) => out(p, bid, c.noSpread ? bid : ask, "end", ms / 1000)); }
-    return { placed, trades, grid: { cycles, stops, sls, trails, flips, signals, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
+    return { placed, trades, grid: { cycles, stops, sls, trails, flips, guards, signals, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
   }
 
   /** Bars as a path of prices for the grid bot when no ticks are loaded: open → low → high → close on a
@@ -3883,13 +3911,16 @@
       const c = Object.assign({ symbol: "", direction: "both", lots: 0.01, gridStep: 2, multiplier: 1.5, maxLevels: 6, maxLot: 0.5, tpMoney: 1,
         basketStop: 60, cooldownMin: 60, sl: 0, slMoney: 0, bias: "off", biasTf: "5m", biasMinBody: 50, biasLotMult: 2,
         entry: "signal", sigCandle: true, sigTf: "1m", sigBody: 50, sigSr: "auto", sigNeed: "two", trailOn: false, trailStart: 1, trailDist: 0.5,
-        addMode: "with", flipClose: true, waitSec: 15, sigSwing: false, swingK: 3, swingZone: 0.5, sigZone: "off", structTf: "1m", structBars: 120, srBars: 30, srZone: 1, sigTick: true, tickSec: 10, tickMove: 0.3, confirmAdd: true, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
+        addMode: "with", flipClose: true, waitSec: 15,
+        nyGuard: true, nyFrom: "08:15", nyTo: "10:30", newsGuard: true, newsBefore: 15, newsAfter: 15, guardAction: "pause", sigSwing: false, swingK: 3, swingZone: 0.5, sigZone: "off", structTf: "1m", structBars: 120, srBars: 30, srZone: 1, sigTick: true, tickSec: 10, tickMove: 0.3, confirmAdd: true, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
       const v = (id) => ($(id) ? $(id).value : null);
       if ($("gbSymbol")) {
         Object.assign(c, {
           symbol: v("gbSymbol").trim(), direction: v("gbDirection"), lots: num(v("gbLots")) || 0.01, gridStep: num(v("gbStep")) || 2,
           multiplier: Math.max(1, Math.min(3, num(v("gbMult")) || 1)), maxLevels: Math.max(1, Math.min(30, Math.round(num(v("gbLevels")) || 6))),
-          maxLot: num(v("gbMaxLot")) || 0.5, tpMoney: Math.max(0, num(v("gbTp")) ?? 1), addMode: v("gbAddMode"), flipClose: $("gbFlip").checked, waitSec: Math.max(0, Math.min(59, num(v("gbWait")) ?? 15)), basketStop: num(v("gbStop")) ?? 60, cooldownMin: num(v("gbCool")) ?? 60,
+          maxLot: num(v("gbMaxLot")) || 0.5, tpMoney: Math.max(0, num(v("gbTp")) ?? 1), addMode: v("gbAddMode"), flipClose: $("gbFlip").checked,
+          nyGuard: $("gbNyGuard").checked, nyFrom: v("gbNyFrom") || "08:15", nyTo: v("gbNyTo") || "10:30", newsGuard: $("gbNewsGuard").checked,
+          newsBefore: Math.max(0, num(v("gbNewsBefore")) ?? 15), newsAfter: Math.max(0, num(v("gbNewsAfter")) ?? 15), guardAction: v("gbGuardAction"), waitSec: Math.max(0, Math.min(59, num(v("gbWait")) ?? 15)), basketStop: num(v("gbStop")) ?? 60, cooldownMin: num(v("gbCool")) ?? 60,
           sl: Math.max(0, num(v("gbSL")) || 0), slMoney: Math.max(0, num(v("gbSLMoney")) || 0),
           bias: v("gbBias"), biasTf: v("gbBiasTf"), biasMinBody: Math.max(0, Math.min(100, num(v("gbBiasBody")) ?? 50)),
           biasLotMult: Math.max(1, Math.min(5, num(v("gbBiasMult")) || 2)),
@@ -3961,6 +3992,21 @@
             <label>SL rổ theo giá (tính từ lệnh đầu, 0 = tắt)<input id="gbSL" inputmode="decimal" placeholder="VD 12" value="${c.sl || 0}"></label>
             <label>SL rổ theo tiền ($ mỗi rổ, 0 = tắt)<input id="gbSLMoney" inputmode="decimal" placeholder="VD 30" value="${c.slMoney || 0}"></label>
             <label>&nbsp;<span class="muted small">Chạm SL: đóng cả rổ bên đó, bên đó nghỉ như sau cắt lỗ. Trên MT5, SL theo giá được đặt luôn vào từng lệnh trên sàn (vẫn cắt khi máy chủ mất kết nối).</span></label>
+          </div>
+          <div class="guard-box">
+            <b>🛡 Bảo vệ khi giá chạy nhanh</b>
+            <label class="check"><input type="checkbox" id="gbNyGuard" ${c.nyGuard !== false ? "checked" : ""}> Không vào lệnh trong <b>giờ mở cửa Mỹ</b> (giờ New York, tự đổi mùa hè / đông; thứ 2 – thứ 6)</label>
+            <div class="fields three">
+              <label>Từ (giờ New York)<input id="gbNyFrom" value="${esc(c.nyFrom || "08:15")}" placeholder="08:15"></label>
+              <label>Đến (giờ New York)<input id="gbNyTo" value="${esc(c.nyTo || "10:30")}" placeholder="10:30"></label>
+              <label>&nbsp;<span class="muted small" id="gbNyVn"></span></label>
+            </div>
+            <label class="check"><input type="checkbox" id="gbNewsGuard" ${c.newsGuard !== false ? "checked" : ""}> Không vào lệnh quanh <b>tin đỏ USD</b> (CPI, NFP, FOMC… theo lịch tin)</label>
+            <div class="fields three">
+              <label>Trước tin (phút)<input id="gbNewsBefore" inputmode="numeric" value="${c.newsBefore ?? 15}"></label>
+              <label>Sau tin (phút)<input id="gbNewsAfter" inputmode="numeric" value="${c.newsAfter ?? 15}"></label>
+              <label>Khi tới giờ đó<select id="gbGuardAction">${opt([["pause", "Ngừng mở lệnh mới (lệnh đang mở vẫn chạy)"], ["close", "Đóng hết lệnh rồi nghỉ"]], c.guardAction || "pause")}</select></label>
+            </div>
           </div>
           <label class="check"><input type="checkbox" id="gbTrail" ${c.trailOn ? "checked" : ""}> <b>Trailing stop từng lệnh</b>: lệnh nào lời đủ mức bắt đầu thì SL bám theo giá tốt nhất (trên MT5 dời luôn SL trên sàn) — nên tăng Chốt rổ để trailing có chỗ chạy</label>
           <div class="fields three">
@@ -4034,6 +4080,11 @@
         <div id="gbLive"></div>`;
       const showRisk = () => {
         const g = this.gridSettings(), r = this.gridRisk(g), up = g.addMode === "with";
+        if ($("gbNyVn")) {
+          // The NY window in Vietnam time today (UTC+7).
+          const off = nyOffsetHours(Date.now() / 1000), vn = (x) => { const [h, m] = String(x).split(":"); const t = ((+h || 0) * 60 + (+m || 0) - off * 60 + 7 * 60 + 2880) % 1440; return `${String(Math.floor(t / 60)).padStart(2, "0")}:${String(t % 60).padStart(2, "0")}`; };
+          $("gbNyVn").textContent = `= ${vn(g.nyFrom)} – ${vn(g.nyTo)} giờ Việt Nam (${off === -4 ? "mùa hè Mỹ" : "mùa đông Mỹ"}). Mỹ mở cửa 09:30 New York.`;
+        }
         $("gbIntro").innerHTML = up
           ? 'Bot "nhồi dương": mở 1 rổ, giá chạy <b>đúng hướng</b> thêm một <b>khoảng nhồi</b> (tính từ lệnh tốt nhất của rổ) thì vào thêm 1 lệnh (lot × <b>hệ số gấp</b>, 1 = không gấp). Giá đi ngược thì <b>không nhồi</b>. Thoát bằng <b>trailing</b>, <b>chốt rổ</b>, SL rổ hoặc cắt lỗ chung.'
           : 'Bot "nhồi âm": mở 1 lệnh MUA và 1 lệnh BÁN. Bên nào giá chạy <b>ngược</b> thêm một <b>khoảng nhồi</b> thì vào thêm lệnh bên đó với lot × <b>hệ số gấp</b> (1 = không gấp). Khi cả rổ bên đó dương đủ <b>mức chốt rổ</b> thì đóng hết rổ và mở lại từ đầu.';
@@ -4112,6 +4163,7 @@
       let txt = "";
       if (s.kind === "off") txt = "bot đang tắt";
       else if (s.kind === "starting") txt = "bot vừa bật, đang đọc giá…";
+      else if (s.kind === "guard") txt = `🛡 <b>đang tránh ${esc(s.why || "giờ mạnh")}</b> tới ${clock(s.until)} — không mở lệnh mới${s.holding ? ` (vẫn giữ ${s.holding} lệnh đang mở)` : ""}`;
       else if (s.kind === "flip") txt = `tín hiệu vừa đảo sang <b>${sideName2(s.side)}</b>: đã đóng rổ ngược chiều, mở rổ mới ngay`;
       else if (s.kind === "error") txt = `<b class="neg">bot đang gặp lỗi: ${esc(s.error || st.error || "")}</b> — bot tự thử lại mỗi 2 giây`;
       else if (s.kind === "noprice") txt = `<b class="neg">MT5 không trả giá ${esc(s.symbol || "")}</b> — kiểm tra MT5 trên VPS đã đăng nhập và mã đúng`;
@@ -4222,6 +4274,11 @@
     async runStopBt() {
       const bot = $("btBot").value;
       const c = bot === "sr" ? this.srSettings() : bot === "tick" ? this.tickSettings() : bot === "grid" ? this.gridSettings() : this.stopBotSettings();
+      if (bot === "grid" && c.newsGuard) {
+        // The week's calendar for the news guard (the server's feed; this week only).
+        if (!this.news) { try { this.news = await this.call(this.owner ? "/news" : "/member/news"); } catch { /* no calendar: the guard skips news */ } }
+        c._news = (this.news && this.news.events) || [];
+      }
       const days = +$("btDays").value, balance = num($("btBalance").value) || 10000;
       store.set("aurum.btDays", String(days)); store.set("aurum.btBalance", String(balance)); store.set("aurum.btBot", bot);
       store.set("aurum.btSpread", $("btSpread").value.trim());
@@ -4375,11 +4432,11 @@
       const pts = curve.map((v, i) => `${(i / Math.max(curve.length - 1, 1) * W).toFixed(1)},${(H - 6 - (v - lo) / span * (H - 12)).toFixed(1)}`).join(" ");
       const color = net >= 0 ? "var(--up)" : "var(--down)";
       const grid = R.bot === "grid";
-      const reason = grid ? { basket: "chốt rổ", trail: "trailing", flip: "tín hiệu ngược", sl: "SL rổ", stop: "cắt lỗ chung", end: "đóng cuối test" } : R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", hold: "hết giờ giữ", end: "đóng cuối test", close: "hết nến" }
+      const reason = grid ? { basket: "chốt rổ", trail: "trailing", flip: "tín hiệu ngược", guard: "tránh giờ mạnh", sl: "SL rổ", stop: "cắt lỗ chung", end: "đóng cuối test" } : R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", hold: "hết giờ giữ", end: "đóng cuối test", close: "hết nến" }
         : { target: "chạm TP", stop: "chạm SL", trail: "chạm SL đã dời", end: "đóng cuối test", close: "hết nến" };
       const sr = R.bot === "sr" || R.bot === "tick" || grid, tick = R.bot === "tick";
       const G = R.grid || {}, gc = R.c;
-      const gridHead = `<p class="muted small">🕸️ Nhồi lệnh · ${esc(gc.symbol)} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "nến 1m (ước lượng) · spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · lot đầu ${gc.lots} · <b>nhồi ${gc.addMode === "with" ? "dương" : "âm"}</b> mỗi ${gc.gridStep} · ×${gc.multiplier} · tối đa ${gc.maxLevels} lớp · chốt rổ ${gc.tpMoney > 0 ? money(gc.tpMoney) : "tắt"}${gc.sl > 0 ? ` · SL rổ ${gc.sl} giá` : ""}${gc.slMoney > 0 ? ` · SL rổ ${money(gc.slMoney)}` : ""}${gc.trailOn ? ` · trailing ${gc.trailDist} sau khi lời ${gc.trailStart}` : ""}${gc.entry === "signal" ? ` · <b>vào 1 bên theo tín hiệu</b>: ${[gc.sigCandle ? `nến ${gc.sigTf} ≥${gc.sigBody}%` : "", gc.sigSr !== "off" ? `${{ auto: "cản M1 tự động", bounce: "bật cản M1", break: "phá cản M1" }[gc.sigSr] || "cản M1"} ${gc.srBars} nến ±${gc.srZone}` : "", gc.sigTick ? `tick ${gc.tickMove}/${gc.tickSec}s` : "", gc.waitSec > 0 ? `chờ ${gc.waitSec}s sau khi nến đóng` : "", gc.sigSwing ? `nến đảo chiều ở đỉnh/đáy ${gc.structTf}` : "", gc.sigZone && gc.sigZone !== "off" ? `phản ứng ${gc.sigZone === "both" ? "FVG + OB" : gc.sigZone.toUpperCase()} ${gc.structTf}` : ""].filter(Boolean).join(" + ")} (${(gc.sigNeed || "all") === "all" ? "cần đủ" : "cần 2 đồng ý"})${gc.confirmAdd ? " · nhồi khi giá quay đầu" : ""}` : ""}${gc.entry !== "signal" && gc.bias && gc.bias !== "off" ? ` · lực nến ${gc.biasTf} ≥${gc.biasMinBody}% (${gc.bias === "only" ? "chỉ bên mạnh" : `bên mạnh ×${gc.biasLotMult} lot`})` : ""} · cắt lỗ chung ${gc.basketStop ? money(gc.basketStop) : "tắt"}${gc.direction === "long" ? " · chỉ rổ MUA" : gc.direction === "short" ? " · chỉ rổ BÁN" : ""}</p>`;
+      const gridHead = `<p class="muted small">🕸️ Nhồi lệnh · ${esc(gc.symbol)} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "nến 1m (ước lượng) · spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · lot đầu ${gc.lots} · <b>nhồi ${gc.addMode === "with" ? "dương" : "âm"}</b> mỗi ${gc.gridStep} · ×${gc.multiplier} · tối đa ${gc.maxLevels} lớp · chốt rổ ${gc.tpMoney > 0 ? money(gc.tpMoney) : "tắt"}${gc.sl > 0 ? ` · SL rổ ${gc.sl} giá` : ""}${gc.slMoney > 0 ? ` · SL rổ ${money(gc.slMoney)}` : ""}${gc.trailOn ? ` · trailing ${gc.trailDist} sau khi lời ${gc.trailStart}` : ""}${gc.nyGuard ? ` · tránh ${gc.nyFrom}–${gc.nyTo} NY` : ""}${gc.newsGuard ? ` · tránh tin đỏ ±${gc.newsBefore}/${gc.newsAfter}p${gc._news ? ` (${gc._news.filter((e) => e.country === "USD" && e.impact === "High").length} tin)` : ""}` : ""}${gc.entry === "signal" ? ` · <b>vào 1 bên theo tín hiệu</b>: ${[gc.sigCandle ? `nến ${gc.sigTf} ≥${gc.sigBody}%` : "", gc.sigSr !== "off" ? `${{ auto: "cản M1 tự động", bounce: "bật cản M1", break: "phá cản M1" }[gc.sigSr] || "cản M1"} ${gc.srBars} nến ±${gc.srZone}` : "", gc.sigTick ? `tick ${gc.tickMove}/${gc.tickSec}s` : "", gc.waitSec > 0 ? `chờ ${gc.waitSec}s sau khi nến đóng` : "", gc.sigSwing ? `nến đảo chiều ở đỉnh/đáy ${gc.structTf}` : "", gc.sigZone && gc.sigZone !== "off" ? `phản ứng ${gc.sigZone === "both" ? "FVG + OB" : gc.sigZone.toUpperCase()} ${gc.structTf}` : ""].filter(Boolean).join(" + ")} (${(gc.sigNeed || "all") === "all" ? "cần đủ" : "cần 2 đồng ý"})${gc.confirmAdd ? " · nhồi khi giá quay đầu" : ""}` : ""}${gc.entry !== "signal" && gc.bias && gc.bias !== "off" ? ` · lực nến ${gc.biasTf} ≥${gc.biasMinBody}% (${gc.bias === "only" ? "chỉ bên mạnh" : `bên mạnh ×${gc.biasLotMult} lot`})` : ""} · cắt lỗ chung ${gc.basketStop ? money(gc.basketStop) : "tắt"}${gc.direction === "long" ? " · chỉ rổ MUA" : gc.direction === "short" ? " · chỉ rổ BÁN" : ""}</p>`;
       el.innerHTML = `${grid ? gridHead : `<p class="muted small">${tick ? "⚡ Nến tick" : sr ? "🧱 Cản & Hỗ trợ" : "🎯 Stop theo nến"} · ${esc(R.c.symbol)} ${R.c.interval} · ${R.ticks ? `<b>${R.ticks.toLocaleString("vi-VN")} tick thật</b> · spread TB` : "spread"} ${fmt(R.spread, R.digits)}${R.acct && R.acct !== "real" ? ` · <b>giả lập ${esc(ACCOUNT_SIMS[R.acct].name.split(" (")[0])}</b>${R.commission ? ` (phí ${R.commission}$/lot)` : ""}` : ""} · ${day(R.from)} → ${day(R.to)} · ${R.bars} nến · ${R.c.lots} lot · ${tick ? `bước ${R.c.step} · chốt lời ${R.c.closeProfit} · SL ${R.c.sl || "không"}${R.c.withCandle ? " · thuận chiều nến" : ""}${R.c.flipExit ? " · đóng khi nến đảo" : ""} · tối đa ${R.c.maxPositions} lệnh · cắt lỗ chung ${R.c.basketStop ? money(R.c.basketStop) : "tắt"}${R.c.exitAtClose !== false ? " · đóng khi hết nến" : ""}` : `R:R ${R.c.rr}`}${R.c.direction === "long" ? " · chỉ Buy" : R.c.direction === "short" ? " · chỉ Sell" : ""}</p>`}
         <div class="stats">
           ${stat("Lãi/lỗ ròng", signed(net), net >= 0 ? "pos" : "neg")}

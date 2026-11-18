@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "6.6"
+VERSION = "6.7"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2493,7 +2493,7 @@ def publish_address(server):
 
 # Why a bot closed a position, as a short code in the closing order's comment on MT5 (comments are short, ASCII
 # is safest), read back by magic_history.
-CLOSE_CODES = {"chốt rổ": "tp", "trailing": "trail", "SL rổ": "sl", "cắt lỗ chung": "stop", "tín hiệu ngược": "flip",
+CLOSE_CODES = {"tránh giờ mạnh": "guard", "chốt rổ": "tp", "trailing": "trail", "SL rổ": "sl", "cắt lỗ chung": "stop", "tín hiệu ngược": "flip",
                "chốt lời": "tp1", "cắt lỗ lệnh": "sl1", "nến đảo chiều": "rev", "hết nến": "bar", "hết giờ giữ": "hold"}
 CLOSE_REASONS = {v: k for k, v in CLOSE_CODES.items()}
 
@@ -3410,6 +3410,11 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    # Signal entry: after a sigTf candle closes, no new basket (nor a turn) for `waitSec` seconds; then
                    # only if price still holds over that candle's close (a buy) or under it (a sell). 0 = off.
                    "waitSec": 15.0,
+                   # Fast-market guard: no new positions inside the New York window (NY time, weekdays) nor within
+                   # newsBefore / newsAfter minutes of a high-impact USD event; guardAction "close" also closes
+                   # everything the bot holds when such a time starts.
+                   "nyGuard": True, "nyFrom": "08:15", "nyTo": "10:30", "newsGuard": True, "newsBefore": 15.0,
+                   "newsAfter": 15.0, "guardAction": "pause",
                    # More signal filters, on the closed `structTf` candles (the last `structBars`):
                    #   sigSwing — a reversal candle (pin bar / engulfing) at an earlier swing low (buy) or high (sell),
                    #              swings over `swingK` bars each side, within `swingZone`;
@@ -3419,6 +3424,45 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    "maxSpread": 0.5, "noSpread": False, "simSpread": -1.0, "commission": 0.0,
                    "paper": True}
 GRID_PAPER_PATH = os.path.join(HERE, "gridbot_paper.json")
+
+
+def ny_offset_hours(ts):
+    """New York's offset from UTC at `ts`: −4 from the second Sunday of March (2:00) to the first Sunday of
+    November (2:00), else −5 (no time zone database needed on the VPS)."""
+    import datetime
+    d = datetime.datetime.utcfromtimestamp(ts)
+
+    def sunday(month, n):
+        first = datetime.datetime(d.year, month, 1)
+        return first + datetime.timedelta(days=(6 - first.weekday()) % 7 + 7 * (n - 1))
+
+    start = sunday(3, 2) + datetime.timedelta(hours=7)
+    end = sunday(11, 1) + datetime.timedelta(hours=6)
+    return -4 if start <= d < end else -5
+
+
+def hhmm(text):
+    """"08:15" → minutes after midnight."""
+    h, _, m = str(text).partition(":")
+    return max(0, min(1439, int(h or 0) * 60 + int(m or 0)))
+
+
+def grid_guard(c, ts, events):
+    """When the grid bot should stay out of the market: (why, until) inside the New York window (weekdays, NY time)
+    or within newsBefore / newsAfter minutes of a high-impact USD event, else None. The website's backtest follows
+    the same rule (gridGuard)."""
+    if c.get("nyGuard"):
+        local = ts + ny_offset_hours(ts) * 3600
+        mins, weekday = (local % 86400) / 60, int(local // 86400 + 3) % 7  # 1970-01-01 was a Thursday (3)
+        a, b = hhmm(c.get("nyFrom", "08:15")), hhmm(c.get("nyTo", "10:30"))
+        if weekday < 5 and a <= mins < b:
+            return "giờ mở cửa Mỹ", ts + (b - mins) * 60
+    if c.get("newsGuard"):
+        before, after = float(c.get("newsBefore", 15)) * 60, float(c.get("newsAfter", 15)) * 60
+        for e in events or ():
+            if e.get("country") == "USD" and e.get("impact") == "High" and e["time"] - before <= ts <= e["time"] + after:
+                return "tin " + str(e.get("title", "")), e["time"] + after
+    return None
 
 
 def grid_lot(c, level, factor=1.0):
@@ -3684,7 +3728,9 @@ class GridBot(TickBot):
                           ("srZone", float), ("sigTick", bool), ("tickSec", float), ("tickMove", float), ("confirmAdd", bool),
                           ("trailOn", bool), ("trailStart", float), ("trailDist", float),
                           ("sigSwing", bool), ("swingK", int), ("swingZone", float), ("sigZone", str), ("structTf", str), ("structBars", int),
-                          ("addMode", str), ("flipClose", bool), ("waitSec", float), ("paper", bool), ("noSpread", bool)):
+                          ("addMode", str), ("flipClose", bool), ("waitSec", float),
+                          ("nyGuard", bool), ("nyFrom", str), ("nyTo", str), ("newsGuard", bool), ("newsBefore", float),
+                          ("newsAfter", float), ("guardAction", str), ("paper", bool), ("noSpread", bool)):
             if key in body:
                 c[key] = cast(body[key])
         if c["direction"] not in ("both", "long", "short"):
@@ -3724,6 +3770,11 @@ class GridBot(TickBot):
         if c["entry"] == "signal" and not (c["sigCandle"] or c["sigSr"] != "off" or c["sigTick"] or c["sigSwing"] or c["sigZone"] != "off"):
             raise ValueError("Vào theo tín hiệu: bật ít nhất một trong nến / cản / tick")
         c["trailStart"], c["trailDist"] = max(0.01, c["trailStart"]), max(0.01, c["trailDist"])
+        if c["guardAction"] not in ("pause", "close"):
+            raise ValueError("Cách tránh giờ mạnh không hợp lệ")
+        if not re.fullmatch(r"\d{1,2}:\d{2}", c["nyFrom"]) or not re.fullmatch(r"\d{1,2}:\d{2}", c["nyTo"]):
+            raise ValueError("Giờ phiên Mỹ phải dạng HH:MM (giờ New York)")
+        c["newsBefore"], c["newsAfter"] = max(0.0, min(240.0, c["newsBefore"])), max(0.0, min(240.0, c["newsAfter"]))
         c["waitSec"] = max(0.0, min(float(SECONDS_OF.get(c.get("sigTf", "1m"), 60)) - 1, c["waitSec"]))
         if c["sigZone"] not in ("off", "fvg", "ob", "both"):
             raise ValueError("Kiểu vùng FVG / OB không hợp lệ")
@@ -3806,6 +3857,15 @@ class GridBot(TickBot):
                 closed = True
         if closed:
             return  # the new basket starts at the next tick, on a fresh price
+        guard = grid_guard(c, time.time(), self._news_events()) if (c.get("nyGuard") or c.get("newsGuard")) else None
+        if guard:
+            if c.get("guardAction") == "close" and book:
+                loss = pnl(book)
+                for p in book:
+                    self._close(mt5, p, tick, units, "tránh giờ mạnh")
+                self.event(f"{guard[0]}: đóng hết {len(book)} lệnh trước giờ mạnh · {money(loss)}", notify=True)
+            self.state = {"kind": "guard", "why": guard[0], "until": guard[1], "holding": len(book) if c.get("guardAction") != "close" else 0}
+            return
         if time.time() < getattr(self, "pause_until", 0):
             self.state = {"kind": "pause", "until": self.pause_until, "why": "cắt lỗ chung"}
             return
@@ -3908,6 +3968,22 @@ class GridBot(TickBot):
                     first = min(ps, key=lambda p: p["openTime"])
                     factor = max(1.0, round(float(first["lots"]) / float(c["lots"]), 2))
                     self._open(mt5, symbol, info, tick, long, f"nhồi {'dương' if c.get('addMode') == 'with' else 'âm'} lớp {len(ps) + 1}", grid_lot(c, len(ps), factor), stop)
+
+    def _news_events(self):
+        """This week's calendar for the news guard: the server's cached feed, fetched again in the background every
+        10 minutes (never inside the bot's loop, which holds MT5)."""
+        if time.time() - getattr(self, "news_at", 0) > 600 and not getattr(self, "news_busy", False):
+            self.news_at, self.news_busy = time.time(), True
+
+            def fetch():
+                try:
+                    self.news_events = (self.server.news.get() or {}).get("events") or []
+                except Exception:
+                    pass
+                finally:
+                    self.news_busy = False
+            threading.Thread(target=fetch, daemon=True).start()
+        return getattr(self, "news_events", [])
 
     def _trail(self, mt5, c, book, tick, units, info):
         """Trailing stop for each position: the best price since it opened, and once the position is trailStart in
