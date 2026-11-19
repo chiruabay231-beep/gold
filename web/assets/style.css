@@ -1219,3 +1219,26 @@ body.on-chart #chartNote { font-size: 10.5px; line-height: 1.3; padding: 1px 4px
 .bl-draw button.wide { width: auto; flex: none; }
 .bl-levels { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 0; }
 .bl-levels:empty { display: none; }
+
+/* Favourite drawing tools: larger and more refined (overrides the compact TradingView look above) */
+.fav-bar { gap: 4px; padding: 6px 8px; border-radius: 16px;
+  background: linear-gradient(180deg, rgba(30, 33, 42, .96), rgba(18, 20, 27, .96)); border: 1px solid rgba(242, 193, 78, .22);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .38), 0 2px 6px rgba(0, 0, 0, .25), inset 0 1px 0 rgba(255, 255, 255, .06); backdrop-filter: blur(14px); }
+.fav-bar .grip { padding: 8px 8px 8px 4px; }
+.fav-bar .grip i { width: 4px; height: 4px; background: rgba(242, 193, 78, .45); }
+.fav-bar .grip:hover i { background: #f2c14e; }
+.fav-bar .fav-sep { height: 28px; margin: 0 6px 0 2px; background: linear-gradient(180deg, transparent, rgba(242, 193, 78, .35), transparent); }
+.fav-bar button { width: 44px; height: 42px; border-radius: 12px; color: #d6dbe6; transition: background .15s, color .15s, transform .15s, box-shadow .15s; }
+.fav-bar button svg { width: 26px; height: 26px; }
+.fav-bar button svg circle { stroke-width: 1.5; }
+.fav-bar button:hover { background: rgba(255, 255, 255, .09); color: #fff; transform: translateY(-1px) !important; box-shadow: 0 6px 14px rgba(0, 0, 0, .28); }
+.fav-bar button.on { color: #1a1205; background: linear-gradient(180deg, #f9d885, #e2a62c); box-shadow: 0 6px 16px rgba(242, 193, 78, .38), inset 0 1px 0 rgba(255, 255, 255, .5); }
+.fav-bar button.on svg circle { fill: rgba(26, 18, 5, .15); }
+html[data-theme="light"] .fav-bar { background: linear-gradient(180deg, #ffffff, #f4f6fa); border-color: rgba(190, 140, 30, .30);
+  box-shadow: 0 14px 32px rgba(20, 30, 50, .16), 0 2px 6px rgba(20, 30, 50, .08), inset 0 1px 0 #fff; }
+html[data-theme="light"] .fav-bar button { color: #1f2633; }
+html[data-theme="light"] .fav-bar button:hover { background: rgba(190, 140, 30, .10); color: #111827; box-shadow: 0 6px 14px rgba(20, 30, 50, .10); }
+html[data-theme="light"] .fav-bar button.on { color: #1a1205; background: linear-gradient(180deg, #f9d885, #e2a62c); }
+html[data-theme="light"] .fav-bar .grip i { background: rgba(190, 140, 30, .55); }
+html[data-theme="light"] .fav-bar .fav-sep { background: linear-gradient(180deg, transparent, rgba(190, 140, 30, .35), transparent); }
+@media (max-width: 600px) { .fav-bar button { width: 38px; height: 38px; } .fav-bar button svg { width: 22px; height: 22px; } }
