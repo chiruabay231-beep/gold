@@ -3811,6 +3811,42 @@
       return ` <span class="close-tag ${good ? "good" : bad ? "bad" : ""}">${esc(label)}</span>`;
     },
 
+    /** The bot's statistics from the server (all its closed trades): overall, by session, by day and by hour of the
+     *  day in Vietnam time — where it makes and loses its money. */
+    botBreakdown(b) {
+      if (!b || !b.all || !b.all.n) return "";
+      const A = b.all, pf = (x) => (x == null ? "∞" : x.toFixed(2)), cls = (v) => (v > 0 ? "pos" : v < 0 ? "neg" : "");
+      const rate = (x) => (x.n ? Math.round(x.wins / x.n * 100) + "%" : "–");
+      const row = (label, x) => `<tr><td>${label}</td><td>${x.n}</td><td>${rate(x)}</td><td class="${cls(x.profit)}">${x.n ? signed(x.profit) : "–"}</td><td class="${x.pf != null && x.pf < 1 ? "neg" : x.n ? "pos" : ""}">${x.n ? pf(x.pf) : "–"}</td></tr>`;
+      const head = `<tr><th></th><th>Lệnh</th><th>Thắng</th><th>Lãi/lỗ</th><th>PF</th></tr>`;
+      const SESS = { "Á": "Á (06:00–14:00)", "Âu": "Âu (14:00–19:30)", "Mỹ": "Mỹ (19:30–04:00)", "Đêm": "Đêm (04:00–06:00)" };
+      const day = (t) => new Date(t * 1000).toLocaleDateString("vi-VN", { weekday: "short", day: "2-digit", month: "2-digit", timeZone: "UTC" });
+      const maxAbs = Math.max(0.01, ...b.hours.map((x) => Math.abs(x.profit)));
+      const bars = b.hours.map((x) => {
+        const hgt = Math.round(Math.abs(x.profit) / maxAbs * 46);
+        return `<div class="bd-h" title="${String(x.hour).padStart(2, "0")}h · ${x.n} lệnh · ${x.n ? signed(x.profit) : "–"} · thắng ${rate(x)}"><div class="bd-bar ${x.profit >= 0 ? "up" : "down"}" style="height:${x.n ? Math.max(2, hgt) : 0}px"></div><span>${x.hour}</span></div>`;
+      }).join("");
+      const best = b.sessions.filter((x) => x.n).sort((p, q) => q.profit - p.profit), worstH = b.hours.filter((x) => x.n).sort((p, q) => p.profit - q.profit).slice(0, 3).filter((x) => x.profit < 0);
+      const span = A.from && A.to ? `${day(A.from + 7 * 3600)} → ${day(A.to + 7 * 3600)}` : "";
+      return `<div class="bot-bd">
+        <h4>📊 Thống kê <span class="muted small">(${A.n} lệnh đã đóng${span ? " · " + span : ""}, giờ Việt Nam)</span></h4>
+        <div class="stats">
+          <div class="stat"><span>Profit factor</span><b class="${A.pf != null && A.pf < 1 ? "neg" : "pos"}">${pf(A.pf)}</b></div>
+          <div class="stat"><span>Lãi kỳ vọng mỗi lệnh</span><b class="${cls(A.expectancy)}">${A.expectancy != null ? signed(A.expectancy) : "–"}</b></div>
+          <div class="stat"><span>Sụt giảm lớn nhất</span><b class="${A.maxDrawdown ? "neg" : ""}">${A.maxDrawdown ? "−" + money(A.maxDrawdown) : "0"}</b></div>
+          <div class="stat"><span>Lệnh mỗi ngày</span><b>${A.perDay ?? "–"}</b></div>
+        </div>
+        ${best.length > 1 ? `<p class="small">Tốt nhất: <b class="${cls(best[0].profit)}">phiên ${best[0].name} ${signed(best[0].profit)}</b> · kém nhất: <b class="${cls(best[best.length - 1].profit)}">phiên ${best[best.length - 1].name} ${signed(best[best.length - 1].profit)}</b>${worstH.length ? ` · giờ lỗ nhiều nhất: ${worstH.map((x) => `<b class="neg">${x.hour}h ${signed(x.profit)}</b>`).join(", ")}` : ""}</p>` : ""}
+        <div class="bd-cols">
+          <div><b class="small">Theo phiên</b><table class="bd-table">${head}${b.sessions.map((x) => row(SESS[x.name] || x.name, x)).join("")}</table></div>
+          <div><b class="small">Theo ngày</b><table class="bd-table">${head}${b.days.slice().reverse().map((x) => row(day(x.day), x)).join("")}</table></div>
+        </div>
+        <b class="small">Theo giờ trong ngày (lãi/lỗ, rê chuột để xem)</b>
+        <div class="bd-hours">${bars}</div>
+        ${A.n < 300 ? `<p class="muted small">Mới ${A.n} lệnh: chạy thêm vài ngày (vài trăm lệnh, qua cả phiên Mỹ và ngày có tin) để số liệu đáng tin hơn.</p>` : ""}
+      </div>`;
+    },
+
     /** Why a bot that wins often can still lose: average win against average loss, the win rate it needs
      *  to break even, and the money by the way trades closed and by side. */
     /** The grid bot's trades read as baskets (positions closed together), and what to change: the stop against the
@@ -3965,6 +4001,7 @@
         </div>
         ${h.length > 1 ? `<svg class="bt-eq" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${net >= 0 ? "var(--up)" : "var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>` : ""}
         ${this.botWhy(h)}${store.get("aurum.hubBot") === "grid" ? this.gridAdvice(h) : ""}
+        ${this.botBreakdown(this.botStatusFor().breakdown)}
         <div class="bl-m5">${this.mt5LikeView(this.botStatusFor())}</div>
         <h4>Lịch sử lệnh của bot (mới nhất trước)</h4>
         <div class="list log">${h.length ? h.slice(0, 25).map((x) => `<div class="log-row"><span class="muted small">${x.closeTime ? clock(x.closeTime) : ""}</span> ${sideName(x.side)}${x.lots ? " " + x.lots : ""} ${x.entry != null ? fmt(x.entry, d) : "–"} → ${x.exit != null ? fmt(x.exit, d) : "–"} · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b>${this.closeTag(x.reason, x.profit)}</div>`).join("") : '<div class="empty">Chưa có lệnh đã đóng</div>'}</div>`;

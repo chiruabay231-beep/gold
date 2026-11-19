@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "7.0"
+VERSION = "7.1"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2511,6 +2511,54 @@ def deal_reason(mt5, d):
     return CLOSE_REASONS.get(code)
 
 
+# The trading sessions the statistics split trades by, in Vietnam time (UTC+7): [name, from hour, to hour).
+STAT_SESSIONS = [("Á", 6, 14), ("Âu", 14, 19.5), ("Mỹ", 19.5, 28), ]
+
+
+def trade_breakdown(trades):
+    """A bot's closed trades summed up: overall (profit factor, deepest drawdown, expectancy, trades a day), and by
+    session, by day (the last 14) and by hour of the day, in Vietnam time. `trades`: dicts with closeTime, profit."""
+    rows = sorted((t for t in trades if t.get("closeTime") is not None), key=lambda t: t["closeTime"])
+
+    def summary(ts):
+        wins = [t["profit"] for t in ts if t["profit"] > 0]
+        losses = [t["profit"] for t in ts if t["profit"] <= 0]
+        gl = -sum(losses)
+        return {"n": len(ts), "wins": len(wins), "profit": round(sum(t["profit"] for t in ts), 2),
+                "pf": round(sum(wins) / gl, 2) if gl > 0 else None, "avgWin": round(sum(wins) / len(wins), 2) if wins else None,
+                "avgLoss": round(sum(losses) / len(losses), 2) if losses else None}
+
+    def vn(t):
+        return t["closeTime"] + 7 * 3600
+
+    def session(t):
+        h = (vn(t) % 86400) / 3600
+        for name, a, b in STAT_SESSIONS:
+            if a <= h < b or a <= h + 24 < b:
+                return name
+        return "Đêm"
+
+    out = {"all": summary(rows)}
+    bal = peak = dd = 0.0
+    for t in rows:
+        bal += t["profit"]
+        peak = max(peak, bal)
+        dd = max(dd, peak - bal)
+    out["all"]["maxDrawdown"] = round(dd, 2)
+    out["all"]["expectancy"] = round(out["all"]["profit"] / len(rows), 3) if rows else None
+    if rows:
+        days = max(1.0, (rows[-1]["closeTime"] - rows[0]["closeTime"]) / 86400)
+        out["all"]["perDay"] = round(len(rows) / days, 1)
+        out["all"]["from"], out["all"]["to"] = rows[0]["closeTime"], rows[-1]["closeTime"]
+    out["sessions"] = [dict(summary([t for t in rows if session(t) == name]), name=name) for name in [s[0] for s in STAT_SESSIONS] + ["Đêm"]]
+    by_day = {}
+    for t in rows:
+        by_day.setdefault(int(vn(t) // 86400), []).append(t)
+    out["days"] = [dict(summary(ts), day=d * 86400) for d, ts in sorted(by_day.items())[-14:]]
+    out["hours"] = [dict(summary([t for t in rows if int((vn(t) % 86400) // 3600) == h]), hour=h) for h in range(24)]
+    return out
+
+
 def magic_history(mt5, magic, since, limit=200):
     """A bot's closed trades on MT5 (its magic number), newest first: side, entry → exit, times (UTC), profit."""
     deals = mt5.history_deals_get(since + Mt5.offset_seconds - 60, now() + Mt5.offset_seconds + 86400) or ()
@@ -3216,7 +3264,7 @@ class TickBot:
                 self.paper["positions"] = [x for x in self.paper["positions"] if x["id"] != p["id"]]
                 self.paper["balance"] = round(self.paper["balance"] + profit, 2)
                 self.paper["history"].insert(0, dict({k: v for k, v in p.items() if k != "raw"}, exit=price, reason=why, closeTime=now(), profit=round(profit, 2)))
-                del self.paper["history"][500:]
+                del self.paper["history"][5000:]  # kept long for the statistics (by session, day, hour)
                 self._save_paper()
             self.event(f"ẢO: đóng {'MUA' if long else 'BÁN'} {fmt(p['entry'])} → {fmt(price)} ({why}) · {money(profit)}")
             return
@@ -3335,6 +3383,7 @@ class TickBot:
         floating = round(sum(p["profit"] for p in positions), 2)
         with self.lock:
             return {"ok": True, "config": c, "positions": positions, "stats": stats, "history": hist[:300], "price": price,
+                    "breakdown": trade_breakdown(hist),
                     "paper": {"balance": self.paper["balance"], "equity": round(self.paper["balance"] + floating, 2), "floating": floating},
                     "events": self.events[:40], "error": self.error, "startedAt": self.started}
 
@@ -3360,10 +3409,13 @@ class TickBot:
                         stats["wins"] += 1 if pnl > 0 else 0
                         stats["profit"] += pnl
                 history = magic_history(mt5, self.MAGIC, now() - 7 * 86400)
+                # The statistics over 30 days, read again once a minute.
+                if time.time() - getattr(self, "bd_at", 0) > 60:
+                    self.bd_at, self.bd = time.time(), trade_breakdown(magic_history(mt5, self.MAGIC, now() - 30 * 86400, limit=5000))
         except Exception as e:
             c["statusError"] = str(e)
         with self.lock:
-            return {"ok": True, "config": c, "history": history, "positions": positions, "stats": stats,
+            return {"ok": True, "config": c, "history": history, "positions": positions, "stats": stats, "breakdown": getattr(self, "bd", None),
                     "events": self.events[:40], "error": self.error, "startedAt": self.started}
 
 
