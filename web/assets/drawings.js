@@ -472,7 +472,13 @@
       }
       this.selected = hit.d.id;
       (this.peers || []).forEach((p) => { if (p.selected) { p.selected = null; p.update(); } });
-      if (!hit.d.locked && !this.lockAll) {
+      if (!hit.d.locked && !this.lockAll && hit.handle === "rot") {
+        // The rotate knob: the drawing turns around its centre (kept as a time / price point while it turns).
+        const pts = hit.d.pts.map((p) => [this.x(p.t), this.y(p.p)]);
+        const c = this.pivot(hit.d, pts) || this.centre(pts);
+        if (!hit.d.rotC || !hit.d.rot) { const cp = this.point(c[0], c[1], false); if (cp) hit.d.rotC = cp; }
+        this.gesture = { kind: "rotate", d: hit.d, x, y, c, a0: Math.atan2(y - c[1], x - c[0]), rot0: hit.d.rot || 0, moved: false };
+      } else if (!hit.d.locked && !this.lockAll) {
         this.gesture = { kind: hit.handle != null ? "handle" : "move", d: hit.d, handle: hit.handle, x, y,
           start: hit.d.pts.map((p) => Object.assign({}, p)), anchor: this.point(x, y, false), moved: false,
           under: wasPicked ? under : null };
@@ -503,7 +509,14 @@
         if (!pt) return true;
         const d = this.pending;
         if (d.tool === "brush") { if (g.moved) d.pts.push(pt); } else { d.pts[d.pts.length - 1] = pt; this.constrain(d, d.pts.length - 1); }
+      } else if (g.kind === "rotate") {
+        let deg = g.rot0 + (Math.atan2(y - g.c[1], x - g.c[0]) - g.a0) * 180 / Math.PI;
+        if (this.lastEvent && this.lastEvent.shiftKey) deg = Math.round(deg / 15) * 15;
+        deg = ((deg % 360) + 360) % 360;
+        g.d.rot = Math.abs(deg) < 0.5 || Math.abs(deg - 360) < 0.5 ? 0 : +deg.toFixed(1);
       } else if (g.kind === "handle") {
+        // A turned drawing's handle: the finger read in its own unturned frame.
+        if (g.d.rot) { const pts0 = g.d.pts.map((p) => [this.x(p.t), this.y(p.p)]); [x, y] = this.local(g.d, pts0, x, y); }
         const pt = this.point(x, y, g.d.tool === "brush" ? "free" : this.snapMode(this.lastEvent));
         const d = g.d;
         if (pt && isPos(d.tool) && d.pts.length >= 3 && g.handle > 0) {
@@ -519,6 +532,11 @@
         if (!now) return true;
         const dl = this.timeToLogical(now.t) - this.timeToLogical(g.anchor.t), dp = now.p - g.anchor.p;
         g.d.pts = g.start.map((p) => ({ t: this.logicalToTime(this.timeToLogical(p.t) + dl), p: +(p.p + dp).toFixed(this.host.digits()) }));
+        // A turned drawing's pivot goes with it.
+        if (g.d.rotC) {
+          if (!g.rotStart) g.rotStart = Object.assign({}, g.d.rotC);
+          g.d.rotC = { t: this.logicalToTime(this.timeToLogical(g.rotStart.t) + dl), p: g.rotStart.p + dp };
+        }
       }
       this.update();
       return true;
@@ -550,7 +568,7 @@
       const g = this.gesture;
       this.gesture = null;
       if (!g) return false;
-      if (g.kind === "handle" && g.moved && g.d.pts.length === 2 && g.lastX != null) {
+      if (g.kind === "handle" && g.moved && g.d.pts.length === 2 && g.lastX != null && !g.d.rot) {
         // The other end stays put; the finger is where this one went.
         const o = g.d.pts[1 - g.handle];
         this.flatten(g.d, g.handle, [[this.x(o.t), this.y(o.p)], [g.lastX, g.lastY]]);
@@ -640,6 +658,35 @@
       this.save(); this.update();
     }
 
+    /* ----- rotation: any drawing turned by d.rot degrees around d.rotC (a time / price point, its centre when the
+     * turn started); painting rotates the canvas, hits and drags work in the drawing's own unturned frame ----- */
+
+    /** The drawing's centre on screen: the middle of its points' box (its point for a one-point tool). */
+    centre(pts) {
+      if (pts.length === 1) return [pts[0][0], pts[0][1]];
+      const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+      return [(Math.min(...xs) + Math.max(...xs)) / 2, (Math.min(...ys) + Math.max(...ys)) / 2];
+    }
+    /** The pivot of a turned drawing on screen (null when it is not turned). */
+    pivot(d, pts) {
+      if (!d.rot) return null;
+      if (d.rotC) { const x = this.x(d.rotC.t), y = this.y(d.rotC.p); if (x != null && y != null) return [x, y]; }
+      return this.centre(pts);
+    }
+    /** (x, y) on screen into the drawing's own unturned frame. */
+    local(d, pts, x, y) {
+      const c = this.pivot(d, pts);
+      if (!c) return [x, y];
+      const r = -d.rot * Math.PI / 180, dx = x - c[0], dy = y - c[1];
+      return [c[0] + dx * Math.cos(r) - dy * Math.sin(r), c[1] + dx * Math.sin(r) + dy * Math.cos(r)];
+    }
+    /** Where the rotate knob sits, in the drawing's own frame: over the middle of its top edge. */
+    knob(d, pts) {
+      const c = d.rot ? this.pivot(d, pts) : this.centre(pts);
+      const top = Math.min(...pts.map((p) => p[1]), d._box ? d._box.y : Infinity);
+      return [c[0], Math.min(top, c[1]) - 30];
+    }
+
     shownNow(d) {
       const tf = this.host.interval ? this.host.interval() : null;
       return !(tf && d.hideOn && d.hideOn[tf]);
@@ -656,11 +703,14 @@
         if (!this.shownNow(d)) continue;
         const pts = d.pts.map((p) => [this.x(p.t), this.y(p.p)]);
         if (pts.some(([a, b]) => a == null || b == null)) continue;
+        const [lx, ly] = this.local(d, pts, x, y);
         if (d.id === this.selected) {
-          const h = this.handles(d, pts).findIndex(([a, b]) => Math.hypot(a - x, b - y) <= tol);
+          const k = this.knob(d, pts);
+          if (Math.hypot(k[0] - lx, k[1] - ly) <= tol + 2) { out.push({ d, handle: "rot", area: false }); continue; }
+          const h = this.handles(d, pts).findIndex(([a, b]) => Math.hypot(a - lx, b - ly) <= tol);
           if (h >= 0) { out.push({ d, handle: h, area: false }); continue; }
         }
-        const hit = this.near(d, pts, x, y, tol);
+        const hit = this.near(d, pts, lx, ly, tol);
         if (hit) out.push({ d, handle: null, area: hit === "area" });
       }
       return out;
@@ -762,8 +812,27 @@
         const pts = d.pts.map((p) => [this.x(p.t), this.y(p.p)]);
         if (pts.some(([a, b]) => a == null || b == null)) return;
         g.save();
+        // A turned drawing: the canvas turned around its pivot, everything drawn as if it were not.
+        const c = this.pivot(d, pts);
+        if (c) { g.translate(c[0], c[1]); g.rotate(d.rot * Math.PI / 180); g.translate(-c[0], -c[1]); }
+        g.save();
         try { this.paintOne(g, d, pts, w, h); } catch { /* skip a broken drawing */ }
         g.restore();
+        if (d.id === this.selected && d !== this.pending && !d.locked && !this.lockAll) {
+          // The rotate knob over the drawing, joined to it by a thin stem; its angle under it once turned.
+          const k = this.knob(d, pts), light = document.documentElement.dataset.theme === "light";
+          g.setLineDash([2, 3]); g.strokeStyle = alpha(d.color, 0.7); g.lineWidth = 1;
+          g.beginPath(); g.moveTo(k[0], k[1] + 9); g.lineTo(k[0], k[1] + 24); g.stroke();
+          g.setLineDash([]);
+          g.fillStyle = light ? "#ffffff" : "#0b0f17"; g.strokeStyle = d.color; g.lineWidth = 2;
+          g.beginPath(); g.arc(k[0], k[1], 9, 0, Math.PI * 2); g.fill(); g.stroke();
+          g.beginPath(); g.arc(k[0], k[1], 4.5, -Math.PI * 0.9, Math.PI * 0.55); g.stroke();
+          g.beginPath(); g.moveTo(k[0] - 4.2, k[1] - 3.6); g.lineTo(k[0] - 4.6, k[1] + 0.6); g.lineTo(k[0] - 1, k[1] - 1.6); g.fillStyle = d.color; g.fill();
+          if (d.rot) {
+            g.font = "600 10px -apple-system, BlinkMacSystemFont, 'Trebuchet MS', Roboto, sans-serif"; g.textAlign = "left"; g.textBaseline = "middle";
+            g.fillStyle = d.color; g.fillText(`${Math.round(d.rot)}°`, k[0] + 13, k[1]);
+          }
+        }
         if (d.id === this.selected || d === this.pending || (this.multi && this.multi.has(d.id))) {
           // Handles: a soft halo, then a ring in the drawing's colour on the chart's background.
           const light = document.documentElement.dataset.theme === "light";
@@ -775,6 +844,7 @@
             g.beginPath(); g.arc(a, b, 4.5, 0, Math.PI * 2); g.fill(); g.stroke();
           });
         }
+        g.restore();
       });
       g.restore();
     }
