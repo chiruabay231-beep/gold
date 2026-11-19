@@ -4216,6 +4216,7 @@
       const runPaper = st && st.config && st.config.paper;
       if (st && st.config && st.config.sl === undefined) problem = (problem ? problem + " " : "") + "Máy chủ VPS chưa có SL rổ: vào tab Máy chủ → Cập nhật lên bản 5.7 (Backtest vẫn dùng được ngay).";
       else if (st && st.config && st.config.bias === undefined) problem = (problem ? problem + " " : "") + "Máy chủ VPS chưa có lực nến: vào tab Máy chủ → Cập nhật lên bản 5.7 (Backtest vẫn dùng được ngay).";
+      else if (st && st.config && st.config.pyramidLock === undefined) problem = (problem ? problem + " " : "") + "⚠️ Máy chủ VPS còn bản cũ: chưa có 'khoá lời khi nhồi' và 'không nhồi sát cản' — lớp nhồi trên cùng có thể bị bỏ lại âm. Vào tab Máy chủ → Cập nhật lên bản 7.0.";
       else if (st && st.config && st.config.entry === undefined) problem = (problem ? problem + " " : "") + "Máy chủ VPS chưa có vào lệnh theo tín hiệu (nến / cản M1 / tick): vào tab Máy chủ → Cập nhật lên bản 5.8 (Backtest dùng được ngay).";
       else if (st && st.grid && st.config.running && st.grid.state === undefined) problem = (problem ? problem + " " : "") + "Cập nhật máy chủ lên bản 5.8 để xem bot đang làm gì (đang nghỉ / chờ tín hiệu) và nút Chạy lại ngay.";
       el.innerHTML = `<div class="panel-head"><h3>🕸️ Bot nhồi lệnh (grid / gấp lot)</h3>${st ? `<span class="badge ${c.running ? "on" : "off"}">${c.running ? (runPaper ? "Đang chạy ẢO" : "Đang chạy trên MT5") : "Đang tắt"}</span>` : ""}</div>
@@ -4439,7 +4440,8 @@
         const p = s.parts || {};
         txt = `<b>đang chờ tín hiệu</b>: ${[cfg.sigCandle ? `nến ${tag(p.candle)}` : "", cfg.sigSr && cfg.sigSr !== "off" ? `cản ${tag(p.sr)}` : "", cfg.sigTick ? `tick ${tag(p.tick)}` : "", cfg.sigSwing ? `đỉnh/đáy ${tag(p.swing)}` : "", cfg.sigZone && cfg.sigZone !== "off" ? `${cfg.sigZone === "both" ? "FVG/OB" : cfg.sigZone.toUpperCase()} ${tag(p.zone)}` : ""].filter(Boolean).join(" · ")} — ${(cfg.sigNeed || "all") === "all" ? "cần tất cả cùng một chiều" : "cần 2 bộ lọc cùng một chiều"}${cfg.sigSr === "bounce" && cfg.sigCandle ? ' · <span class="muted">mẹo: "Bật cản" + nến hay ngược nhau, thử cản "Tự động"</span>' : ""}`;
       } else if (s.kind === "open") txt = "sẵn sàng vào lệnh";
-      return txt + (rest ? ` · <b class="neg">${rest}</b>` : "");
+      const old = cfg.running && cfg.pyramidLock === undefined ? '<b class="neg">⚠️ Máy chủ VPS còn bản cũ — cập nhật lên 7.0 (khoá lời khi nhồi, không nhồi sát cản)</b> · ' : "";
+      return old + txt + (rest ? ` · <b class="neg">${rest}</b>` : "");
     },
 
     renderGridBotLive(st) {
