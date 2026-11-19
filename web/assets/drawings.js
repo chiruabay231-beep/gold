@@ -102,6 +102,11 @@
         },
       };
       host.series.attachPrimitive(this.primitive);
+      // The condensed face comes from the web: drawn again once it is there.
+      if (document.fonts && document.fonts.load) {
+        Promise.all(["italic 700 12px \"Roboto Condensed\"", "italic 500 12px \"Roboto Condensed\"", "700 12px \"Roboto Condensed\""].map((f) => document.fonts.load(f).catch(() => null)))
+          .then(() => this.update());
+      }
     }
 
     static get tools() { return TOOLS; }
@@ -181,6 +186,8 @@
     /** Drawings saved by an earlier version get the options added since. */
     upgrade(d) {
       const base = this.defaults(d.tool);
+      // Drawings from before the condensed bold italic look get it once (their bold / italic can be turned off again).
+      if (d.fontV !== 2) { d.bold = true; d.italic = true; d.fontV = 2; }
       for (const k of Object.keys(base)) if (d[k] === undefined) d[k] = base[k];
       if (isPos(d.tool) && d.pts.length === 2) d.pts.push({ t: d.pts[1].t, p: this.target(d) });
       return d;
@@ -281,7 +288,7 @@
         extend: "none",
         mid: false, midColor: "#787b86", midStyle: "dashed",
         fill: hasFill(tool), fillColor: color, fillOpacity: tool === "headShoulders" || tool === "trianglePattern" ? 10 : 15,
-        text: "", textColor: tool === "text" ? "#ff9800" : color, fontSize: tool === "text" ? 18 : 12, bold: false, italic: false,
+        text: "", textColor: tool === "text" ? "#ff9800" : color, fontSize: tool === "text" ? 18 : 12, bold: true, italic: true, fontV: 2,
         textBg: false, textBgColor: "#2a3449", textBorder: false, textBorderColor: "#787b86", wrap: false,
         textV: "top", textH: "center",
         targetColor: "#089981", stopColor: "#f23645",
@@ -295,7 +302,10 @@
         };
       }
       const saved = own ? this.styles[tool] : null;
-      return saved ? Object.assign(base, JSON.parse(JSON.stringify(saved))) : base;
+      const out = saved ? Object.assign(base, JSON.parse(JSON.stringify(saved))) : base;
+      // A look remembered before the condensed bold italic text: that text style on top of it.
+      if (out.fontV !== 2) { out.bold = true; out.italic = true; out.fontV = 2; }
+      return out;
     }
 
     newDrawing(tool) {
@@ -850,7 +860,8 @@
     }
 
     font(d, size) {
-      return `${d.italic ? "italic " : ""}${d.bold ? "700 " : "500 "}${size || d.fontSize || 12}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif`;
+      // Topstep's chart look: a condensed face, bold and slanted (each drawing can still turn bold / italic off).
+      return `${d.italic ? "italic " : ""}${d.bold ? "700 " : "500 "}${size || d.fontSize || 12}px "Roboto Condensed", "Arial Narrow", "Helvetica Neue Condensed", "Sofia Sans Condensed", sans-serif`;
     }
 
     /** Lines of `text` that fit `max` pixels when wrapping. */
