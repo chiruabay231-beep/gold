@@ -398,10 +398,10 @@ struct CandleChart: View {
     /// The mascot under the finger and how far it has been dragged.
     @State private var mascotDrag: (id: UUID, offset: CGSize)?
 
-    private let axisWidth: CGFloat = 74
+    private let axisWidth: CGFloat = 80
     /// Height of a price label on the axis (and of the last price row).
-    static let axisLabelHeight: CGFloat = 23
-    private var timeAxisHeight: CGFloat { showTimeAxis ? 18 : 0 }
+    static let axisLabelHeight: CGFloat = 25
+    private var timeAxisHeight: CGFloat { showTimeAxis ? 24 : 0 }
 
     private var headerHeight: CGFloat { showHeader && !headerInside && !headerOnCrosshair ? 34 : (headerInside ? 0 : 4) }
 
@@ -731,7 +731,7 @@ struct CandleChart: View {
                 context.stroke(line, with: .color(event.color.opacity(0.45)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
             }
             let text = Text(offscreen ? "\(event.label) ›" : event.label)
-                .font(.system(size: 9, weight: .semibold)).foregroundColor(.white)
+                .font(.system(size: 10.5, weight: .bold)).foregroundColor(.white)
             let resolved = context.resolve(text)
             let size = resolved.measure(in: CGSize(width: 200, height: 20))
             let width = size.width + 10
@@ -787,7 +787,7 @@ struct CandleChart: View {
             if showGrid { context.stroke(line, with: .color(theme.grid), lineWidth: theme.isLight ? 1 : 0.5) }
             // Axis prices: black (white on dark) and bold, like the website.
             let tickText = Self.format(tick, decimals)
-            context.draw(Text(tickText).font(.system(size: Self.axisFont(tickText, 12), weight: .bold).monospacedDigit())
+            context.draw(Text(tickText).font(.system(size: Self.axisFont(tickText, 13.5), weight: .heavy).monospacedDigit())
                             .foregroundColor(theme.isLight ? .black : theme.primaryText),
                          at: CGPoint(x: layout.axisX + 5, y: y), anchor: .leading)
         }
@@ -801,7 +801,7 @@ struct CandleChart: View {
             line.addLine(to: CGPoint(x: x, y: layout.volume.maxY))
             if showGrid { context.stroke(line, with: .color(theme.grid), lineWidth: theme.isLight ? 1 : 0.5) }
             if showTimeAxis {
-                context.draw(Text(candles[i].time.formatted(timeFormat)).font(.system(size: 10.5, weight: .semibold))
+                context.draw(Text(candles[i].time.formatted(timeFormat)).font(.system(size: 13, weight: .heavy).monospacedDigit())
                                 .foregroundColor(theme.isLight ? .black : theme.primaryText),
                          at: CGPoint(x: x, y: layout.timeAxis.midY), anchor: .center)
             }
@@ -1104,7 +1104,7 @@ struct CandleChart: View {
             if let border = label.border {
                 context.stroke(Path(roundedRect: box.insetBy(dx: 1, dy: 1), cornerRadius: 3), with: .color(border), lineWidth: 2)
             }
-            context.draw(Text(label.text).font(.system(size: Self.axisFont(label.text, 13), weight: .bold).monospacedDigit()).foregroundColor(label.textColor),
+            context.draw(Text(label.text).font(.system(size: Self.axisFont(label.text, 14), weight: .heavy).monospacedDigit()).foregroundColor(label.textColor),
                          at: CGPoint(x: box.midX, y: box.midY), anchor: .center)
             if !label.tag.isEmpty {
                 let tagText = Text(label.tag).font(.system(size: 11, weight: .medium)).foregroundColor(label.textColor)
@@ -1145,7 +1145,7 @@ struct CandleChart: View {
                     context.fill(Path(roundedRect: askBox, cornerRadius: 2), with: .color(theme.background))
                     context.stroke(Path(roundedRect: askBox.insetBy(dx: 0.5, dy: 0.5), cornerRadius: 2),
                                    with: .color(theme.down), lineWidth: 1.5)
-                    context.draw(Text(Self.format(ask, decimals)).font(.system(size: Self.axisFont(Self.format(ask, decimals), 12), weight: .bold).monospacedDigit()).foregroundColor(theme.down),
+                    context.draw(Text(Self.format(ask, decimals)).font(.system(size: Self.axisFont(Self.format(ask, decimals), 13), weight: .heavy).monospacedDigit()).foregroundColor(theme.down),
                                  at: CGPoint(x: askBox.midX, y: askBox.midY), anchor: .center)
                 }
             }
@@ -1203,17 +1203,17 @@ struct CandleChart: View {
             let timeText = candles[index].time.formatted(crosshairFormat)
             // Without a time axis (upper compare chart) the time sits at the bottom of the plot.
             let timeY = showTimeAxis ? layout.timeAxis.minY + 1 : layout.volume.maxY - 17
-            let timeBox = CGRect(x: x - 60, y: timeY, width: 120, height: 16)
-            context.fill(Path(roundedRect: timeBox, cornerRadius: 2), with: .color(theme.crosshairLabel))
-            context.draw(Text(timeText).font(.system(size: 10)).foregroundColor(.white),
+            let timeBox = CGRect(x: x - 70, y: timeY, width: 140, height: 21)
+            context.fill(Path(roundedRect: timeBox, cornerRadius: 3), with: .color(theme.crosshairLabel))
+            context.draw(Text(timeText).font(.system(size: 12.5, weight: .bold).monospacedDigit()).foregroundColor(.white),
                          at: CGPoint(x: timeBox.midX, y: timeBox.midY), anchor: .center)
         }
     }
 
-    /// A price label's font size: `size`, smaller for long figures (8 characters and more) so they stay
+    /// A price label's font size: `size`, smaller for long figures (9 characters and more) so they stay
     /// inside the axis.
     static func axisFont(_ text: String, _ size: CGFloat) -> CGFloat {
-        text.count <= 7 ? size : max(size * 7.6 / CGFloat(text.count), 10)
+        text.count <= 8 ? size : max(size * 8.4 / CGFloat(text.count), 10.5)
     }
 
     private struct AxisLabel {
