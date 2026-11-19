@@ -774,7 +774,8 @@ struct CandleChart: View {
         guard !candles.isEmpty else { return }
         let s = scale(layout: layout)
         let range = vp.range(total: candles.count)
-        let ticks = priceTicks(low: s.low, high: s.high, count: 6)
+        // A price on the axis about every 34 pt of chart height (more levels than the 6 before).
+        let ticks = priceTicks(low: s.low, high: s.high, count: max(6, Int(layout.plot.height / 34)))
         let decimals = priceDecimals ?? Self.decimals(for: s.high)
 
         // Grid and price axis.
@@ -791,7 +792,9 @@ struct CandleChart: View {
                             .foregroundColor(theme.isLight ? .black : theme.primaryText),
                          at: CGPoint(x: layout.axisX + 5, y: y), anchor: .leading)
         }
-        let timeStep = max(1, Int(Double(range.count) / 4))
+        // A time under the chart about every 58 pt of width (was 4 across the whole chart).
+        let timeLabels = max(4, Int(layout.axisX / 58))
+        let timeStep = max(1, Int(Double(range.count) / Double(timeLabels)))
         var timeFormat = Self.timeFormat(for: candles)
         timeFormat.timeZone = timeZone
         for i in range where (i - range.lowerBound) % timeStep == timeStep / 2 {
