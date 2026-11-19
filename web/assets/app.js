@@ -1126,8 +1126,10 @@
     if (bars.length < 2 * k + 3) return [];
     const { highs, lows } = swingPoints(bars.slice(0, -1), k), last = bars[bars.length - 1];
     const rev = reversalCandle(bars[bars.length - 2], last);
-    if (rev === "long" && lows.some((x) => Math.abs(last[2] - x) <= z)) return ["long"];
-    if (rev === "short" && highs.some((x) => Math.abs(last[1] - x) <= z)) return ["short"];
+    // Any recent swing is a level; the reversal says whether price holds over it (buy) or under it (sell).
+    const levels = highs.slice(-5).concat(lows.slice(-5));
+    if (rev === "long" && levels.some((x) => Math.abs(last[2] - x) <= z && last[3] > x)) return ["long"];
+    if (rev === "short" && levels.some((x) => Math.abs(last[1] - x) <= z && last[3] < x)) return ["short"];
     const eng = engulfing(bars[bars.length - 2], last);
     if (eng === "short" && lows.slice(-5).some((x) => last[0] >= x && x > last[3])) return ["short"];
     if (eng === "long" && highs.slice(-5).some((x) => last[0] <= x && x < last[3])) return ["long"];
@@ -1203,11 +1205,11 @@
   function levelBlock(c, lv, bid) {
     if (!lv) return null;
     const room = c.levelRoom ?? 1.5, eng = engulfing(lv.prev, lv.last), last = lv.last;
-    const nearest = (xs) => xs.reduce((a, x) => (a == null || Math.abs(bid - x) < Math.abs(bid - a) ? x : a), null);
-    const sups = lv.lows.filter((x) => Math.abs(bid - x) <= room);
-    if (sups.length) { const sp = nearest(sups); if (!(eng === "short" && last[3] < sp)) return ["short", sp]; }
-    const ress = lv.highs.filter((x) => Math.abs(bid - x) <= room);
-    if (ress.length) { const r = nearest(ress); if (!(eng === "long" && last[3] > r)) return ["long", r]; }
+    // A level's role is where price is: under it a resistance (a broken support too), over it a support.
+    const levels = lv.highs.concat(lv.lows);
+    const sups = levels.filter((x) => bid - x >= 0 && bid - x <= room), ress = levels.filter((x) => x - bid > 0 && x - bid <= room);
+    if (sups.length) { const sp = Math.max(...sups); if (!(eng === "short" && last[3] < sp)) return ["short", sp]; }
+    if (ress.length) { const r = Math.min(...ress); if (!(eng === "long" && last[3] > r)) return ["long", r]; }
     return null;
   }
 
@@ -3639,8 +3641,8 @@
         positions: (a.st.positions || []).map((p) => ({ side: p.side, entry: p.entryPrice, profit: +p.profit || 0 })), history: (a.hist || []).map(norm) };
     },
 
-    /** Drawing on the bot's chart: the symbol's drawings (the same list as the main chart's when it shows the same
-     *  symbol), a small toolbar over the chart, tap / drag as on the main chart. */
+    /** Drawing on the bot's chart: its own drawings for each symbol (not the main chart's), a small toolbar over the
+     *  chart, tap / drag as on the main chart. */
     setupBotDrawings() {
       const term = this, wrap = $("botChart");
       if (!window.AurumDrawings || !wrap || this.botDraw) return;
@@ -3648,17 +3650,11 @@
         chart: this.botChart, series: this.botSeries, store,
         bars: () => this.botBars || [], sec: () => TF_SECONDS[this.botTf] || 60, digits: () => this.digitsFor(this.botSym),
         symbol: () => this.botSym || "XAUUSD", magnet: () => false, interval: () => this.botTf || "1m",
-        onChange: () => { this.renderBotDrawBar(); const main = this.drawingsMain; if (main && this.botSym === this.symbolKey()) main.update(); },
+        onChange: () => this.renderBotDrawBar(),
         onEdit: () => {},
-        onSave: () => { if (this.drawingsMain && this.botSym === this.symbolKey()) this.pushDrawings(this.drawingsMain); },
       }));
-      // The same symbol as the main chart: one list for both (as the extra timeframe charts).
-      let own = [];
-      Object.defineProperty(dr, "list", {
-        get: () => (this.drawingsMain && this.botSym === this.symbolKey() ? this.drawingsMain.list : own),
-        set: (list) => { if (this.drawingsMain && this.botSym === this.symbolKey()) this.drawingsMain.list = list; else own = list; },
-        configurable: true,
-      });
+      // The bot chart's own drawings, kept apart from the main chart's.
+      dr.key = () => "aurum.botdraw." + (this.botSym || "XAUUSD");
       const rel = (e) => { const r = wrap.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
       const lock = (on) => this.botChart.applyOptions({ handleScroll: !on, handleScale: !on });
       let gesture = false;
@@ -3699,11 +3695,51 @@
       bar.innerHTML = tools.map(([k, icon, name]) => `<button type="button" data-t="${k}" title="${name}" class="${dr.tool === k ? "on" : ""}">${icon}</button>`).join("")
         + `<button type="button" data-a="del" title="Xoá bản vẽ đang chọn" ${dr.current ? "" : "disabled"}>🗑</button>`
         + `<button type="button" data-a="hide" title="${dr.hidden ? "Hiện" : "Ẩn"} bản vẽ" class="${dr.hidden ? "on" : ""}">${dr.hidden ? "🙈" : "👁"}</button>`
-        + `<button type="button" data-a="trend" title="Tự kẻ đường trend qua 3 đỉnh / 3 đáy" class="wide ${auto ? "on" : ""}">⟋ Trend 3 đỉnh/đáy</button>`;
+        + `<button type="button" data-a="levels" title="Hỗ trợ / kháng cự bot đang dùng" class="wide ${store.get("aurum.botLevels") !== "0" ? "on" : ""}">▤ Cản / hỗ trợ</button>`
+        + `<button type="button" data-a="trend" title="Tự kẻ đường trend qua 3 đỉnh / 3 đáy" class="${auto ? "on" : ""}">⟋ Trend 3 đỉnh/đáy</button>`;
       bar.querySelectorAll("[data-t]").forEach((b) => (b.onclick = () => { dr.setTool(dr.tool === b.dataset.t ? null : b.dataset.t); this.renderBotDrawBar(); }));
       bar.querySelector('[data-a="del"]').onclick = () => { if (dr.current) dr.remove(dr.current.id); this.renderBotDrawBar(); };
       bar.querySelector('[data-a="hide"]').onclick = () => { dr.hidden = !dr.hidden; dr.update(); this.renderBotDrawBar(); };
+      bar.querySelector('[data-a="levels"]').onclick = () => { store.set("aurum.botLevels", store.get("aurum.botLevels") === "0" ? "1" : "0"); this.renderBotDrawBar(); if (this.botBars) this.renderBotLevels(this.botBars, { symbol: this.botSym }); };
       bar.querySelector('[data-a="trend"]').onclick = () => { store.set("aurum.botTrend", auto ? "0" : "1"); this.renderBotDrawBar(); if (this.botBars) this.renderBotTrend(this.botBars, { symbol: this.botSym }); };
+    },
+
+    /** The supports and resistances the bot reads (the recent swing highs / lows, as its "đợi xác nhận" filter):
+     *  each drawn from the bar that made it to now, green under price (a support), red over it (a resistance),
+     *  dashed once price has closed through it (its role turned), the band of levelRoom around the nearest two. */
+    renderBotLevels(bars, v) {
+      (this.botLevelSeries || []).forEach((sr) => { try { this.botChart.removeSeries(sr); } catch { /* gone */ } });
+      this.botLevelSeries = [];
+      if (store.get("aurum.botLevels") === "0" || bars.length < 12) return;
+      const c = Object.assign({ swingK: 3, levelRoom: 1.5 }, (this.gridStatus && this.gridStatus.config) || {});
+      const k = c.swingK || 3, n = bars.length, last = bars[n - 1].close, d = this.digitsFor(v.symbol);
+      const levels = [];
+      for (let i = k; i < n - 1 - k; i++) {
+        const w = bars.slice(i - k, i + k + 1), before = bars.slice(i - k, i);
+        if (bars[i].high > Math.max(...before.map((b) => b.high)) && bars[i].high >= Math.max(...w.map((b) => b.high))) levels.push({ i, p: bars[i].high, kind: "high" });
+        if (bars[i].low < Math.min(...before.map((b) => b.low)) && bars[i].low <= Math.min(...w.map((b) => b.low))) levels.push({ i, p: bars[i].low, kind: "low" });
+      }
+      // The bot looks at the last five highs and five lows; of those, the nearest three over and three under price.
+      const recent = levels.filter((l) => l.kind === "high").slice(-5).concat(levels.filter((l) => l.kind === "low").slice(-5));
+      const over = recent.filter((l) => l.p > last).sort((a, b) => a.p - b.p).slice(0, 3), under = recent.filter((l) => l.p <= last).sort((a, b) => b.p - a.p).slice(0, 3);
+      [...over, ...under].forEach((l) => {
+        const res = l.p > last, broken = bars.slice(l.i + 1).some((b) => (l.kind === "low" ? b.close < l.p : b.close > l.p));
+        const color = res ? "#f0455a" : "#14b88a";
+        const sr = this.botChart.addLineSeries({ color, lineWidth: 2, lineStyle: broken ? 2 : 0, lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false,
+          title: `${res ? "Cản" : "Hỗ trợ"}${broken ? " · đã phá, đổi vai" : ""}` });
+        sr.setData([{ time: bars[l.i].time + TZ, value: l.p }, { time: bars[n - 1].time + TZ, value: l.p }]);
+        this.botLevelSeries.push(sr);
+      });
+      // The band the bot keeps out of around the nearest support and resistance.
+      [over[0], under[0]].filter(Boolean).forEach((l) => {
+        [l.p + c.levelRoom, l.p - c.levelRoom].forEach((p) => {
+          const band = this.botChart.addLineSeries({ color: (l.p > last ? "#f0455a" : "#14b88a") + "55", lineWidth: 1, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+          band.setData([{ time: bars[Math.max(l.i, n - 40)].time + TZ, value: p }, { time: bars[n - 1].time + TZ, value: p }]);
+          this.botLevelSeries.push(band);
+        });
+      });
+      const info = $("blLevels");
+      if (info) info.innerHTML = `<span>🟥 Cản gần nhất: ${over[0] ? `<b>${fmt(over[0].p, d)}</b>` : "–"}</span><span>🟩 Hỗ trợ gần nhất: ${under[0] ? `<b>${fmt(under[0].p, d)}</b>` : "–"}</span><span class="muted">vùng mờ = ±${c.levelRoom} bot đợi nến phá / phản ứng, nét đứt = mức đã bị phá (đổi vai)</span>`;
     },
 
     /** Trend lines through 3 swing highs (above) and 3 swing lows (below) of the bot's chart, drawn to the last
@@ -3853,6 +3889,7 @@
         if (this.botDraw && this.botDrawKey !== v.symbol) { this.botDrawKey = v.symbol; this.botDraw.load(); }
         if (this.botDraw) this.botDraw.update();
         this.renderBotTrend(bars, v);
+        this.renderBotLevels(bars, v);
         if (this.botKey !== key) { this.botKey = key; this.botChart.timeScale().scrollToRealTime(); }
         const sec = TF_SECONDS[v.interval] || 60, first = bars[0].time;
         const at = (t) => Math.floor(t / sec) * sec + TZ;

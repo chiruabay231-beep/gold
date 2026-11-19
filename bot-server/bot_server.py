@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "6.8"
+VERSION = "6.9"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3526,12 +3526,15 @@ def swing_vote(c, bars):
         return set(), None
     highs, lows = swing_points(bars[:-1], k)
     rev, last = reversal_candle(bars[-2], bars[-1]), bars[-1]
+    # Any recent swing is a level: a low still under price is a support, one price broke and came back up to is now a
+    # resistance (and the other way for highs) — the reversal decides which.
+    levels = highs[-5:] + lows[-5:]
     if rev == "long":
-        near = [x for x in lows if abs(last[2] - x) <= z]
+        near = [x for x in levels if abs(last[2] - x) <= z and last[3] > x]
         if near:
             return {"long"}, near[-1]
     if rev == "short":
-        near = [x for x in highs if abs(last[1] - x) <= z]
+        near = [x for x in levels if abs(last[1] - x) <= z and last[3] < x]
         if near:
             return {"short"}, near[-1]
     # A break: an engulfing bar closing through a recent swing (down through a low: sell, up through a high: buy).
@@ -3571,20 +3574,23 @@ def swing_levels(c, bars):
 
 
 def level_block(c, lv, bid):
-    """"Đợi xác nhận ở cản": the side not to open now and the level why — no sell within levelRoom of a recent
-    swing low unless the last closed bar engulfed down and closed under it; no buy near a swing high unless it
-    engulfed up and closed over it. (side, level) or None."""
+    """"Đợi xác nhận ở cản": the side not to open now and the level why — no sell within levelRoom over a recent
+    swing (a support) unless the last closed bar broke down and closed under it; no buy within levelRoom under one
+    (a resistance, a broken support included) unless it broke up and closed over it. (side, level) or None."""
     if not lv:
         return None
     room, eng, last = float(c.get("levelRoom", 1.5)), engulfing(lv["prev"], lv["last"]), lv["last"]
-    sups = [x for x in lv["lows"] if abs(bid - x) <= room]
+    # A level's role is where price is: under it, a resistance (a broken support included, retested from below);
+    # over it, a support.
+    levels = lv["highs"] + lv["lows"]
+    sups = [x for x in levels if 0 <= bid - x <= room]
+    ress = [x for x in levels if 0 < x - bid <= room]
     if sups:
-        s = min(sups, key=lambda x: abs(bid - x))
+        s = max(sups)
         if not (eng == "short" and last[3] < s):
             return "short", s
-    ress = [x for x in lv["highs"] if abs(bid - x) <= room]
     if ress:
-        r = min(ress, key=lambda x: abs(bid - x))
+        r = min(ress)
         if not (eng == "long" and last[3] > r):
             return "long", r
     return None
