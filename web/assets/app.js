@@ -1134,6 +1134,54 @@
     return [];
   }
 
+  /** Trend lines through 3 swing highs (falling or rising) and 3 swing lows of bars {time, open, high, low, close}:
+   *  for each side the latest three swings whose middle sits on the line through the outer two (within a quarter of
+   *  the average bar range), with no close beyond the line between them. Each line: its points, its value at a bar
+   *  index, and the last closed bar against it — "breakout" (closed through), "bounce" (touched and closed back),
+   *  "near" (within the tolerance) or "away". */
+  function trendLines3(bars, k = 3) {
+    const n = bars.length;
+    if (n < 2 * k + 8) return [];
+    const avg = bars.slice(-50).reduce((a, b) => a + (b.high - b.low), 0) / Math.min(50, n), tol = Math.max(avg * 0.25, 1e-9);
+    const highs = [], lows = [];
+    for (let i = k; i < n - k; i++) {
+      const w = bars.slice(i - k, i + k + 1);
+      if (bars[i].high >= Math.max(...w.map((b) => b.high)) && bars[i].high > Math.max(...bars.slice(i - k, i).map((b) => b.high))) highs.push(i);
+      if (bars[i].low <= Math.min(...w.map((b) => b.low)) && bars[i].low < Math.min(...bars.slice(i - k, i).map((b) => b.low))) lows.push(i);
+    }
+    const out = [];
+    for (const [kind, idx, val] of [["high", highs, (i) => bars[i].high], ["low", lows, (i) => bars[i].low]]) {
+      const recent = idx.slice(-8);
+      let best = null;
+      for (let c = recent.length - 1; c >= 2 && !best; c--) {
+        for (let b = c - 1; b >= 1 && !best; b--) {
+          for (let a = b - 1; a >= 0 && !best; a--) {
+            const i1 = recent[a], i2 = recent[b], i3 = recent[c], p1 = val(i1), p3 = val(i3), slope = (p3 - p1) / (i3 - i1);
+            const at = (i) => p1 + slope * (i - i1);
+            if (Math.abs(val(i2) - at(i2)) > tol) continue;
+            // Respected between the first and the last point: no close beyond it.
+            let ok = true;
+            for (let i = i1; i <= i3 && ok; i++) if (kind === "high" ? bars[i].close > at(i) + tol : bars[i].close < at(i) - tol) ok = false;
+            if (!ok) continue;
+            best = { kind, i1, i3, p1, p3, points: [i1, i2, i3], at };
+          }
+        }
+      }
+      if (!best) continue;
+      // What price did after the third point: the first close through the line (a breakout), else the last touch
+      // that closed back (a bounce); then where the last bar is.
+      best.state = null; best.eventAt = null; best.touches = 0;
+      for (let i = best.i3 + 1; i < n; i++) {
+        const lv = best.at(i), b = bars[i];
+        if (kind === "high" ? b.close > lv + tol : b.close < lv - tol) { best.state = "breakout"; best.eventAt = i; break; }
+        if (kind === "high" ? b.high >= lv - tol && b.close < lv : b.low <= lv + tol && b.close > lv) { best.state = "bounce"; best.eventAt = i; best.touches++; }
+      }
+      if (!best.state) best.state = Math.abs(bars[n - 1].close - best.at(n - 1)) <= tol ? "near" : "away";
+      out.push(best);
+    }
+    return out;
+  }
+
   /** A breaking bar (as the server's engulfing): a down / up bar whose body covers the bar before's body or makes
    *  at least 60 % of its range. */
   function engulfing(prev, last) {
@@ -3591,6 +3639,104 @@
         positions: (a.st.positions || []).map((p) => ({ side: p.side, entry: p.entryPrice, profit: +p.profit || 0 })), history: (a.hist || []).map(norm) };
     },
 
+    /** Drawing on the bot's chart: the symbol's drawings (the same list as the main chart's when it shows the same
+     *  symbol), a small toolbar over the chart, tap / drag as on the main chart. */
+    setupBotDrawings() {
+      const term = this, wrap = $("botChart");
+      if (!window.AurumDrawings || !wrap || this.botDraw) return;
+      const dr = (this.botDraw = new window.AurumDrawings({
+        chart: this.botChart, series: this.botSeries, store,
+        bars: () => this.botBars || [], sec: () => TF_SECONDS[this.botTf] || 60, digits: () => this.digitsFor(this.botSym),
+        symbol: () => this.botSym || "XAUUSD", magnet: () => false, interval: () => this.botTf || "1m",
+        onChange: () => { this.renderBotDrawBar(); const main = this.drawingsMain; if (main && this.botSym === this.symbolKey()) main.update(); },
+        onEdit: () => {},
+        onSave: () => { if (this.drawingsMain && this.botSym === this.symbolKey()) this.pushDrawings(this.drawingsMain); },
+      }));
+      // The same symbol as the main chart: one list for both (as the extra timeframe charts).
+      let own = [];
+      Object.defineProperty(dr, "list", {
+        get: () => (this.drawingsMain && this.botSym === this.symbolKey() ? this.drawingsMain.list : own),
+        set: (list) => { if (this.drawingsMain && this.botSym === this.symbolKey()) this.drawingsMain.list = list; else own = list; },
+        configurable: true,
+      });
+      const rel = (e) => { const r = wrap.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+      const lock = (on) => this.botChart.applyOptions({ handleScroll: !on, handleScale: !on });
+      let gesture = false;
+      wrap.addEventListener("pointerdown", (e) => {
+        if (e.button > 0 || e.target.closest(".bl-draw")) return;
+        const { x, y } = rel(e);
+        if (x > this.botChart.timeScale().width()) return;
+        if (dr.down(x, y, e) === true) { gesture = true; lock(true); e.stopPropagation(); }
+      }, true);
+      ["mousedown", "touchstart"].forEach((t) => wrap.addEventListener(t, (e) => { if (gesture) e.stopPropagation(); }, { capture: true, passive: true }));
+      wrap.addEventListener("touchmove", (e) => { if (gesture) e.preventDefault(); }, { passive: false });
+      wrap.addEventListener("pointermove", (e) => {
+        if (gesture) return;
+        const { x, y } = rel(e);
+        if (dr.pending) { dr.move(x, y, e); return; }
+        if (e.pointerType === "mouse") wrap.style.cursor = dr.tool ? "crosshair" : x <= this.botChart.timeScale().width() && dr.hitTest(x, y, 8) ? "move" : "";
+      });
+      window.addEventListener("pointermove", (e) => { if (gesture) { const { x, y } = rel(e); dr.move(x, y, e); } });
+      const up = () => { if (!gesture) return; gesture = false; lock(false); dr.up(); };
+      window.addEventListener("pointerup", up);
+      window.addEventListener("pointercancel", up);
+      wrap.addEventListener("contextmenu", (e) => { e.preventDefault(); if (dr.pending) dr.cancel(); else if (dr.tool) dr.setTool(null); });
+      document.addEventListener("keydown", (e) => {
+        if (this.tab !== "autobot" || /INPUT|TEXTAREA|SELECT/.test((document.activeElement || {}).tagName || "")) return;
+        if ((e.key === "Delete" || e.key === "Backspace") && dr.current) { dr.remove(dr.current.id); e.preventDefault(); }
+        if (e.key === "Escape") { if (dr.pending) dr.cancel(); dr.setTool(null); }
+      });
+      this.renderBotDrawBar();
+    },
+
+    /** The bot chart's drawing tools: line, ray, horizontal, rectangle, Fib, text; delete the picked one; hide all;
+     *  the auto trend lines through 3 highs / 3 lows. */
+    renderBotDrawBar() {
+      const bar = $("blDraw"), dr = this.botDraw;
+      if (!bar || !dr) return;
+      const tools = [["trendLine", "╱", "Đường xu hướng"], ["trendRay", "↗", "Tia xu hướng"], ["horizontalLine", "─", "Đường ngang"], ["rectangle", "▭", "Hình chữ nhật (vùng)"], ["fibRetracement", "Fib", "Fib thoái lui"], ["text", "T", "Văn bản"]];
+      const auto = store.get("aurum.botTrend") !== "0";
+      bar.innerHTML = tools.map(([k, icon, name]) => `<button type="button" data-t="${k}" title="${name}" class="${dr.tool === k ? "on" : ""}">${icon}</button>`).join("")
+        + `<button type="button" data-a="del" title="Xoá bản vẽ đang chọn" ${dr.current ? "" : "disabled"}>🗑</button>`
+        + `<button type="button" data-a="hide" title="${dr.hidden ? "Hiện" : "Ẩn"} bản vẽ" class="${dr.hidden ? "on" : ""}">${dr.hidden ? "🙈" : "👁"}</button>`
+        + `<button type="button" data-a="trend" title="Tự kẻ đường trend qua 3 đỉnh / 3 đáy" class="wide ${auto ? "on" : ""}">⟋ Trend 3 đỉnh/đáy</button>`;
+      bar.querySelectorAll("[data-t]").forEach((b) => (b.onclick = () => { dr.setTool(dr.tool === b.dataset.t ? null : b.dataset.t); this.renderBotDrawBar(); }));
+      bar.querySelector('[data-a="del"]').onclick = () => { if (dr.current) dr.remove(dr.current.id); this.renderBotDrawBar(); };
+      bar.querySelector('[data-a="hide"]').onclick = () => { dr.hidden = !dr.hidden; dr.update(); this.renderBotDrawBar(); };
+      bar.querySelector('[data-a="trend"]').onclick = () => { store.set("aurum.botTrend", auto ? "0" : "1"); this.renderBotDrawBar(); if (this.botBars) this.renderBotTrend(this.botBars, { symbol: this.botSym }); };
+    },
+
+    /** Trend lines through 3 swing highs (above) and 3 swing lows (below) of the bot's chart, drawn to the last
+     *  bar, and what price did at each: broke out or touched it and turned back. */
+    renderBotTrend(bars, v) {
+      (this.botTrendSeries || []).forEach((sr) => { try { this.botChart.removeSeries(sr); } catch { /* gone */ } });
+      this.botTrendSeries = [];
+      const info = $("blTrend");
+      const lines = store.get("aurum.botTrend") !== "0" ? trendLines3(bars) : [];
+      const d = this.digitsFor(v.symbol), notes = [];
+      lines.forEach((ln) => {
+        const sr = this.botChart.addLineSeries({ color: ln.kind === "high" ? "#f0455a" : "#14b88a", lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+        // The line through its three points on to the last bar; a dot on each of the three.
+        const idx = [...new Set([...ln.points, bars.length - 1])].sort((x, y) => x - y);
+        sr.setData(idx.map((i) => ({ time: bars[i].time + TZ, value: ln.at(i) })));
+        sr.setMarkers(ln.points.map((i, q) => ({ time: bars[i].time + TZ, position: "inBar", color: ln.kind === "high" ? "#f0455a" : "#14b88a", shape: "circle", text: String(q + 1) })));
+        this.botTrendSeries.push(sr);
+        const when = ln.eventAt != null ? ` lúc ${clock(bars[ln.eventAt].time)}` : "";
+        const what = ln.state === "breakout" ? `<b class="${ln.kind === "high" ? "pos" : "neg"}">giá đã đóng nến phá ${ln.kind === "high" ? "lên" : "xuống"}${when}</b>`
+          : ln.state === "bounce" ? `<b class="${ln.kind === "high" ? "neg" : "pos"}">chạm trend rồi bật ${ln.kind === "high" ? "xuống" : "lên"}${when}${ln.touches > 1 ? ` (${ln.touches} lần)` : ""}</b>`
+          : ln.state === "near" ? "giá đang sát trend" : "giá chưa chạm lại trend";
+        if (ln.eventAt != null && ln.eventAt > ln.i3) {
+          // The breakout / bounce bar marked on the line.
+          const mk = ln.points.map((i, q) => ({ time: bars[i].time + TZ, position: "inBar", color: ln.kind === "high" ? "#f0455a" : "#14b88a", shape: "circle", text: String(q + 1) }));
+          mk.push({ time: bars[ln.eventAt].time + TZ, position: ln.kind === "high" ? (ln.state === "breakout" ? "belowBar" : "aboveBar") : (ln.state === "breakout" ? "aboveBar" : "belowBar"),
+            color: "#f2c14e", shape: ln.state === "breakout" ? (ln.kind === "high" ? "arrowUp" : "arrowDown") : (ln.kind === "high" ? "arrowDown" : "arrowUp"), text: ln.state === "breakout" ? "phá" : "bật" });
+          sr.setMarkers(mk.sort((a, b) => a.time - b.time));
+        }
+        notes.push(`${ln.kind === "high" ? "Trend 3 đỉnh" : "Trend 3 đáy"} (đang ở ${fmt(ln.at(bars.length - 1), d)}): ${what}`);
+      });
+      if (info) { info.hidden = !notes.length; info.innerHTML = notes.map((x) => `<span>⟋ ${x}</span>`).join(""); }
+    },
+
     /** Why a closed trade closed, as a tag coloured by its result. */
     closeTag(reason, profit) {
       if (!reason) return "";
@@ -3695,6 +3841,7 @@
         });
         this.botSeries = this.botChart.addCandlestickSeries({ upColor: "#14b88a", downColor: "#f0455a", wickUpColor: "#14b88a", wickDownColor: "#f0455a", borderVisible: false });
         this.botLines = [];
+        this.setupBotDrawings();
       }
       const key = v.symbol + "|" + v.interval;
       try {
@@ -3702,6 +3849,10 @@
         const bars = this.toBars(data.candles || []);
         if (!bars.length) return;
         this.botSeries.setData(bars.map((b) => ({ time: b.time + TZ, open: b.open, high: b.high, low: b.low, close: b.close })));
+        this.botBars = bars; this.botSym = v.symbol; this.botTf = v.interval;
+        if (this.botDraw && this.botDrawKey !== v.symbol) { this.botDrawKey = v.symbol; this.botDraw.load(); }
+        if (this.botDraw) this.botDraw.update();
+        this.renderBotTrend(bars, v);
         if (this.botKey !== key) { this.botKey = key; this.botChart.timeScale().scrollToRealTime(); }
         const sec = TF_SECONDS[v.interval] || 60, first = bars[0].time;
         const at = (t) => Math.floor(t / sec) * sec + TZ;
