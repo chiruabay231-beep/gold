@@ -917,7 +917,12 @@
         const path = () => { g.beginPath(); g.moveTo(px(pp[0][0]), px(pp[0][1])); pp.slice(1).forEach((p) => g.lineTo(px(p[0]), px(p[1]))); };
         if (!gap) { path(); g.stroke(); return; }
         g.save();
-        g.beginPath(); g.rect(-1e5, -1e5, 2e5, 2e5); g.rect(gap.x - 5, gap.y - 2, gap.w + 10, gap.h + 4); g.clip("evenodd");
+        g.beginPath(); g.rect(-1e5, -1e5, 2e5, 2e5);
+        if (gap.poly) {
+          // Text slanted along the line: its turned box cut out of the line.
+          g.moveTo(gap.poly[0][0], gap.poly[0][1]); gap.poly.slice(1).forEach((q) => g.lineTo(q[0], q[1])); g.closePath();
+        } else g.rect(gap.x - 5, gap.y - 2, gap.w + 10, gap.h + 4);
+        g.clip("evenodd");
         path(); g.stroke();
         g.restore();
       };
@@ -950,6 +955,28 @@
       };
       // The text's box before the line is drawn, so the line leaves room for it.
       const gapFor = (l, t, r, b) => { gap = caption(l, t, r, b, true); };
+      // A sloping line's text: slanted along it (read left to right whatever way the line was drawn), at its left
+      // end, middle or right end and over, on or under it as the "Văn bản" options say.
+      const slanted = (a, b, dry = false) => {
+        if (!d.text) return null;
+        const [L, R] = a[0] <= b[0] ? [a, b] : [b, a], len = Math.hypot(R[0] - L[0], R[1] - L[1]);
+        if (len < 2) return null;
+        const ang = Math.atan2(R[1] - L[1], R[0] - L[0]), cos = Math.cos(ang), sin = Math.sin(ang);
+        const along = d.textH === "left" ? 4 : d.textH === "right" ? len - 4 : len / 2;
+        const ox = L[0] + cos * along, oy = L[1] + sin * along;
+        const align = d.textH === "left" ? "left" : d.textH === "right" ? "right" : "center";
+        const base = d.textV === "bottom" ? "top" : d.textV === "middle" ? "middle" : "bottom", y0 = d.textV === "bottom" ? 4 : d.textV === "middle" ? 0 : -4;
+        if (dry) {
+          const bx = this.textBlock(g, d, d.text, 0, y0, align, base, len, true);
+          if (!bx) return null;
+          const turn = (x, y) => [ox + x * cos - y * sin, oy + x * sin + y * cos];
+          return { poly: [turn(bx.x - 5, bx.y - 2), turn(bx.x + bx.w + 5, bx.y - 2), turn(bx.x + bx.w + 5, bx.y + bx.h + 2), turn(bx.x - 5, bx.y + bx.h + 2)] };
+        }
+        g.save(); g.translate(ox, oy); g.rotate(ang);
+        const box = this.textBlock(g, d, d.text, 0, y0, align, base, len);
+        g.restore();
+        return box;
+      };
       const [p0, p1] = pts;
       switch (d.tool) {
         case "trendLine": case "arrow": case "arrowMarker": {
@@ -959,20 +986,20 @@
             if (d.extend === "left" || d.extend === "both") a = [a[0] - dx * k, a[1] - dy * k];
             if (d.extend === "right" || d.extend === "both") b = [b[0] + dx * k, b[1] + dy * k];
           }
-          gapFor(Math.min(p0[0], p1[0]), Math.min(p0[1], p1[1]), Math.max(p0[0], p1[0]), Math.max(p0[1], p1[1]));
+          gap = slanted(p0, p1, true);
           lineTo([a, b]);
           gap = null;
           if (d.tool !== "trendLine") arrowHead(p0, p1, d.tool === "arrowMarker" ? 14 : 10);
           if (d.mid) { g.strokeStyle = d.midColor; g.setLineDash(DASH[d.midStyle]); const mx = (p0[0] + p1[0]) / 2, my = (p0[1] + p1[1]) / 2; lineTo([[mx - 6, my], [mx + 6, my]]); }
-          caption(Math.min(p0[0], p1[0]), Math.min(p0[1], p1[1]), Math.max(p0[0], p1[0]), Math.max(p0[1], p1[1]));
+          slanted(p0, p1);
           break;
         }
         case "trendRay": {
           const dx = p1[0] - p0[0], dy = p1[1] - p0[1], k = dx || dy ? 4000 / Math.hypot(dx, dy) : 0;
-          gapFor(Math.min(p0[0], p1[0]), Math.min(p0[1], p1[1]), Math.max(p0[0], p1[0]), Math.max(p0[1], p1[1]));
+          gap = slanted(p0, p1, true);
           lineTo([p0, [p0[0] + dx * k, p0[1] + dy * k]]);
           gap = null;
-          caption(Math.min(p0[0], p1[0]), Math.min(p0[1], p1[1]), Math.max(p0[0], p1[0]), Math.max(p0[1], p1[1]));
+          slanted(p0, p1);
           break;
         }
         case "horizontalLine": gapFor(0, p0[1], w, p0[1]); lineTo([[0, p0[1]], [w, p0[1]]]); gap = null; tag(d.pts[0].p.toFixed(dg), w - 4, p0[1] - 1, color, "#fff", "right"); caption(0, p0[1], w, p0[1]); break;
