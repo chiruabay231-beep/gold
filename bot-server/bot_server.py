@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "6.7"
+VERSION = "6.8"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3410,6 +3410,9 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    # Signal entry: after a sigTf candle closes, no new basket (nor a turn) for `waitSec` seconds; then
                    # only if price still holds over that candle's close (a buy) or under it (a sell). 0 = off.
                    "waitSec": 15.0,
+                   # Signal entry: no sell within levelRoom of a recent M1 swing low (no buy near a swing high) unless an
+                   # engulfing candle just closed through it — wait for the break, or the bounce the other way.
+                   "levelGuard": True, "levelRoom": 1.5,
                    # Fast-market guard: no new positions inside the New York window (NY time, weekdays) nor within
                    # newsBefore / newsAfter minutes of a high-impact USD event; guardAction "close" also closes
                    # everything the bot holds when such a time starts.
@@ -3500,15 +3503,18 @@ def swing_points(bars, k):
 
 def reversal_candle(prev, last):
     """"long" / "short" when the last closed bar is a reversal: a pin bar (its wick on one side at least half the
-    bar and twice its body, closing in the other half) or an engulfing of the bar before."""
+    bar and twice its body, closing in the other half), an engulfing of the bar before, or a rejection bar."""
     o, h, l, c = last
     rng = h - l
     if rng <= 0:
         return None
     body, lower, upper = abs(c - o), min(o, c) - l, h - max(o, c)
     po, _, _, pc = prev
-    bull = (lower >= 2 * body and lower >= 0.5 * rng and c >= l + 0.5 * rng) or (c > o and pc < po and c >= po and o <= pc)
-    bear = (upper >= 2 * body and upper >= 0.5 * rng and c <= h - 0.5 * rng) or (c < o and pc > po and c <= po and o >= pc)
+    bull = ((lower >= 2 * body and lower >= 0.5 * rng and c >= l + 0.5 * rng) or (c > o and pc < po and c >= po and o <= pc)
+            # a rejection: an up bar closing in its top 35 % with a lower wick of at least 30 % of the bar
+            or (c > o and c - l >= 0.65 * rng and lower >= 0.3 * rng))
+    bear = ((upper >= 2 * body and upper >= 0.5 * rng and c <= h - 0.5 * rng) or (c < o and pc > po and c <= po and o >= pc)
+            or (c < o and h - c >= 0.65 * rng and upper >= 0.3 * rng))
     return "long" if bull and not bear else "short" if bear and not bull else None
 
 
@@ -3528,7 +3534,60 @@ def swing_vote(c, bars):
         near = [x for x in highs if abs(last[1] - x) <= z]
         if near:
             return {"short"}, near[-1]
+    # A break: an engulfing bar closing through a recent swing (down through a low: sell, up through a high: buy).
+    eng = engulfing(bars[-2], last)
+    if eng == "short":
+        broke = [x for x in lows[-5:] if last[0] >= x > last[3]]
+        if broke:
+            return {"short"}, broke[-1]
+    if eng == "long":
+        broke = [x for x in highs[-5:] if last[0] <= x < last[3]]
+        if broke:
+            return {"long"}, broke[-1]
     return set(), None
+
+
+def engulfing(prev, last):
+    """A breaking bar: "short" / "long" when the last bar is a down / up bar whose body covers the bar before's body
+    (an engulfing, whatever that bar's colour) or makes at least 60 % of its range (a long body), else None."""
+    o, h, l, c = last
+    po, _, _, pc = prev
+    rng = h - l
+    if rng <= 0 or c == o:
+        return None
+    covers = max(o, c) >= max(po, pc) and min(o, c) <= min(po, pc)
+    if covers or abs(c - o) >= 0.6 * rng:
+        return "long" if c > o else "short"
+    return None
+
+
+def swing_levels(c, bars):
+    """The recent confirmed swing highs / lows (the last five each) and the last two closed bars, for level_block."""
+    k = int(c.get("swingK", 3))
+    if len(bars) < 2 * k + 3:
+        return None
+    highs, lows = swing_points(bars[:-1], k)
+    return {"highs": highs[-5:], "lows": lows[-5:], "prev": bars[-2], "last": bars[-1]}
+
+
+def level_block(c, lv, bid):
+    """"Đợi xác nhận ở cản": the side not to open now and the level why — no sell within levelRoom of a recent
+    swing low unless the last closed bar engulfed down and closed under it; no buy near a swing high unless it
+    engulfed up and closed over it. (side, level) or None."""
+    if not lv:
+        return None
+    room, eng, last = float(c.get("levelRoom", 1.5)), engulfing(lv["prev"], lv["last"]), lv["last"]
+    sups = [x for x in lv["lows"] if abs(bid - x) <= room]
+    if sups:
+        s = min(sups, key=lambda x: abs(bid - x))
+        if not (eng == "short" and last[3] < s):
+            return "short", s
+    ress = [x for x in lv["highs"] if abs(bid - x) <= room]
+    if ress:
+        r = min(ress, key=lambda x: abs(bid - x))
+        if not (eng == "long" and last[3] > r):
+            return "long", r
+    return None
 
 
 def fvg_ob_zones(bars, kinds):
@@ -3685,6 +3744,8 @@ class GridBot(TickBot):
             parts.append(f"tick {c['tickMove']:g}/{c['tickSec']:g}s")
         if float(c.get("waitSec", 0)) > 0:
             parts.append(f"chờ {c['waitSec']:g}s sau khi nến đóng")
+        if c.get("levelGuard"):
+            parts.append(f"đợi xác nhận ở đỉnh/đáy M1 (±{c['levelRoom']:g})")
         if c.get("sigSwing"):
             parts.append(f"nến đảo chiều ở đỉnh/đáy {c['structTf']}")
         if c.get("sigZone", "off") != "off":
@@ -3728,7 +3789,7 @@ class GridBot(TickBot):
                           ("srZone", float), ("sigTick", bool), ("tickSec", float), ("tickMove", float), ("confirmAdd", bool),
                           ("trailOn", bool), ("trailStart", float), ("trailDist", float),
                           ("sigSwing", bool), ("swingK", int), ("swingZone", float), ("sigZone", str), ("structTf", str), ("structBars", int),
-                          ("addMode", str), ("flipClose", bool), ("waitSec", float),
+                          ("addMode", str), ("flipClose", bool), ("waitSec", float), ("levelGuard", bool), ("levelRoom", float),
                           ("nyGuard", bool), ("nyFrom", str), ("nyTo", str), ("newsGuard", bool), ("newsBefore", float),
                           ("newsAfter", float), ("guardAction", str), ("paper", bool), ("noSpread", bool)):
             if key in body:
@@ -3885,22 +3946,27 @@ class GridBot(TickBot):
                 if bars is not None and len(bars):
                     sup, res = float(min(b["low"] for b in bars)), float(max(b["high"] for b in bars))
             extra, struct = {}, {}
-            if c.get("sigSwing") or c.get("sigZone", "off") != "off":
+            if c.get("sigSwing") or c.get("sigZone", "off") != "off" or c.get("levelGuard"):
                 # Swings and FVG / OB of the closed structTf candles, worked out again only on a new candle.
                 rates = mt5.copy_rates_from_pos(symbol, getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[c["structTf"]]), 1, int(c["structBars"]))
                 if rates is not None and len(rates):
-                    key = (symbol, c["structTf"], float(rates[-1]["time"]), c.get("sigSwing"), c.get("sigZone"), c.get("swingK"), c.get("swingZone"))
+                    key = (symbol, c["structTf"], float(rates[-1]["time"]), c.get("sigSwing"), c.get("sigZone"), c.get("swingK"), c.get("swingZone"),
+                           c.get("levelGuard"))
                     if getattr(self, "struct_key", None) != key:
                         bars = [(float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"])) for r in rates]
                         self.struct_key, self.struct = key, {"swing": swing_vote(c, bars) if c.get("sigSwing") else None,
-                                                             "zone": zone_vote(c, bars) if c.get("sigZone", "off") != "off" else None}
+                                                             "zone": zone_vote(c, bars) if c.get("sigZone", "off") != "off" else None,
+                                                             "levels": swing_levels(c, bars) if c.get("levelGuard") else None}
                     struct = self.struct
                 for name in ("swing", "zone"):
                     if struct.get(name) is not None:
                         extra[name] = struct[name][0]
             parts = {}
             signal = grid_signal(c, float(tick.bid), candle, sup, res, move, parts, extra)
-            gate, wait_left = None, 0.0
+            gate, wait_left, level = None, 0.0, None
+            block = level_block(c, struct.get("levels"), float(tick.bid)) if c.get("levelGuard") else None
+            if block and signal == block[0]:
+                gate, level, signal = "level", block[1], None
             if float(c.get("waitSec", 0)) > 0 and bar_t is not None:
                 # Seconds since that candle closed, on the broker's clock (the tick's and the bars' times are both).
                 since = float(tick.time) - (bar_t + SECONDS_OF[c["sigTf"]])
@@ -3908,7 +3974,9 @@ class GridBot(TickBot):
                     gate, wait_left, signal = "waiting", round(float(c["waitSec"]) - since, 1), None
                 elif signal and ((signal == "long" and tick.bid < candle[3]) or (signal == "short" and tick.bid > candle[3])):
                     gate, signal = "notHeld", None
-            self.signal = {"gate": gate, "waitLeft": wait_left, "close": candle[3] if candle else None, "side": signal, "candle": candle_bias(c, *candle, min_body=float(c["sigBody"])) if candle else None,
+            if block:
+                level = block[1]
+            self.signal = {"gate": gate, "level": level, "blocked": block[0] if block else None, "waitLeft": wait_left, "close": candle[3] if candle else None, "side": signal, "candle": candle_bias(c, *candle, min_body=float(c["sigBody"])) if candle else None,
                            "sup": sup, "res": res, "move": None if move is None else round(move, 3), "time": now(), "parts": parts,
                            "swingLevel": (struct.get("swing") or (None, None))[1], "zone": (struct.get("zone") or (None, None))[1]}
         strong = None
@@ -3935,7 +4003,8 @@ class GridBot(TickBot):
                           "signal": signal, "parts": (getattr(self, "signal", None) or {}).get("parts", {}) if c.get("entry") == "signal" else {}}
         elif c.get("entry") == "signal":
             self.state = {"kind": "wait" if not signal else "open", "side": signal, "parts": self.signal.get("parts", {}), "sidePause": rest,
-                          "gate": self.signal.get("gate"), "waitLeft": self.signal.get("waitLeft"), "close": self.signal.get("close")}
+                          "gate": self.signal.get("gate"), "waitLeft": self.signal.get("waitLeft"), "close": self.signal.get("close"),
+                          "level": self.signal.get("level"), "blocked": self.signal.get("blocked")}
         else:
             self.state = {"kind": "open", "sidePause": rest}
         for side in ("long", "short"):
