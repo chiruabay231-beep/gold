@@ -6809,7 +6809,7 @@
         bar.hidden = false;
         // The saved templates one tap away: the next drawing starts with the one picked.
         const tpls = Object.keys(d.templates(d.tool)), next = tpls.length ? d.nextTemplate(d.tool) : null;
-        bar.innerHTML = `<span class="db-grip" title="Kéo để di chuyển · bấm đúp để về giữa">⋮⋮</span><span><b>${esc(D.tools[d.tool].name)}</b> · ${this.hint(d.tool)}</span>`
+        bar.innerHTML = `<span class="db-grip" title="Kéo để di chuyển · bấm đúp để về giữa">⋮⋮</span><span title="${esc(this.hint(d.tool))}"><b>${esc(D.tools[d.tool].name)}</b></span>`
           + (tpls.length ? `<button type="button" data-a="tplNext" class="db-pick" title="Mẫu cho đường vẽ tiếp theo">${BAR_ICON.tpl}<span class="db-px">${esc(next || "Mẫu")}</span>${BAR_ICON.chev}</button>` : "")
           + `<button type="button" data-a="cancel">Huỷ</button>`;
       } else if (d.current) {
