@@ -1303,7 +1303,7 @@
 
   function gridBotOnTicks(ticks, c, value) {
     const trades = [];
-    let guards = 0, flips = 0, trails = 0, placed = 0, book = [], pauseUntil = 0, cycles = 0, stops = 0, sls = 0, maxFloat = 0, maxLevel = 0, maxLots = 0;
+    let locks = 0, guards = 0, flips = 0, trails = 0, placed = 0, book = [], pauseUntil = 0, cycles = 0, stops = 0, sls = 0, maxFloat = 0, maxLevel = 0, maxLots = 0;
     const sidePause = { long: 0, short: 0 };
     // Candle strength: the candles of `biasTf` built from the ticks' bid; `strong` = the last closed one's side.
     const useBias = c.bias && c.bias !== "off", bsec = TF_SECONDS[c.biasTf] || 300;
@@ -1316,7 +1316,25 @@
     const useStruct = sig && (c.sigSwing || (c.sigZone && c.sigZone !== "off") || c.levelGuard), xsec = TF_SECONDS[c.structTf] || 60;
     let xCur = null, xBars = [], extra = {}, xLevels = null, blocks = 0;
     // The basket's stop: `sl` in price past its first (best) entry.
-    const slLevel = (ps, long) => (c.sl > 0 && ps.length ? (long ? Math.max(...ps.map((p) => p.entry)) - c.sl : Math.min(...ps.map((p) => p.entry)) + c.sl) : null);
+    // The basket's stop (as the server's sl_level): sl past its best entry; a locked nhồi dương basket (2 layers or
+    // more) also at the tightest of the layer before, its average entry and the basket trailing stop.
+    const locked = (ps) => c.addMode === "with" && c.pyramidLock !== false && ps.length >= 2;
+    const slLevel = (ps, long, peak) => {
+      if (!ps.length) return null;
+      const e = ps.map((p) => p.entry).sort((a, b) => a - b);
+      let level = c.sl > 0 ? (long ? e[e.length - 1] - c.sl : e[0] + c.sl) : null;
+      if (locked(ps)) {
+        const lots = ps.reduce((a, p) => a + p.lots, 0), avg = ps.reduce((a, p) => a + p.entry * p.lots, 0) / lots;
+        let lock = long ? Math.max(e[e.length - 2], avg) : Math.min(e[1], avg);
+        if (c.trailOn && peak != null && (long ? peak - avg : avg - peak) >= c.trailStart - 1e-9) {
+          const tr = long ? peak - c.trailDist : peak + c.trailDist;
+          lock = long ? Math.max(lock, tr) : Math.min(lock, tr);
+        }
+        level = level == null ? lock : long ? Math.max(level, lock) : Math.min(level, lock);
+      }
+      return level;
+    };
+    const bpeak = { long: null, short: null };
     const pv = (p, bid, ask) => value(p.side, p.entry, p.side === "long" ? bid : ask, p.lots);
     const out = (p, bid, ask, reason, t) => trades.push(Object.assign({}, p, { exit: p.side === "long" ? bid : ask, reason, closeTime: t, profit: pv(p, bid, ask) }));
     for (const [ms, bid0, ask0] of ticks) {
@@ -1359,9 +1377,11 @@
       if (book.length && c.trailOn) {
         // Trailing stop for each position: the best price since it opened; once trailStart in profit, out when price
         // comes back trailDist from it.
+        const lockedSide = { long: locked(book.filter((p) => p.side === "long")), short: locked(book.filter((p) => p.side === "short")) };
         book = book.filter((p) => {
           const long = p.side === "long", px = long ? bid : ask;
           p.peak = p.peak == null ? px : long ? Math.max(p.peak, px) : Math.min(p.peak, px);
+          if (lockedSide[p.side]) return true; // a locked basket trails as one
           if ((long ? p.peak - p.entry : p.entry - p.peak) < c.trailStart - 1e-9) return true;
           const stop = long ? p.peak - c.trailDist : p.peak + c.trailDist;
           if (long ? px <= stop + 1e-9 : px >= stop - 1e-9) { out(p, bid, ask, "trail", t); trails++; return false; }
@@ -1376,12 +1396,19 @@
         }
         let closed = false;
         for (const side of ["long", "short"]) {
+          const ps = book.filter((p) => p.side === side), px = side === "long" ? bid : ask;
+          bpeak[side] = !ps.length ? null : bpeak[side] == null ? px : side === "long" ? Math.max(bpeak[side], px) : Math.min(bpeak[side], px);
+        }
+        for (const side of ["long", "short"]) {
           const ps = book.filter((p) => p.side === side);
           if (!ps.length) continue;
-          const sum = ps.reduce((a, p) => a + pv(p, bid, ask), 0), lv = slLevel(ps, side === "long");
+          const sum = ps.reduce((a, p) => a + pv(p, bid, ask), 0), lv = slLevel(ps, side === "long", bpeak[side]);
           const hit = lv != null && (side === "long" ? bid <= lv + 1e-9 : ask >= lv - 1e-9);
           if (hit || (c.slMoney > 0 && sum <= -c.slMoney + 1e-9)) {
-            ps.forEach((p) => out(p, bid, ask, "sl", t)); book = book.filter((p) => p.side !== side); sls++; sidePause[side] = t + (c.cooldownMin || 0) * 60; closed = true; continue;
+            const lock = hit && locked(ps);
+            ps.forEach((p) => out(p, bid, ask, lock ? "lock" : "sl", t)); book = book.filter((p) => p.side !== side);
+            if (lock) locks++; else { sls++; sidePause[side] = t + (c.cooldownMin || 0) * 60; }
+            closed = true; continue;
           }
           if (c.tpMoney > 0 && sum >= c.tpMoney - 1e-9) {
             ps.forEach((p) => out(p, bid, ask, "basket", t)); book = book.filter((p) => p.side !== side); cycles++; closed = true;
@@ -1426,17 +1453,20 @@
           add = (c.addMode === "with" ? (long ? price - best : best - price) : (long ? worst - price : price - worst)) >= c.gridStep - 1e-9;
           // Signal entry with confirmAdd: a layer only once price turns back the basket's way.
           if (add && sig && c.confirmAdd) add = move != null && (long ? move : -move) >= c.tickMove / 2 - 1e-9;
+          // No layer right under a resistance (over a support) before a bar breaks it.
+          if (add && sig && c.levelGuard) { const b = levelBlock(c, xLevels, bid); if (b && b[0] === side) add = false; }
         }
         if (!add) continue;
         placed++;
-        book.push({ side, entry: price, lots: gridLot(c, ps.length, factor), layer: ps.length + 1, stop: ps.length ? slLevel(ps, long) : (c.sl > 0 ? (long ? price - c.sl : price + c.sl) : null), target: null, openTime: t });
+        const lot = gridLot(c, ps.length, factor);
+        book.push({ side, entry: price, lots: lot, layer: ps.length + 1, stop: ps.length ? slLevel(ps.concat([{ entry: price, lots: lot }]), long, bpeak[side]) : (c.sl > 0 ? (long ? price - c.sl : price + c.sl) : null), target: null, openTime: t });
         maxLevel = Math.max(maxLevel, ps.length + 1);
       }
       const lots = book.reduce((a, p) => a + p.lots, 0);
       if (lots > maxLots) maxLots = lots;
     }
     if (book.length && ticks.length) { const [ms, bid, ask] = ticks[ticks.length - 1]; book.forEach((p) => out(p, bid, c.noSpread ? bid : ask, "end", ms / 1000)); }
-    return { placed, trades, grid: { cycles, stops, sls, trails, flips, guards, blocks, signals, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
+    return { placed, trades, grid: { cycles, stops, sls, trails, flips, guards, blocks, locks, signals, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
   }
 
   /** Bars as a path of prices for the grid bot when no ticks are loaded: open → low → high → close on a
@@ -4135,14 +4165,14 @@
       const c = Object.assign({ symbol: "", direction: "both", lots: 0.01, gridStep: 2, multiplier: 1.5, maxLevels: 6, maxLot: 0.5, tpMoney: 1,
         basketStop: 60, cooldownMin: 60, sl: 0, slMoney: 0, bias: "off", biasTf: "5m", biasMinBody: 50, biasLotMult: 2,
         entry: "signal", sigCandle: true, sigTf: "1m", sigBody: 50, sigSr: "auto", sigNeed: "two", trailOn: false, trailStart: 1, trailDist: 0.5,
-        addMode: "with", flipClose: true, waitSec: 15, levelGuard: true, levelRoom: 1.5,
+        addMode: "with", pyramidLock: true, flipClose: true, waitSec: 15, levelGuard: true, levelRoom: 1.5,
         nyGuard: true, nyFrom: "08:15", nyTo: "10:30", newsGuard: true, newsBefore: 15, newsAfter: 15, guardAction: "pause", sigSwing: false, swingK: 3, swingZone: 0.5, sigZone: "off", structTf: "1m", structBars: 120, srBars: 30, srZone: 1, sigTick: true, tickSec: 10, tickMove: 0.3, confirmAdd: true, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
       const v = (id) => ($(id) ? $(id).value : null);
       if ($("gbSymbol")) {
         Object.assign(c, {
           symbol: v("gbSymbol").trim(), direction: v("gbDirection"), lots: num(v("gbLots")) || 0.01, gridStep: num(v("gbStep")) || 2,
           multiplier: Math.max(1, Math.min(3, num(v("gbMult")) || 1)), maxLevels: Math.max(1, Math.min(30, Math.round(num(v("gbLevels")) || 6))),
-          maxLot: num(v("gbMaxLot")) || 0.5, tpMoney: Math.max(0, num(v("gbTp")) ?? 1), addMode: v("gbAddMode"), flipClose: $("gbFlip").checked, levelGuard: $("gbLevelGuard").checked, levelRoom: Math.max(0.05, num(v("gbLevelRoom")) ?? 1.5),
+          maxLot: num(v("gbMaxLot")) || 0.5, tpMoney: Math.max(0, num(v("gbTp")) ?? 1), addMode: v("gbAddMode"), pyramidLock: $("gbLock").checked, flipClose: $("gbFlip").checked, levelGuard: $("gbLevelGuard").checked, levelRoom: Math.max(0.05, num(v("gbLevelRoom")) ?? 1.5),
           nyGuard: $("gbNyGuard").checked, nyFrom: v("gbNyFrom") || "08:15", nyTo: v("gbNyTo") || "10:30", newsGuard: $("gbNewsGuard").checked,
           newsBefore: Math.max(0, num(v("gbNewsBefore")) ?? 15), newsAfter: Math.max(0, num(v("gbNewsAfter")) ?? 15), guardAction: v("gbGuardAction"), waitSec: Math.max(0, Math.min(59, num(v("gbWait")) ?? 15)), basketStop: num(v("gbStop")) ?? 60, cooldownMin: num(v("gbCool")) ?? 60,
           sl: Math.max(0, num(v("gbSL")) || 0), slMoney: Math.max(0, num(v("gbSLMoney")) || 0),
@@ -4202,6 +4232,7 @@
             <label>Kiểu nhồi<select id="gbAddMode">${opt([["with", "📈 Nhồi dương — giá đi đúng hướng mới nhồi thêm"], ["against", "📉 Nhồi âm — giá chạy ngược thì nhồi (kiểu cũ)"]], c.addMode || "against")}</select></label>
             <label class="grow2">&nbsp;<span class="muted small" id="gbAddHint"></span></label>
           </div>
+          <label class="check"><input type="checkbox" id="gbLock" ${c.pyramidLock !== false ? "checked" : ""}> <b>Khoá lời khi nhồi dương</b>: rổ có từ 2 lớp thì cả rổ đi chung một SL — chặt nhất trong: giá lớp trước, <b>giá vốn trung bình</b> (không lỗ), và trailing của cả rổ. Không còn cảnh chốt lớp dưới rồi bỏ lại lớp trên cùng âm.</label>
           <div class="fields three">
             <label>Khoảng nhồi (giá)<input id="gbStep" inputmode="decimal" value="${c.gridStep}"></label>
             <label>Hệ số gấp lot (1 – 3)<input id="gbMult" inputmode="decimal" value="${c.multiplier}"></label>
@@ -4664,7 +4695,7 @@
       const pts = curve.map((v, i) => `${(i / Math.max(curve.length - 1, 1) * W).toFixed(1)},${(H - 6 - (v - lo) / span * (H - 12)).toFixed(1)}`).join(" ");
       const color = net >= 0 ? "var(--up)" : "var(--down)";
       const grid = R.bot === "grid";
-      const reason = grid ? { basket: "chốt rổ", trail: "trailing", flip: "tín hiệu ngược", guard: "tránh giờ mạnh", sl: "SL rổ", stop: "cắt lỗ chung", end: "đóng cuối test" } : R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", hold: "hết giờ giữ", end: "đóng cuối test", close: "hết nến" }
+      const reason = grid ? { basket: "chốt rổ", lock: "khoá lời nhồi", trail: "trailing", flip: "tín hiệu ngược", guard: "tránh giờ mạnh", sl: "SL rổ", stop: "cắt lỗ chung", end: "đóng cuối test" } : R.bot === "tick" ? { target: "chốt lời", stop: "cắt lỗ chung", sl: "cắt lỗ lệnh", flip: "nến đảo chiều", hold: "hết giờ giữ", end: "đóng cuối test", close: "hết nến" }
         : { target: "chạm TP", stop: "chạm SL", trail: "chạm SL đã dời", end: "đóng cuối test", close: "hết nến" };
       const sr = R.bot === "sr" || R.bot === "tick" || grid, tick = R.bot === "tick";
       const G = R.grid || {}, gc = R.c;

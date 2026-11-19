@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "6.9"
+VERSION = "7.0"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2493,7 +2493,7 @@ def publish_address(server):
 
 # Why a bot closed a position, as a short code in the closing order's comment on MT5 (comments are short, ASCII
 # is safest), read back by magic_history.
-CLOSE_CODES = {"tránh giờ mạnh": "guard", "chốt rổ": "tp", "trailing": "trail", "SL rổ": "sl", "cắt lỗ chung": "stop", "tín hiệu ngược": "flip",
+CLOSE_CODES = {"khoá lời nhồi": "lock", "tránh giờ mạnh": "guard", "chốt rổ": "tp", "trailing": "trail", "SL rổ": "sl", "cắt lỗ chung": "stop", "tín hiệu ngược": "flip",
                "chốt lời": "tp1", "cắt lỗ lệnh": "sl1", "nến đảo chiều": "rev", "hết nến": "bar", "hết giờ giữ": "hold"}
 CLOSE_REASONS = {v: k for k, v in CLOSE_CODES.items()}
 
@@ -3413,6 +3413,8 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    # Signal entry: no sell within levelRoom of a recent M1 swing low (no buy near a swing high) unless an
                    # engulfing candle just closed through it — wait for the break, or the bounce the other way.
                    "levelGuard": True, "levelRoom": 1.5,
+                   # Nhồi dương: each new layer moves the basket's stop to the layer before (khoá lời khi nhồi).
+                   "pyramidLock": True,
                    # Fast-market guard: no new positions inside the New York window (NY time, weekdays) nor within
                    # newsBefore / newsAfter minutes of a high-impact USD event; guardAction "close" also closes
                    # everything the bot holds when such a time starts.
@@ -3726,11 +3728,29 @@ class GridBot(TickBot):
         self.cycles = 0
 
     @staticmethod
-    def sl_level(c, ps, long):
-        """The basket's stop: `sl` in price past its first (best) entry, or None."""
-        if not c.get("sl") or not ps:
+    def sl_level(c, ps, long, peak=None):
+        """The basket's stop: `sl` in price past its best entry; and for a nhồi dương basket of two layers or more
+        (pyramidLock) the tightest of the layer before the last one, its average entry (no loss) and, with the
+        trailing stop on, trailDist behind the best price since it opened once that is trailStart past the average.
+        The tighter of all, or None."""
+        if not ps:
             return None
-        return max(p["entry"] for p in ps) - c["sl"] if long else min(p["entry"] for p in ps) + c["sl"]
+        entries = sorted(p["entry"] for p in ps)
+        level = (entries[-1] - c["sl"] if long else entries[0] + c["sl"]) if c.get("sl") else None
+        if GridBot.locked(c, ps):
+            lots = sum(float(p["lots"]) for p in ps)
+            avg = sum(p["entry"] * float(p["lots"]) for p in ps) / lots
+            lock = max(entries[-2], avg) if long else min(entries[1], avg)
+            if c.get("trailOn") and peak is not None and ((peak - avg) if long else (avg - peak)) >= float(c["trailStart"]) - 1e-9:
+                trail = peak - float(c["trailDist"]) if long else peak + float(c["trailDist"])
+                lock = max(lock, trail) if long else min(lock, trail)
+            level = lock if level is None else (max(level, lock) if long else min(level, lock))
+        return level
+
+    @staticmethod
+    def locked(c, ps):
+        """Nhồi dương with "khoá lời khi nhồi": once a basket has two layers its stop sits at the layer before."""
+        return c.get("addMode") == "with" and c.get("pyramidLock", True) and len(ps) >= 2
 
     def _start_text(self, c):
         return (f"{c['lots']} lot · nhồi {'dương' if c.get('addMode') == 'with' else 'âm'} mỗi {c['gridStep']} giá × {c['multiplier']} · "
@@ -3795,7 +3815,7 @@ class GridBot(TickBot):
                           ("srZone", float), ("sigTick", bool), ("tickSec", float), ("tickMove", float), ("confirmAdd", bool),
                           ("trailOn", bool), ("trailStart", float), ("trailDist", float),
                           ("sigSwing", bool), ("swingK", int), ("swingZone", float), ("sigZone", str), ("structTf", str), ("structBars", int),
-                          ("addMode", str), ("flipClose", bool), ("waitSec", float), ("levelGuard", bool), ("levelRoom", float),
+                          ("addMode", str), ("flipClose", bool), ("waitSec", float), ("levelGuard", bool), ("levelRoom", float), ("pyramidLock", bool),
                           ("nyGuard", bool), ("nyFrom", str), ("nyTo", str), ("newsGuard", bool), ("newsBefore", float),
                           ("newsAfter", float), ("guardAction", str), ("paper", bool), ("noSpread", bool)):
             if key in body:
@@ -3903,16 +3923,29 @@ class GridBot(TickBot):
         pauses = getattr(self, "side_pause", None)
         if pauses is None:
             pauses = self.side_pause = {}
+        # The best price since each basket opened (its trailing stop when it is locked).
+        bpeak = getattr(self, "bpeak", None)
+        if bpeak is None:
+            bpeak = self.bpeak = {}
         for side in ("long", "short"):
             ps = [p for p in book if p["side"] == side]
-            level = self.sl_level(c, ps, side == "long")
+            px = tick.bid if side == "long" else tick.ask
+            bpeak[side] = None if not ps else px if bpeak.get(side) is None else (max(bpeak[side], px) if side == "long" else min(bpeak[side], px))
+        for side in ("long", "short"):
+            ps = [p for p in book if p["side"] == side]
+            level = self.sl_level(c, ps, side == "long", bpeak.get(side))
             hit = level is not None and (tick.bid <= level + 1e-9 if side == "long" else tick.ask >= level - 1e-9)
             if ps and (hit or (c.get("slMoney", 0) > 0 and pnl(ps) <= -c["slMoney"] + 1e-9)):
                 loss = pnl(ps)
+                lock = hit and self.locked(c, ps)
                 for p in ps:
-                    self._close(mt5, p, tick, units, "SL rổ")
-                pauses[side] = time.time() + c["cooldownMin"] * 60
-                self.event(f"SL rổ {'MUA' if side == 'long' else 'BÁN'} {len(ps)} lệnh · {money(loss)} · bên này nghỉ {c['cooldownMin']:g} phút", notify=True)
+                    self._close(mt5, p, tick, units, "khoá lời nhồi" if lock else "SL rổ")
+                if lock:
+                    # Out at the layer before: the basket's gain kept, no rest after it.
+                    self.event(f"khoá lời nhồi: chạm SL chung (lớp trước / giá vốn / trailing), đóng rổ {'MUA' if side == 'long' else 'BÁN'} {len(ps)} lệnh · {money(loss)}")
+                else:
+                    pauses[side] = time.time() + c["cooldownMin"] * 60
+                    self.event(f"SL rổ {'MUA' if side == 'long' else 'BÁN'} {len(ps)} lệnh · {money(loss)} · bên này nghỉ {c['cooldownMin']:g} phút", notify=True)
                 closed = True
                 continue
             if ps and c["tpMoney"] > 0 and pnl(ps) >= c["tpMoney"] - 1e-9:
@@ -3939,7 +3972,7 @@ class GridBot(TickBot):
         if not no_spread and c["maxSpread"] > 0 and tick.ask - tick.bid > c["maxSpread"]:
             self.state = {"kind": "spread", "spread": round(tick.ask - tick.bid, 3), "max": c["maxSpread"]}
             return
-        signal = None
+        signal, block = None, None
         if c.get("entry") == "signal":
             candle, bar_t = None, None
             rates = mt5.copy_rates_from_pos(symbol, getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[c["sigTf"]]), 1, 1)
@@ -4037,11 +4070,13 @@ class GridBot(TickBot):
                 gone = (price - best if long else best - price) if c.get("addMode") == "with" else (worst - price if long else price - worst)
                 turned = not (c.get("entry") == "signal" and c.get("confirmAdd")) or (
                     move is not None and (move if long else -move) >= float(c["tickMove"]) / 2 - 1e-9)
+                if block and block[0] == side:
+                    continue  # no layer right under a resistance (over a support) before a bar breaks it
                 if gone >= c["gridStep"] - 1e-9 and turned:
-                    # The new layer gets the basket's stop (first entry ± sl), as its other positions, and its size.
-                    stop = self.sl_level(c, ps, long)
+                    # The new layer gets the basket's size and stop (with it counted, for the lock).
                     first = min(ps, key=lambda p: p["openTime"])
                     factor = max(1.0, round(float(first["lots"]) / float(c["lots"]), 2))
+                    stop = self.sl_level(c, ps + [{"entry": price, "lots": grid_lot(c, len(ps), factor)}], long, (getattr(self, "bpeak", None) or {}).get(side))
                     self._open(mt5, symbol, info, tick, long, f"nhồi {'dương' if c.get('addMode') == 'with' else 'âm'} lớp {len(ps) + 1}", grid_lot(c, len(ps), factor), stop)
 
     def _news_events(self):
@@ -4070,6 +4105,8 @@ class GridBot(TickBot):
         start, dist, closed, dirty = float(c["trailStart"]), float(c["trailDist"]), False, False
         for p in book:
             long = p["side"] == "long"
+            if self.locked(c, [x for x in book if x["side"] == p["side"]]):
+                continue  # a locked nhồi dương basket trails as one (sl_level), not position by position
             now_px = tick.bid if long else tick.ask
             peak = p.get("peak") if p.get("paper") else peaks.get(p["id"])
             peak = now_px if peak is None else (max(peak, now_px) if long else min(peak, now_px))
