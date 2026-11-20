@@ -5062,6 +5062,7 @@
           <div class="kv"><span>MT5 của nó</span><b>${w.info && w.info.mt5 ? (w.info.mt5.connected ? "đã kết nối" : esc(w.info.mt5.error || "chưa đăng nhập")) : "–"}</b></div>
           <div class="kv"><span>Bot đang dùng</span><b class="${this.ownAccount ? "pos" : "neg"}">${this.ownAccount ? "🖥️ tài khoản riêng" : "⚠️ tài khoản chính của chart"}</b></div></div>
           ${w.error ? `<p class="warn">${esc(w.error)}</p>` : ""}
+          ${w.enabled && !w.running && w.startingFor > 120 ? `<p class="warn">Đã ${Math.round(w.startingFor / 60)} phút mà máy chủ thứ 2 chưa trả lời${w.log ? `: <span class="small">${esc(w.log)}</span>` : ""}. Thử <b>■ Tắt tài khoản riêng</b> rồi bật lại; vẫn vậy thì chụp ô này gửi hỗ trợ.</p>` : ""}
           ${w.enabled && w.running && !w.proxy && !w.url ? `<p class="warn">Web chưa vào được tài khoản này nên chưa hiện ô đăng nhập: máy chủ chính còn bản cũ. Bấm <b>Cập nhật máy chủ</b> (lên bản 7.7), chờ 1 phút rồi tải lại trang.</p><div class="row-btns"><button class="btn btn-gold" id="ownUpdate" type="button">⟳ Cập nhật máy chủ</button></div>` : ""}
           <div class="row-btns">
             <button class="btn ${w.enabled ? "btn-ghost" : "btn-gold"}" id="ownToggle" type="button">${w.enabled ? "■ Tắt tài khoản riêng" : "▶ Bật tài khoản riêng cho bot"}</button>

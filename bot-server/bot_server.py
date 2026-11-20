@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "7.7"
+VERSION = "7.8"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -4719,16 +4719,30 @@ class WebAccount:
         args = [sys.executable, os.path.join(HERE, "bot_server.py"), "--instance", "web"]
         if "--public" in sys.argv:
             args.append("--public")
+        # Its output in web.stderr.log: why it stopped, shown on the website.
+        out = open(os.path.join(HERE, "web.stderr.log"), "w", encoding="utf-8", errors="replace")
         self.process = subprocess.Popen(args, cwd=HERE, creationflags=NO_WINDOW,
-                                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                        stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT)
+        out.close()
+        self.spawned = time.time()
         self.server.log(f"🖥️ Tài khoản riêng cho máy tính: đã chạy máy chủ thứ 2 (cổng {self.port})")
+
+    def _tail(self):
+        try:
+            with open(os.path.join(HERE, "web.stderr.log"), encoding="utf-8", errors="replace") as f:
+                lines = [x.strip() for x in f.read().splitlines() if x.strip()]
+            return " | ".join(lines[-3:])[-400:]
+        except OSError:
+            return ""
 
     def _supervise(self):
         while self.cfg.get("enabled"):
             try:
-                if self.process is None or self.process.poll() is not None:
+                if self.process is not None and self.process.poll() is not None:
+                    self.error = f"Máy chủ thứ 2 bị dừng (mã {self.process.returncode}), đang chạy lại: {self._tail() or 'không có thông báo'}"
+                    self.process = None
+                if self.process is None:
                     self._spawn()
-                self.error = ""
             except Exception as e:
                 self.error = str(e)
             time.sleep(15)
@@ -4756,13 +4770,22 @@ class WebAccount:
         running, info = False, {}
         if self.cfg.get("enabled"):
             try:
-                st = self._local("/status", timeout=3)
-                running = True
-                info = {"version": st.get("version"), "mt5": st.get("mt5"), "url": st.get("tunnelURL") or self.url()}
+                # /ping answers at once (no lock): up, even while its MT5 is busy connecting.
+                running = bool(self._local("/ping", timeout=4).get("ok"))
             except Exception:
                 pass
+            if running:
+                self.error = ""
+                try:
+                    st = self._local("/status", timeout=8)
+                    info = {"version": st.get("version"), "mt5": st.get("mt5"), "url": st.get("tunnelURL") or self.url()}
+                except Exception:
+                    info = {"mt5": {"connected": False, "error": "đang bận kết nối MT5…"}}
+        alive = self.process is not None and self.process.poll() is None
         return {"enabled": bool(self.cfg.get("enabled")), "running": running, "port": self.port, "proxy": True,
-                "url": info.get("url") or (self.url() if running else ""), "info": info, "error": self.error}
+                "url": info.get("url") or (self.url() if running else ""), "info": info, "error": self.error,
+                "alive": alive, "startingFor": round(time.time() - getattr(self, "spawned", time.time())) if alive and not running else 0,
+                "log": "" if running else self._tail()}
 
     def settings(self, body):
         on = bool(body.get("enabled"))
