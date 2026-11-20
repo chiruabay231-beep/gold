@@ -2246,24 +2246,25 @@
      *  khoản riêng" is on, else the main one. Charts and manual trading always stay on the main account. */
     async pickAccountServer() {
       this.mainBase = this.mainBase || this.base;
-      this.botBase = null;
-      this.botProxy = false;
-      this.ownAccount = false;
       // The bot goes where the DEMO account is: the second MT5 when it is logged in to a demo one (the chart
-      // keeping the real account), else the chart's own account when that one is a demo. A real account never
-      // gets the bot while it is being tested (the server refuses it too).
+      // keeping the real account), else the chart's own account. Worked out into locals and set at the end, and a
+      // check that fails or comes back half-way (a slow reply, the second MT5 busy) keeps the last answer: the
+      // bot never flips to the chart's account for a moment.
+      let own = false, proxy = false, base = null, acct = this.botAcct;
       try {
         const st = await api(this.mainBase, this.secret, "/status");
         const w = st.webAccount;
-        if (!(w && w.enabled && w.running && (w.proxy || w.url))) return;
-        const base = w.proxy ? this.mainBase + "/acct2" : w.url;
-        const own = await api(base, this.secret, "/mt5/trading").catch(() => null);
-        this.botAcct = own;
-        const isDemo = (t) => !!(t && t.login && t.mode !== "real");
-        if (isDemo(own)) {
-          this.botProxy = !!w.proxy; this.botBase = w.proxy ? "proxy" : w.url; this.ownAccount = true;
+        if (w && w.enabled && !w.running && this.ownAccount) return;  // starting / busy: unknown
+        if (w && w.enabled && w.running && (w.proxy || w.url)) {
+          const b = w.proxy ? this.mainBase + "/acct2" : w.url;
+          let t;
+          try { t = await api(b, this.secret, "/mt5/trading"); } catch { if (this.ownAccount !== undefined) return; t = null; }
+          if (this.ownAccount && !(t && t.login)) return;  // its MT5 reconnecting: unknown
+          acct = t;
+          if (t && t.login && t.mode !== "real") { own = true; proxy = !!w.proxy; base = w.proxy ? "proxy" : w.url; }
         }
-      } catch { /* the main server will do */ }
+      } catch { if (this.ownAccount !== undefined) return; }
+      this.botAcct = acct; this.ownAccount = own; this.botProxy = proxy; this.botBase = base;
     },
     mainCall(path, body) { return api(this.mainBase || this.base, this.secret, path, body); },
     /** The address of the bot's own account: through the main server (/acct2) or its own tunnel (older servers). */
@@ -3641,8 +3642,15 @@
       // The account the bot trades on: its own (the second MT5) when that runs, else the chart's main one.
       const t = (this.ownAccount ? this.botAcct : this.lastTrading) || {}, acct = $("hubAcct");
       if (acct) {
-        acct.textContent = t.login ? `${this.ownAccount ? "Tài khoản bot" : "⚠️ Bot dùng tài khoản chính"} #${t.login} · ${t.mode === "real" ? "THẬT" : "demo"}` : this.ownAccount ? "Tài khoản bot chưa đăng nhập" : "MT5 chưa đăng nhập";
-        acct.className = "badge " + (t.login ? (t.mode === "real" ? "real" : "on") : "off");
+        if (mode === "demo" || mode === "backtest") {
+          acct.textContent = mode === "demo" ? "🎮 Tài khoản ảo" : "🧪 Backtest";
+          acct.className = "badge on";
+        } else {
+          acct.textContent = !t.login ? (this.ownAccount ? "Tài khoản bot chưa đăng nhập" : "Chưa có tài khoản demo cho bot")
+            : t.mode === "real" ? `⛔ Chưa có tài khoản demo — chart #${t.login} là THẬT, bot không chạy trên đó`
+            : `${this.ownAccount ? "🖥️ MT5 thứ 2" : "Tài khoản chart"} #${t.login} · demo`;
+          acct.className = "badge " + (t.login ? (t.mode === "real" ? "real" : "on") : "off");
+        }
       }
       const key = bot + ":" + mode;
       document.querySelectorAll("#botHub [data-hub]").forEach((el) => { el.hidden = !el.dataset.hub.split(" ").includes(key); });
