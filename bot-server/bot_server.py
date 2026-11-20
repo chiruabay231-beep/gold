@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "7.4"
+VERSION = "7.5"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2393,9 +2393,59 @@ class Tunnel:
             time.sleep(10)
         self.url = ""
 
+    def _ngrok(self, port):
+        """ngrok instead of Cloudflare's quick tunnel (config ngrok_token, and ngrok_domain for the free fixed
+        address, e.g. name.ngrok-free.app): HTTPS on 443, the same address every start, no quick-tunnel limits."""
+        token = str(self.server.config.get("ngrok_token") or "").strip()
+        domain = re.sub(r"^https?://", "", str(self.server.config.get("ngrok_domain") or "").strip()).strip("/")
+        local = os.path.join(HERE, "ngrok.exe" if IS_WINDOWS else "ngrok")
+        binary = self.server.config.get("ngrok") or (local if os.path.exists(local) else "ngrok")
+        flag, failures = "--url", 0
+        while True:
+            args = [binary, "http", f"127.0.0.1:{port}", "--authtoken", token, "--log", "stdout", "--log-format", "logfmt"]
+            if domain:
+                args += [flag, domain]
+            try:
+                self.process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
+            except FileNotFoundError:
+                self.error = "Không tìm thấy ngrok (chạy lại bộ cài với -Ngrok)"
+                return
+            try:
+                with open(own("tunnel.pid"), "w") as f:
+                    f.write(str(self.process.pid))  # kept across an update, as cloudflared (see _adopt)
+            except OSError:
+                pass
+            lines, started = [], time.time()
+            for raw in self.process.stdout:
+                line = raw.decode("utf-8", "replace")
+                # Never the token in a log.
+                lines.append(line.rstrip().replace(token, "***") if token else line.rstrip())
+                del lines[:-200]
+                match = re.search(r"url=(https://[^\s\"]+)", line)
+                if match and "started tunnel" in line and match.group(1) != self.url:
+                    self.url, self.error, failures = match.group(1).rstrip("/"), "", 0
+                    self.server.on_tunnel(self.url)
+            self.process.wait()
+            try:
+                with open(own("tunnel.log"), "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines))
+            except OSError:
+                pass
+            self.url = ""
+            if flag == "--url" and any("unknown flag" in x and "--url" in x for x in lines):
+                flag = "--domain"  # an older ngrok
+                continue
+            failures = failures + 1 if time.time() - started < 60 else 0
+            self.error = "Đường hầm ngrok bị ngắt, đang kết nối lại"
+            if failures in (3, 10):
+                self.server.log(f"🌐 Đường hầm ngrok không chạy được ({failures} lần) — xem {own('tunnel.log')}")
+            time.sleep(min(300, 15 * max(1, failures) ** 2))
+
     def _run(self):
         port = int(self.server.config.get("port", 8787))
         self._adopt()
+        if str(self.server.config.get("ngrok_token") or "").strip():
+            return self._ngrok(port)
         failures = 0
         while True:
             # HTTP/2 over TCP 443 by default: QUIC (UDP) often fails behind a virtual machine's network (VMware,
@@ -5221,7 +5271,7 @@ def make_handler(server):
             """The website (another origin) calls the server too: members with their code,
             the owner with the password. Nothing works without one of them."""
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, ngrok-skip-browser-warning")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Max-Age", "600")
 

@@ -111,7 +111,9 @@
   async function api(base, secret, path, body) {
     let res;
     try {
-      const init = { headers: { Authorization: "Bearer " + secret }, cache: "no-store" };
+      // ngrok-skip-browser-warning: a server reached through ngrok's free address answers the API, not ngrok's
+      // warning page for browsers.
+      const init = { headers: { Authorization: "Bearer " + secret, "ngrok-skip-browser-warning": "1" }, cache: "no-store" };
       if (body !== undefined) {
         init.method = "POST";
         init.headers["Content-Type"] = "application/json";
@@ -5614,7 +5616,7 @@
         let wait = 1000;
         while (!ctrl.signal.aborted && token === this.loadToken) {
           try {
-            const res = await fetch(this.base + path, { headers: { Authorization: "Bearer " + this.secret }, signal: ctrl.signal, cache: "no-store" });
+            const res = await fetch(this.base + path, { headers: { Authorization: "Bearer " + this.secret, "ngrok-skip-browser-warning": "1" }, signal: ctrl.signal, cache: "no-store" });
             if (res.status === 404 || res.status === 403) return; // an older server, or not for this member: the 2 s poll stays
             if (!res.ok || !res.body) throw new Error(String(res.status));
             const reader = res.body.getReader(), dec = new TextDecoder();

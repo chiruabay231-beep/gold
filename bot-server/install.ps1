@@ -12,9 +12,13 @@
 # or give its path with -Restore; it is put back before the first start (settings, members, drawings, virtual
 # accounts). On a Windows virtual machine (Mac + Parallels / UTM) the -Mt5 phase also keeps Windows awake and
 # can sign Windows in by itself, so MT5 and the bot start with the virtual machine.
+#
+# -Ngrok: the server's address through ngrok instead of Cloudflare's quick tunnel (a free ngrok account: its
+# authtoken and its free fixed domain, name.ngrok-free.app) — the same address every start, no quick-tunnel limits.
 
 param(
     [switch]$Mt5,
+    [switch]$Ngrok,
     [string]$Restore = "",
     [string]$Dir = "C:\GoldBot"
 )
@@ -27,6 +31,7 @@ $Release = "https://github.com/chiruabay231-beep/gold/releases/download/bot-late
 $PythonUrl = "https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe"
 $VcRedistUrl = "https://aka.ms/vs/17/release/vc_redist.x64.exe"
 $CloudflaredUrl = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
+$NgrokUrl = "https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-windows-amd64.zip"
 $TaskName = "GoldBot"
 
 function Step($text) { Write-Host "`n==> $text" -ForegroundColor Cyan }
@@ -51,7 +56,7 @@ New-Item -ItemType Directory -Force -Path $Temp | Out-Null
 
 # Stop a running copy so its files can be replaced.
 Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='cloudflared.exe' OR Name='powershell.exe'" -ErrorAction SilentlyContinue |
+Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='cloudflared.exe' OR Name='ngrok.exe' OR Name='powershell.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -like "*$Dir\bot_server.py*" -or $_.CommandLine -like "*$Dir\run.ps1*" -or $_.ExecutablePath -like "$Dir*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
@@ -124,6 +129,24 @@ if (-not (Test-Path $configPath)) {
     $config | ConvertTo-Json -Depth 8 | Set-Content -Path $configPath -Encoding UTF8
 }
 $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+if ($Ngrok -or $config.ngrok_token) {
+    Step "Đường hầm ngrok (địa chỉ cố định)"
+    if ($Ngrok) {
+        Write-Host "Mở https://dashboard.ngrok.com → 'Your Authtoken': copy token rồi dán vào đây:" -ForegroundColor Yellow
+        $token = (Read-Host).Trim()
+        Write-Host "Domain miễn phí của bạn (dashboard.ngrok.com → Domains, dạng ten-cua-ban.ngrok-free.app), Enter nếu chưa có:" -ForegroundColor Yellow
+        $domain = (Read-Host).Trim() -replace "^https?://", "" -replace "/+$", ""
+        if (-not $token) { throw "Chưa nhập authtoken ngrok" }
+        $config | Add-Member -NotePropertyName ngrok_token -NotePropertyValue $token -Force
+        $config | Add-Member -NotePropertyName ngrok_domain -NotePropertyValue $domain -Force
+        $config | ConvertTo-Json -Depth 8 | Set-Content -Path $configPath -Encoding UTF8
+    }
+    $ngzip = Join-Path $Temp "ngrok.zip"
+    Invoke-WebRequest -Uri $NgrokUrl -OutFile $ngzip -UseBasicParsing
+    Expand-Archive -Path $ngzip -DestinationPath $Dir -Force
+    Write-Host "Đã cài ngrok$(if ($config.ngrok_domain) { ': https://' + $config.ngrok_domain })."
+}
 
 if ($Mt5) {
     Step "Giữ Windows luôn thức (máy ảo / máy bàn chạy 24/24)"

@@ -23,6 +23,6 @@ while ($true) {
         continue
     }
     # A crashed server may leave its tunnel behind.
-    Get-Process cloudflared -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Dir*" } | Stop-Process -Force
+    Get-Process cloudflared, ngrok -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$Dir*" } | Stop-Process -Force
     Start-Sleep -Seconds 5
 }

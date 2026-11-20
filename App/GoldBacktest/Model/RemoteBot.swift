@@ -236,6 +236,8 @@ struct RemoteBotClient {
         var request = URLRequest(url: url, timeoutInterval: timeout)
         request.httpMethod = method
         request.setValue("Bearer \(password)", forHTTPHeaderField: "Authorization")
+        // A server reached through ngrok's free address: the API, not ngrok's warning page.
+        request.setValue("1", forHTTPHeaderField: "ngrok-skip-browser-warning")
         if let body {
             request.httpBody = body
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -438,6 +440,7 @@ extension RemoteBotClient {
                     var request = URLRequest(url: url, timeoutInterval: 30)
                     request.setValue("Bearer \(password)", forHTTPHeaderField: "Authorization")
                     request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
+                    request.setValue("1", forHTTPHeaderField: "ngrok-skip-browser-warning")
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     let code = (response as? HTTPURLResponse)?.statusCode ?? 0
                     guard code == 200 else { throw ServerError(message: "Không mở được luồng giá (lỗi \(code))", code: code) }
