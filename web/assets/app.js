@@ -4187,19 +4187,30 @@
     /** The bot's open positions as MT5's Trade screen shows them: the floating total on top, the account
      *  lines, then "XAUUSD buy 0.01 / entry → now / profit" for each. */
     mt5LikeView(st) {
-      const pos = st.positions || [], d = (sym) => this.digitsFor(sym);
+      const pos = st.positions || [], d = (sym) => this.digitsFor(sym), c = st.config || {};
       const floating = pos.reduce((a, p) => a + (p.profit || 0), 0);
-      const acc = st.paper || null;
-      const line = (k, v) => `<div class="m5-line"><span>${k}</span><b>${v}</b></div>`;
+      // Virtual run: its own book. On MT5: the account the bot trades (its second MT5, or the chart's).
+      const paper = !!c.paper && st.paper;
+      const t = paper ? null : (this.ownAccount ? this.botAcct : this.lastTrading) || null;
+      const bal = paper ? st.paper.balance : t && t.balance != null ? +t.balance : null;
+      const eq = paper ? (st.paper.equity ?? st.paper.balance + floating) : t && t.equity != null ? +t.equity : null;
+      const who = paper ? `<span class="m5-tag paper">ẢO</span> Tài khoản ảo của bot`
+        : t && t.login ? `<span class="m5-tag ${t.mode === "real" ? "real" : ""}">${t.mode === "real" ? "THẬT" : "DEMO"}</span> #${esc(String(t.login))}${t.server ? ` · ${esc(t.server)}` : ""}${this.ownAccount ? " · MT5 thứ 2" : " · tài khoản chart"}`
+        : "Chưa có tài khoản MT5";
+      const cell = (k, v, cls = "") => `<div class="m5-cell"><span>${k}</span><b class="${cls}">${v}</b></div>`;
+      const sym = c.symbol;
       return `<div class="m5-view">
-        <div class="m5-total ${floating >= 0 ? "pos" : "neg"}">${floating >= 0 ? "" : "−"}${Math.abs(floating).toFixed(2)} USD</div>
-        ${acc ? line("Balance:", acc.balance.toFixed(2)) + line("Equity:", (acc.equity ?? acc.balance + floating).toFixed(2)) : ""}
-        ${st.price ? line("Giá Bid / Ask:", `${fmt(st.price.bid, d((st.config || {}).symbol))} / ${fmt(st.price.ask, d((st.config || {}).symbol))}`) : ""}
-        <div class="m5-head">Positions</div>
-        ${pos.length ? pos.map((p) => `<div class="m5-pos">
-          <div><div><b>${esc((p.symbol || "").replace(/m$/, ""))}</b> <span class="${p.side === "long" ? "m5-buy" : "m5-sell"}">${p.side === "long" ? "buy" : "sell"} ${p.lots}</span></div>
-            <div class="m5-px">${fmt(p.entry, d(p.symbol))} → ${p.now != null ? fmt(p.now, d(p.symbol)) : "…"}</div></div>
-          <div class="m5-pl ${(p.profit || 0) >= 0 ? "pos" : "neg"}">${(p.profit || 0).toFixed(2)}</div></div>`).join("") : '<div class="m5-empty">Chưa có lệnh đang mở</div>'}
+        <div class="m5-top"><div class="m5-who">${who}</div>${paper && t === null && this.botAcct && this.botAcct.login ? `<span class="m5-hint">đang chạy ẢO — chọn 💹 để chạy trên tài khoản demo</span>` : ""}</div>
+        <div class="m5-grid">
+          ${cell("Balance", bal != null ? money(bal) : "–")}
+          ${cell("Equity", eq != null ? money(eq) : "–", eq != null && bal != null ? (eq >= bal ? "pos" : "neg") : "")}
+          ${cell("Lời/lỗ đang mở", signed(floating), floating >= 0 ? "pos" : "neg")}
+          ${cell("Bid / Ask", st.price ? `${fmt(st.price.bid, d(sym))} / ${fmt(st.price.ask, d(sym))}` : "–")}
+        </div>
+        ${pos.length ? `<div class="m5-list">${pos.map((p) => `<div class="m5-pos">
+          <span class="m5-side ${p.side === "long" ? "buy" : "sell"}">${p.side === "long" ? "BUY" : "SELL"} ${p.lots}</span>
+          <span class="m5-px">${esc((p.symbol || "").replace(/m$/, ""))} · ${fmt(p.entry, d(p.symbol))} → ${p.now != null ? fmt(p.now, d(p.symbol)) : "…"}</span>
+          <b class="m5-pl ${(p.profit || 0) >= 0 ? "pos" : "neg"}">${signed(p.profit || 0)}</b></div>`).join("")}</div>` : '<div class="m5-empty">Không có lệnh đang mở</div>'}
       </div>`;
     },
 
