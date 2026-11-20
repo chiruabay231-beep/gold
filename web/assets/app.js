@@ -2057,6 +2057,16 @@
 
     init() {
       this.secret = this.role === "owner" ? ownerStore.get() : store.get("aurum.code");
+      // "Chưa cho phép đặt lệnh" on the bot's account (its second MT5 has its own switch): on, in one tap.
+      if (!this.fixBound) {
+        this.fixBound = true;
+        document.addEventListener("click", async (e) => {
+          const b = e.target.closest && e.target.closest('[data-fix="trade"]');
+          if (!b) return;
+          const r = await act(b, () => this.botCall("/mt5/settings", { trading_enabled: true }), "Đã cho phép đặt lệnh trên tài khoản của bot");
+          if (r) this.loadGridBot(true);
+        });
+      }
     },
 
     show() {
@@ -4537,7 +4547,7 @@
       else if (s.kind === "starting") txt = "bot vừa bật, đang đọc giá…";
       else if (s.kind === "guard") txt = `🛡 <b>đang tránh ${esc(s.why || "giờ mạnh")}</b> tới ${clock(s.until)} — không mở lệnh mới${s.holding ? ` (vẫn giữ ${s.holding} lệnh đang mở)` : ""}`;
       else if (s.kind === "flip") txt = `tín hiệu vừa đảo sang <b>${sideName2(s.side)}</b>: đã đóng rổ ngược chiều, mở rổ mới ngay`;
-      else if (s.kind === "error") txt = `<b class="neg">bot đang gặp lỗi: ${esc(s.error || st.error || "")}</b> — bot tự thử lại mỗi 2 giây`;
+      else if (s.kind === "error") txt = `<b class="neg">bot đang gặp lỗi: ${esc(s.error || st.error || "")}</b> — bot tự thử lại mỗi 2 giây${/Chưa cho phép đặt lệnh/.test(s.error || st.error || "") ? ` <button class="btn btn-small btn-gold" type="button" data-fix="trade">✓ Cho phép đặt lệnh trên tài khoản của bot</button>` : ""}`;
       else if (s.kind === "noprice") txt = `<b class="neg">MT5 không trả giá ${esc(s.symbol || "")}</b> — kiểm tra MT5 trên VPS đã đăng nhập và mã đúng`;
       else if (s.kind === "pause") txt = `<b class="neg">đang nghỉ sau ${esc(s.why || "cắt lỗ")} tới ${clock(s.until)}</b> (còn ${Math.max(0, Math.ceil((s.until * 1000 - Date.now()) / 60000))} phút) — không vào lệnh mới`;
       else if (s.kind === "spread") txt = `<b class="neg">spread đang ${s.spread} &gt; mức tối đa ${s.max}</b> — chờ spread hạ`;

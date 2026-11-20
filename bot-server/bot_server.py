@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "8.1"
+VERSION = "8.2"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -4740,8 +4740,12 @@ class WebAccount:
         else:
             mt5.update({"path": exe, "portable": True})
         self.exe = exe
-        for k in ("trading_enabled", "max_lots", "deviation"):
+        for k in ("max_lots", "deviation"):
             mt5.setdefault(k, main["mt5"].get(k))
+        # The bot's own account: orders allowed (its "Cho phép đặt lệnh từ app" is not on the chart's screen);
+        # a real account there is still refused (the grid bot runs on demo only, and allow_real_account is off).
+        mt5["trading_enabled"] = True
+        mt5.setdefault("allow_real_account", False)
         cfg.update({"password": main["password"], "port": self.port, "mt5": mt5, "tunnel": False,
                     "cloudflared": main.get("cloudflared", ""), "url_relay": "", "telegram": {}, "copy": {}, "members": [],
                     "webAccount": {"enabled": False}})
