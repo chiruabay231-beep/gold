@@ -2057,6 +2057,9 @@
 
     init() {
       this.secret = this.role === "owner" ? ownerStore.get() : store.get("aurum.code");
+      // For now the bot runs on the chart's account (demo only, the server refuses a real one): once, the bot
+      // is moved back from its own account; "Cho bot chạy trên tài khoản này" in its box moves it there again.
+      if (!store.get("aurum.botMainV1")) { store.set("aurum.useWebAcct", null); store.set("aurum.botMainV1", "1"); }
     },
 
     show() {
@@ -3654,7 +3657,7 @@
         "tick:demo": "Chạy thử: bot chạy trên máy chủ theo giá Exness thật từng tick, lệnh và số dư là ẢO (không đặt lệnh lên MT5, kể cả khi đang đăng nhập tài khoản thật).",
         "grid:backtest": "Backtest bot nhồi lệnh trên tick thật Exness (tối đa 2 ngày) hoặc trên nến 1 phút (ước lượng). Xem kỹ ô 'Âm sâu nhất khi đang gồng': đó là số tiền tài khoản phải chịu được.",
         "grid:demo": "Chạy thử: bot nhồi lệnh chạy trên máy chủ theo giá Exness thật từng tick, lệnh và số dư là ẢO (không đặt lệnh lên MT5).",
-        "grid:mt5": this.ownAccount ? "Bot đặt lệnh trên TÀI KHOẢN RIÊNG của bot (ô phía trên) — chart vẫn dùng tài khoản thật của bạn. Thử trên tài khoản demo Exness tới khi bot ổn rồi mới đổi sang tài khoản thật." : "⚠️ Bot đang dùng TÀI KHOẢN CHÍNH của chart. Bật 'Tài khoản riêng cho bot' ở ô phía trên và đăng nhập một tài khoản demo Exness để bot chạy riêng.",
+        "grid:mt5": this.ownAccount ? "Bot đặt lệnh trên TÀI KHOẢN RIÊNG của bot (ô phía trên). Chỉ chạy trên tài khoản DEMO khi bot chưa test xong." : `Bot đặt lệnh trên tài khoản đang đăng nhập ở chart${this.lastTrading && this.lastTrading.login ? ` (#${this.lastTrading.login} · ${this.lastTrading.mode === "real" ? "THẬT — bot sẽ không chạy" : "demo"})` : ""}. Chỉ nhận tài khoản DEMO: tài khoản thật bị từ chối, và nếu chart đổi sang tài khoản thật thì bot tự tắt.`,
       };
       const real = t.login && t.mode === "real" && mode !== "backtest" && !(mode === "demo" && (bot === "strategy" || bot === "tick" || bot === "grid"));
       $("hubNote").innerHTML = (notes[key] ? esc(notes[key]) : "") + (real ? `<div class="warn">⚠️ Đang đăng nhập TÀI KHOẢN THẬT: bot sẽ đặt lệnh bằng tiền thật.</div>` : "");
@@ -4465,6 +4468,10 @@
           return;
         }
         const a = (this.ownAccount ? this.botAcct : this.lastTrading) || {};
+        if (!g.paper && a.mode === "real") {
+          toast(`Tài khoản #${a.login} là TÀI KHOẢN THẬT: bot nhồi lệnh chưa test xong nên chỉ chạy trên DEMO. Đăng nhập tài khoản demo Exness trên chart rồi bật lại.`, true);
+          return;
+        }
         const where = `${this.ownAccount ? "TÀI KHOẢN BOT" : "TÀI KHOẢN CHÍNH CỦA CHART"} #${a.login || "?"} (${a.mode === "real" ? "TIỀN THẬT" : "demo"})`;
         if (!g.paper && !confirm(`Bot nhồi lệnh sẽ đặt lệnh trên ${where}, tới ${this.gridRisk(g).total} lot mỗi rổ. Tiếp tục?`)) return;
         send(e.currentTarget, { running: true }, "Đã bật bot nhồi lệnh");

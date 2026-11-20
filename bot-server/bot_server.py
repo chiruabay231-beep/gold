@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "7.8"
+VERSION = "7.9"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3552,6 +3552,9 @@ class TickBot:
 
 GRID_MAGIC = 20266
 DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 0.01, "gridStep": 2.0,
+                   # On MT5 only a DEMO account while the bot is being tested: refused on a real one, and turned off
+                   # if the account it trades becomes a real one (the chart's account logged in to a real one).
+                   "demoOnly": True,
                    "multiplier": 1.5, "maxLevels": 6, "maxLot": 0.5, "tpMoney": 1.0, "basketStop": 60.0,
                    "cooldownMin": 60.0,
                    # Stop for each basket: price this far against its first entry (on MT5 also the positions' own SL
@@ -3902,6 +3905,22 @@ class GridBot(TickBot):
         self.cycles = 0
 
     @staticmethod
+    def _real_account(mt5):
+        """The MT5 account when it is a real (live money) one, else None."""
+        a = mt5.account_info()
+        return a if a is not None and a.trade_mode == mt5.ACCOUNT_TRADE_MODE_REAL else None
+
+    def settings(self, body):
+        c = self.cfg
+        if body.get("running") and not c["running"] and not body.get("paper", c["paper"]) and c.get("demoOnly", True):
+            with Mt5.lock:
+                a = self._real_account(Mt5.connect(self.server.config["mt5"]))
+            if a is not None:
+                raise ValueError(f"Tài khoản #{a.login} là TÀI KHOẢN THẬT: bot nhồi lệnh chưa test xong nên chỉ chạy trên tài khoản "
+                                 "DEMO. Đăng nhập tài khoản demo Exness trên chart rồi bật lại (hoặc dùng 🎮 Chạy thử ảo).")
+        return TickBot.settings(self, body)
+
+    @staticmethod
     def sl_level(c, ps, long, peak=None):
         """The basket's stop: `sl` in price past its best entry; and for a nhồi dương basket of two layers or more
         (pyramidLock) the tightest of the layer before the last one, its average entry (no loss) and, with the
@@ -4054,6 +4073,16 @@ class GridBot(TickBot):
     def _tick(self):
         c = self.cfg
         mt5 = Mt5.connect(self.server.config["mt5"])
+        if not c["paper"] and c.get("demoOnly", True):
+            real = self._real_account(mt5)
+            if real is not None:
+                # The account changed to a real one while running (e.g. the chart logged in to it): stop here.
+                c["running"] = False
+                self.server.save_config()
+                self.event(f"tài khoản #{real.login} là TÀI KHOẢN THẬT — bot chỉ chạy trên demo khi chưa test xong: ĐÃ TẮT "
+                           "(lệnh đang mở giữ nguyên)", notify=True)
+                self.state = {"kind": "error", "error": "Tài khoản thật: bot chỉ chạy trên tài khoản demo"}
+                return
         if not c["paper"]:
             self.server.mt5_account._check_trading(mt5)
         symbol = Mt5.need_symbol(mt5, c["symbol"])
