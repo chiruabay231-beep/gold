@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "8.0"
+VERSION = "8.1"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -4728,10 +4728,18 @@ class WebAccount:
         main = self.server.config
         path = os.path.join(HERE, "web.config.json")
         cfg = read_json(path, {}) or {}
-        exe = clone_terminal("web", main["mt5"])
-        self._shortcut(exe)
+        clone = clone_terminal("web", main["mt5"])
+        self._shortcut(clone)
+        exe = getattr(self, "target", None) or clone
         mt5 = dict(cfg.get("mt5") or {})
-        mt5.update({"path": exe, "portable": True})
+        if os.path.normcase(exe) != os.path.normcase(clone):
+            # An MT5 the owner opened and logged in to themselves: attached as it is (its own login, not ours).
+            for k in ("login", "password", "server"):
+                mt5.pop(k, None)
+            mt5.update({"path": exe, "portable": False})
+        else:
+            mt5.update({"path": exe, "portable": True})
+        self.exe = exe
         for k in ("trading_enabled", "max_lots", "deviation"):
             mt5.setdefault(k, main["mt5"].get(k))
         cfg.update({"password": main["password"], "port": self.port, "mt5": mt5, "tunnel": False,
@@ -4752,6 +4760,42 @@ class WebAccount:
                     f.write(f'@echo off\r\nstart "" "{exe}" /portable\r\n')
         except OSError:
             pass
+
+    @staticmethod
+    def _main_exe():
+        """The chart's MT5 (this server's own terminal), when connected."""
+        try:
+            with Mt5.lock:
+                if Mt5.connected and Mt5.module is not None:
+                    info = Mt5.module.terminal_info()
+                    if info is not None and info.path:
+                        return os.path.join(info.path, "terminal64.exe")
+        except Exception:
+            pass
+        return ""
+
+    @staticmethod
+    def _running_terminals():
+        if os.name != "nt":
+            return []
+        try:
+            r = subprocess.run(["powershell", "-NoProfile", "-Command",
+                                "Get-Process terminal64 -ErrorAction SilentlyContinue | ForEach-Object { $_.Path }"],
+                               capture_output=True, text=True, timeout=30, creationflags=NO_WINDOW)
+            return [x.strip() for x in r.stdout.splitlines() if x.strip().lower().endswith("terminal64.exe")]
+        except Exception:
+            return []
+
+    def _pick_terminal(self):
+        """The bot's MT5: one the owner opened (an MT5 running besides the chart's and the bot's own copy, e.g. a
+        second MT5 installed and logged in to a demo account), else the copy. None when the chart's is unknown."""
+        main = self._main_exe()
+        if not main:
+            return None
+        clone = os.path.join(HERE, "terminals", "web", "terminal64.exe")
+        norm = lambda x: os.path.normcase(os.path.abspath(x))  # noqa: E731
+        others = [x for x in self._running_terminals() if norm(x) not in (norm(main), norm(clone))]
+        return others[0] if others else clone
 
     def _spawn(self):
         try:
@@ -4780,8 +4824,19 @@ class WebAccount:
             return ""
 
     def _supervise(self):
+        turn = 0
         while self.cfg.get("enabled"):
             try:
+                if turn % 4 == 0:
+                    # About every minute: which MT5 the bot's server should use (an MT5 the owner opened wins).
+                    pick = self._pick_terminal()
+                    if pick and os.path.normcase(pick) != os.path.normcase(getattr(self, "target", None) or getattr(self, "exe", "") or ""):
+                        changed = self.process is not None
+                        self.target = pick
+                        if changed and os.path.normcase(pick) != os.path.normcase(getattr(self, "exe", "") or ""):
+                            self.server.log(f"🖥️ MT5 thứ 2 cho bot: dùng {pick}")
+                            self.stop()
+                turn += 1
                 if self.process is not None and self.process.poll() is not None:
                     self.error = f"Máy chủ thứ 2 bị dừng (mã {self.process.returncode}), đang chạy lại: {self._tail() or 'không có thông báo'}"
                     self.process = None
@@ -4828,7 +4883,7 @@ class WebAccount:
         alive = self.process is not None and self.process.poll() is None
         return {"enabled": bool(self.cfg.get("enabled")), "running": running, "port": self.port, "proxy": True,
                 "url": info.get("url") or (self.url() if running else ""), "info": info, "error": self.error,
-                "alive": alive, "startingFor": round(time.time() - getattr(self, "spawned", time.time())) if alive and not running else 0,
+                "terminal": getattr(self, "exe", ""), "alive": alive, "startingFor": round(time.time() - getattr(self, "spawned", time.time())) if alive and not running else 0,
                 "log": "" if running else self._tail()}
 
     def settings(self, body):

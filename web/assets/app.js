@@ -5063,9 +5063,9 @@
       const t = (this.ownAccount ? this.botAcct : this.lastTrading) || {};
       const acctText = (x) => (x && x.login ? `#${esc(String(x.login))} · ${x.mode === "real" ? "THẬT" : "demo"}` : "chưa đăng nhập");
       const html = `<h4>🖥️ Hai MT5: tài khoản thật cho chart, tài khoản demo cho bot</h4>
-        <p class="muted small">Máy chủ chạy thêm <b>MT5 thứ 2</b>. Đăng nhập <b>tài khoản demo Exness</b> vào MT5 thứ 2 (ô bên dưới, hoặc mở biểu tượng <b>"MT5 Bot (demo)"</b> ngoài Desktop của Windows rồi đăng nhập thẳng trong đó). Chart và app giữ <b>tài khoản thật</b>. Bot tự chạy trên tài khoản <b>DEMO</b>; tài khoản thật bị từ chối khi bot chưa test xong.</p>
+        <p class="muted small">Máy chủ chạy thêm <b>MT5 thứ 2</b>. Đăng nhập <b>tài khoản demo Exness</b> vào MT5 thứ 2 (ô bên dưới; hoặc trên Windows mở một MT5 khác — biểu tượng <b>"MT5 Bot (demo)"</b> ngoài Desktop hay MT5 bạn tự cài thêm — đăng nhập demo trong đó, máy chủ tự nhận trong khoảng 1 phút). Chart và app giữ <b>tài khoản thật</b>. Bot tự chạy trên tài khoản <b>DEMO</b>; tài khoản thật bị từ chối khi bot chưa test xong.</p>
         ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
-        ${w ? `<div class="kvs"><div class="kv"><span>MT5 thứ 2</span><b>${w.enabled ? (w.running ? `đang chạy · cổng ${w.port}` : "đang khởi động…") : "đang tắt"}</b></div>
+        ${w ? `<div class="kvs"><div class="kv"><span>MT5 thứ 2</span><b>${w.enabled ? (w.running ? `đang chạy · cổng ${w.port}` : "đang khởi động…") : "đang tắt"}${w.enabled && w.terminal ? `<br><span class="muted small">${esc(w.terminal)}</span>` : ""}</b></div>
           <div class="kv"><span>Tài khoản MT5 thứ 2</span><b>${w.enabled && w.running ? acctText(this.botAcct) : "–"}</b></div>
           <div class="kv"><span>Tài khoản chart</span><b>${acctText(this.lastTrading)}</b></div>
           <div class="kv"><span>Bot chạy trên</span><b class="${t.login && t.mode !== "real" ? "pos" : "neg"}">${t.login ? `${this.ownAccount ? "🖥️ MT5 thứ 2" : "chart"} ${acctText(t)}${t.mode === "real" ? " — bot sẽ không chạy" : ""}` : "chưa có tài khoản demo"}</b></div></div>
