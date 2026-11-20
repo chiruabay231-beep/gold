@@ -336,15 +336,16 @@
       <div class="tab" data-tab="autobot" hidden>
         <!-- Every bot in one box: pick the bot, then how it runs (backtest, demo on the server, MT5). -->
         <div class="panel bot-hub" id="botHub">
-          <div class="panel-head"><h3>🤖 Bot</h3><span class="badge" id="hubAcct"></span></div>
-          <div class="hub-label">Chọn bot</div>
-          <div class="hub-seg" id="hubBots"></div>
+          <div class="panel-head"><h3>🕸️ Bot nhồi lệnh</h3><span class="badge" id="hubAcct"></span></div>
+          <div class="hub-seg" id="hubBots" hidden></div>
+          <!-- The bot's own MT5 account (an Exness demo while it is tested), apart from the chart's real account. -->
+          <div class="own-box bot-acct" id="ownAcctBox"></div>
           <div class="hub-label">Chạy</div>
           <div class="hub-seg modes" id="hubModes"></div>
           <div class="hub-note" id="hubNote"></div>
           <div class="hub-body">
-            <div class="panel bot-live" id="botLive" data-hub="strategy:demo strategy:mt5 stop:demo stop:mt5 sr:demo sr:mt5 tick:demo tick:mt5 grid:demo grid:mt5">
-              <div class="bl-head"><b id="blTitle">Bot</b><span class="muted small grow" id="blSub"></span><label class="check small"><input type="checkbox" id="blMarks"> Hiện điểm vào / ra</label></div>
+            <div class="panel bot-live" id="botLive" data-hub="grid:demo grid:mt5">
+              <div class="bl-head"><b id="blTitle">Bot</b><span class="bl-sub" id="blSub"></span><span class="bl-pill off" id="blPill"></span><span class="grow"></span><label class="check small"><input type="checkbox" id="blMarks"> Hiện điểm vào / ra</label></div>
               <p class="grid-state" id="blState" hidden></p>
               <div class="bl-draw" id="blDraw"></div>
               <div class="bot-chart" id="botChart"></div>
@@ -352,22 +353,8 @@
               <p class="bl-trend small" id="blTrend" hidden></p>
               <div id="botPL"></div>
             </div>
-            <div class="panel" id="stopBotPanel" data-hub="stop:demo stop:mt5"></div>
-            <div class="panel" id="srBotPanel" data-hub="sr:demo sr:mt5"></div>
-            <div class="panel" id="tickBotPanel" data-hub="tick:demo tick:mt5"></div>
             <div class="panel" id="gridBotPanel" data-hub="grid:demo grid:mt5"></div>
-            <div class="panel" id="stopBtPanel" data-hub="stop:backtest sr:backtest tick:backtest grid:backtest"></div>
-            <div class="panel" id="autoStatus" data-hub="strategy:demo strategy:mt5"></div>
-            <div class="panel" id="autoForm" data-hub="strategy:demo strategy:mt5"></div>
-            <div class="panel" data-hub="strategy:demo strategy:mt5">
-              <div class="panel-head"><h3 id="botPosTitle">Lệnh của bot</h3><button class="btn btn-ghost btn-small" id="botCloseAll" hidden>Đóng tất cả ✕</button></div>
-              <div id="botPositions" class="list"></div>
-            </div>
-            <div class="panel" data-hub="strategy:demo strategy:mt5">
-              <h3>Lịch sử bot</h3>
-              <div class="stats" id="botStats"></div>
-              <div id="botHistory" class="list"></div>
-            </div>
+            <div class="panel" id="stopBtPanel" data-hub="grid:backtest"></div>
           </div>
         </div>
       </div>
@@ -375,7 +362,6 @@
       <!-- Bot & server (owner) -->
       <div class="tab" data-tab="bot" hidden>
         <div class="panel" id="botPanel"></div>
-        <div class="panel own-box" id="ownAcctBox"></div>
         <div class="panel" id="mt5Login"></div>
         <div class="panel" id="mt5Panel"></div>
         <div class="panel">

@@ -2193,8 +2193,7 @@
       this.timers.push(setInterval(() => this.loadNews(), 5 * 60 * 1000));
       if (this.owner) {
         const badge = () => {
-          this.botCall("/status").then((st) => { this.botStatus = st; this.renderBotBadge(); }).catch(() => {});
-          this.botCall("/stopbot").then((st) => { this.stopStatus = st; this.renderBotBadge(); }).catch(() => {});
+          this.botCall("/gridbot").then((st) => { this.gridStatus = st; this.renderBotBadge(); }).catch(() => {});
         };
         badge();
         this.timers.push(setInterval(badge, 15000));
@@ -2982,7 +2981,10 @@
       if (t === "bot") this.loadBot(first);
       if (t === "autobot") {
         this.applyBotHub();
-        Promise.allSettled([this.loadAutoBot(first), this.loadStopBot(first), this.loadSRBot(first), this.loadTickBot(first), this.loadGridBot(first)]).then(() => this.applyBotHub());
+        // One bot now: the grid ("nhồi lệnh") bot; its own account box at the top, refreshed every 15 s.
+        if (first || !this.ownAt || Date.now() - this.ownAt > 15000) { this.ownAt = Date.now(); this.renderOwnAccount(); }
+        if (!$("stopBtPanel").firstChild) this.renderStopBt();
+        this.loadGridBot(first).then(() => this.applyBotHub());
       }
     },
 
@@ -3601,10 +3603,11 @@
     /* ----- the Bot box: one bot at a time, and how it runs ----- */
 
     applyBotHub() {
-      const BOTS = [["strategy", "📈 Chiến lược (ICT / mẫu)"], ["stop", "🎯 Stop theo nến"], ["sr", "🧱 Cản & Hỗ trợ"], ["tick", "⚡ Nến tick"], ["grid", "🕸️ Nhồi lệnh (grid)"]];
-      const MODES = [["backtest", "🧪 Backtest", "chạy trên nến đã qua"], ["demo", "🎮 Chạy thử", "tiền ảo, không đặt lệnh thật"], ["mt5", "💹 Tài khoản MT5", "Exness demo / thật"]];
-      let bot = store.get("aurum.hubBot") || "strategy", mode = store.get("aurum.hubMode") || "demo";
-      if (!BOTS.some(([k]) => k === bot)) bot = "strategy";
+      // The other bots are gone from the website: the grid bot only.
+      const BOTS = [["grid", "🕸️ Nhồi lệnh"]];
+      const MODES = [["backtest", "🧪 Backtest", "chạy trên tick / nến đã qua"], ["demo", "🎮 Chạy thử ảo", "tiền ảo trên giá Exness"], ["mt5", "💹 Tài khoản của bot", this.ownAccount ? "lệnh thật trên tài khoản riêng" : "lệnh thật trên MT5"]];
+      let bot = "grid", mode = store.get("aurum.hubMode") || "demo";
+      store.set("aurum.hubBot", "grid");
       if (!MODES.some(([k]) => k === mode)) mode = "demo";
       const bots = $("hubBots"), modes = $("hubModes");
       if (!bots || !modes) return;
@@ -3613,9 +3616,10 @@
       bots.querySelectorAll("[data-b]").forEach((b) => (b.onclick = () => { store.set("aurum.hubBot", b.dataset.b); this.applyBotHub(); }));
       modes.querySelectorAll("[data-m]").forEach((b) => (b.onclick = () => { store.set("aurum.hubMode", b.dataset.m); this.applyBotHub(); }));
       // The MT5 account in use: demo or real (from the last trading status).
-      const t = this.lastTrading || {}, acct = $("hubAcct");
+      // The account the bot trades on: its own (the second MT5) when that runs, else the chart's main one.
+      const t = (this.ownAccount ? this.botAcct : this.lastTrading) || {}, acct = $("hubAcct");
       if (acct) {
-        acct.textContent = t.login ? `MT5 #${t.login} · ${t.mode === "real" ? "TÀI KHOẢN THẬT" : "demo"}` : "MT5 chưa đăng nhập";
+        acct.textContent = t.login ? `${this.ownAccount ? "Tài khoản bot" : "⚠️ Bot dùng tài khoản chính"} #${t.login} · ${t.mode === "real" ? "THẬT" : "demo"}` : this.ownAccount ? "Tài khoản bot chưa đăng nhập" : "MT5 chưa đăng nhập";
         acct.className = "badge " + (t.login ? (t.mode === "real" ? "real" : "on") : "off");
       }
       const key = bot + ":" + mode;
@@ -3647,7 +3651,7 @@
         "tick:demo": "Chạy thử: bot chạy trên máy chủ theo giá Exness thật từng tick, lệnh và số dư là ẢO (không đặt lệnh lên MT5, kể cả khi đang đăng nhập tài khoản thật).",
         "grid:backtest": "Backtest bot nhồi lệnh trên tick thật Exness (tối đa 2 ngày) hoặc trên nến 1 phút (ước lượng). Xem kỹ ô 'Âm sâu nhất khi đang gồng': đó là số tiền tài khoản phải chịu được.",
         "grid:demo": "Chạy thử: bot nhồi lệnh chạy trên máy chủ theo giá Exness thật từng tick, lệnh và số dư là ẢO (không đặt lệnh lên MT5).",
-        "grid:mt5": "Bot nhồi lệnh đặt lệnh THẬT trên tài khoản MT5 đang đăng nhập (bắt buộc có SL rổ hoặc Cắt lỗ chung). Nên chạy trên tài khoản DEMO Exness trước.",
+        "grid:mt5": this.ownAccount ? "Bot đặt lệnh trên TÀI KHOẢN RIÊNG của bot (ô phía trên) — chart vẫn dùng tài khoản thật của bạn. Thử trên tài khoản demo Exness tới khi bot ổn rồi mới đổi sang tài khoản thật." : "⚠️ Bot đang dùng TÀI KHOẢN CHÍNH của chart. Bật 'Tài khoản riêng cho bot' ở ô phía trên và đăng nhập một tài khoản demo Exness để bot chạy riêng.",
       };
       const real = t.login && t.mode === "real" && mode !== "backtest" && !(mode === "demo" && (bot === "strategy" || bot === "tick" || bot === "grid"));
       $("hubNote").innerHTML = (notes[key] ? esc(notes[key]) : "") + (real ? `<div class="warn">⚠️ Đang đăng nhập TÀI KHOẢN THẬT: bot sẽ đặt lệnh bằng tiền thật.</div>` : "");
@@ -3927,7 +3931,14 @@
         mk.checked = store.get("aurum.botMarks") === "1";
         mk.onchange = () => { store.set("aurum.botMarks", mk.checked ? "1" : null); this.renderBotLive(); };
       }
-      $("blSub").textContent = v ? ` · ${v.symbol || "–"} ${v.interval || ""} · ${v.running ? (v.paper ? "đang chạy ẢO" : "đang chạy trên MT5") : "đang tắt"}${this.ownAccount ? " · tài khoản riêng" : ""} · chạy 24/24 trên VPS` : " · chưa có dữ liệu";
+      $("blSub").textContent = v ? `${(v.symbol || "–").replace(/m$/, "")} · ${v.interval || ""}${this.ownAccount ? " · tài khoản riêng của bot" : ""}` : "chưa có dữ liệu";
+      // A status pill: running (virtual / on MT5) with a live dot, or stopped; the open P/L beside it.
+      const pill = $("blPill");
+      if (pill) {
+        const open = v ? v.positions.reduce((a, p) => a + (p.profit || 0), 0) : 0;
+        pill.className = "bl-pill " + (v && v.running ? (v.paper ? "paper" : "live") : "off");
+        pill.innerHTML = `<i></i>${v && v.running ? (v.paper ? "Đang chạy ảo" : "Đang chạy · MT5") : "Đang tắt"}${v && v.positions.length ? ` <b class="${open >= 0 ? "pos" : "neg"}">${signed(open)}</b>` : ""}`;
+      }
       // The grid bot: what it is doing now, over its chart (resting after a stop, waiting for a signal…).
       const gs = $("blState");
       if (gs) {
@@ -3937,13 +3948,21 @@
       if (!v || !v.symbol || !v.interval) return;
       if (!this.botChart) {
         const el = $("botChart");
+        // A refined dark chart: a deep gradient, hairline grid, a faint gold watermark, gold crosshair.
         this.botChart = LightweightCharts.createChart(el, {
-          autoSize: true, layout: { background: { color: "#050506" }, textColor: "#c3cad7", fontSize: 11 },
-          grid: { vertLines: { color: "#141417" }, horzLines: { color: "#141417" } },
-          rightPriceScale: { borderColor: "#1e1e23" }, timeScale: { borderColor: "#1e1e23", timeVisible: true, rightOffset: 4 },
-          crosshair: { mode: 0 },
+          autoSize: true,
+          layout: { background: { type: "gradient", topColor: "#11141b", bottomColor: "#07080c" }, textColor: "#9aa3b5", fontSize: 11,
+            fontFamily: "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" },
+          grid: { vertLines: { color: "rgba(255, 255, 255, 0.035)" }, horzLines: { color: "rgba(255, 255, 255, 0.045)" } },
+          rightPriceScale: { borderVisible: false, scaleMargins: { top: 0.12, bottom: 0.1 } },
+          timeScale: { borderVisible: false, timeVisible: true, rightOffset: 6, barSpacing: 7 },
+          crosshair: { mode: 0,
+            vertLine: { color: "rgba(242, 193, 78, 0.45)", width: 1, style: 2, labelBackgroundColor: "#2a2412" },
+            horzLine: { color: "rgba(242, 193, 78, 0.45)", width: 1, style: 2, labelBackgroundColor: "#2a2412" } },
+          watermark: { visible: true, text: "AURUM · BOT", color: "rgba(242, 193, 78, 0.06)", fontSize: 44, fontStyle: "700" },
         });
-        this.botSeries = this.botChart.addCandlestickSeries({ upColor: "#14b88a", downColor: "#f0455a", wickUpColor: "#14b88a", wickDownColor: "#f0455a", borderVisible: false });
+        this.botSeries = this.botChart.addCandlestickSeries({ upColor: "#1fc28b", downColor: "#f04a5f", wickUpColor: "#1fc28b", wickDownColor: "#f04a5f", borderVisible: false,
+          priceLineColor: "rgba(242, 193, 78, 0.7)" });
         this.botLines = [];
         this.setupBotDrawings();
       }
@@ -4419,7 +4438,13 @@
       const start = $("gbStart"), stop = $("gbStopBtn"), save = $("gbSave");
       if (start) start.onclick = (e) => {
         const g = this.gridSettings();
-        if (!g.paper && !confirm(`Bot nhồi lệnh sẽ đặt lệnh THẬT trên tài khoản MT5 đang đăng nhập, gấp lot tới ${this.gridRisk(g).total} lot mỗi rổ. Tiếp tục?`)) return;
+        if (!g.paper && store.get("aurum.useWebAcct") === "1" && !this.ownAccount) {
+          toast("Tài khoản riêng của bot chưa sẵn sàng (đang khởi động?): chưa bật, để không đặt nhầm lên tài khoản chính", true);
+          return;
+        }
+        const a = (this.ownAccount ? this.botAcct : this.lastTrading) || {};
+        const where = `${this.ownAccount ? "TÀI KHOẢN BOT" : "TÀI KHOẢN CHÍNH CỦA CHART"} #${a.login || "?"} (${a.mode === "real" ? "TIỀN THẬT" : "demo"})`;
+        if (!g.paper && !confirm(`Bot nhồi lệnh sẽ đặt lệnh trên ${where}, tới ${this.gridRisk(g).total} lot mỗi rổ. Tiếp tục?`)) return;
         send(e.currentTarget, { running: true }, "Đã bật bot nhồi lệnh");
       };
       if (stop) stop.onclick = (e) => send(e.currentTarget, { running: false }, "Đã tắt bot (lệnh đang mở giữ nguyên)");
@@ -4829,9 +4854,8 @@
       const st = this.botStatus, b = $("botBadge");
       if (!b) return;
       const parts = [];
-      if (this.owner && st && st.running) { const s = st.settings || {}; parts.push(`🤖 Bot: ${s.strategyName || "chiến lược"} · ${s.symbol} ${s.interval}`); }
-      const sb = this.stopStatus && this.stopStatus.config;
-      if (this.owner && sb && sb.running) parts.push(`🎯 Bot Stop · ${sb.symbol} ${sb.interval}`);
+      const g = this.gridStatus && this.gridStatus.config;
+      if (this.owner && g && g.running) parts.push(`🕸️ Bot nhồi lệnh · ${g.symbol} · ${g.paper ? "ảo" : this.ownAccount ? "tài khoản bot" : "MT5"}`);
       b.hidden = !parts.length;
       b.textContent = parts.join("  ·  ");
       b.onclick = () => this.setTab("autobot");
@@ -4997,16 +5021,16 @@
       let w = null, problem = "";
       try { w = await this.mainCall("/webacct"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.7 để dùng." : plain(e.message); }
       const use = store.get("aurum.useWebAcct") === "1";
-      const html = `<h4>🖥️ Tài khoản MT5 riêng cho máy tính</h4>
-        <p class="muted small">Máy chủ VPS chạy thêm một MT5 thứ 2 với tài khoản riêng (ví dụ tài khoản <b>demo</b>) <b>chỉ cho bot</b>: tab Bot trên máy tính này xem và chạy bot trên tài khoản đó, còn tab Biểu đồ vẫn trade tay trên <b>tài khoản chính</b> (app cũng vậy) — không cần đăng nhập qua lại. Bot chạy 24/24 trên VPS, tắt web vẫn chạy. Lần đầu bật, máy chủ sao chép MT5 (vài phút).</p>
+      const html = `<h4>🖥️ Tài khoản riêng của bot</h4>
+        <p class="muted small">Bot chạy trên một <b>MT5 thứ 2</b> với tài khoản riêng — dùng <b>tài khoản demo Exness</b> để thử cho thật; chart và app vẫn dùng <b>tài khoản thật</b> của bạn. Bot ổn rồi mới đăng nhập tài khoản thật vào đây. Lần đầu bật, máy chủ sao chép MT5 (vài phút).</p>
         ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
         ${w ? `<div class="kvs"><div class="kv"><span>Máy chủ thứ 2</span><b>${w.enabled ? (w.running ? `đang chạy · cổng ${w.port}` : "đang khởi động…") : "đang tắt"}</b></div>
           <div class="kv"><span>MT5 của nó</span><b>${w.info && w.info.mt5 ? (w.info.mt5.connected ? "đã kết nối" : esc(w.info.mt5.error || "chưa đăng nhập")) : "–"}</b></div>
-          <div class="kv"><span>Tab Bot trên máy tính này</span><b>${this.ownAccount ? "🖥️ chạy trên tài khoản riêng" : "dùng tài khoản chính"}</b></div></div>
+          <div class="kv"><span>Bot đang dùng</span><b class="${this.ownAccount ? "pos" : "neg"}">${this.ownAccount ? "🖥️ tài khoản riêng" : "⚠️ tài khoản chính của chart"}</b></div></div>
           ${w.error ? `<p class="warn">${esc(w.error)}</p>` : ""}
           <div class="row-btns">
-            <button class="btn ${w.enabled ? "btn-ghost" : "btn-gold"}" id="ownToggle" type="button">${w.enabled ? "■ Tắt máy chủ thứ 2" : "▶ Bật tài khoản riêng cho máy tính"}</button>
-            ${w.enabled ? `<button class="btn ${use ? "btn-ghost" : "btn-gold"}" id="ownUse" type="button">${use ? "Bot về tài khoản chính" : "Bot chạy trên tài khoản riêng"}</button>` : ""}
+            <button class="btn ${w.enabled ? "btn-ghost" : "btn-gold"}" id="ownToggle" type="button">${w.enabled ? "■ Tắt tài khoản riêng" : "▶ Bật tài khoản riêng cho bot"}</button>
+            ${w.enabled ? `<button class="btn ${use ? "btn-ghost" : "btn-gold"}" id="ownUse" type="button">${use ? "Bot về tài khoản chính" : "Cho bot chạy trên tài khoản này"}</button>` : ""}
           </div>
           ${w.enabled ? `<div id="ownLogin"></div>` : ""}` : ""}`;
       // Same as on screen: leave it (and the login form being typed in) alone.
@@ -5014,11 +5038,21 @@
       this.ownHtml = html;
       box.innerHTML = html;
       if (w && w.enabled && w.running && w.url) this.renderOwnLogin(w.url);
+      if (w && w.enabled && w.running && use && !this.ownAccount) {
+        // Just started: the bot moves to its own account now.
+        await this.pickAccountServer();
+        if (this.ownAccount) { toast("Bot đã chuyển sang tài khoản riêng"); this.ownHtml = ""; this.loadGridBot(true); this.renderOwnAccount(); return; }
+      }
       const toggle = $("ownToggle"), useBtn = $("ownUse");
       if (toggle) toggle.onclick = async (e) => {
         const on = !w.enabled;
-        const r = await act(e.currentTarget, () => this.mainCall("/webacct", { enabled: on }), on ? "Đang bật máy chủ thứ 2 (lần đầu vài phút)…" : "Đã tắt");
-        if (r) { if (!on && use) { store.set("aurum.useWebAcct", null); location.reload(); return; } this.renderOwnAccount(); }
+        const r = await act(e.currentTarget, () => this.mainCall("/webacct", { enabled: on }), on ? "Đang bật MT5 thứ 2 cho bot (lần đầu vài phút)…" : "Đã tắt");
+        if (r) {
+          if (!on && use) { store.set("aurum.useWebAcct", null); location.reload(); return; }
+          // Turned on: the bot moves to it as soon as it runs (no second click).
+          if (on) store.set("aurum.useWebAcct", "1");
+          this.renderOwnAccount();
+        }
       };
       if (useBtn) useBtn.onclick = () => {
         store.set("aurum.useWebAcct", use ? null : "1");
@@ -5034,6 +5068,8 @@
       const own = (path, body) => api(url, this.secret, path, body);
       let t = null;
       try { t = await own("/mt5/trading"); } catch { /* not logged in yet */ }
+      this.botAcct = t;
+      if (this.tab === "autobot") this.applyBotHub();
       box.innerHTML = `<div class="fp-sec" style="margin-top:10px">Tài khoản MT5 cho bot</div>
         <p class="small">${t && t.login ? `Đang đăng nhập <b>#${esc(String(t.login))}</b> · ${esc(t.server || "")} · ${t.mode === "real" ? '<b class="neg">TÀI KHOẢN THẬT</b>' : "demo"}` : "Chưa đăng nhập: nhập tài khoản demo Exness để bot chạy."}</p>
         <div class="fields three">
