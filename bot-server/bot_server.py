@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "7.1"
+VERSION = "7.2"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -349,7 +349,9 @@ class Mt5:
             if cls.connected and mt5.terminal_info() is not None:
                 return mt5
             kwargs = {}
-            if cfg.get("path"):
+            # A path from another machine (settings brought over from an old VPS) that is not here: the
+            # installed MT5 instead.
+            if cfg.get("path") and os.path.exists(cfg["path"]):
                 kwargs["path"] = cfg["path"]
                 if cfg.get("portable"):
                     kwargs["portable"] = True
@@ -1484,7 +1486,7 @@ class CopyWorker:
     def connect(self, cfg):
         mt5 = self.mt5
         kwargs = {"timeout": 60000}
-        if cfg.get("path"):
+        if cfg.get("path") and os.path.exists(cfg["path"]):
             kwargs["path"] = cfg["path"]
             kwargs["portable"] = bool(cfg.get("portable"))
         kwargs.update(login=int(cfg["login"]), password=str(cfg["password"]), server=str(cfg["server"]))
@@ -1732,6 +1734,8 @@ def clone_terminal(follower_id, master_cfg):
     if os.path.exists(exe):
         return exe
     source = os.path.dirname(master_cfg.get("path") or "")
+    if source and not os.path.exists(os.path.join(source, "terminal64.exe")):
+        source = ""  # a path from another machine: the running terminal's own instead
     data_path = None
     with Mt5.lock:
         try:

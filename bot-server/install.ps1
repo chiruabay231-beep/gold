@@ -7,9 +7,15 @@
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/chiruabay231-beep/gold/claude/ios-backtest-custom-indicators-jptyoz/bot-server/install.ps1))) -Mt5
 #
 # Running it again updates the bot and keeps config.json / state.json.
+#
+# Moving from another machine: put GoldBot-backup.zip (made there by backup.ps1) on the Desktop or in Downloads,
+# or give its path with -Restore; it is put back before the first start (settings, members, drawings, virtual
+# accounts). On a Windows virtual machine (Mac + Parallels / UTM) the -Mt5 phase also keeps Windows awake and
+# can sign Windows in by itself, so MT5 and the bot start with the virtual machine.
 
 param(
     [switch]$Mt5,
+    [string]$Restore = "",
     [string]$Dir = "C:\GoldBot"
 )
 
@@ -48,6 +54,25 @@ Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
 Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='cloudflared.exe' OR Name='powershell.exe'" -ErrorAction SilentlyContinue |
     Where-Object { $_.CommandLine -like "*$Dir\bot_server.py*" -or $_.CommandLine -like "*$Dir\run.ps1*" -or $_.ExecutablePath -like "$Dir*" } |
     ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+
+# A backup from the old machine: given, or found on the Desktop / in Downloads when this machine has no settings yet.
+if (-not $Restore -and -not (Test-Path (Join-Path $Dir "config.json"))) {
+    foreach ($place in @([Environment]::GetFolderPath("Desktop"), (Join-Path $env:USERPROFILE "Downloads"))) {
+        $found = Join-Path $place "GoldBot-backup.zip"
+        if (Test-Path $found) { $Restore = $found; break }
+    }
+}
+if ($Restore) {
+    if (-not (Test-Path $Restore)) { throw "Không thấy file sao lưu $Restore" }
+    Step "Khôi phục dữ liệu từ máy cũ ($Restore)"
+    $restoreDir = Join-Path $Temp "restore"
+    Remove-Item -Recurse -Force $restoreDir -ErrorAction SilentlyContinue
+    Expand-Archive -Path $Restore -DestinationPath $restoreDir -Force
+    Get-ChildItem $restoreDir -File | ForEach-Object {
+        Copy-Item $_.FullName -Destination $Dir -Force
+        Write-Host "  + $($_.Name)"
+    }
+}
 
 Step "Tải bot (botkit + máy chủ)"
 $zip = Join-Path $Temp "gold-bot-windows.zip"
@@ -99,6 +124,36 @@ if (-not (Test-Path $configPath)) {
     $config | ConvertTo-Json -Depth 8 | Set-Content -Path $configPath -Encoding UTF8
 }
 $config = Get-Content $configPath -Raw | ConvertFrom-Json
+
+if ($Mt5) {
+    Step "Giữ Windows luôn thức (máy ảo / máy bàn chạy 24/24)"
+    # Never sleep or hibernate on power; the screen may turn off.
+    powercfg /change standby-timeout-ac 0 | Out-Null
+    powercfg /change hibernate-timeout-ac 0 | Out-Null
+    powercfg /change standby-timeout-dc 0 | Out-Null
+    powercfg /change hibernate-timeout-dc 0 | Out-Null
+    # Windows Update: no restart on its own while someone is signed in (the bot's session).
+    $wu = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
+    New-Item -Path $wu -Force | Out-Null
+    Set-ItemProperty -Path $wu -Name "NoAutoRebootWithLoggedOnUsers" -Value 1 -Type DWord
+    Write-Host "Đã tắt ngủ / ngủ đông và tự khởi động lại khi cập nhật."
+
+    Write-Host "Tự đăng nhập Windows khi bật máy (để MT5 và bot tự chạy, không cần ai bấm)? (y/N)" -ForegroundColor Yellow
+    if ((Read-Host) -match "^[yYcC]") {
+        $secure = Read-Host "Mật khẩu Windows của $env:USERNAME (để trống nếu không có)" -AsSecureString
+        $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+        $autologon = Join-Path $Temp "Autologon64.exe"
+        try {
+            Invoke-WebRequest -Uri "https://live.sysinternals.com/Autologon64.exe" -OutFile $autologon -UseBasicParsing
+            # Sysinternals Autologon keeps the password encrypted (LSA secret), not in plain text in the registry.
+            & $autologon $env:USERNAME $env:USERDOMAIN $plain /accepteula | Out-Null
+            Write-Host "Đã bật tự đăng nhập cho $env:USERNAME." -ForegroundColor Green
+        } catch {
+            Write-Host "Không bật được tự đăng nhập ($($_.Exception.Message)). Có thể bật tay: Win+R → netplwiz." -ForegroundColor Yellow
+        }
+        $plain = $null
+    }
+}
 
 Step "Đăng ký tự chạy"
 $action = New-ScheduledTaskAction -Execute "powershell.exe" `
