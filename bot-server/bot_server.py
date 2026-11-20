@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "7.2"
+VERSION = "7.3"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2396,10 +2396,14 @@ class Tunnel:
     def _run(self):
         port = int(self.server.config.get("port", 8787))
         self._adopt()
+        failures = 0
         while True:
+            # HTTP/2 over TCP 443 by default: QUIC (UDP) often fails behind a virtual machine's network (VMware,
+            # Parallels) or a home router, and cloudflared then quits a few seconds after getting its address.
+            protocol = str(self.server.config.get("tunnel_protocol") or "http2")
             try:
                 self.process = subprocess.Popen(
-                    [self._binary(), "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{port}"],
+                    [self._binary(), "tunnel", "--no-autoupdate", "--protocol", protocol, "--url", f"http://127.0.0.1:{port}"],
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
             except FileNotFoundError:
                 self.error = "Không tìm thấy cloudflared"
@@ -2409,17 +2413,43 @@ class Tunnel:
                     f.write(str(self.process.pid))
             except OSError:
                 pass
+            pending, lines, started = "", [], time.time()
             for raw in self.process.stdout:
                 line = raw.decode("utf-8", "replace")
+                lines.append(line.rstrip())
+                del lines[:-200]
                 match = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
-                if match and match.group(0) != self.url:
-                    self.url = match.group(0)
+                if match and match.group(0) != pending:
+                    pending = match.group(0)
+                    proc = self.process
+
+                    def still_up(url=pending, proc=proc):
+                        # A cloudflared that does not print the registration line: given out once it has stayed up.
+                        if proc.poll() is None and self.url != url:
+                            self.url, self.error = url, ""
+                            self.server.on_tunnel(url)
+                    threading.Timer(25, still_up).start()
+                # The address is given out only once the tunnel is connected to Cloudflare (an address printed
+                # by a cloudflared that cannot connect is dead at once).
+                if pending and pending != self.url and ("Registered tunnel connection" in line or "Connection registered" in line):
+                    self.url = pending
                     self.error = ""
+                    failures = 0
                     self.server.on_tunnel(self.url)
             self.process.wait()
+            try:
+                with open(own("tunnel.log"), "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines))
+            except OSError:
+                pass
+            lived = time.time() - started
             self.url = ""
+            failures = failures + 1 if lived < 60 else 0
             self.error = "Tunnel bị ngắt, đang kết nối lại"
-            time.sleep(10)
+            if failures in (3, 10):
+                self.server.log(f"🌐 Đường hầm Cloudflare không giữ được kết nối ({failures} lần) — xem {own('tunnel.log')}")
+            # Waits longer after repeated failures (up to 2 minutes), not a new address every few seconds.
+            time.sleep(min(120, 10 * max(1, failures)))
 
     def stop(self):
         if self.process and self.process.poll() is None:
