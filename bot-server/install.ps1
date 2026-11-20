@@ -135,9 +135,19 @@ if ($Ngrok -or $config.ngrok_token) {
     if ($Ngrok) {
         Write-Host "Mở https://dashboard.ngrok.com → 'Your Authtoken': copy token rồi dán vào đây:" -ForegroundColor Yellow
         $token = (Read-Host).Trim()
-        Write-Host "Domain miễn phí của bạn (dashboard.ngrok.com → Domains, dạng ten-cua-ban.ngrok-free.app), Enter nếu chưa có:" -ForegroundColor Yellow
-        $domain = (Read-Host).Trim() -replace "^https?://", "" -replace "/+$", ""
+        if ($token -match "\.ngrok") { throw "Bạn vừa dán domain vào ô token: token lấy ở dashboard.ngrok.com → Your Authtoken" }
         if (-not $token) { throw "Chưa nhập authtoken ngrok" }
+        # The domain is a host name (name.ngrok-free.app / .ngrok.app / .ngrok.dev / one of your own), never the token.
+        while ($true) {
+            Write-Host "Domain miễn phí của bạn (dashboard.ngrok.com → Domains, dạng ten-cua-ban.ngrok-free.app), Enter nếu chưa có:" -ForegroundColor Yellow
+            $domain = (Read-Host).Trim() -replace "^https?://", "" -replace "/+$", ""
+            if (-not $domain) { break }
+            if ($domain -eq $token -or $domain -notmatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$") {
+                Write-Host "Đây không phải domain (giống token?). Domain có dạng ten-cua-ban.ngrok-free.app — nhập lại:" -ForegroundColor Red
+                continue
+            }
+            break
+        }
         $config | Add-Member -NotePropertyName ngrok_token -NotePropertyValue $token -Force
         $config | Add-Member -NotePropertyName ngrok_domain -NotePropertyValue $domain -Force
         $config | ConvertTo-Json -Depth 8 | Set-Content -Path $configPath -Encoding UTF8
