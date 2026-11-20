@@ -81,7 +81,15 @@ if ($Restore) {
 
 Step "Tải bot (botkit + máy chủ)"
 $zip = Join-Path $Temp "gold-bot-windows.zip"
-Invoke-WebRequest -Uri $Release -OutFile $zip -UseBasicParsing
+# The release is replaced for a minute or two while a new build is published: tried again then.
+for ($try = 1; $try -le 8; $try++) {
+    try { Invoke-WebRequest -Uri $Release -OutFile $zip -UseBasicParsing; break }
+    catch {
+        if ($try -eq 8) { throw }
+        Write-Host "Chưa tải được (bản mới đang được phát hành?), thử lại sau 30 giây… ($try/8)" -ForegroundColor Yellow
+        Start-Sleep -Seconds 30
+    }
+}
 $unpack = Join-Path $Temp "unpack"
 Remove-Item -Recurse -Force $unpack -ErrorAction SilentlyContinue
 Expand-Archive -Path $zip -DestinationPath $unpack -Force

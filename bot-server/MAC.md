@@ -101,6 +101,22 @@ Xem loại chip: menu  → *Giới thiệu về máy Mac* → **Chip Apple M1/M2
    - Hỏi *Tự đăng nhập Windows khi bật máy?* → gõ **y**, nhập mật khẩu Windows (để trống nếu không đặt).
      Nhờ vậy khi máy ảo bật lại, Windows tự vào và bot + MT5 tự chạy, không cần ai bấm.
 
+### 3b. Địa chỉ cố định bằng ngrok (nên dùng khi chạy ở nhà)
+
+Đường hầm mặc định của Cloudflare (`…trycloudflare.com`) hay bị Cloudflare **giới hạn (lỗi 429)** ở mạng nhà và đổi
+địa chỉ mỗi lần bật lại. Dùng **ngrok** (miễn phí) cho địa chỉ **cố định**:
+
+1. Đăng ký tại **ngrok.com** → **dashboard.ngrok.com**: copy **Your Authtoken**; vào **Domains** lấy domain miễn phí
+   (dạng `ten-gi-do.ngrok-free.dev` / `.ngrok-free.app`).
+2. Chạy lại lệnh cài với thêm `-Ngrok`:
+
+   ```powershell
+   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/chiruabay231-beep/gold/claude/ios-backtest-custom-indicators-jptyoz/bot-server/install.ps1))) -Mt5 -Ngrok
+   ```
+
+   Dán **token** khi được hỏi token, dán **domain** khi được hỏi domain (không dán nhầm token vào ô domain).
+3. Token ngrok là bí mật: không gửi cho ai, không chụp màn hình có token.
+
 ## 4. Trên Mac: giữ Mac luôn thức
 
 1. Mở **Terminal** trên Mac, dán (sẽ hỏi mật khẩu Mac một lần):
