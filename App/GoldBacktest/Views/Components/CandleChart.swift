@@ -382,6 +382,9 @@ struct CandleChart: View {
     @State private var creatingPreview: Drawing?
     /// Finger position while creating or reshaping, shown as a guide.
     @State private var guidePoint: CGPoint?
+    /// While a drawing is drawn, reshaped or moved: the point under the finger, shown magnified in a lens in a
+    /// top corner of the chart (as MT5), since the finger hides it.
+    @State private var loupePoint: CGPoint?
     /// Handle of the selected drawing being dragged (2 = position target).
     @State private var handleIndex: Int?
     /// Price line being dragged and its latest price.
@@ -770,7 +773,7 @@ struct CandleChart: View {
     }
 
     /// `axisOnly`: the pass that only shows the price axis (axis on the left), candles skipped.
-    private func draw(in context: inout GraphicsContext, layout: Layout, now: Date, axisOnly: Bool = false) {
+    private func draw(in context: inout GraphicsContext, layout: Layout, now: Date, axisOnly: Bool = false, lens: Bool = false) {
         guard !candles.isEmpty else { return }
         let s = scale(layout: layout)
         let range = vp.range(total: candles.count)
@@ -1211,6 +1214,37 @@ struct CandleChart: View {
             context.draw(Text(timeText).font(.system(size: 10)).foregroundColor(.white),
                          at: CGPoint(x: timeBox.midX, y: timeBox.midY), anchor: .center)
         }
+        if !lens, !axisOnly, let focus = loupePoint {
+            drawLoupe(in: &context, layout: layout, now: now, focus: focus)
+        }
+    }
+
+    /// The magnifying lens: the chart around `focus` drawn again 2.2 times bigger in a rounded box in the top-left
+    /// corner of the plot (the top-right one when the finger is there), a red dot on the point under the finger.
+    private func drawLoupe(in context: inout GraphicsContext, layout: Layout, now: Date, focus: CGPoint) {
+        let side: CGFloat = 124, zoom: CGFloat = 2.2, pad: CGFloat = 8
+        var box = CGRect(x: layout.plot.minX + pad, y: layout.plot.minY + pad, width: side, height: side)
+        if box.insetBy(dx: -28, dy: -28).contains(focus) { box.origin.x = layout.axisX - side - pad }
+        let shape = Path(roundedRect: box, cornerRadius: 12)
+        var shadow = context
+        shadow.addFilter(.shadow(color: .black.opacity(0.35), radius: 8, y: 3))
+        shadow.fill(shape, with: .color(theme.background))
+        var magnified = context
+        magnified.clip(to: shape)
+        magnified.fill(shape, with: .color(theme.background))
+        magnified.translateBy(x: box.midX, y: box.midY)
+        magnified.scaleBy(x: zoom, y: zoom)
+        magnified.translateBy(x: -focus.x, y: -focus.y)
+        draw(in: &magnified, layout: layout, now: now, lens: true)
+        context.stroke(shape, with: .color(theme.text.opacity(0.5)), lineWidth: 1.2)
+        // The point under the finger: a red ring with a dark centre, and faint cross hairs through it.
+        let c = CGPoint(x: box.midX, y: box.midY)
+        var cross = Path()
+        cross.move(to: CGPoint(x: box.minX + 6, y: c.y)); cross.addLine(to: CGPoint(x: box.maxX - 6, y: c.y))
+        cross.move(to: CGPoint(x: c.x, y: box.minY + 6)); cross.addLine(to: CGPoint(x: c.x, y: box.maxY - 6))
+        context.stroke(cross, with: .color(theme.text.opacity(0.25)), style: StrokeStyle(lineWidth: 0.6, dash: [3, 3]))
+        context.fill(Path(ellipseIn: CGRect(x: c.x - 8, y: c.y - 8, width: 16, height: 16)), with: .color(Color.red.opacity(0.85)))
+        context.fill(Path(ellipseIn: CGRect(x: c.x - 3.5, y: c.y - 3.5, width: 7, height: 7)), with: .color(Color(white: 0.22)))
     }
 
     /// A price label's font size: `size`, smaller for long figures (8 characters and more) so they stay
@@ -2441,6 +2475,7 @@ struct CandleChart: View {
                         ChartPoint(time: time(forIndex: index(for: p.time) + barShift), price: p.price + priceShift)
                     }
                     movingPreview = moved
+                    loupePoint = location
                 case .priceLine:
                     guard let line = draggedLine else { return }
                     // Two fingers: a zoom, not a drag.
@@ -2472,6 +2507,7 @@ struct CandleChart: View {
                         }
                         creatingPreview = Drawing(tool: .brush, points: stroke)
                         guidePoint = nil
+                        loupePoint = location
                         return
                     }
                     let end = chartPoint(at: location, layout: layout)
@@ -2486,11 +2522,13 @@ struct CandleChart: View {
                         creatingPreview = makeDrawing(tool, points: [start, end])
                     }
                     guidePoint = screenPoint(end, layout: layout)
+                    loupePoint = guidePoint
                 case .moveHandle:
                     guard let original = movingOriginal, let handle = handleIndex else { return }
                     let point = chartPoint(at: location, layout: layout)
                     movingPreview = moving(original, handle: handle, to: point)
                     guidePoint = screenPoint(point, layout: layout)
+                    loupePoint = guidePoint
                 case .crosshair:
                     crosshair = location
                 case .pan:
@@ -2567,6 +2605,7 @@ struct CandleChart: View {
                 }
                 creatingPreview = nil
                 guidePoint = nil
+                loupePoint = nil
                 handleIndex = nil
                 dragMode = nil
                 dragStartRange = nil
