@@ -32,7 +32,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "7.3"
+VERSION = "7.4"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2446,10 +2446,17 @@ class Tunnel:
             self.url = ""
             failures = failures + 1 if lived < 60 else 0
             self.error = "Tunnel bị ngắt, đang kết nối lại"
+            if any("status 429" in x or "Too Many Requests" in x for x in lines[-20:]):
+                # trycloudflare.com limits how often one place asks for a quick tunnel: asking again soon keeps
+                # the limit on, so this waits a quarter of an hour.
+                self.error = "Cloudflare tạm giới hạn đường hầm (quá nhiều lần mở): thử lại sau 15 phút"
+                self.server.log("🌐 Cloudflare tạm giới hạn đường hầm (lỗi 429): chờ 15 phút rồi thử lại")
+                time.sleep(900)
+                continue
             if failures in (3, 10):
                 self.server.log(f"🌐 Đường hầm Cloudflare không giữ được kết nối ({failures} lần) — xem {own('tunnel.log')}")
-            # Waits longer after repeated failures (up to 2 minutes), not a new address every few seconds.
-            time.sleep(min(120, 10 * max(1, failures)))
+            # Waits longer after repeated failures (up to 5 minutes), not a new address every few seconds.
+            time.sleep(min(300, 15 * max(1, failures) ** 2))
 
     def stop(self):
         if self.process and self.process.poll() is None:
