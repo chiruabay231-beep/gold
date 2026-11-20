@@ -233,7 +233,7 @@ if ($url) { Write-Host "Địa chỉ máy chủ : $url" -ForegroundColor Green }
 else { Write-Host "Địa chỉ máy chủ : chưa có, xem lại sau trong $Dir\tunnel.txt hoặc gõ /url cho bot Telegram" -ForegroundColor Yellow }
 Write-Host "Mật khẩu máy chủ: $($config.password)" -ForegroundColor Green
 Write-Host ""
-Write-Host "Mở app → Backtest → Bot → Máy chủ VPS, nhập địa chỉ và mật khẩu ở trên."
+Write-Host "Web và app: chỉ cần nhập mật khẩu máy chủ ở trên (tự tìm địa chỉ)."
 Write-Host "KHÔNG gửi mật khẩu này cho ai (kể cả trong chat)."
 if ($config.telegram.token -and -not $config.telegram.chat_id) {
     Write-Host "Mở Telegram, nhắn bất kỳ chữ nào cho bot của bạn để liên kết thông báo." -ForegroundColor Yellow

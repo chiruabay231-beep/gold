@@ -49,11 +49,7 @@ struct RootView: View {
                     .tabItem { Label("Tin tức", systemImage: "newspaper") }
                     .tag(AppTab.news)
             }
-            if memberFeed.allows(.backtest) {
-                NavigationStack { BacktestView() }
-                    .tabItem { Label("Backtest", systemImage: "play.circle") }
-                    .tag(AppTab.backtest)
-            }
+            // The strategies' backtest tab is gone from the app (the grid bot is backtested on the website).
         }
         .onChange(of: member) { store.selectedTab = .live }
         .sheet(isPresented: $store.showIndicators) { NavigationStack { IndicatorListView() } }

@@ -4826,7 +4826,7 @@ class BotServer:
                 f.write(url + "\n")
         except OSError:
             pass
-        self.log(f"🌐 Địa chỉ máy chủ: {url}\n(dán vào app → Backtest → Bot → Máy chủ VPS)", notify=True)
+        self.log(f"🌐 Địa chỉ máy chủ: {url}\n(app → Bot → Kết nối máy chủ, hoặc web: chỉ cần mật khẩu)", notify=True)
         threading.Thread(target=publish_address, args=(self,), daemon=True).start()
 
     # ----- control -----

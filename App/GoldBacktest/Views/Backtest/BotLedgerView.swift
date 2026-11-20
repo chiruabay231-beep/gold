@@ -6,7 +6,8 @@ import SwiftUI
 struct BotLedgerView: View {
     @State private var ledger: BotLedger?
     @State private var error: String?
-    @State private var showOwn = false
+    /// The bot's own account (the second MT5, an Exness demo while it is tested) first when there is one.
+    @State private var showOwn = true
 
     var body: some View {
         List {
@@ -17,13 +18,13 @@ struct BotLedgerView: View {
                 if ledger.own != nil {
                     Section {
                         Picker("Tài khoản", selection: $showOwn) {
+                            Text("Tài khoản bot").tag(true)
                             Text("Tài khoản chính").tag(false)
-                            Text("Tài khoản riêng (máy tính)").tag(true)
                         }
                         .pickerStyle(.segmented)
                     }
                 }
-                let books = (showOwn ? ledger.own?.books : ledger.books) ?? []
+                let books = (showOwn && ledger.own != nil ? ledger.own?.books : ledger.books) ?? []
                 if showOwn, let ownError = ledger.own?.error {
                     Section { Text(ownError).foregroundColor(.orange) }
                 }
@@ -36,13 +37,13 @@ struct BotLedgerView: View {
             }
             Section {
                 NavigationLink { RemoteBotView() } label: {
-                    Label("Kết nối & điều khiển bot trên VPS", systemImage: "slider.horizontal.3")
+                    Label("Kết nối máy chủ", systemImage: "slider.horizontal.3")
                 }
             } footer: {
-                Text("Bot chạy 24/24 trên VPS, kể cả khi tắt app hay web. Bật / tắt và chỉnh bot ở web (tab Bot) hoặc ở mục trên.")
+                Text("Bot nhồi lệnh chạy 24/24 trên máy chủ, kể cả khi tắt app hay web. Bật / tắt và chỉnh bot ở web (tab Bot).")
             }
         }
-        .navigationTitle("Bot")
+        .navigationTitle("Bot nhồi lệnh")
         .task {
             while !Task.isCancelled {
                 await load()
@@ -57,11 +58,11 @@ struct BotLedgerView: View {
         let net = closed.reduce(0) { $0 + $1.profit }
         let open = books.flatMap(\.positions).reduce(0) { $0 + $1.profit }
         let wins = closed.filter { $0.profit > 0 }.count
-        return Section("Tổng các bot") {
+        return Section("Bot nhồi lệnh") {
             LabeledContent("Lãi/lỗ đã chốt") { Text(Self.money(net)).foregroundColor(net >= 0 ? .green : .red).monospacedDigit() }
             LabeledContent("Đang mở") { Text("\(books.flatMap(\.positions).count) lệnh · \(Self.money(open))").foregroundColor(open >= 0 ? .green : .red).monospacedDigit() }
             LabeledContent("Thắng") { Text(closed.isEmpty ? "–" : "\(wins)/\(closed.count) · \(Int((Double(wins) / Double(closed.count) * 100).rounded()))%").monospacedDigit() }
-            LabeledContent("Bot đang chạy") { Text("\(books.filter(\.running).count)/\(books.count)") }
+            LabeledContent("Trạng thái") { Text(books.contains(where: \.running) ? "Đang chạy" : "Đang tắt").foregroundColor(books.contains(where: \.running) ? .green : .secondary) }
         }
     }
 
@@ -145,13 +146,10 @@ struct BotLedger: Decodable {
     var strategy: StrategyBot?
     var own: OwnLedger?
 
+    /// The grid ("nhồi lệnh") bot only: the other bots are gone from the app and the website.
     var books: [BotBook] {
         var out: [BotBook] = []
-        if let tick { out.append(tick.book(id: "tick", title: "⚡ Nến tick")) }
         if let grid { out.append(grid.book(id: "grid", title: "🕸️ Nhồi lệnh")) }
-        if let sr { out.append(sr.book(id: "sr", title: "🧱 Cản & Hỗ trợ")) }
-        if let stop { out.append(stop.book(id: "stop", title: "🎯 Stop theo nến")) }
-        if let strategy { out.append(strategy.book) }
         return out
     }
 }

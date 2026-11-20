@@ -52,10 +52,7 @@ struct RemoteBotView: View {
                 if ServerUpdate.isOlder(status.version) {
                     ServerUpdateSection(message: "Máy chủ đang chạy bản \(status.version ?? "cũ"), đã có bản \(ServerUpdate.latestVersion).")
                 }
-                if !running { settingsSection }
-                controlSection(status)
-                positionsSection(status)
-                historySection
+                // The strategy bot is gone from the app: the server's connection, state, update and log only.
                 logSection
             } else if let error = remote.error {
                 Section {
@@ -64,7 +61,7 @@ struct RemoteBotView: View {
             }
             Section {
                 NavigationLink { BotLedgerView() } label: {
-                    Label("Sổ lệnh các bot (lệnh & lãi lỗ, chạy 24/24)", systemImage: "list.bullet.rectangle")
+                    Label("Bot nhồi lệnh (lệnh & lãi lỗ, chạy 24/24)", systemImage: "list.bullet.rectangle")
                 }
                 if remote.status != nil {
                     NavigationLink { MembersView() } label: {
@@ -76,7 +73,7 @@ struct RemoteBotView: View {
                 }
             }
         }
-        .navigationTitle("Bot trên VPS")
+        .navigationTitle("Máy chủ")
         .task(id: urlText + (editingConnection ? "1" : "0")) {
             guard !editingConnection else { return }
             await remote.refreshLoop()
@@ -131,14 +128,10 @@ struct RemoteBotView: View {
     private func statusSection(_ status: RemoteStatus) -> some View {
         Section("Trạng thái") {
             HStack {
-                Label(running ? "Đang chạy 24/7" : "Đang dừng", systemImage: running ? "bolt.fill" : "pause.circle")
-                    .foregroundColor(running ? .green : .secondary)
+                Label("Máy chủ đang chạy", systemImage: "bolt.fill")
+                    .foregroundColor(.green)
                 Spacer()
                 if let version = status.version { Text("v\(version)").font(.caption).foregroundColor(.secondary) }
-            }
-            if let s = status.settings, running {
-                LabeledContent("Chiến lược", value: s.strategyName.isEmpty ? "—" : s.strategyName)
-                LabeledContent("Mã / khung", value: "\(s.symbol) · \(s.interval) · \(Self.sourceTitle(s.source))")
             }
             if let price = status.price {
                 LabeledContent("Giá", value: BotController.format(price))
