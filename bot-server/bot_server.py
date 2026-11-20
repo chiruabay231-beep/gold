@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "7.6"
+VERSION = "7.7"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3038,29 +3038,34 @@ class SRBot:
             c["running"] = on
         self.server.save_config()
         if body.get("closeAll"):
-            self.close_book()
+            # "paper" / "mt5": the book shown on the website (it may differ from the mode picked in the form).
+            self.close_book(body["closeAll"] == "paper" if body["closeAll"] in ("paper", "mt5") else c["paper"])
         return self.status()
 
-    def close_book(self):
+    def close_book(self, paper):
         """The "Đóng hết lệnh của bot" button: every position of this bot closed now, on the virtual account or
-        on MT5 (whichever the bot is set to)."""
+        on MT5. Under the MT5 lock, so the bot's loop never sees the mode switched for this."""
         c, n, total = self.cfg, 0, 0.0
         with Mt5.lock:
-            mt5 = Mt5.connect(self.server.config["mt5"])
-            if c["paper"]:
-                symbols = sorted({p["symbol"] for p in self.paper["positions"]})
-            else:
-                symbols = sorted({p.symbol for p in self._mine(mt5.positions_get())})
-            for symbol in symbols:
-                info, tick = mt5.symbol_info(symbol), mt5.symbol_info_tick(symbol)
-                if tick is None:
-                    raise ValueError(f"Chưa có giá {symbol}: thử lại sau")
-                units = self._units(info, symbol)
-                for p in self._book(mt5, symbol):
-                    long = p["side"] == "long"
-                    total += ((tick.bid - p["entry"]) if long else (p["entry"] - tick.ask)) * p["lots"] * units
-                    self._close(mt5, p, tick, units, "đóng tay")
-                    n += 1
+            was, c["paper"] = c["paper"], paper  # _book / _close read the mode
+            try:
+                mt5 = Mt5.connect(self.server.config["mt5"])
+                if paper:
+                    symbols = sorted({p["symbol"] for p in self.paper["positions"]})
+                else:
+                    symbols = sorted({p.symbol for p in self._mine(mt5.positions_get())})
+                for symbol in symbols:
+                    info, tick = mt5.symbol_info(symbol), mt5.symbol_info_tick(symbol)
+                    if tick is None:
+                        raise ValueError(f"Chưa có giá {symbol}: thử lại sau")
+                    units = self._units(info, symbol)
+                    for p in self._book(mt5, symbol):
+                        long = p["side"] == "long"
+                        total += ((tick.bid - p["entry"]) if long else (p["entry"] - tick.ask)) * p["lots"] * units
+                        self._close(mt5, p, tick, units, "đóng tay")
+                        n += 1
+            finally:
+                c["paper"] = was
         self.event(f"đóng tay {n} lệnh · {money(total)}" if n else "đóng tay: không có lệnh nào đang mở")
         return n
 

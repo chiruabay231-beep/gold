@@ -3501,12 +3501,6 @@
       if (start) start.onclick = (e) => send(e.currentTarget, { running: true }, "Đã bật bot Stop: lệnh đầu tiên đặt khi nến tiếp theo đóng");
       if (stop) stop.onclick = (e) => send(e.currentTarget, { running: false }, "Đã tắt bot Stop và huỷ lệnh chờ của nó");
       if (save) save.onclick = (e) => send(e.currentTarget, {}, "Đã lưu");
-      const closeAll = $("gbCloseAll");
-      // Off, the bot leaves its positions open (their P/L still moves): this closes them now.
-      if (closeAll) closeAll.onclick = (e) => {
-        if (!confirm(`Đóng ngay ${(st.positions || []).length} lệnh ${c.paper ? "ảo " : ""}của bot theo giá hiện tại?${c.running ? " (Bot đang bật: nó có thể mở rổ mới ở tín hiệu sau — tắt bot trước nếu muốn dừng hẳn.)" : ""}`)) return;
-        send(e.currentTarget, { closeAll: true }, "Đã đóng hết lệnh của bot");
-      };
       this.renderStopBotLive(st);
     },
 
@@ -4402,7 +4396,7 @@
           <div class="grid-risk" id="gbRisk"></div>
           <div class="row-btns">
             ${!st ? "" : c.running ? '<button class="btn btn-ghost" id="gbStopBtn">■ Tắt bot</button><button class="btn btn-ghost" id="gbSave">Lưu cài đặt</button>' : `<button class="btn btn-gold" id="gbStart">▶ Bật bot nhồi lệnh ${c.paper ? "(ẢO · giá Exness)" : "trên MT5"}</button>`}
-            ${st && (st.positions || []).length ? `<button class="btn btn-ghost" id="gbCloseAll" type="button">✕ Đóng hết ${st.positions.length} lệnh ${c.paper ? "ảo " : ""}của bot</button>` : ""}
+            ${st && (st.positions || []).length ? `<button class="btn btn-ghost" id="gbCloseAll" type="button">✕ Đóng hết ${st.positions.length} lệnh ${runPaper ? "ảo " : ""}của bot</button>` : ""}
             ${st && c.paper ? '<button class="btn btn-ghost" id="gbReset">Đặt lại tài khoản ảo</button>' : ""}
           </div>
         </div>
@@ -4455,7 +4449,7 @@
             try { w = await this.mainCall("/webacct"); } catch { /* said below */ }
             const why = !w || !w.enabled ? "đang tắt: bấm ▶ Bật tài khoản riêng cho bot ở ô trên cùng"
               : !w.running ? `đang khởi động (lần đầu chép MT5 mất vài phút)${w.error ? ": " + w.error : ""}`
-              : "chưa có đường vào: cập nhật máy chủ lên bản 7.6 (tab Máy chủ → Cập nhật)";
+              : "chưa có đường vào: cập nhật máy chủ lên bản 7.7 (tab Máy chủ → Cập nhật)";
             toast(`Tài khoản riêng của bot ${why}. Chưa bật bot, để không đặt nhầm lên tài khoản chính.`, true);
             const box = $("ownAcctBox"); if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
             return;
@@ -4477,6 +4471,18 @@
       };
       if (stop) stop.onclick = (e) => send(e.currentTarget, { running: false }, "Đã tắt bot (lệnh đang mở giữ nguyên)");
       if (save) save.onclick = (e) => send(e.currentTarget, {}, "Đã lưu");
+      const closeAll = $("gbCloseAll");
+      // Off, the bot leaves its positions open (their P/L still moves): this closes them now.
+      // The book the list shows (virtual or MT5, as the server runs it), whatever mode is picked in the form.
+      if (closeAll) closeAll.onclick = async (e) => {
+        const paper = !!(st.config && st.config.paper), n = (st.positions || []).length;
+        if (!confirm(`Đóng ngay ${n} lệnh ${paper ? "ảo " : ""}của bot theo giá hiện tại?${st.config && st.config.running ? " (Bot đang bật: nó có thể mở rổ mới ở tín hiệu sau — tắt bot trước nếu muốn dừng hẳn.)" : ""}`)) return;
+        const r = await act(e.currentTarget, () => this.botCall("/gridbot", { closeAll: paper ? "paper" : "mt5" }));
+        if (!r) return;
+        this.gridStatus = r; this.renderGridBot(r, "");
+        if ((r.positions || []).length >= n) toast("Máy chủ chưa đóng được: cập nhật máy chủ lên bản 7.7 (tab Máy chủ → Cập nhật) rồi thử lại.", true);
+        else toast("Đã đóng hết lệnh của bot");
+      };
       const acct = $("gbAcct"), fillAcct = () => {
         const a = ACCOUNT_SIMS[acct.value] || ACCOUNT_SIMS.real;
         if (acct.value !== "custom" && acct.value !== "real") { $("gbSimSpread").value = a.spread; $("gbComm").value = a.commission; }
@@ -5056,6 +5062,7 @@
           <div class="kv"><span>MT5 của nó</span><b>${w.info && w.info.mt5 ? (w.info.mt5.connected ? "đã kết nối" : esc(w.info.mt5.error || "chưa đăng nhập")) : "–"}</b></div>
           <div class="kv"><span>Bot đang dùng</span><b class="${this.ownAccount ? "pos" : "neg"}">${this.ownAccount ? "🖥️ tài khoản riêng" : "⚠️ tài khoản chính của chart"}</b></div></div>
           ${w.error ? `<p class="warn">${esc(w.error)}</p>` : ""}
+          ${w.enabled && w.running && !w.proxy && !w.url ? `<p class="warn">Web chưa vào được tài khoản này nên chưa hiện ô đăng nhập: máy chủ chính còn bản cũ. Bấm <b>Cập nhật máy chủ</b> (lên bản 7.7), chờ 1 phút rồi tải lại trang.</p><div class="row-btns"><button class="btn btn-gold" id="ownUpdate" type="button">⟳ Cập nhật máy chủ</button></div>` : ""}
           <div class="row-btns">
             <button class="btn ${w.enabled ? "btn-ghost" : "btn-gold"}" id="ownToggle" type="button">${w.enabled ? "■ Tắt tài khoản riêng" : "▶ Bật tài khoản riêng cho bot"}</button>
             ${w.enabled ? `<button class="btn ${use ? "btn-ghost" : "btn-gold"}" id="ownUse" type="button">${use ? "Bot về tài khoản chính" : "Cho bot chạy trên tài khoản này"}</button>` : ""}
@@ -5071,7 +5078,11 @@
         await this.pickAccountServer();
         if (this.ownAccount) { toast("Bot đã chuyển sang tài khoản riêng"); this.ownHtml = ""; this.loadGridBot(true); this.renderOwnAccount(); return; }
       }
-      const toggle = $("ownToggle"), useBtn = $("ownUse");
+      const toggle = $("ownToggle"), useBtn = $("ownUse"), upd = $("ownUpdate");
+      if (upd) upd.onclick = async (e) => {
+        const r = await act(e.currentTarget, () => this.mainCall("/update", {}));
+        if (r) toast(r.message || "Đang cập nhật, chờ khoảng 1 phút rồi tải lại trang…");
+      };
       if (toggle) toggle.onclick = async (e) => {
         const on = !w.enabled;
         const r = await act(e.currentTarget, () => this.mainCall("/webacct", { enabled: on }), on ? "Đang bật MT5 thứ 2 cho bot (lần đầu vài phút)…" : "Đã tắt");
