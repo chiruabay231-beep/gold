@@ -47,6 +47,21 @@ Xem loại chip: menu  → *Giới thiệu về máy Mac* → **Chip Apple M1/M2
    - **Options → Optimization**: tắt **Pause Windows when possible**.
    - Tắt **Travel Mode** (nếu có).
 
+### Cách C — VMware Fusion (miễn phí cho cá nhân)
+
+1. Mở VMware Fusion → **File → New** → chọn **Get Windows from Microsoft** (Fusion 13.5 trở lên; nếu không có thì
+   tải file ISO **Windows 11 ARM64** tại microsoft.com/software-download/windows11arm64 — Mac Intel: Windows 11 bản
+   thường — rồi kéo file vào cửa sổ).
+2. **Encryption** (Windows 11 cần TPM): chọn **Only the files needed to support a TPM are encrypted**, đặt mật khẩu,
+   **tích "Remember password and store it in Mac's Keychain"**.
+3. Trước khi bấm Finish → **Customize Settings**: **Processors & Memory** 4 nhân, **8192 MB** (tối thiểu 6144);
+   **Hard Disk** 64 – 80 GB.
+4. Cài Windows: tới màn hình bắt kết nối mạng mà không có mạng → bấm **Shift + F10**, gõ `OOBE\BYPASSNRO`, Enter;
+   máy khởi động lại → chọn **I don't have internet** → tạo **tài khoản cục bộ** (nhớ mật khẩu).
+5. Vào được Windows → menu Mac **Virtual Machine → Install VMware Tools** → chạy file cài trong ổ đĩa ảo → khởi động
+   lại Windows (có mạng, màn hình nét, kéo thả file Mac ↔ Windows).
+6. **Tự bật máy ảo cùng Mac**: lệnh ở **bước 4.1** tự lo khi thấy VMware (chạy nó **sau khi** đã tạo máy ảo).
+
 ### Cách B — UTM (miễn phí, chậm hơn, nhiều bước hơn)
 
 1. Tải **UTM** tại mac.getutm.app, tải file cài **Windows 11 ARM** bằng **CrystalFetch** (miễn phí).
