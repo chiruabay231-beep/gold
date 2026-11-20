@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "7.9"
+VERSION = "8.0"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -4729,6 +4729,7 @@ class WebAccount:
         path = os.path.join(HERE, "web.config.json")
         cfg = read_json(path, {}) or {}
         exe = clone_terminal("web", main["mt5"])
+        self._shortcut(exe)
         mt5 = dict(cfg.get("mt5") or {})
         mt5.update({"path": exe, "portable": True})
         for k in ("trading_enabled", "max_lots", "deviation"):
@@ -4737,6 +4738,20 @@ class WebAccount:
                     "cloudflared": main.get("cloudflared", ""), "url_relay": "", "telegram": {}, "copy": {}, "members": [],
                     "webAccount": {"enabled": False}})
         write_json(path, cfg)
+
+    @staticmethod
+    def _shortcut(exe):
+        """"MT5 Bot (demo)" on the Windows desktop: opens the second MT5 (the bot's), to log in to a demo account
+        right in it (saved there, the bot's server attaches to it)."""
+        if os.name != "nt":
+            return
+        try:
+            desk = os.path.join(os.environ.get("USERPROFILE", ""), "Desktop")
+            if os.path.isdir(desk):
+                with open(os.path.join(desk, "MT5 Bot (demo).bat"), "w", encoding="ascii", errors="replace", newline="") as f:
+                    f.write(f'@echo off\r\nstart "" "{exe}" /portable\r\n')
+        except OSError:
+            pass
 
     def _spawn(self):
         try:

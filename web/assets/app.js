@@ -2057,9 +2057,6 @@
 
     init() {
       this.secret = this.role === "owner" ? ownerStore.get() : store.get("aurum.code");
-      // For now the bot runs on the chart's account (demo only, the server refuses a real one): once, the bot
-      // is moved back from its own account; "Cho bot chạy trên tài khoản này" in its box moves it there again.
-      if (!store.get("aurum.botMainV1")) { store.set("aurum.useWebAcct", null); store.set("aurum.botMainV1", "1"); }
     },
 
     show() {
@@ -2240,13 +2237,22 @@
     async pickAccountServer() {
       this.mainBase = this.mainBase || this.base;
       this.botBase = null;
+      this.botProxy = false;
       this.ownAccount = false;
-      if (store.get("aurum.useWebAcct") !== "1") return;
+      // The bot goes where the DEMO account is: the second MT5 when it is logged in to a demo one (the chart
+      // keeping the real account), else the chart's own account when that one is a demo. A real account never
+      // gets the bot while it is being tested (the server refuses it too).
       try {
         const st = await api(this.mainBase, this.secret, "/status");
         const w = st.webAccount;
-        // 7.6+: reached through the main server (/acct2), no second tunnel needed; older: its own address.
-        if (w && w.enabled && w.running && (w.proxy || w.url)) { this.botProxy = !!w.proxy; this.botBase = w.proxy ? "proxy" : w.url; this.ownAccount = true; }
+        if (!(w && w.enabled && w.running && (w.proxy || w.url))) return;
+        const base = w.proxy ? this.mainBase + "/acct2" : w.url;
+        const own = await api(base, this.secret, "/mt5/trading").catch(() => null);
+        this.botAcct = own;
+        const isDemo = (t) => !!(t && t.login && t.mode !== "real");
+        if (isDemo(own)) {
+          this.botProxy = !!w.proxy; this.botBase = w.proxy ? "proxy" : w.url; this.ownAccount = true;
+        }
       } catch { /* the main server will do */ }
     },
     mainCall(path, body) { return api(this.mainBase || this.base, this.secret, path, body); },
@@ -4445,27 +4451,16 @@
       const start = $("gbStart"), stop = $("gbStopBtn"), save = $("gbSave");
       if (start) start.onclick = async (e) => {
         const g = this.gridSettings();
-        if (!g.paper && store.get("aurum.useWebAcct") === "1" && !this.ownAccount) {
+        if (!g.paper) {
+          // Where the demo account is now (one of the two MT5 may have logged in / out meanwhile).
+          const was = this.ownAccount;
           await this.pickAccountServer();
-          if (!this.ownAccount) {
-            let w = null;
-            try { w = await this.mainCall("/webacct"); } catch { /* said below */ }
-            const why = !w || !w.enabled ? "đang tắt: bấm ▶ Bật tài khoản riêng cho bot ở ô trên cùng"
-              : !w.running ? `đang khởi động (lần đầu chép MT5 mất vài phút)${w.error ? ": " + w.error : ""}`
-              : "chưa có đường vào: cập nhật máy chủ lên bản 7.7 (tab Máy chủ → Cập nhật)";
-            toast(`Tài khoản riêng của bot ${why}. Chưa bật bot, để không đặt nhầm lên tài khoản chính.`, true);
-            const box = $("ownAcctBox"); if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
+          if (was !== this.ownAccount) { this.ownHtml = ""; this.renderOwnAccount(); }
+          const t = (this.ownAccount ? this.botAcct : this.lastTrading) || {};
+          if (!t.login) {
+            toast("Chưa có tài khoản MT5 đăng nhập cho bot: đăng nhập tài khoản demo Exness (trên chart, hoặc MT5 thứ 2 ở ô trên cùng).", true);
             return;
           }
-          this.ownHtml = ""; this.renderOwnAccount();
-        }
-        if (!g.paper && this.ownAccount && !(this.botAcct && this.botAcct.login)) {
-          try { this.botAcct = await this.botCall("/mt5/trading"); } catch { this.botAcct = null; }
-        }
-        if (!g.paper && this.ownAccount && !(this.botAcct && this.botAcct.login)) {
-          toast("Tài khoản riêng của bot chưa đăng nhập MT5: nhập tài khoản demo Exness ở ô trên cùng rồi bật bot.", true);
-          const box = $("ownAcctBox"); if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
-          return;
         }
         const a = (this.ownAccount ? this.botAcct : this.lastTrading) || {};
         if (!g.paper && a.mode === "real") {
@@ -5061,19 +5056,24 @@
       if (!box) return;
       let w = null, problem = "";
       try { w = await this.mainCall("/webacct"); } catch (e) { problem = ServerTooOld(e) ? "Cập nhật máy chủ lên bản 4.7 để dùng." : plain(e.message); }
-      const use = store.get("aurum.useWebAcct") === "1";
-      const html = `<h4>🖥️ Tài khoản riêng của bot</h4>
-        <p class="muted small">Bot chạy trên một <b>MT5 thứ 2</b> với tài khoản riêng — dùng <b>tài khoản demo Exness</b> để thử cho thật; chart và app vẫn dùng <b>tài khoản thật</b> của bạn. Bot ổn rồi mới đăng nhập tài khoản thật vào đây. Lần đầu bật, máy chủ sao chép MT5 (vài phút).</p>
+      // Where the bot goes now (the demo account of the two), worked out again on every refresh.
+      const was = this.ownAccount;
+      if (this.owner) await this.pickAccountServer();
+      if (was !== undefined && was !== this.ownAccount) { toast(this.ownAccount ? "Bot chuyển sang MT5 thứ 2 (tài khoản demo)" : "Bot về tài khoản của chart"); this.loadGridBot(true); }
+      const t = (this.ownAccount ? this.botAcct : this.lastTrading) || {};
+      const acctText = (x) => (x && x.login ? `#${esc(String(x.login))} · ${x.mode === "real" ? "THẬT" : "demo"}` : "chưa đăng nhập");
+      const html = `<h4>🖥️ Hai MT5: tài khoản thật cho chart, tài khoản demo cho bot</h4>
+        <p class="muted small">Máy chủ chạy thêm <b>MT5 thứ 2</b>. Đăng nhập <b>tài khoản demo Exness</b> vào MT5 thứ 2 (ô bên dưới, hoặc mở biểu tượng <b>"MT5 Bot (demo)"</b> ngoài Desktop của Windows rồi đăng nhập thẳng trong đó). Chart và app giữ <b>tài khoản thật</b>. Bot tự chạy trên tài khoản <b>DEMO</b>; tài khoản thật bị từ chối khi bot chưa test xong.</p>
         ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
-        ${w ? `<div class="kvs"><div class="kv"><span>Máy chủ thứ 2</span><b>${w.enabled ? (w.running ? `đang chạy · cổng ${w.port}` : "đang khởi động…") : "đang tắt"}</b></div>
-          <div class="kv"><span>MT5 của nó</span><b>${w.info && w.info.mt5 ? (w.info.mt5.connected ? "đã kết nối" : esc(w.info.mt5.error || "chưa đăng nhập")) : "–"}</b></div>
-          <div class="kv"><span>Bot đang dùng</span><b class="${this.ownAccount ? "pos" : "neg"}">${this.ownAccount ? "🖥️ tài khoản riêng" : "⚠️ tài khoản chính của chart"}</b></div></div>
+        ${w ? `<div class="kvs"><div class="kv"><span>MT5 thứ 2</span><b>${w.enabled ? (w.running ? `đang chạy · cổng ${w.port}` : "đang khởi động…") : "đang tắt"}</b></div>
+          <div class="kv"><span>Tài khoản MT5 thứ 2</span><b>${w.enabled && w.running ? acctText(this.botAcct) : "–"}</b></div>
+          <div class="kv"><span>Tài khoản chart</span><b>${acctText(this.lastTrading)}</b></div>
+          <div class="kv"><span>Bot chạy trên</span><b class="${t.login && t.mode !== "real" ? "pos" : "neg"}">${t.login ? `${this.ownAccount ? "🖥️ MT5 thứ 2" : "chart"} ${acctText(t)}${t.mode === "real" ? " — bot sẽ không chạy" : ""}` : "chưa có tài khoản demo"}</b></div></div>
           ${w.error ? `<p class="warn">${esc(w.error)}</p>` : ""}
-          ${w.enabled && !w.running && w.startingFor > 120 ? `<p class="warn">Đã ${Math.round(w.startingFor / 60)} phút mà máy chủ thứ 2 chưa trả lời${w.log ? `: <span class="small">${esc(w.log)}</span>` : ""}. Thử <b>■ Tắt tài khoản riêng</b> rồi bật lại; vẫn vậy thì chụp ô này gửi hỗ trợ.</p>` : ""}
-          ${w.enabled && w.running && !w.proxy && !w.url ? `<p class="warn">Web chưa vào được tài khoản này nên chưa hiện ô đăng nhập: máy chủ chính còn bản cũ. Bấm <b>Cập nhật máy chủ</b> (lên bản 7.7), chờ 1 phút rồi tải lại trang.</p><div class="row-btns"><button class="btn btn-gold" id="ownUpdate" type="button">⟳ Cập nhật máy chủ</button></div>` : ""}
+          ${w.enabled && !w.running && w.startingFor > 120 ? `<p class="warn">Đã ${Math.round(w.startingFor / 60)} phút mà MT5 thứ 2 chưa trả lời${w.log ? `: <span class="small">${esc(w.log)}</span>` : ""}. Thử <b>■ Tắt MT5 thứ 2</b> rồi bật lại; vẫn vậy thì chụp ô này gửi hỗ trợ.</p>` : ""}
+          ${w.enabled && w.running && !w.proxy && !w.url ? `<p class="warn">Web chưa vào được MT5 thứ 2: máy chủ chính còn bản cũ. Bấm <b>Cập nhật máy chủ</b>, chờ 1 phút rồi tải lại trang.</p><div class="row-btns"><button class="btn btn-gold" id="ownUpdate" type="button">⟳ Cập nhật máy chủ</button></div>` : ""}
           <div class="row-btns">
-            <button class="btn ${w.enabled ? "btn-ghost" : "btn-gold"}" id="ownToggle" type="button">${w.enabled ? "■ Tắt tài khoản riêng" : "▶ Bật tài khoản riêng cho bot"}</button>
-            ${w.enabled ? `<button class="btn ${use ? "btn-ghost" : "btn-gold"}" id="ownUse" type="button">${use ? "Bot về tài khoản chính" : "Cho bot chạy trên tài khoản này"}</button>` : ""}
+            <button class="btn ${w.enabled ? "btn-ghost" : "btn-gold"}" id="ownToggle" type="button">${w.enabled ? "■ Tắt MT5 thứ 2" : "▶ Bật MT5 thứ 2 cho bot"}</button>
           </div>
           ${w.enabled ? `<div id="ownLogin"></div>` : ""}` : ""}`;
       // Same as on screen: leave it (and the login form being typed in) alone.
@@ -5081,30 +5081,17 @@
       this.ownHtml = html;
       box.innerHTML = html;
       if (w && w.enabled && w.running && (w.proxy || w.url)) this.renderOwnLogin(w.proxy ? (this.mainBase || this.base) + "/acct2" : w.url);
-      if (w && w.enabled && w.running && use && !this.ownAccount) {
-        // Just started: the bot moves to its own account now.
-        await this.pickAccountServer();
-        if (this.ownAccount) { toast("Bot đã chuyển sang tài khoản riêng"); this.ownHtml = ""; this.loadGridBot(true); this.renderOwnAccount(); return; }
-      }
-      const toggle = $("ownToggle"), useBtn = $("ownUse"), upd = $("ownUpdate");
+      const toggle = $("ownToggle"), upd = $("ownUpdate");
       if (upd) upd.onclick = async (e) => {
         const r = await act(e.currentTarget, () => this.mainCall("/update", {}));
         if (r) toast(r.message || "Đang cập nhật, chờ khoảng 1 phút rồi tải lại trang…");
       };
       if (toggle) toggle.onclick = async (e) => {
         const on = !w.enabled;
-        const r = await act(e.currentTarget, () => this.mainCall("/webacct", { enabled: on }), on ? "Đang bật MT5 thứ 2 cho bot (lần đầu vài phút)…" : "Đã tắt");
-        if (r) {
-          if (!on && use) { store.set("aurum.useWebAcct", null); location.reload(); return; }
-          // Turned on: the bot moves to it as soon as it runs (no second click).
-          if (on) store.set("aurum.useWebAcct", "1");
-          this.renderOwnAccount();
-        }
-      };
-      if (useBtn) useBtn.onclick = () => {
-        store.set("aurum.useWebAcct", use ? null : "1");
-        toast(use ? "Bot về tài khoản chính" : "Bot chạy trên tài khoản riêng");
-        setTimeout(() => location.reload(), 600);
+        if (!on && this.ownAccount && this.gridStatus && this.gridStatus.config && this.gridStatus.config.running
+          && !confirm("Bot đang chạy trên MT5 thứ 2. Tắt MT5 thứ 2 thì bot ở đó dừng theo (lệnh đang mở giữ nguyên trên tài khoản demo). Tiếp tục?")) return;
+        const r = await act(e.currentTarget, () => this.mainCall("/webacct", { enabled: on }), on ? "Đang bật MT5 thứ 2 (lần đầu sao chép MT5, vài phút)…" : "Đã tắt MT5 thứ 2");
+        if (r) { this.ownHtml = ""; this.renderOwnAccount(); }
       };
     },
 
@@ -5117,7 +5104,7 @@
       try { t = await own("/mt5/trading"); } catch { /* not logged in yet */ }
       this.botAcct = t;
       if (this.tab === "autobot") this.applyBotHub();
-      box.innerHTML = `<div class="fp-sec" style="margin-top:10px">Tài khoản MT5 cho bot</div>
+      box.innerHTML = `<div class="fp-sec" style="margin-top:10px">Đăng nhập MT5 thứ 2 (tài khoản demo cho bot)</div>
         <p class="small">${t && t.login ? `Đang đăng nhập <b>#${esc(String(t.login))}</b> · ${esc(t.server || "")} · ${t.mode === "real" ? '<b class="neg">TÀI KHOẢN THẬT</b>' : "demo"}` : "Chưa đăng nhập: nhập tài khoản demo Exness để bot chạy."}</p>
         <div class="fields three">
           <label>Số tài khoản<input id="olLogin" inputmode="numeric" placeholder="VD 123456789"></label>
@@ -5129,7 +5116,7 @@
         const login = $("olLogin").value.trim(), password = $("olPass").value, server = $("olServer").value.trim();
         if (!login || !password || !server) return toast("Nhập đủ số tài khoản, mật khẩu, máy chủ", true);
         const r = await act(e.currentTarget, () => own("/mt5/login", { server, login, password, remember: true }), "Đã đăng nhập tài khoản cho bot");
-        if (r) this.renderOwnLogin(url);
+        if (r) { this.ownHtml = ""; this.renderOwnAccount(); }
       };
     },
 
