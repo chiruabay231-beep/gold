@@ -2242,19 +2242,22 @@
       try {
         const st = await api(this.mainBase, this.secret, "/status");
         const w = st.webAccount;
-        if (w && w.enabled && w.running && w.url) { this.botBase = w.url; this.ownAccount = true; }
+        // 7.6+: reached through the main server (/acct2), no second tunnel needed; older: its own address.
+        if (w && w.enabled && w.running && (w.proxy || w.url)) { this.botProxy = !!w.proxy; this.botBase = w.proxy ? "proxy" : w.url; this.ownAccount = true; }
       } catch { /* the main server will do */ }
     },
     mainCall(path, body) { return api(this.mainBase || this.base, this.secret, path, body); },
+    /** The address of the bot's own account: through the main server (/acct2) or its own tunnel (older servers). */
+    botUrl() { return this.botProxy ? (this.mainBase || this.base) + "/acct2" : this.botBase; },
     /** A call for the bots (their own server when it runs). */
     async botCall(path, body) {
       if (!this.botBase) return this.call(path, body);
       try {
-        return await api(this.botBase, this.secret, path, body);
+        return await api(this.botUrl(), this.secret, path, body);
       } catch (e) {
         if (!(e instanceof Unreachable)) throw e;
         await this.pickAccountServer();
-        return this.botBase ? api(this.botBase, this.secret, path, body) : this.call(path, body);
+        return this.botBase ? api(this.botUrl(), this.secret, path, body) : this.call(path, body);
       }
     },
 
@@ -3498,6 +3501,12 @@
       if (start) start.onclick = (e) => send(e.currentTarget, { running: true }, "Đã bật bot Stop: lệnh đầu tiên đặt khi nến tiếp theo đóng");
       if (stop) stop.onclick = (e) => send(e.currentTarget, { running: false }, "Đã tắt bot Stop và huỷ lệnh chờ của nó");
       if (save) save.onclick = (e) => send(e.currentTarget, {}, "Đã lưu");
+      const closeAll = $("gbCloseAll");
+      // Off, the bot leaves its positions open (their P/L still moves): this closes them now.
+      if (closeAll) closeAll.onclick = (e) => {
+        if (!confirm(`Đóng ngay ${(st.positions || []).length} lệnh ${c.paper ? "ảo " : ""}của bot theo giá hiện tại?${c.running ? " (Bot đang bật: nó có thể mở rổ mới ở tín hiệu sau — tắt bot trước nếu muốn dừng hẳn.)" : ""}`)) return;
+        send(e.currentTarget, { closeAll: true }, "Đã đóng hết lệnh của bot");
+      };
       this.renderStopBotLive(st);
     },
 
@@ -4393,6 +4402,7 @@
           <div class="grid-risk" id="gbRisk"></div>
           <div class="row-btns">
             ${!st ? "" : c.running ? '<button class="btn btn-ghost" id="gbStopBtn">■ Tắt bot</button><button class="btn btn-ghost" id="gbSave">Lưu cài đặt</button>' : `<button class="btn btn-gold" id="gbStart">▶ Bật bot nhồi lệnh ${c.paper ? "(ẢO · giá Exness)" : "trên MT5"}</button>`}
+            ${st && (st.positions || []).length ? `<button class="btn btn-ghost" id="gbCloseAll" type="button">✕ Đóng hết ${st.positions.length} lệnh ${c.paper ? "ảo " : ""}của bot</button>` : ""}
             ${st && c.paper ? '<button class="btn btn-ghost" id="gbReset">Đặt lại tài khoản ảo</button>' : ""}
           </div>
         </div>
@@ -4436,10 +4446,28 @@
         if (r) { this.gridStatus = r; this.renderGridBot(r, ""); }
       };
       const start = $("gbStart"), stop = $("gbStopBtn"), save = $("gbSave");
-      if (start) start.onclick = (e) => {
+      if (start) start.onclick = async (e) => {
         const g = this.gridSettings();
         if (!g.paper && store.get("aurum.useWebAcct") === "1" && !this.ownAccount) {
-          toast("Tài khoản riêng của bot chưa sẵn sàng (đang khởi động?): chưa bật, để không đặt nhầm lên tài khoản chính", true);
+          await this.pickAccountServer();
+          if (!this.ownAccount) {
+            let w = null;
+            try { w = await this.mainCall("/webacct"); } catch { /* said below */ }
+            const why = !w || !w.enabled ? "đang tắt: bấm ▶ Bật tài khoản riêng cho bot ở ô trên cùng"
+              : !w.running ? `đang khởi động (lần đầu chép MT5 mất vài phút)${w.error ? ": " + w.error : ""}`
+              : "chưa có đường vào: cập nhật máy chủ lên bản 7.6 (tab Máy chủ → Cập nhật)";
+            toast(`Tài khoản riêng của bot ${why}. Chưa bật bot, để không đặt nhầm lên tài khoản chính.`, true);
+            const box = $("ownAcctBox"); if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
+            return;
+          }
+          this.ownHtml = ""; this.renderOwnAccount();
+        }
+        if (!g.paper && this.ownAccount && !(this.botAcct && this.botAcct.login)) {
+          try { this.botAcct = await this.botCall("/mt5/trading"); } catch { this.botAcct = null; }
+        }
+        if (!g.paper && this.ownAccount && !(this.botAcct && this.botAcct.login)) {
+          toast("Tài khoản riêng của bot chưa đăng nhập MT5: nhập tài khoản demo Exness ở ô trên cùng rồi bật bot.", true);
+          const box = $("ownAcctBox"); if (box) box.scrollIntoView({ behavior: "smooth", block: "start" });
           return;
         }
         const a = (this.ownAccount ? this.botAcct : this.lastTrading) || {};
@@ -5037,7 +5065,7 @@
       if (html === this.ownHtml && box.innerHTML) return;
       this.ownHtml = html;
       box.innerHTML = html;
-      if (w && w.enabled && w.running && w.url) this.renderOwnLogin(w.url);
+      if (w && w.enabled && w.running && (w.proxy || w.url)) this.renderOwnLogin(w.proxy ? (this.mainBase || this.base) + "/acct2" : w.url);
       if (w && w.enabled && w.running && use && !this.ownAccount) {
         // Just started: the bot moves to its own account now.
         await this.pickAccountServer();

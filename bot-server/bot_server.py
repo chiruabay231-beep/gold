@@ -27,12 +27,13 @@ import threading
 import types
 import time
 import traceback
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "7.5"
+VERSION = "7.6"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2585,7 +2586,7 @@ def publish_address(server):
 # Why a bot closed a position, as a short code in the closing order's comment on MT5 (comments are short, ASCII
 # is safest), read back by magic_history.
 CLOSE_CODES = {"khoá lời nhồi": "lock", "tránh giờ mạnh": "guard", "chốt rổ": "tp", "trailing": "trail", "SL rổ": "sl", "cắt lỗ chung": "stop", "tín hiệu ngược": "flip",
-               "chốt lời": "tp1", "cắt lỗ lệnh": "sl1", "nến đảo chiều": "rev", "hết nến": "bar", "hết giờ giữ": "hold"}
+               "chốt lời": "tp1", "cắt lỗ lệnh": "sl1", "nến đảo chiều": "rev", "hết nến": "bar", "hết giờ giữ": "hold", "đóng tay": "manual"}
 CLOSE_REASONS = {v: k for k, v in CLOSE_CODES.items()}
 
 
@@ -3036,7 +3037,32 @@ class SRBot:
                 self.event("TẮT (lệnh đang mở giữ nguyên)", notify=True)
             c["running"] = on
         self.server.save_config()
+        if body.get("closeAll"):
+            self.close_book()
         return self.status()
+
+    def close_book(self):
+        """The "Đóng hết lệnh của bot" button: every position of this bot closed now, on the virtual account or
+        on MT5 (whichever the bot is set to)."""
+        c, n, total = self.cfg, 0, 0.0
+        with Mt5.lock:
+            mt5 = Mt5.connect(self.server.config["mt5"])
+            if c["paper"]:
+                symbols = sorted({p["symbol"] for p in self.paper["positions"]})
+            else:
+                symbols = sorted({p.symbol for p in self._mine(mt5.positions_get())})
+            for symbol in symbols:
+                info, tick = mt5.symbol_info(symbol), mt5.symbol_info_tick(symbol)
+                if tick is None:
+                    raise ValueError(f"Chưa có giá {symbol}: thử lại sau")
+                units = self._units(info, symbol)
+                for p in self._book(mt5, symbol):
+                    long = p["side"] == "long"
+                    total += ((tick.bid - p["entry"]) if long else (p["entry"] - tick.ask)) * p["lots"] * units
+                    self._close(mt5, p, tick, units, "đóng tay")
+                    n += 1
+        self.event(f"đóng tay {n} lệnh · {money(total)}" if n else "đóng tay: không có lệnh nào đang mở")
+        return n
 
     def _mine(self, rows):
         return [r for r in rows or () if getattr(r, "magic", 0) == SR_MAGIC]
@@ -4673,7 +4699,7 @@ class WebAccount:
         mt5.update({"path": exe, "portable": True})
         for k in ("trading_enabled", "max_lots", "deviation"):
             mt5.setdefault(k, main["mt5"].get(k))
-        cfg.update({"password": main["password"], "port": self.port, "mt5": mt5, "tunnel": main.get("tunnel"),
+        cfg.update({"password": main["password"], "port": self.port, "mt5": mt5, "tunnel": False,
                     "cloudflared": main.get("cloudflared", ""), "url_relay": "", "telegram": {}, "copy": {}, "members": [],
                     "webAccount": {"enabled": False}})
         write_json(path, cfg)
@@ -4730,7 +4756,7 @@ class WebAccount:
                 info = {"version": st.get("version"), "mt5": st.get("mt5"), "url": st.get("tunnelURL") or self.url()}
             except Exception:
                 pass
-        return {"enabled": bool(self.cfg.get("enabled")), "running": running, "port": self.port,
+        return {"enabled": bool(self.cfg.get("enabled")), "running": running, "port": self.port, "proxy": True,
                 "url": info.get("url") or (self.url() if running else ""), "info": info, "error": self.error}
 
     def settings(self, body):
@@ -5357,6 +5383,29 @@ def make_handler(server):
             raw = self.rfile.read(length) if length else b"{}"
             return json.loads(raw.decode() or "{}")
 
+        def _proxy(self, body=None):
+            """/acct2/…: the bot's own account (the second copy on port+1) reached through this server, so it
+            needs no tunnel of its own (a free ngrok has one address only). Owner only."""
+            rest = self.path[len("/acct2"):] or "/"
+            req = urllib.request.Request(f"http://127.0.0.1:{server.web_account.port}{rest}",
+                                         data=json.dumps(body).encode() if body is not None else None,
+                                         headers={"Authorization": "Bearer " + server.config["password"],
+                                                  "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=60) as r:
+                    code, data = r.status, r.read()
+            except urllib.error.HTTPError as e:
+                code, data = e.code, e.read()
+            except Exception:
+                return self._send(503, {"ok": False, "error": "Tài khoản riêng của bot chưa chạy (đang khởi động hoặc đang tắt)"})
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self._cors()
+            self.end_headers()
+            self.wfile.write(data)
+
         def do_GET(self):
             path, _, query = self.path.partition("?")
             params = urllib.parse.parse_qs(query)
@@ -5366,6 +5415,8 @@ def make_handler(server):
             who = self._authorized(path)
             if not who:
                 return
+            if who is True and not INSTANCE and path.startswith("/acct2/"):
+                return self._proxy()
             try:
                 if isinstance(who, dict):
                     server.members.check(who)
@@ -5460,6 +5511,12 @@ def make_handler(server):
             who = self._authorized(path)
             if not who:
                 return
+            if who is True and not INSTANCE and path.startswith("/acct2/"):
+                try:
+                    body = self._body()
+                except Exception as e:
+                    return self._send(400, {"ok": False, "error": str(e)})
+                return self._proxy(body)
             try:
                 body = self._body()
                 if isinstance(who, dict):
