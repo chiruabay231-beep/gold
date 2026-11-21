@@ -20,9 +20,12 @@ Write-Host "Windows: $($os.Caption)  ·  bật lần cuối: $($os.LastBootUpTim
 $lic = Get-CimInstance SoftwareLicensingProduct -Filter "PartialProductKey IS NOT NULL AND ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f'" | Select-Object -First 1
 $evaluation = $os.Caption -match "Evaluation"
 if ($lic) {
-    $days = [math]::Round($lic.GracePeriodRemaining / 1440, 1)
+    $graceDays = [math]::Round($lic.GracePeriodRemaining / 1440, 1)
     $state = @{0 = "chưa kích hoạt"; 1 = "đã kích hoạt"; 2 = "dùng thử (OOB)"; 3 = "dùng thử (OOT)"; 4 = "không chính hãng"; 5 = "thông báo"; 6 = "gia hạn" }[[int]$lic.LicenseStatus]
-    Write-Host "Bản quyền: $state$(if ($lic.LicenseStatus -ne 1 -or $evaluation) { " · còn $days ngày" })"
+    Write-Host "Bản quyền: $state$(if ($evaluation) { " · còn $graceDays ngày" })"
+    if ($lic.LicenseStatus -eq 5 -and -not $evaluation) {
+        Write-Host "   (Windows chưa kích hoạt: chỉ hiện chữ nhắc và khoá đổi hình nền — KHÔNG tự tắt máy.)"
+    }
 }
 if ($evaluation -and $lic -and $lic.GracePeriodRemaining -le 0) {
     Write-Host "⛔ Đây là bản Windows DÙNG THỬ (Evaluation) ĐÃ HẾT HẠN: Windows tự tắt khoảng MỖI GIỜ. Đây là nguyên nhân." -ForegroundColor Red
