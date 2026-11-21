@@ -9,13 +9,44 @@
 #   - starts again by itself after a power cut, wakes for network access;
 #   - keeps `caffeinate` running from login (a second guard against sleep), as a LaunchAgent.
 #   - VMware Fusion: starts the Windows virtual machine by itself at login (Fusion has no such option of its own).
-# Undo: bash mac-setup.sh --undo
+# Check what is set: ... | bash -s -- --check      Undo: bash mac-setup.sh --undo
 
 set -e
 
 AGENT="$HOME/Library/LaunchAgents/com.goldbot.caffeinate.plist"
 VMAGENT="$HOME/Library/LaunchAgents/com.goldbot.vmware.plist"
 VMRUN="/Applications/VMware Fusion.app/Contents/Library/vmrun"
+
+if [ "$1" = "--check" ]; then
+  # What is set now: does the Mac stay awake for the virtual machine?
+  ok=0
+  echo "==================== KIỂM TRA MAC ===================="
+  ac=$(pmset -g custom | awk '/AC Power/{f=1;next} /Battery Power|UPS Power/{f=0} f && $1=="sleep"{print $2; exit}')
+  [ -z "$ac" ] && ac=$(pmset -g | awk '$1=="sleep"{print $2; exit}')
+  if [ "$ac" = "0" ]; then echo "✅ Cắm sạc: Mac KHÔNG tự ngủ"; else echo "❌ Cắm sạc: Mac tự ngủ sau ${ac:-?} phút"; ok=1; fi
+  if launchctl list | grep -q com.goldbot.caffeinate && pgrep -x caffeinate >/dev/null; then
+    echo "✅ Lớp chống ngủ (caffeinate) đang chạy"
+  else
+    echo "❌ Lớp chống ngủ (caffeinate) chưa chạy"; ok=1
+  fi
+  if [ -x "$VMRUN" ]; then
+    if launchctl list | grep -q com.goldbot.vmware; then echo "✅ Tự mở máy ảo VMware khi đăng nhập Mac"; else echo "❌ Chưa tự mở máy ảo VMware khi đăng nhập Mac"; ok=1; fi
+    running=$("$VMRUN" list 2>/dev/null | head -1)
+    echo "   VMware: ${running:-không đọc được}"
+  fi
+  [ "$(pmset -g | awk '$1=="autorestart"{print $2}')" = "1" ] && echo "✅ Tự bật lại sau khi mất điện" || { echo "❌ Chưa tự bật lại sau khi mất điện"; ok=1; }
+  pn=$(pmset -g | awk '$1=="powernap"{print $2}')
+  [ "$pn" = "1" ] && { echo "❌ Power Nap đang bật (có thể làm máy ảo bị đóng băng)"; ok=1; } || echo "✅ Power Nap tắt"
+  user=$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null)
+  [ -n "$user" ] && echo "✅ Tự đăng nhập Mac: $user" || echo "⚠️ Mac chưa tự đăng nhập (Cài đặt hệ thống → Người dùng & Nhóm → Tự động đăng nhập)"
+  if pmset -g batt 2>/dev/null | grep -q "InternalBattery"; then
+    pmset -g batt | grep -q "AC Power" && echo "✅ MacBook đang cắm sạc" || { echo "❌ MacBook đang chạy PIN: cắm sạc (chạy pin vẫn có thể ngủ)"; ok=1; }
+    echo "⚠️ MacBook: GẬP NẮP là ngủ (trừ khi cắm màn hình ngoài) — để mở nắp"
+  fi
+  echo ""
+  [ $ok = 0 ] && echo "==> Mac đã cài KHÔNG NGỦ đầy đủ." || echo "==> Còn mục ❌: chạy lại lệnh cài (không có --check) để sửa."
+  exit 0
+fi
 
 if [ "$1" = "--undo" ]; then
   echo "==> Trả Mac về chế độ ngủ bình thường"
