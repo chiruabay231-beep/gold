@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "8.3"
+VERSION = "8.4"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3542,6 +3542,7 @@ class TickBot:
                 for p in self._mine(mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()):
                     positions.append({"ticket": int(p.ticket), "symbol": p.symbol, "side": "long" if p.type == mt5.POSITION_TYPE_BUY else "short",
                                       "lots": p.volume, "entry": p.price_open, "stop": float(p.sl) or None, "target": float(p.tp) or None,
+                                      "openTime": float(p.time) - Mt5.offset_seconds,
                                       "now": getattr(p, "price_current", None), "profit": p.profit + getattr(p, "swap", 0)})
                 since = self.started or now() - 86400
                 for d in mt5.history_deals_get(since + Mt5.offset_seconds - 60, now() + Mt5.offset_seconds + 86400) or ():

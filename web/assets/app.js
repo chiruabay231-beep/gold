@@ -3695,7 +3695,8 @@
       const norm = (h) => ({ side: h.side, spreadCost: h.spreadCost, entry: h.entry ?? h.entryPrice ?? null, exit: h.exit ?? h.exitPrice ?? null,
         openTime: h.openTime ?? h.entryTime ?? null, closeTime: h.closeTime ?? h.exitTime ?? null, profit: +h.profit || 0, lots: h.lots, reason: h.reason });
       const pick = (st, name) => st && st.config ? { name, running: !!st.config.running, paper: !!st.config.paper, symbol: st.config.symbol, interval: st.config.interval || "1m",
-        positions: (st.positions || []).map((p) => ({ side: p.side, entry: p.entry ?? p.entryPrice, profit: +p.profit || 0 })), history: (st.history || []).map(norm), stats: st.stats } : null;
+        positions: (st.positions || []).map((p) => ({ side: p.side, entry: p.entry ?? p.entryPrice, profit: +p.profit || 0, lots: p.lots,
+          stop: p.trail ?? p.stop ?? null, stopKind: p.trail != null ? "trailing" : p.stopKind, openTime: p.openTime ?? null })), history: (st.history || []).map(norm), stats: st.stats } : null;
       if (bot === "tick") return pick(this.tickStatus, "⚡ Nến tick");
       if (bot === "grid") return pick(this.gridStatus, "🕸️ Nhồi lệnh");
       if (bot === "sr") return pick(this.srStatus, "🧱 Cản & Hỗ trợ");
@@ -4016,12 +4017,19 @@
           if (h.openTime && h.openTime >= first) marks.push({ time: at(h.openTime), position: long ? "belowBar" : "aboveBar", color: long ? "#2b6bf3" : "#f0455a", shape: long ? "arrowUp" : "arrowDown", text: long ? "B" : "S" });
           if (h.closeTime && h.closeTime >= first) marks.push({ time: at(h.closeTime), position: long ? "aboveBar" : "belowBar", color: h.profit >= 0 ? "#14b88a" : "#f0455a", shape: "circle", text: (h.profit >= 0 ? "+" : "") + h.profit.toFixed(2) });
         });
-        marks.sort((a, b) => a.time - b.time);
-        // The entries / exits are many with a scalping bot: off unless asked for.
-        this.botSeries.setMarkers(store.get("aurum.botMarks") === "1" ? marks : []);
+        // The running positions: always marked where they opened (the closed trades' marks only when asked for).
+        const openMarks = v.positions.filter((p) => p.openTime && p.openTime >= first).map((p) => ({ time: at(p.openTime), position: p.side === "long" ? "belowBar" : "aboveBar",
+          color: p.side === "long" ? "#2b6bf3" : "#f0455a", shape: p.side === "long" ? "arrowUp" : "arrowDown", text: `${p.side === "long" ? "BUY" : "SELL"} ${p.lots ?? ""}` }));
+        const shown = (store.get("aurum.botMarks") === "1" ? marks : []).concat(openMarks);
+        shown.sort((a, b) => a.time - b.time);
+        this.botSeries.setMarkers(shown);
         (this.botLines || []).forEach((l) => this.botSeries.removePriceLine(l));
         this.botLines = v.positions.filter((p) => p.entry != null).map((p) => this.botSeries.createPriceLine({ price: p.entry, color: p.side === "long" ? "#2b6bf3" : "#f0455a", lineWidth: 1, lineStyle: 2,
-          axisLabelVisible: true, title: `${p.side === "long" ? "BUY" : "SELL"} ${p.profit >= 0 ? "+" : ""}${p.profit.toFixed(2)}` }));
+          axisLabelVisible: true, title: `${p.side === "long" ? "BUY" : "SELL"} ${p.lots ?? ""} ${p.profit >= 0 ? "+" : ""}${p.profit.toFixed(2)}` }));
+        // Their SL (the basket's, the lock or the trailing one), dotted.
+        const slName = { trailing: "Trailing SL", "khoá lời nhồi": "SL khoá lời", "SL rổ": "SL rổ" };
+        v.positions.filter((p) => p.stop != null).forEach((p) => this.botLines.push(this.botSeries.createPriceLine({ price: p.stop, color: p.stopKind === "SL rổ" || !p.stopKind ? "#f0a03a" : "#14b8a6",
+          lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: `${slName[p.stopKind] || "SL"} ${p.side === "long" ? "BUY" : "SELL"}` })));
         // The spread, as MT5 draws it: the candles are Bid, the Ask line over them (buys fill there, sells close there).
         const st0 = this.botStatusFor(), live = st0.price || (v.symbol === this.symbol && this.bid != null && this.ask != null ? { bid: this.bid, ask: this.ask } : null);
         if (live && live.ask != null && live.bid != null && live.ask > live.bid) {

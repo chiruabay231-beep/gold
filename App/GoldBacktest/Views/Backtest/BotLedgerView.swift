@@ -370,7 +370,10 @@ struct BotChartView: View {
             let axisW: CGFloat = 62, timeH: CGFloat = 16
             let plot = CGRect(x: 0, y: 8, width: size.width - axisW, height: size.height - timeH - 8)
             var lo = rows.map { $0[3] }.min() ?? 0, hi = rows.map { $0[2] }.max() ?? 1
-            for p in positions { if let e = p.entry { lo = min(lo, e); hi = max(hi, e) } }
+            for p in positions {
+                if let e = p.entry { lo = min(lo, e); hi = max(hi, e) }
+                if let sl = p.stop { lo = min(lo, sl); hi = max(hi, sl) }
+            }
             if let b = data.bid { lo = min(lo, b); hi = max(hi, b) }
             let pad = max((hi - lo) * 0.06, 1e-6)
             lo -= pad; hi += pad
@@ -415,17 +418,49 @@ struct BotChartView: View {
                 ctx.stroke(line, with: .color(.secondary.opacity(0.7)), lineWidth: 0.8)
                 label(price(b), at: b, color: .gray)
             }
-            // The open positions' entries.
+            // The running positions, as a trading chart shows them: from the candle each opened on, a band from its
+            // entry to the price now (green in profit, red in loss), its entry line and an arrow where it opened, its
+            // SL dotted with its kind, and a label with side, lots and P/L.
+            func xAt(_ t: Double?) -> CGFloat {
+                guard let t, let i = rows.lastIndex(where: { $0[0] <= t }) else { return 0 }
+                return CGFloat(i) * step + step / 2
+            }
+            let now = data.bid ?? rows.last?[4]
             for p in positions {
                 guard let e = p.entry else { continue }
-                let color: Color = p.side == "long" ? .blue : down
-                var line = Path(); line.move(to: CGPoint(x: 0, y: y(e))); line.addLine(to: CGPoint(x: plot.maxX, y: y(e)))
-                ctx.stroke(line, with: .color(color), style: StrokeStyle(lineWidth: 1, dash: [5, 3]))
-                let text = "\(p.side == "long" ? "BUY" : "SELL") \(p.lots.map { String(format: "%g", $0) } ?? "") \(p.profit >= 0 ? "+" : "")\(String(format: "%.2f", p.profit))"
+                let long = p.side == "long"
+                let color: Color = long ? .blue : down
+                let x0 = xAt(p.openTime)
+                if let now {
+                    let top = min(y(e), y(now)), h = max(1, abs(y(e) - y(now)))
+                    ctx.fill(Path(CGRect(x: x0, y: top, width: max(1, plot.maxX - x0), height: h)),
+                             with: .color((p.profit >= 0 ? up : down).opacity(0.13)))
+                }
+                var line = Path(); line.move(to: CGPoint(x: x0, y: y(e))); line.addLine(to: CGPoint(x: plot.maxX, y: y(e)))
+                ctx.stroke(line, with: .color(color), lineWidth: 1.2)
+                if x0 > 0 {
+                    // The arrow where it opened: under the candle for a buy, over it for a sell.
+                    let ay = long ? y(e) + 9 : y(e) - 9
+                    var arrow = Path()
+                    arrow.move(to: CGPoint(x: x0, y: long ? ay - 6 : ay + 6))
+                    arrow.addLine(to: CGPoint(x: x0 - 5, y: long ? ay + 3 : ay - 3))
+                    arrow.addLine(to: CGPoint(x: x0 + 5, y: long ? ay + 3 : ay - 3))
+                    arrow.closeSubpath()
+                    ctx.fill(arrow, with: .color(color))
+                }
+                if let sl = p.stop {
+                    let kind = BotReason.close(p.stopKind ?? "SL rổ", kind: nil)
+                    var dash = Path(); dash.move(to: CGPoint(x: x0, y: y(sl))); dash.addLine(to: CGPoint(x: plot.maxX, y: y(sl)))
+                    ctx.stroke(dash, with: .color(kind.color), style: StrokeStyle(lineWidth: 1, dash: [2, 3]))
+                    ctx.draw(Text(kind.label).font(.system(size: 8, weight: .semibold)).foregroundColor(kind.color),
+                             at: CGPoint(x: max(x0, 2) + 2, y: y(sl) - 2), anchor: .bottomLeading)
+                    label(price(sl), at: sl, color: kind.color)
+                }
+                let text = "\(long ? "BUY" : "SELL") \(p.lots.map { String(format: "%g", $0) } ?? "") \(p.profit >= 0 ? "+" : "")\(String(format: "%.2f", p.profit))"
                 let t = ctx.resolve(Text(text).font(.system(size: 9, weight: .bold)).foregroundColor(.white))
                 let s = t.measure(in: CGSize(width: 200, height: 20))
                 let rect = CGRect(x: max(2, plot.maxX - s.width - 12), y: y(e) - s.height - 5, width: s.width + 8, height: s.height + 4)
-                ctx.fill(Path(roundedRect: rect, cornerRadius: 3), with: .color(color.opacity(0.85)))
+                ctx.fill(Path(roundedRect: rect, cornerRadius: 3), with: .color(color.opacity(0.9)))
                 ctx.draw(t, at: CGPoint(x: rect.minX + 4, y: rect.midY), anchor: .leading)
                 label(price(e), at: e, color: color)
             }
@@ -466,7 +501,7 @@ struct ServerBot: Decodable {
     struct Config: Decodable { var running: Bool?; var paper: Bool?; var symbol: String?; var interval: String? }
     struct Position: Decodable {
         var side: String?; var lots: Double?; var entry: Double?; var profit: Double?
-        var why: String?; var stop: Double?; var trail: Double?; var stopKind: String?
+        var why: String?; var stop: Double?; var trail: Double?; var stopKind: String?; var openTime: Double?
     }
     struct Trade: Decodable {
         var side: String?; var lots: Double?; var entry: Double?; var exit: Double?; var closeTime: Double?; var profit: Double?
@@ -486,7 +521,7 @@ struct ServerBot: Decodable {
                 balance: paper?.balance,
                 positions: (positions ?? []).enumerated().map { i, p in
                     BotBook.Open(id: i, side: p.side ?? "", lots: p.lots, entry: p.entry, profit: p.profit ?? 0,
-                                 why: p.why, stop: p.trail ?? p.stop, stopKind: p.trail != nil ? "trailing" : p.stopKind)
+                                 why: p.why, stop: p.trail ?? p.stop, stopKind: p.trail != nil ? "trailing" : p.stopKind, openTime: p.openTime)
                 },
                 history: (history ?? []).enumerated().map { i, t in
                     BotBook.Closed(id: i, side: t.side ?? "", lots: t.lots, entry: t.entry, exit: t.exit, closeTime: t.closeTime, profit: t.profit ?? 0,
@@ -521,7 +556,7 @@ struct BotBook: Identifiable {
     struct Open: Identifiable {
         var id: Int; var side: String; var lots: Double?; var entry: Double?; var profit: Double
         /// Why it opened (the bot's signal / layer), its SL price and which SL that is.
-        var why: String? = nil; var stop: Double? = nil; var stopKind: String? = nil
+        var why: String? = nil; var stop: Double? = nil; var stopKind: String? = nil; var openTime: Double? = nil
     }
     struct Closed: Identifiable {
         var id: Int; var side: String; var lots: Double?; var entry: Double?; var exit: Double?; var closeTime: Double?; var profit: Double
