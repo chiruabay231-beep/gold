@@ -89,6 +89,8 @@ if [ -x "$VMRUN" ]; then
   VMX=$(find "$HOME/Virtual Machines.localized" "$HOME/Virtual Machines" "$HOME/Documents/Virtual Machines.localized" \
         -maxdepth 3 -name "*.vmx" 2>/dev/null | grep -i -m1 "win" || true)
   [ -z "$VMX" ] && VMX=$(find "$HOME/Virtual Machines.localized" "$HOME/Virtual Machines" -maxdepth 3 -name "*.vmx" 2>/dev/null | head -1)
+  # Elsewhere (another folder or disk): the virtual machine running now, as VMware lists it.
+  [ -z "$VMX" ] && VMX=$("$VMRUN" list 2>/dev/null | grep -i "\.vmx$" | head -1 || true)
   if [ -n "$VMX" ]; then
     echo "==> VMware: tự bật máy ảo khi đăng nhập Mac ($VMX)"
     cat > "$VMAGENT" <<PLIST
@@ -106,7 +108,7 @@ PLIST
     launchctl unload "$VMAGENT" 2>/dev/null || true
     launchctl load "$VMAGENT"
   else
-    echo "==> VMware: chưa thấy máy ảo nào — tạo máy ảo Windows xong thì chạy lại lệnh này"
+    echo "==> VMware: chưa thấy máy ảo nào — mở máy ảo Windows trong VMware rồi chạy lại lệnh này"
   fi
 fi
 
