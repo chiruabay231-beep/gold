@@ -1316,3 +1316,15 @@ html[data-theme="light"] .fav-bar .fav-sep { background: linear-gradient(180deg,
 .ol-more summary::-webkit-details-marker { display: none; }
 .ol-more summary::before { content: "⇄ "; }
 .ol-more[open] summary { margin-bottom: 8px; }
+
+/* The bot's account: one line, the rest folded. */
+.own-fold > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; font-size: 14px; padding: 2px 0; }
+.own-fold > summary::-webkit-details-marker { display: none; }
+.own-fold > summary .grow { flex: 1; min-width: 0; }
+.own-fold > summary .own-more { font-size: 12px; color: var(--muted, #6b7280); white-space: nowrap; }
+.own-fold > summary .own-more::after { content: " ▾"; }
+.own-fold[open] > summary .own-more::after { content: " ▴"; }
+.own-fold[open] > summary { margin-bottom: 10px; }
+.own-fold .own-dot { width: 8px; height: 8px; border-radius: 50%; background: #c2c6cf; flex: none; }
+.own-fold .own-dot.on { background: #14b88a; box-shadow: 0 0 0 3px rgba(20, 184, 138, .18); }
+#blAcct .bl-m5 .m5-view { margin: 8px 0 10px; }

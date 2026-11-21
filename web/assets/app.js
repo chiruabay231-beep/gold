@@ -3975,7 +3975,8 @@
       const gs = $("blState");
       if (gs) {
         const txt = store.get("aurum.hubBot") === "grid" && this.gridStatus ? this.gridStateText(this.gridStatus) : "";
-        gs.hidden = !txt; gs.innerHTML = txt ? "🤖 " + txt : "";
+        const sum = txt && this.gridStatus.config && this.gridStatus.config.running ? this.gridSummary(this.gridStatus) : "";
+        gs.hidden = !txt; gs.innerHTML = txt ? `🤖 ${txt}${sum ? `<br><span class="small muted">${sum}</span>` : ""}` : "";
       }
       if (!v || !v.symbol || !v.interval) return;
       if (!this.botChart) {
@@ -4051,6 +4052,9 @@
       const pts = curve.map((c, i) => `${(i / Math.max(curve.length - 1, 1) * W).toFixed(1)},${(H - 4 - (c - lo) / span * (H - 8)).toFixed(1)}`).join(" ");
       const d = this.digitsFor(v.symbol);
       const stat = (k, val, cls = "") => `<div class="stat"><span>${k}</span><b class="${cls}">${val}</b></div>`;
+      // The account card over the chart.
+      const acctBox = $("blAcct");
+      if (acctBox) acctBox.innerHTML = `<div class="bl-m5">${this.mt5LikeView(this.botStatusFor())}</div>`;
       if (this.eqHover && $("botPL").querySelector(".eq-wrap")) return;  // being read: left as it is
       $("botPL").innerHTML = `<div class="stats">
           ${stat("Lãi/lỗ đã chốt", signed(net), net >= 0 ? "pos" : "neg")}
@@ -4063,7 +4067,6 @@
         ${h.length > 1 ? `<div class="eq-wrap"><svg class="bt-eq" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${net >= 0 ? "var(--up)" : "var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><div class="eq-line" hidden></div><div class="eq-dot" hidden></div><div class="eq-tip" hidden></div></div>` : ""}
         ${this.botWhy(h)}${store.get("aurum.hubBot") === "grid" ? this.gridAdvice(h) : ""}
         ${this.botBreakdown(this.botStatusFor().breakdown)}
-        <div class="bl-m5">${this.mt5LikeView(this.botStatusFor())}</div>
         <h4>Lịch sử lệnh của bot (mới nhất trước)</h4>
         <div class="list log">${h.length ? h.slice(0, 25).map((x) => `<div class="log-row"><span class="muted small">${x.closeTime ? clock(x.closeTime) : ""}</span> ${sideName(x.side)}${x.lots ? " " + x.lots : ""} ${x.entry != null ? fmt(x.entry, d) : "–"} → ${x.exit != null ? fmt(x.exit, d) : "–"} · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b>${this.closeTag(x.reason, x.profit)}</div>`).join("") : '<div class="empty">Chưa có lệnh đã đóng</div>'}</div>`;
       this.bindEquity($("botPL"), curve, h.slice().reverse(), { lo, span, H, d });
@@ -4616,24 +4619,28 @@
     },
 
     renderGridBotLive(st) {
-      this.renderTickBotLive(st, "gbLive");
+      // The state, numbers and positions are on the bot's chart card: here only "▶ Chạy lại ngay" while it rests.
       const live = $("gbLive");
-      if (!live || !st || !st.grid) return;
-      const pos = st.positions || [], g = st.grid;
-      const side = (s) => pos.filter((p) => p.side === s);
-      const basket = (s) => { const ps = side(s); return ps.length ? `${ps.length} lớp · ${+ps.reduce((a, p) => a + (+p.lots || 0), 0).toFixed(2)} lot · <b class="${ps.reduce((a, p) => a + (p.profit || 0), 0) >= 0 ? "pos" : "neg"}">${signed(ps.reduce((a, p) => a + (p.profit || 0), 0))}</b>` : "trống"; };
-      let pause = g.pauseUntil && g.pauseUntil * 1000 > Date.now() ? ` · <b class="neg">đang nghỉ sau cắt lỗ tới ${clock(g.pauseUntil)}</b>` : "";
-      Object.entries(g.sidePause || {}).forEach(([k, v]) => { if (v * 1000 > Date.now()) pause += ` · <b class="neg">rổ ${k === "long" ? "MUA" : "BÁN"} nghỉ sau SL tới ${clock(v)}</b>`; });
-      const sg = g.signal, cfg = st.config || {}, sd = (x) => (x === "long" ? '<b class="pos">MUA</b>' : x === "short" ? '<b class="neg">BÁN</b>' : "—");
-      const sigTxt = sg ? ` · tín hiệu: ${sg.side ? sd(sg.side) : "<b>chờ</b>"}${cfg.sigCandle && sg.candle ? ` (nến ${esc(cfg.sigTf || "")} ${sd(sg.candle[0])} ${Math.round(sg.candle[1] * 100)}%` : " ("}${sg.sup != null ? ` · hỗ trợ ${fmt(sg.sup, this.digitsFor(cfg.symbol))} / cản ${fmt(sg.res, this.digitsFor(cfg.symbol))}` : ""}${sg.move != null ? ` · tick ${sg.move > 0 ? "+" : ""}${sg.move}/${cfg.tickSec}s` : ""})` : "";
-      const b = g.bias, bias = sigTxt || (b ? ` · lực nến ${esc((st.config || {}).biasTf || "")}: ${b.side ? `<b class="${b.side === "long" ? "pos" : "neg"}">${b.side === "long" ? "MUA" : "BÁN"} mạnh</b>` : "<b>yếu</b>"} (thân ${b.body > 0 ? "+" : ""}${b.body}%)` : "");
-      const stTxt = this.gridStateText(st), resting = g.state && (g.state.kind === "pause" || Object.keys(g.state.sidePause || {}).length);
-      live.insertAdjacentHTML("afterbegin", `${stTxt ? `<p class="grid-state">🤖 ${stTxt}${resting ? ' <button class="btn btn-ghost btn-small" id="gbResume" type="button">▶ Chạy lại ngay</button>' : ""}</p>` : ""}<p class="small">Rổ MUA: ${basket("long")} · Rổ BÁN: ${basket("short")} · đã chốt ${g.cycles || 0} rổ từ lúc bật${bias}${pause}</p>`);
+      if (!live) return;
+      const g = (st && st.grid) || {};
+      const resting = g.state && (g.state.kind === "pause" || Object.keys(g.state.sidePause || {}).length);
+      live.innerHTML = resting ? '<div class="row-btns"><button class="btn btn-ghost btn-small" id="gbResume" type="button">▶ Chạy lại ngay (bỏ thời gian nghỉ)</button></div>' : "";
       const resume = $("gbResume");
       if (resume) resume.onclick = async (e) => {
         const r = await act(e.currentTarget, () => this.botCall("/gridbot", { resume: true }), "Bot vào lệnh lại ngay khi có tín hiệu");
         if (r) { this.gridStatus = r; this.renderGridBotLive(r); }
       };
+    },
+
+    /** One line under the bot's state: its baskets, closed baskets and the signal's parts now. */
+    gridSummary(st) {
+      if (!st || !st.grid) return "";
+      const pos = st.positions || [], g = st.grid, cfg = st.config || {};
+      const basket = (s) => { const ps = pos.filter((p) => p.side === s); if (!ps.length) return "trống"; const pl = ps.reduce((a, p) => a + (p.profit || 0), 0);
+        return `${ps.length} lớp · ${+ps.reduce((a, p) => a + (+p.lots || 0), 0).toFixed(2)} lot · <b class="${pl >= 0 ? "pos" : "neg"}">${signed(pl)}</b>`; };
+      const sg = g.signal, sd = (x) => (x === "long" ? '<b class="pos">MUA</b>' : x === "short" ? '<b class="neg">BÁN</b>' : "—");
+      const sig = sg ? ` · tín hiệu: ${sg.side ? sd(sg.side) : "<b>chờ</b>"}${cfg.sigCandle && sg.candle ? ` (nến ${esc(cfg.sigTf || "")} ${sd(sg.candle[0])} ${Math.round(sg.candle[1] * 100)}%` : " ("}${sg.sup != null ? ` · hỗ trợ ${fmt(sg.sup, this.digitsFor(cfg.symbol))} / cản ${fmt(sg.res, this.digitsFor(cfg.symbol))}` : ""}${sg.move != null ? ` · tick ${sg.move > 0 ? "+" : ""}${sg.move}/${cfg.tickSec}s` : ""})` : "";
+      return `Rổ MUA: ${basket("long")} · Rổ BÁN: ${basket("short")} · đã chốt ${g.cycles || 0} rổ từ lúc bật${sig}`;
     },
 
     /** The Cản & Hỗ trợ bot's settings as its form shows them. */
@@ -5133,25 +5140,35 @@
       if (was !== undefined && was !== this.ownAccount) { toast(this.ownAccount ? "Bot chuyển sang MT5 thứ 2 (tài khoản demo)" : "Bot về tài khoản của chart"); this.loadGridBot(true); }
       const t = (this.ownAccount ? this.botAcct : this.lastTrading) || {};
       const acctText = (x) => (x && x.login ? `#${esc(String(x.login))} · ${x.mode === "real" ? "THẬT" : "demo"}` : "chưa đăng nhập");
-      const html = `<h4>🖥️ Hai MT5: tài khoản thật cho chart, tài khoản demo cho bot</h4>
-        <p class="muted small">Bot chạy trên tài khoản <b>DEMO</b> ở MT5 thứ 2; chart và app giữ tài khoản <b>thật</b>. Tài khoản thật bị từ chối khi bot chưa test xong.</p>
+      // One line: the account the bot trades on; the rest (sign in / change account, on / off) when tapped.
+      const bad = !!(problem || (w && (w.error || (w.enabled && !w.running && w.startingFor > 120) || (w.enabled && w.running && !w.proxy && !w.url))));
+      const signedIn = !!(t.login && t.mode !== "real");
+      const open = bad || !signedIn || !!this.ownOpen;
+      const head = !w ? "Tài khoản bot" : signedIn
+        ? `Tài khoản bot: <b>#${esc(String(t.login))}</b> · demo${t.server ? ` · ${esc(t.server)}` : ""}`
+        : !w.enabled ? "Tài khoản bot: <b>đang tắt</b> — bấm để bật và đăng nhập demo Exness"
+        : !w.running ? "Tài khoản bot: <b>đang khởi động…</b>"
+        : t.login ? `Tài khoản bot: <b class="neg">#${esc(String(t.login))} · THẬT</b> — bot không chạy trên tài khoản thật`
+        : "Tài khoản bot: <b>chưa đăng nhập</b> — bấm để đăng nhập demo Exness";
+      const html = `<details class="own-fold" ${open ? "open" : ""}><summary><span class="own-dot ${signedIn ? "on" : ""}"></span><span class="grow">🖥️ ${head}</span><span class="own-more">Đổi / cài đặt</span></summary>
         ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
-        ${w ? `<div class="kvs"><div class="kv"><span>MT5 thứ 2</span><b>${w.enabled ? (w.running ? `đang chạy · cổng ${w.port}` : "đang khởi động…") : "đang tắt"}${w.enabled && w.terminal ? `<br><span class="muted small">${esc(w.terminal)}</span>` : ""}</b></div>
-          <div class="kv"><span>Tài khoản MT5 thứ 2</span><b>${w.enabled && w.running ? acctText(this.botAcct) : "–"}</b></div>
-          <div class="kv"><span>Tài khoản chart</span><b>${acctText(this.lastTrading)}</b></div>
-          <div class="kv"><span>Bot chạy trên</span><b class="${t.login && t.mode !== "real" ? "pos" : "neg"}">${t.login ? `${this.ownAccount ? "🖥️ MT5 thứ 2" : "chart"} ${acctText(t)}${t.mode === "real" ? " — bot sẽ không chạy" : ""}` : "chưa có tài khoản demo"}</b></div></div>
-          ${w.error ? `<p class="warn">${esc(w.error)}</p>` : ""}
-          ${w.enabled && !w.running && w.startingFor > 120 ? `<p class="warn">Đã ${Math.round(w.startingFor / 60)} phút mà MT5 thứ 2 chưa trả lời${w.log ? `: <span class="small">${esc(w.log)}</span>` : ""}. Thử <b>■ Tắt MT5 thứ 2</b> rồi bật lại; vẫn vậy thì chụp ô này gửi hỗ trợ.</p>` : ""}
-          ${w.enabled && w.running && !w.proxy && !w.url ? `<p class="warn">Web chưa vào được MT5 thứ 2: máy chủ chính còn bản cũ. Bấm <b>Cập nhật máy chủ</b>, chờ 1 phút rồi tải lại trang.</p><div class="row-btns"><button class="btn btn-gold" id="ownUpdate" type="button">⟳ Cập nhật máy chủ</button></div>` : ""}
+        ${w ? `${w.error ? `<p class="warn">${esc(w.error)}</p>` : ""}
+          ${w.enabled && !w.running && w.startingFor > 120 ? `<p class="warn">Đã ${Math.round(w.startingFor / 60)} phút mà tài khoản bot chưa trả lời${w.log ? `: <span class="small">${esc(w.log)}</span>` : ""}. Thử <b>■ Tắt</b> rồi bật lại; vẫn vậy thì chụp ô này gửi hỗ trợ.</p>` : ""}
+          ${w.enabled && w.running && !w.proxy && !w.url ? `<p class="warn">Web chưa vào được tài khoản bot: máy chủ còn bản cũ. Bấm <b>Cập nhật máy chủ</b>, chờ 1 phút rồi tải lại trang.</p><div class="row-btns"><button class="btn btn-gold" id="ownUpdate" type="button">⟳ Cập nhật máy chủ</button></div>` : ""}
+          <p class="muted small">Bot chỉ chạy trên tài khoản <b>demo</b>; chart và app giữ tài khoản ${this.lastTrading && this.lastTrading.login ? `<b>#${esc(String(this.lastTrading.login))} · ${this.lastTrading.mode === "real" ? "thật" : "demo"}</b>` : "chính"}.</p>
+          ${w.enabled ? `<div id="ownLogin"></div>` : ""}
           <div class="row-btns">
-            <button class="btn ${w.enabled ? "btn-ghost" : "btn-gold"}" id="ownToggle" type="button">${w.enabled ? "■ Tắt MT5 thứ 2" : "▶ Bật MT5 thứ 2 cho bot"}</button>
-          </div>
-          ${w.enabled ? `<div id="ownLogin"></div>` : ""}` : ""}`;
-      // Same as on screen: leave it (and the login form being typed in) alone.
-      if (html === this.ownHtml && box.innerHTML) return;
-      this.ownHtml = html;
+            <button class="btn ${w.enabled ? "btn-ghost btn-small" : "btn-gold"}" id="ownToggle" type="button">${w.enabled ? "■ Tắt tài khoản bot" : "▶ Bật tài khoản bot"}</button>
+          </div>` : ""}
+        </details>`;
+      // Same as on screen: leave it (and the login form being typed in) alone; opening / closing it is no change.
+      const key = html.replace(/<details class="own-fold" (open)?/, "");
+      if (key === this.ownHtml && box.innerHTML) return;
+      this.ownHtml = key;
       box.innerHTML = html;
       if (w && w.enabled && w.running && (w.proxy || w.url)) this.renderOwnLogin(w.proxy ? (this.mainBase || this.base) + "/acct2" : w.url);
+      const fold = box.querySelector(".own-fold");
+      if (fold) fold.ontoggle = () => { this.ownOpen = fold.open; };
       const toggle = $("ownToggle"), upd = $("ownUpdate");
       if (upd) upd.onclick = async (e) => {
         const r = await act(e.currentTarget, () => this.mainCall("/update", {}));
@@ -5182,9 +5199,7 @@
         </div>
         <div class="row-btns"><button class="btn btn-gold" id="olGo" type="button">Đăng nhập cho bot</button></div>`;
       // Signed in: the account is in the lines above; the form only behind "Đổi tài khoản".
-      box.innerHTML = t && t.login
-        ? `<details class="ol-more"><summary>Đổi tài khoản demo cho bot</summary>${form}</details>`
-        : `<div class="fp-sec" style="margin-top:10px">Đăng nhập tài khoản demo Exness cho bot</div>${form}`;
+      box.innerHTML = `<div class="fp-sec" style="margin-top:6px">${t && t.login ? "Đổi tài khoản demo cho bot" : "Đăng nhập tài khoản demo Exness cho bot"}</div>${form}`;
       $("olGo").onclick = async (e) => {
         const login = $("olLogin").value.trim(), password = $("olPass").value, server = $("olServer").value.trim();
         if (!login || !password || !server) return toast("Nhập đủ số tài khoản, mật khẩu, máy chủ", true);
