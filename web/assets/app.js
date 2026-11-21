@@ -3628,10 +3628,11 @@
     applyBotHub() {
       // The other bots are gone from the website: the grid bot only.
       const BOTS = [["grid", "🕸️ Nhồi lệnh"]];
-      const MODES = [["backtest", "🧪 Backtest", "chạy trên tick / nến đã qua"], ["demo", "🎮 Chạy thử ảo", "tiền ảo trên giá Exness"], ["mt5", "💹 Tài khoản của bot", this.ownAccount ? "lệnh thật trên tài khoản riêng" : "lệnh thật trên MT5"]];
-      let bot = "grid", mode = store.get("aurum.hubMode") || "demo";
+      // No virtual run any more: the bot is tested on an Exness demo account (its second MT5).
+      const MODES = [["mt5", "💹 Tài khoản demo Exness", this.ownAccount ? "lệnh trên MT5 thứ 2 của bot" : "lệnh trên MT5"], ["backtest", "🧪 Backtest", "chạy trên tick / nến đã qua"]];
+      let bot = "grid", mode = store.get("aurum.hubMode") || "mt5";
       store.set("aurum.hubBot", "grid");
-      if (!MODES.some(([k]) => k === mode)) mode = "demo";
+      if (!MODES.some(([k]) => k === mode)) { mode = "mt5"; store.set("aurum.hubMode", "mt5"); }
       const bots = $("hubBots"), modes = $("hubModes");
       if (!bots || !modes) return;
       bots.innerHTML = BOTS.map(([k, n]) => `<button type="button" data-b="${k}" class="${k === bot ? "on" : ""}">${n}</button>`).join("");
@@ -4050,6 +4051,7 @@
       const pts = curve.map((c, i) => `${(i / Math.max(curve.length - 1, 1) * W).toFixed(1)},${(H - 4 - (c - lo) / span * (H - 8)).toFixed(1)}`).join(" ");
       const d = this.digitsFor(v.symbol);
       const stat = (k, val, cls = "") => `<div class="stat"><span>${k}</span><b class="${cls}">${val}</b></div>`;
+      if (this.eqHover && $("botPL").querySelector(".eq-wrap")) return;  // being read: left as it is
       $("botPL").innerHTML = `<div class="stats">
           ${stat("Lãi/lỗ đã chốt", signed(net), net >= 0 ? "pos" : "neg")}
           ${stat("Đang mở", `${v.positions.length} · ${signed(open)}`, open >= 0 ? "pos" : "neg")}
@@ -4058,12 +4060,13 @@
           ${(() => { const rb = +store.get("aurum.rebate") || 0; if (!rb) return ""; const lots = h.reduce((a, x) => a + (+x.lots || 0), 0), got = lots * rb;
             return stat("Backcom ước tính", `${signed(got)} · ${lots.toFixed(2)} lot`, "pos") + stat("Ròng sau backcom", signed(net + got), net + got >= 0 ? "pos" : "neg"); })()}
         </div>
-        ${h.length > 1 ? `<svg class="bt-eq" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${net >= 0 ? "var(--up)" : "var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>` : ""}
+        ${h.length > 1 ? `<div class="eq-wrap"><svg class="bt-eq" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${net >= 0 ? "var(--up)" : "var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><div class="eq-line" hidden></div><div class="eq-dot" hidden></div><div class="eq-tip" hidden></div></div>` : ""}
         ${this.botWhy(h)}${store.get("aurum.hubBot") === "grid" ? this.gridAdvice(h) : ""}
         ${this.botBreakdown(this.botStatusFor().breakdown)}
         <div class="bl-m5">${this.mt5LikeView(this.botStatusFor())}</div>
         <h4>Lịch sử lệnh của bot (mới nhất trước)</h4>
         <div class="list log">${h.length ? h.slice(0, 25).map((x) => `<div class="log-row"><span class="muted small">${x.closeTime ? clock(x.closeTime) : ""}</span> ${sideName(x.side)}${x.lots ? " " + x.lots : ""} ${x.entry != null ? fmt(x.entry, d) : "–"} → ${x.exit != null ? fmt(x.exit, d) : "–"} · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b>${this.closeTag(x.reason, x.profit)}</div>`).join("") : '<div class="empty">Chưa có lệnh đã đóng</div>'}</div>`;
+      this.bindEquity($("botPL"), curve, h.slice().reverse(), { lo, span, H, d });
     },
 
     /* ----- "Nến tick" bot on the server: in on a run from the candle's open, out by its close ----- */
@@ -4097,7 +4100,7 @@
       }
       c.symbol = c.symbol || this.symbol || "XAUUSDm";
       // "Chạy thử" in the Bot box: virtual orders on the live Exness price; "Tài khoản MT5": real orders.
-      c.paper = c.running ? c.paper !== false : (store.get("aurum.hubMode") || "demo") !== "mt5";
+      c.paper = c.running ? c.paper !== false : (store.get("aurum.hubMode") || "mt5") === "demo";
       return c;
     },
 
@@ -4106,6 +4109,7 @@
       const c = this.tickSettings();
       const opt = (list, v) => list.map(([k, n]) => `<option value="${k}" ${String(k) === String(v) ? "selected" : ""}>${n}</option>`).join("");
       const runPaper = st && st.config && st.config.paper;
+      if (runPaper && st.config.running) problem = (problem ? problem + " " : "") + "Bot đang chạy ẢO (chế độ cũ, đã bỏ): bấm ■ Tắt bot rồi ▶ Bật lại để chạy trên tài khoản demo Exness.";
       if (st && st.config && st.config.sl === undefined) problem = (problem ? problem + " " : "") + "Máy chủ VPS còn bản cũ: chưa có SL mỗi lệnh / thuận chiều nến / đóng khi nến đảo. Vào tab Máy chủ → Cập nhật (bản 5.0) rồi đặt lại tài khoản ảo để chạy lại từ đầu.";
       el.innerHTML = `<div class="panel-head"><h3>⚡ Bot nến tick (bản đầu)</h3>${st ? `<span class="badge ${c.running ? "on" : "off"}">${c.running ? (runPaper ? "Đang chạy ẢO" : "Đang chạy trên MT5") : "Đang tắt"}</span>` : ""}</div>
         <p class="muted small">Bot <b>MUA / BÁN liên tục</b> theo từng tick trong cây nến: mỗi lần giá chạy thêm một <b>bước</b> từ lệnh trước (lúc đầu từ giá mở nến) thì vào thêm 1 lệnh theo chiều đó (lên = MUA, xuống = BÁN), nên <b>bên nào giá phản ứng mạnh hơn sẽ có nhiều lệnh hơn</b>. Lệnh nào dương đủ mức <b>chốt lời</b> thì đóng ngay, lệnh khác vào tiếp; lệnh âm tới <b>SL</b> hoặc khi <b>nến đảo chiều</b> thì đóng sớm. An toàn: giới hạn số lệnh mở cùng lúc, <b>cắt lỗ chung</b> khi cả rổ lệnh âm quá mức, và đóng hết khi hết cây nến.</p>
@@ -4206,8 +4210,36 @@
           <div><div class="top"><span class="sym">${esc(o.symbol)}</span><span class="side ${o.side === "long" ? "buy" : "sell"}">${sideName(o.side)} ${o.lots}</span><span class="muted small">@ ${fmt(o.entry, d(o.symbol))}${o.paper ? " · ảo" : ""}</span></div>
           <div class="lv">SL ${o.stop ? fmt(o.stop, d(o.symbol)) : "–"} · TP ${o.target ? fmt(o.target, d(o.symbol)) : "–"}${o.trail != null ? ` · <b class="pos">trailing ${fmt(o.trail, d(o.symbol))}</b>` : ""}</div></div>
           <div class="right"><div class="move ${(o.profit || 0) >= 0 ? "pos" : "neg"}">${signed(o.profit || 0)}</div></div></div>`).join("")}</div>
-        ${(st.history || []).length ? `<h4>Lệnh ảo đã đóng</h4><div class="list log">${st.history.slice(0, 20).map((x) => `<div class="log-row"><span class="muted small">${clock(x.closeTime)}</span> ${sideName(x.side)} ${fmt(x.entry, d(x.symbol))} → ${fmt(x.exit, d(x.symbol))} · ${esc(x.reason)} · <b class="${x.profit >= 0 ? "pos" : "neg"}">${signed(x.profit)}</b></div>`).join("")}</div>` : ""}
         ${(st.events || []).length ? `<h4>Hoạt động</h4><div class="list log">${st.events.slice(0, 15).map((e) => `<div class="log-row"><span class="muted small">${clock(e.time)}</span> ${esc(e.text)}</div>`).join("")}</div>` : ""}`;
+    },
+
+    /** The profit curve under the pointer (or finger): the trade at that point, its P/L and the running total. */
+    bindEquity(box, curve, trades, g) {
+      const wrap = box && box.querySelector(".eq-wrap");
+      if (!wrap) return;
+      const tip = wrap.querySelector(".eq-tip"), dot = wrap.querySelector(".eq-dot"), line = wrap.querySelector(".eq-line");
+      const show = (clientX) => {
+        const r = wrap.getBoundingClientRect(), n = curve.length - 1;
+        const i = Math.round(Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * n);
+        const x = (i / n) * r.width, y = ((g.H - 4 - (curve[i] - g.lo) / g.span * (g.H - 8)) / g.H) * r.height;
+        const t = i > 0 ? trades[i - 1] : null;
+        tip.innerHTML = t ? `<div class="muted">${t.closeTime ? clock(t.closeTime) : ""} · lệnh ${i}/${n}</div>
+            <div>${sideName(t.side)}${t.lots ? " " + t.lots : ""} ${t.entry != null ? fmt(t.entry, g.d) : ""} → ${t.exit != null ? fmt(t.exit, g.d) : ""}</div>
+            <div>Lệnh này: <b class="${t.profit >= 0 ? "pos" : "neg"}">${signed(t.profit)}</b>${t.reason ? ` · ${esc(t.reason)}` : ""}</div>
+            <div>Tổng tới đây: <b class="${curve[i] >= 0 ? "pos" : "neg"}">${signed(curve[i])}</b></div>`
+          : `<div>Bắt đầu · <b>0.00</b></div>`;
+        line.hidden = dot.hidden = tip.hidden = false;
+        line.style.left = dot.style.left = x + "px";
+        dot.style.top = y + "px";
+        dot.style.background = curve[i] >= 0 ? "var(--up)" : "var(--down)";
+        const w = tip.offsetWidth || 180;
+        tip.style.left = Math.min(Math.max(0, x - w / 2), r.width - w) + "px";
+      };
+      const hide = () => { line.hidden = dot.hidden = tip.hidden = true; this.eqHover = false; };
+      wrap.onmousemove = (e) => { this.eqHover = true; show(e.clientX); };
+      wrap.onmouseleave = hide;
+      wrap.ontouchstart = wrap.ontouchmove = (e) => { this.eqHover = true; show(e.touches[0].clientX); };
+      wrap.ontouchend = () => setTimeout(hide, 2500);
     },
 
     /** The bot's open positions as MT5's Trade screen shows them: the floating total on top, the account
@@ -4299,7 +4331,7 @@
       c.symbol = c.symbol || this.symbol || "XAUUSDm";
       c.maxLot = Math.max(c.lots, c.maxLot);
       c.interval = "1m"; // the backtest's bars and the bot chart
-      c.paper = c.running ? c.paper !== false : (store.get("aurum.hubMode") || "demo") !== "mt5";
+      c.paper = c.running ? c.paper !== false : (store.get("aurum.hubMode") || "mt5") === "demo";
       return c;
     },
 
@@ -4529,6 +4561,8 @@
         $("gbComm").closest("label").hidden = acct.value === "real";
       };
       acct.onchange = () => { fillAcct(); showRisk(); }; fillAcct();
+      // The virtual account's settings: only while an old virtual run is still on (it is gone from the modes).
+      if (!c.paper) { acct.closest(".fields").hidden = true; $("gbNoSpread").closest("label").hidden = true; }
       $("gbPreset").onclick = () => {
         // As in the video: 0.01 to start, a new layer every 2$ against, lots × 1.5, the basket out at about +1$.
         const set = (id, v) => { if ($(id)) $(id).value = v; };
@@ -5100,7 +5134,7 @@
       const t = (this.ownAccount ? this.botAcct : this.lastTrading) || {};
       const acctText = (x) => (x && x.login ? `#${esc(String(x.login))} · ${x.mode === "real" ? "THẬT" : "demo"}` : "chưa đăng nhập");
       const html = `<h4>🖥️ Hai MT5: tài khoản thật cho chart, tài khoản demo cho bot</h4>
-        <p class="muted small">Máy chủ chạy thêm <b>MT5 thứ 2</b>. Đăng nhập <b>tài khoản demo Exness</b> vào MT5 thứ 2 (ô bên dưới; hoặc trên Windows mở một MT5 khác — biểu tượng <b>"MT5 Bot (demo)"</b> ngoài Desktop hay MT5 bạn tự cài thêm — đăng nhập demo trong đó, máy chủ tự nhận trong khoảng 1 phút). Chart và app giữ <b>tài khoản thật</b>. Bot tự chạy trên tài khoản <b>DEMO</b>; tài khoản thật bị từ chối khi bot chưa test xong.</p>
+        <p class="muted small">Bot chạy trên tài khoản <b>DEMO</b> ở MT5 thứ 2; chart và app giữ tài khoản <b>thật</b>. Tài khoản thật bị từ chối khi bot chưa test xong.</p>
         ${problem ? `<p class="warn">${esc(problem)}</p>` : ""}
         ${w ? `<div class="kvs"><div class="kv"><span>MT5 thứ 2</span><b>${w.enabled ? (w.running ? `đang chạy · cổng ${w.port}` : "đang khởi động…") : "đang tắt"}${w.enabled && w.terminal ? `<br><span class="muted small">${esc(w.terminal)}</span>` : ""}</b></div>
           <div class="kv"><span>Tài khoản MT5 thứ 2</span><b>${w.enabled && w.running ? acctText(this.botAcct) : "–"}</b></div>
@@ -5141,14 +5175,16 @@
       try { t = await own("/mt5/trading"); } catch { /* not logged in yet */ }
       this.botAcct = t;
       if (this.tab === "autobot") this.applyBotHub();
-      box.innerHTML = `<div class="fp-sec" style="margin-top:10px">Đăng nhập MT5 thứ 2 (tài khoản demo cho bot)</div>
-        <p class="small">${t && t.login ? `Đang đăng nhập <b>#${esc(String(t.login))}</b> · ${esc(t.server || "")} · ${t.mode === "real" ? '<b class="neg">TÀI KHOẢN THẬT</b>' : "demo"}` : "Chưa đăng nhập: nhập tài khoản demo Exness để bot chạy."}</p>
-        <div class="fields three">
+      const form = `<div class="fields three">
           <label>Số tài khoản<input id="olLogin" inputmode="numeric" placeholder="VD 123456789"></label>
           <label>Mật khẩu<input id="olPass" type="password" autocomplete="off"></label>
           <label>Máy chủ<input id="olServer" placeholder="VD Exness-MT5Trial15" value="${esc((t && t.server) || "")}"></label>
         </div>
         <div class="row-btns"><button class="btn btn-gold" id="olGo" type="button">Đăng nhập cho bot</button></div>`;
+      // Signed in: the account is in the lines above; the form only behind "Đổi tài khoản".
+      box.innerHTML = t && t.login
+        ? `<details class="ol-more"><summary>Đổi tài khoản demo cho bot</summary>${form}</details>`
+        : `<div class="fp-sec" style="margin-top:10px">Đăng nhập tài khoản demo Exness cho bot</div>${form}`;
       $("olGo").onclick = async (e) => {
         const login = $("olLogin").value.trim(), password = $("olPass").value, server = $("olServer").value.trim();
         if (!login || !password || !server) return toast("Nhập đủ số tài khoản, mật khẩu, máy chủ", true);

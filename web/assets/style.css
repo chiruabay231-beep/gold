@@ -1299,3 +1299,20 @@ html[data-theme="light"] .fav-bar .fav-sep { background: linear-gradient(180deg,
 .bot-live .bd-table th, .bot-live .bd-table td { border-color: rgba(255, 255, 255, .07); }
 .bot-live .log-row { border-color: rgba(255, 255, 255, .06); color: #dfe3ec; }
 .bot-live .grid-advice { background: rgba(245, 165, 36, .08); color: #e9dcc0; }
+
+/* The bot's profit curve: the trade and running total under the pointer. */
+.eq-wrap { position: relative; cursor: crosshair; touch-action: pan-y; }
+.eq-wrap .eq-line { position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(224, 180, 74, .55); pointer-events: none; }
+.eq-wrap .eq-dot { position: absolute; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; border: 2px solid #11141a; pointer-events: none; }
+.eq-wrap .eq-tip { position: absolute; top: -6px; transform: translateY(-100%); min-width: 170px; padding: 7px 10px; border-radius: 9px;
+  background: rgba(17, 20, 26, .96); border: 1px solid rgba(224, 180, 74, .35); color: #e6e9f0; font-size: 12px; line-height: 1.45;
+  white-space: nowrap; pointer-events: none; z-index: 5; box-shadow: 0 6px 18px rgba(0, 0, 0, .35); }
+.eq-wrap .eq-tip .muted { color: #8e97a8; font-size: 11px; }
+.eq-wrap .eq-tip .pos { color: #3fd6a6; } .eq-wrap .eq-tip .neg { color: #ff6b7d; }
+
+/* The second MT5's sign-in: one line when signed in, the form behind "Đổi tài khoản". */
+.ol-more { margin-top: 10px; }
+.ol-more summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--muted, #6b7280); list-style: none; }
+.ol-more summary::-webkit-details-marker { display: none; }
+.ol-more summary::before { content: "⇄ "; }
+.ol-more[open] summary { margin-bottom: 8px; }
