@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "8.2"
+VERSION = "8.3"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2662,7 +2662,7 @@ def magic_history(mt5, magic, since, limit=200):
         if getattr(d, "magic", 0) != magic or d.entry != mt5.DEAL_ENTRY_OUT:
             continue
         i = opened.get(d.position_id)
-        out.append({"symbol": d.symbol, "side": "long" if d.type == mt5.DEAL_TYPE_SELL else "short", "lots": d.volume,
+        out.append({"id": int(d.position_id), "symbol": d.symbol, "side": "long" if d.type == mt5.DEAL_TYPE_SELL else "short", "lots": d.volume,
                     "entry": i.price if i else None, "openTime": float(i.time) - Mt5.offset_seconds if i else None,
                     "exit": d.price, "closeTime": float(d.time) - Mt5.offset_seconds, "reason": deal_reason(mt5, d),
                     "profit": round(d.profit + d.commission + d.swap + (getattr(d, "fee", 0) or 0), 2)})
@@ -3243,10 +3243,27 @@ class TickBot:
         self.error = ""
         self.started = None
         self.paper = read_json(self.paper_path(), None) or {"balance": 10000.0, "positions": [], "history": []}
+        # Why each MT5 position was opened and what its SL is (by ticket): MT5 keeps only a 31-character comment.
+        self.notes = read_json(self.notes_path(), None) or {}
         threading.Thread(target=self._loop, daemon=True).start()
 
     def _save_paper(self):
         write_json(self.paper_path(), self.paper)
+
+    def notes_path(self):
+        return self.paper_path().replace("_paper.json", "_notes.json")
+
+    def _note(self, key, **fields):
+        with self.lock:
+            n = self.notes.setdefault(str(key), {})
+            n.update(fields, t=time.time())
+            if len(self.notes) > 800:
+                for k in sorted(self.notes, key=lambda k: self.notes[k].get("t", 0))[:200]:
+                    self.notes.pop(k, None)
+            try:
+                write_json(self.notes_path(), self.notes)
+            except OSError:
+                pass
 
     @property
     def cfg(self):
@@ -3349,7 +3366,7 @@ class TickBot:
                  "lots": p.volume, "entry": p.price_open, "openTime": float(p.time), "raw": p}
                 for p in self._mine(mt5.positions_get(symbol=symbol))]
 
-    def _open(self, mt5, symbol, info, tick, long, why, lots=None, stop=None):
+    def _open(self, mt5, symbol, info, tick, long, why, lots=None, stop=None, stop_kind="SL rổ"):
         c = self.cfg
         lots = round(max(0.01, float(lots if lots is not None else c["lots"])), 2)
         price = tick.ask if long else tick.bid
@@ -3358,7 +3375,8 @@ class TickBot:
             # The spread paid on the way in (Exness' own bid / ask at that tick), in money.
             spread_cost = round((tick.ask - tick.bid) * lots * self._units(info, symbol), 2)
             p = {"id": f"P{int(time.time() * 1000)}-{self.seq}", "symbol": symbol, "side": "long" if long else "short", "lots": lots,
-                 "entry": price, "openTime": float(tick.time), "paper": True, "spreadCost": spread_cost, "stop": stop}
+                 "entry": price, "openTime": float(tick.time), "paper": True, "spreadCost": spread_cost, "stop": stop,
+                 "why": why, "stopKind": stop_kind if stop else None}
             with self.lock:
                 self.paper["positions"].append(p)
                 self._save_paper()
@@ -3369,10 +3387,12 @@ class TickBot:
                    "type": mt5.ORDER_TYPE_BUY if long else mt5.ORDER_TYPE_SELL, "price": price, "sl": float(stop) if stop else 0.0, "tp": 0.0,
                    "magic": self.MAGIC, "comment": self.COMMENT, "type_time": mt5.ORDER_TIME_GTC,
                    "deviation": int(self.server.config["mt5"].get("deviation", 30))}
-        _, error = mt5_send(mt5, request)
+        result, error = mt5_send(mt5, request)
         if error:
             self.event(f"không vào được {'MUA' if long else 'BÁN'} @ {fmt(price)}: {error}")
             return False
+        if getattr(result, "order", 0):
+            self._note(int(result.order), why=why, stopKind=stop_kind if stop else None)
         self.event(f"{'MUA' if long else 'BÁN'} {volume} @ {fmt(price)} ({why})")
         return True
 
@@ -3521,7 +3541,7 @@ class TickBot:
                 symbol = c["symbol"] or None
                 for p in self._mine(mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()):
                     positions.append({"ticket": int(p.ticket), "symbol": p.symbol, "side": "long" if p.type == mt5.POSITION_TYPE_BUY else "short",
-                                      "lots": p.volume, "entry": p.price_open, "stop": None, "target": None,
+                                      "lots": p.volume, "entry": p.price_open, "stop": float(p.sl) or None, "target": float(p.tp) or None,
                                       "now": getattr(p, "price_current", None), "profit": p.profit + getattr(p, "swap", 0)})
                 since = self.started or now() - 86400
                 for d in mt5.history_deals_get(since + Mt5.offset_seconds - 60, now() + Mt5.offset_seconds + 86400) or ():
@@ -4279,8 +4299,10 @@ class GridBot(TickBot):
                     # The new layer gets the basket's size and stop (with it counted, for the lock).
                     first = min(ps, key=lambda p: p["openTime"])
                     factor = max(1.0, round(float(first["lots"]) / float(c["lots"]), 2))
-                    stop = self.sl_level(c, ps + [{"entry": price, "lots": grid_lot(c, len(ps), factor)}], long, (getattr(self, "bpeak", None) or {}).get(side))
-                    self._open(mt5, symbol, info, tick, long, f"nhồi {'dương' if c.get('addMode') == 'with' else 'âm'} lớp {len(ps) + 1}", grid_lot(c, len(ps), factor), stop)
+                    layer = ps + [{"entry": price, "lots": grid_lot(c, len(ps), factor)}]
+                    stop = self.sl_level(c, layer, long, (getattr(self, "bpeak", None) or {}).get(side))
+                    self._open(mt5, symbol, info, tick, long, f"nhồi {'dương' if c.get('addMode') == 'with' else 'âm'} lớp {len(ps) + 1}", grid_lot(c, len(ps), factor), stop,
+                               "khoá lời nhồi" if self.locked(c, layer) else "SL rổ")
 
     def _news_events(self):
         """This week's calendar for the news guard: the server's cached feed, fetched again in the background every
@@ -4330,7 +4352,7 @@ class GridBot(TickBot):
                 if p.get("trail") is None or (stop > p["trail"] + 1e-9 if long else stop < p["trail"] - 1e-9):
                     for x in self.paper["positions"]:
                         if x["id"] == p["id"]:
-                            x["trail"], x["peak"] = round(stop, 3), peak
+                            x["trail"], x["peak"], x["stopKind"] = round(stop, 3), peak, "trailing"
                     dirty = True
             else:
                 raw = p.get("raw")
@@ -4342,6 +4364,8 @@ class GridBot(TickBot):
                                               "sl": round(stop, digits), "tp": float(getattr(raw, "tp", 0) or 0)})
                     if error and getattr(self, "trail_error", "") != error:
                         self.event(f"không dời được SL trailing #{p['id']}: {error}")
+                    if not error:
+                        self._note(p["id"], stopKind="trailing")
                     self.trail_error = error or ""
         if dirty:
             with self.lock:
@@ -4361,6 +4385,17 @@ class GridBot(TickBot):
                       "state": ((getattr(self, "state", None) or {"kind": "starting"}) if cfg.get("running") else {"kind": "off"}),
                       "sidePause": {k: v for k, v in (getattr(self, "side_pause", None) or {}).items() if v > time.time()},
                       "lots": levels, "totalLots": round(sum(levels), 2)}
+        if not cfg.get("paper"):
+            # Why each MT5 position opened and its SL's kind (the broker's "SL trên sàn" says which SL it was).
+            with self.lock:
+                for p in st.get("positions") or []:
+                    n = self.notes.get(str(p.get("ticket") or p.get("id"))) or {}
+                    p.setdefault("why", n.get("why")); p.setdefault("stopKind", n.get("stopKind") if p.get("stop") else None)
+                for h in st.get("history") or []:
+                    n = self.notes.get(str(h.get("id"))) or {}
+                    h.setdefault("why", n.get("why"))
+                    if h.get("reason") == "SL trên sàn" and n.get("stopKind"):
+                        h["stopKind"] = n["stopKind"]
         return st
 
 

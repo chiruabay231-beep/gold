@@ -13,7 +13,7 @@ $ErrorActionPreference = "Stop"
 if (-not (Test-Path $Dir)) { Write-Host "Không thấy thư mục bot $Dir" -ForegroundColor Red; return }
 
 # The files that are the bot's data (the program itself is downloaded again on the new machine).
-$names = @("config.json", "state.json", "stops.json", "drawings.json", "tickbot_paper.json", "gridbot_paper.json")
+$names = @("config.json", "state.json", "stops.json", "drawings.json", "tickbot_paper.json", "gridbot_paper.json", "gridbot_notes.json", "tickbot_notes.json")
 $files = @()
 foreach ($n in $names) { $p = Join-Path $Dir $n; if (Test-Path $p) { $files += $p } }
 $files += Get-ChildItem -Path $Dir -Filter "web.*" -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike "*.log*" } | ForEach-Object { $_.FullName }

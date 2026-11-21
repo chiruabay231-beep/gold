@@ -140,15 +140,29 @@ struct BotLedgerView: View {
     }
 
     private func positions(_ book: BotBook) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Lệnh đang mở").font(.subheadline.bold())
             ForEach(book.positions) { p in
-                HStack(spacing: 8) {
-                    sideTag(p.side, p.lots)
-                    Text(p.entry.map { String(format: "@ %.2f", $0) } ?? "").font(.caption).foregroundColor(.secondary).monospacedDigit()
-                    Spacer()
-                    Text(Self.money(p.profit)).font(.subheadline.bold()).foregroundColor(p.profit >= 0 ? .green : .red).monospacedDigit()
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        sideTag(p.side, p.lots)
+                        Text(p.entry.map { String(format: "@ %.2f", $0) } ?? "").font(.caption).foregroundColor(.secondary).monospacedDigit()
+                        Spacer()
+                        Text(Self.money(p.profit)).font(.subheadline.bold()).foregroundColor(p.profit >= 0 ? .green : .red).monospacedDigit()
+                    }
+                    if let why = p.why, !why.isEmpty { reasonLine("Vào", BotReason.entry(why), .secondary) }
+                    if let stop = p.stop {
+                        let k = BotReason.close(p.stopKind ?? "SL rổ", kind: nil)
+                        HStack(spacing: 6) {
+                            chip(k.label, k.color)
+                            Text(String(format: "SL %.2f", stop)).font(.caption2).monospacedDigit().foregroundColor(.secondary)
+                        }
+                    } else {
+                        HStack(spacing: 6) { chip("Không có SL trên sàn", .orange); Text("bot tự đóng theo rổ").font(.caption2).foregroundColor(.secondary) }
+                    }
                 }
+                .padding(.vertical, 2)
+                if p.id != book.positions.last?.id { Divider() }
             }
         }
         .botCard()
@@ -161,23 +175,46 @@ struct BotLedgerView: View {
                 Text("Chưa có lệnh đã đóng").font(.caption).foregroundColor(.secondary)
             }
             ForEach(showAll ? book.history : Array(book.history.prefix(8))) { t in
-                HStack(spacing: 8) {
-                    sideTag(t.side, t.lots)
-                    VStack(alignment: .leading, spacing: 1) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 8) {
+                        sideTag(t.side, t.lots)
                         Text("\(t.entry.map { String(format: "%.2f", $0) } ?? "–") → \(t.exit.map { String(format: "%.2f", $0) } ?? "–")")
                             .font(.caption).monospacedDigit()
+                        Spacer()
+                        Text(Self.money(t.profit)).font(.caption.bold()).foregroundColor(t.profit >= 0 ? .green : .red).monospacedDigit()
+                    }
+                    HStack(spacing: 6) {
+                        if t.reason != nil || t.stopKind != nil {
+                            let r = BotReason.close(t.reason, kind: t.stopKind)
+                            chip(r.label, r.color)
+                        }
                         if let time = t.closeTime {
                             Text(Date(timeIntervalSince1970: time), format: .dateTime.day().month().hour().minute())
                                 .font(.caption2).foregroundColor(.secondary)
                         }
                     }
-                    Spacer()
-                    Text(Self.money(t.profit)).font(.caption.bold()).foregroundColor(t.profit >= 0 ? .green : .red).monospacedDigit()
+                    if let why = t.why, !why.isEmpty { reasonLine("Vào", BotReason.entry(why), .secondary) }
                 }
+                .padding(.vertical, 2)
+                if t.id != (showAll ? book.history : Array(book.history.prefix(8))).last?.id { Divider() }
             }
             if book.history.count > 8 {
                 Button(showAll ? "Thu gọn" : "Xem tất cả \(book.history.count) lệnh") { showAll.toggle() }.font(.caption)
             }
+            DisclosureGroup("Các loại SL / lý do đóng lệnh") {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(BotReason.legend.indices, id: \.self) { i in
+                        let item = BotReason.legend[i]
+                        let r = BotReason.close(item.0, kind: nil)
+                        HStack(alignment: .top, spacing: 6) {
+                            chip(r.label, r.color).frame(width: 118, alignment: .leading)
+                            Text(item.1).font(.caption2).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .padding(.top, 4)
+            }
+            .font(.caption)
         }
         .botCard()
     }
@@ -189,6 +226,16 @@ struct BotLedgerView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .botCard()
+    }
+
+    private func chip(_ text: String, _ color: Color) -> some View {
+        Text(text).font(.caption2.weight(.semibold)).lineLimit(1)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Capsule().fill(color.opacity(0.15))).foregroundColor(color)
+    }
+
+    private func reasonLine(_ title: String, _ text: String, _ color: Color) -> some View {
+        (Text(title + ": ").bold() + Text(text)).font(.caption2).foregroundColor(color).lineLimit(2)
     }
 
     private func tag(_ text: String, _ color: Color) -> some View {
@@ -243,6 +290,53 @@ private extension View {
         padding(12)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(.secondarySystemGroupedBackground)))
     }
+}
+
+/// The bot's reasons in plain words: why a position opened, and which SL / exit closed it.
+enum BotReason {
+    /// "mở rổ theo tín hiệu: nến 1m tăng 60%, bật hỗ trợ 3583.05, tick +0.44/10s" → "Mở rổ · nến 1m tăng 60% · …".
+    static func entry(_ why: String) -> String {
+        var t = why
+        for (old, new) in [("mở rổ theo tín hiệu: ", "Mở rổ · "), ("mở rổ theo tín hiệu", "Mở rổ theo tín hiệu"), ("mở rổ", "Mở rổ"),
+                           ("nhồi dương lớp", "Nhồi dương lớp"), ("nhồi âm lớp", "Nhồi âm lớp")] {
+            if t.hasPrefix(old) { t = new + t.dropFirst(old.count); break }
+        }
+        return t.replacingOccurrences(of: ", ", with: " · ")
+    }
+
+    /// The exit's short label and colour; the broker's "SL trên sàn" names which SL it was when known.
+    static func close(_ reason: String?, kind: String?) -> (label: String, color: Color) {
+        let r = reason ?? kind ?? ""
+        switch r {
+        case "chốt rổ", "chốt lời", "TP trên sàn": return (r == "TP trên sàn" ? "TP trên sàn" : "Chốt rổ", .green)
+        case "trailing": return ("Trailing SL", .teal)
+        case "khoá lời nhồi": return ("SL khoá lời", .teal)
+        case "SL rổ", "cắt lỗ lệnh": return ("SL rổ", .red)
+        case "cắt lỗ chung": return ("Cắt lỗ chung", .red)
+        case "tín hiệu ngược", "nến đảo chiều": return ("Tín hiệu đảo", .orange)
+        case "tránh giờ mạnh": return ("Tránh tin / phiên Mỹ", .orange)
+        case "đóng tay": return ("Đóng tay", .gray)
+        case "cháy (stop out)": return ("Cháy (stop out)", .red)
+        case "SL trên sàn":
+            if let kind, kind != "SL trên sàn" {
+                let k = close(kind, kind: nil)
+                return ("SL trên sàn · " + k.label, k.color)
+            }
+            return ("SL trên sàn", .red)
+        default: return (r.isEmpty ? "Đóng" : r, .secondary)
+        }
+    }
+
+    static let legend: [(String, String)] = [
+        ("chốt rổ", "Cả rổ đủ số tiền lời cài sẵn nên đóng hết."),
+        ("trailing", "Lệnh đã lời, SL dời theo giá; giá quay lại chạm SL nên đóng (giữ phần lời)."),
+        ("khoá lời nhồi", "Rổ nhồi dương: SL chung ở lớp trước / giá vốn; giá quay lại chạm nên đóng cả rổ."),
+        ("SL rổ", "Giá chạy ngược quá khoảng SL rổ, hoặc rổ âm quá số tiền cài: cắt lỗ cả rổ."),
+        ("cắt lỗ chung", "Tổng các lệnh của bot âm tới mức cắt lỗ chung: đóng hết rồi nghỉ."),
+        ("tín hiệu ngược", "Tín hiệu đảo sang chiều kia nên đóng rổ đang ngược."),
+        ("tránh giờ mạnh", "Sắp có tin đỏ / vào giờ phiên Mỹ: đóng trước để tránh giật."),
+        ("đóng tay", "Bạn bấm \"Đóng hết lệnh của bot\"."),
+    ]
 }
 
 /// The MT5 account (/mt5/trading): who, demo or real, its money.
@@ -370,8 +464,14 @@ struct OwnLedger: Decodable {
 
 struct ServerBot: Decodable {
     struct Config: Decodable { var running: Bool?; var paper: Bool?; var symbol: String?; var interval: String? }
-    struct Position: Decodable { var side: String?; var lots: Double?; var entry: Double?; var profit: Double? }
-    struct Trade: Decodable { var side: String?; var lots: Double?; var entry: Double?; var exit: Double?; var closeTime: Double?; var profit: Double? }
+    struct Position: Decodable {
+        var side: String?; var lots: Double?; var entry: Double?; var profit: Double?
+        var why: String?; var stop: Double?; var trail: Double?; var stopKind: String?
+    }
+    struct Trade: Decodable {
+        var side: String?; var lots: Double?; var entry: Double?; var exit: Double?; var closeTime: Double?; var profit: Double?
+        var reason: String?; var why: String?; var stopKind: String?
+    }
     struct Paper: Decodable { var balance: Double? }
     var config: Config?
     var positions: [Position]?
@@ -384,8 +484,14 @@ struct ServerBot: Decodable {
                 market: [config?.symbol, config?.interval].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " "),
                 symbol: config?.symbol ?? "",
                 balance: paper?.balance,
-                positions: (positions ?? []).enumerated().map { BotBook.Open(id: $0.offset, side: $0.element.side ?? "", lots: $0.element.lots, entry: $0.element.entry, profit: $0.element.profit ?? 0) },
-                history: (history ?? []).enumerated().map { BotBook.Closed(id: $0.offset, side: $0.element.side ?? "", lots: $0.element.lots, entry: $0.element.entry, exit: $0.element.exit, closeTime: $0.element.closeTime, profit: $0.element.profit ?? 0) },
+                positions: (positions ?? []).enumerated().map { i, p in
+                    BotBook.Open(id: i, side: p.side ?? "", lots: p.lots, entry: p.entry, profit: p.profit ?? 0,
+                                 why: p.why, stop: p.trail ?? p.stop, stopKind: p.trail != nil ? "trailing" : p.stopKind)
+                },
+                history: (history ?? []).enumerated().map { i, t in
+                    BotBook.Closed(id: i, side: t.side ?? "", lots: t.lots, entry: t.entry, exit: t.exit, closeTime: t.closeTime, profit: t.profit ?? 0,
+                                   reason: t.reason, why: t.why, stopKind: t.stopKind)
+                },
                 error: error)
     }
 }
@@ -412,8 +518,15 @@ struct StrategyBot: Decodable {
 
 /// One bot as the ledger shows it.
 struct BotBook: Identifiable {
-    struct Open: Identifiable { var id: Int; var side: String; var lots: Double?; var entry: Double?; var profit: Double }
-    struct Closed: Identifiable { var id: Int; var side: String; var lots: Double?; var entry: Double?; var exit: Double?; var closeTime: Double?; var profit: Double }
+    struct Open: Identifiable {
+        var id: Int; var side: String; var lots: Double?; var entry: Double?; var profit: Double
+        /// Why it opened (the bot's signal / layer), its SL price and which SL that is.
+        var why: String? = nil; var stop: Double? = nil; var stopKind: String? = nil
+    }
+    struct Closed: Identifiable {
+        var id: Int; var side: String; var lots: Double?; var entry: Double?; var exit: Double?; var closeTime: Double?; var profit: Double
+        var reason: String? = nil; var why: String? = nil; var stopKind: String? = nil
+    }
     var id: String
     var title: String
     var running: Bool
