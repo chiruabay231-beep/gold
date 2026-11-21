@@ -68,8 +68,21 @@ if ($standby -and [Convert]::ToInt32($standby, 16) -gt 0) {
     Write-Host "⚠️ Windows đang cài TỰ NGỦ sau $([Convert]::ToInt32($standby, 16) / 60) phút khi cắm điện." -ForegroundColor Yellow
 }
 
+# 4. Signing in by itself: after a restart MT5 and the bot start only once the user is signed in.
+$wl = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+$autoOn = $wl.AutoAdminLogon -eq "1"
+$pwless = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device").DevicePasswordLessBuildVersion
+Write-Host ""
+if ($autoOn -and $pwless -ne 2) {
+    Write-Host "Tự đăng nhập: BẬT ($($wl.DefaultUserName))"
+} else {
+    Write-Host "⛔ Tự đăng nhập: CHƯA HOẠT ĐỘNG$(if ($pwless -eq 2) { ' (Windows đang bắt đăng nhập bằng Windows Hello/PIN nên tự đăng nhập bị chặn)' })." -ForegroundColor Red
+    Write-Host "   Sau mỗi lần Windows khởi động lại, máy đứng ở màn hình khoá → MT5 và bot KHÔNG chạy cho tới khi có người đăng nhập." -ForegroundColor Red
+}
+
 Write-Host ""
 Write-Host "==================== KẾT LUẬN ====================" -ForegroundColor Cyan
+if (-not $autoOn -or $pwless -eq 2) { Write-Host "• Chưa tự đăng nhập: chạy lệnh có -Fix để bật (nhập mật khẩu Windows 1 lần)." -ForegroundColor Red }
 if ($update) { Write-Host "• Windows Update tự khởi động lại máy → chạy lệnh có -Fix (bên dưới) để Windows không tự khởi động lại." -ForegroundColor Yellow }
 if ($sleep) { Write-Host "• Windows tự ngủ → chạy lệnh có -Fix để tắt chế độ ngủ." -ForegroundColor Yellow }
 if ($sudden) {
@@ -123,6 +136,43 @@ $mt = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Schedule\Maintenance"
 New-Item -Path $mt -Force | Out-Null
 Set-ItemProperty -Path $mt -Name "MaintenanceDisabled" -Value 1 -Type DWord
 Write-Host "✓ Tắt bảo trì tự động ban đêm"
+
+# No lock screen: never ask to sign in again after the screen turns off, wakes, or a screen saver.
+powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_NONE CONSOLELOCK 0 | Out-Null
+powercfg /SETDCVALUEINDEX SCHEME_CURRENT SUB_NONE CONSOLELOCK 0 | Out-Null
+powercfg /SETACTIVE SCHEME_CURRENT | Out-Null
+$sys = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
+Set-ItemProperty -Path $sys -Name "InactivityTimeoutSecs" -Value 0 -Type DWord
+$desk = "HKCU:\Control Panel\Desktop"
+Set-ItemProperty -Path $desk -Name "ScreenSaveActive" -Value "0"
+Set-ItemProperty -Path $desk -Name "ScreenSaverIsSecure" -Value "0"
+Remove-ItemProperty -Path $desk -Name "SCRNSAVE.EXE" -ErrorAction SilentlyContinue
+Write-Host "✓ Không khoá màn hình khi để lâu / tắt màn hình / thức dậy"
+
+# Signing in by itself after a restart (MT5 and the bot need the user's session).
+$pl = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\PasswordLess\Device"
+New-Item -Path $pl -Force | Out-Null
+Set-ItemProperty -Path $pl -Name "DevicePasswordLessBuildVersion" -Value 0 -Type DWord
+if (-not $autoOn) {
+    Write-Host ""
+    Write-Host "Bật TỰ ĐĂNG NHẬP cho $env:USERNAME (bắt buộc để bot tự chạy sau khi Windows khởi động lại)." -ForegroundColor Yellow
+    Write-Host "Nhập mật khẩu đăng nhập Windows (mật khẩu tài khoản, KHÔNG phải mã PIN; tài khoản Microsoft thì là mật khẩu Microsoft):" -ForegroundColor Yellow
+    $secure = Read-Host "Mật khẩu Windows của $env:USERNAME" -AsSecureString
+    $plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+    $user = $env:USERNAME; $domain = $env:USERDOMAIN
+    $autologon = Join-Path $env:TEMP "Autologon64.exe"
+    try {
+        Invoke-WebRequest -Uri "https://live.sysinternals.com/Autologon64.exe" -OutFile $autologon -UseBasicParsing
+        # Sysinternals Autologon keeps the password encrypted (LSA secret), not in plain text in the registry.
+        & $autologon $user $domain $plain /accepteula | Out-Null
+        Write-Host "✓ Đã bật tự đăng nhập cho $user" -ForegroundColor Green
+    } catch {
+        Write-Host "Không bật được tự đăng nhập ($($_.Exception.Message)). Bật tay: Win+R → netplwiz → bỏ tick 'Users must enter a user name and password'." -ForegroundColor Red
+    }
+    $plain = $null
+} else {
+    Write-Host "✓ Tự đăng nhập đã bật"
+}
 
 Write-Host ""
 Write-Host "XONG. Thỉnh thoảng (khi thị trường nghỉ cuối tuần) tự vào Settings → Windows Update để cài bản cập nhật rồi khởi động lại." -ForegroundColor Green
