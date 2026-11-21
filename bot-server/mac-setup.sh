@@ -37,7 +37,7 @@ if [ "$1" = "--check" ]; then
   [ "$(pmset -g | awk '$1=="autorestart"{print $2}')" = "1" ] && echo "✅ Tự bật lại sau khi mất điện" || { echo "❌ Chưa tự bật lại sau khi mất điện"; ok=1; }
   pn=$(pmset -g | awk '$1=="powernap"{print $2}')
   [ "$pn" = "1" ] && { echo "❌ Power Nap đang bật (có thể làm máy ảo bị đóng băng)"; ok=1; } || echo "✅ Power Nap tắt"
-  user=$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null)
+  user=$(defaults read /Library/Preferences/com.apple.loginwindow autoLoginUser 2>/dev/null || true)
   [ -n "$user" ] && echo "✅ Tự đăng nhập Mac: $user" || echo "⚠️ Mac chưa tự đăng nhập (Cài đặt hệ thống → Người dùng & Nhóm → Tự động đăng nhập)"
   if pmset -g batt 2>/dev/null | grep -q "InternalBattery"; then
     pmset -g batt | grep -q "AC Power" && echo "✅ MacBook đang cắm sạc" || { echo "❌ MacBook đang chạy PIN: cắm sạc (chạy pin vẫn có thể ngủ)"; ok=1; }
