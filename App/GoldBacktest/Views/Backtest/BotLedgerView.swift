@@ -13,6 +13,13 @@ struct BotLedgerView: View {
     @State private var chartError: String?
     @AppStorage("bot.chartTf") private var tf = "1m"
     @State private var showAll = false
+    /// "Lệnh đã đóng" for a period: today, yesterday, the last 7 days or days picked (read from the server).
+    @State private var period = BotPeriod.today
+    @State private var customFrom = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-6 * 86400)
+    @State private var customTo = Date()
+    @State private var periodTrades: [BotBook.Closed]?
+    @State private var periodKey = ""
+    @State private var periodAt = Date.distantPast
 
     private var useOwn: Bool { showOwn && ledger?.own != nil }
     private var book: BotBook? { ((useOwn ? ledger?.own?.books : ledger?.books) ?? []).first }
@@ -114,7 +121,9 @@ struct BotLedgerView: View {
                 .onChange(of: tf) { _, _ in chart = nil; Task { await load() } }
             }
             if let chart, chart.candles.count > 1 {
-                BotChartView(data: chart, positions: book.positions).frame(height: 250)
+                BotChartView(data: chart, positions: book.positions).frame(height: 260)
+                Text("Chụm / mở 2 ngón để zoom · kéo ngang xem nến cũ · chạm 2 lần về mặc định")
+                    .font(.caption2).foregroundColor(.secondary)
             } else if let chartError {
                 Text(chartError).font(.caption).foregroundColor(.orange).frame(height: 60)
             } else {
@@ -125,15 +134,17 @@ struct BotLedgerView: View {
     }
 
     private func stats(_ book: BotBook) -> some View {
-        let net = book.history.reduce(0) { $0 + $1.profit }
+        let closed = closedTrades(book)
+        let net = closed.reduce(0) { $0 + $1.profit }
         let open = book.positions.reduce(0) { $0 + $1.profit }
-        let wins = book.history.filter { $0.profit > 0 }.count
+        let wins = closed.filter { $0.profit > 0 }.count
+        let when = period.label.lowercased()
         let balance = book.paper ? book.balance : account?.balance
         let equity = book.paper ? book.balance.map { $0 + open } : account?.equity
         return LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
-            tile("Lãi/lỗ đã chốt", Self.money(net), net >= 0 ? .green : .red)
+            tile("Lãi/lỗ đã chốt (\(when))", Self.money(net), net >= 0 ? .green : .red)
             tile("Đang mở", "\(book.positions.count) · \(Self.money(open))", open >= 0 ? .green : .red)
-            tile("Thắng", book.history.isEmpty ? "–" : "\(wins)/\(book.history.count) · \(Int((Double(wins) / Double(book.history.count) * 100).rounded()))%", .primary)
+            tile("Thắng (\(when))", closed.isEmpty ? "–" : "\(wins)/\(closed.count) · \(Int((Double(wins) / Double(closed.count) * 100).rounded()))%", .primary)
             tile(book.paper ? "Số dư ảo / Equity" : "Balance / Equity",
                  balance.map { String(format: "%.2f", $0) + (equity.map { String(format: " / %.2f", $0) } ?? "") } ?? "–", .primary)
         }
@@ -169,12 +180,36 @@ struct BotLedgerView: View {
     }
 
     private func history(_ book: BotBook) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let closed = closedTrades(book)
+        let shown = showAll ? closed : Array(closed.prefix(8))
+        let net = closed.reduce(0) { $0 + $1.profit }
+        let wins = closed.filter { $0.profit > 0 }.count
+        return VStack(alignment: .leading, spacing: 6) {
             Text("Lệnh đã đóng").font(.subheadline.bold())
-            if book.history.isEmpty {
-                Text("Chưa có lệnh đã đóng").font(.caption).foregroundColor(.secondary)
+            Picker("Thời gian", selection: $period) {
+                ForEach(BotPeriod.allCases, id: \.self) { Text($0.label).tag($0) }
             }
-            ForEach(showAll ? book.history : Array(book.history.prefix(8))) { t in
+            .pickerStyle(.segmented)
+            .onChange(of: period) { _, _ in periodTrades = nil; showAll = false; Task { await load() } }
+            if period == .custom {
+                HStack {
+                    DatePicker("Từ", selection: $customFrom, in: ...Date(), displayedComponents: .date)
+                    DatePicker("Đến", selection: $customTo, in: ...Date(), displayedComponents: .date)
+                }
+                .font(.caption)
+                .onChange(of: customFrom) { _, _ in periodTrades = nil; Task { await load() } }
+                .onChange(of: customTo) { _, _ in periodTrades = nil; Task { await load() } }
+            }
+            HStack(spacing: 6) {
+                Text(closed.isEmpty ? "Không có lệnh" : "\(closed.count) lệnh · thắng \(Int((Double(wins) / Double(max(closed.count, 1)) * 100).rounded()))%")
+                    .font(.caption).foregroundColor(.secondary)
+                Spacer()
+                if !closed.isEmpty {
+                    Text(Self.money(net)).font(.subheadline.bold()).foregroundColor(net >= 0 ? .green : .red).monospacedDigit()
+                }
+            }
+            .padding(.vertical, 2)
+            ForEach(shown) { t in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         sideTag(t.side, t.lots)
@@ -196,10 +231,10 @@ struct BotLedgerView: View {
                     if let why = t.why, !why.isEmpty { reasonLine("Vào", BotReason.entry(why), .secondary) }
                 }
                 .padding(.vertical, 2)
-                if t.id != (showAll ? book.history : Array(book.history.prefix(8))).last?.id { Divider() }
+                if t.id != shown.last?.id { Divider() }
             }
-            if book.history.count > 8 {
-                Button(showAll ? "Thu gọn" : "Xem tất cả \(book.history.count) lệnh") { showAll.toggle() }.font(.caption)
+            if closed.count > 8 {
+                Button(showAll ? "Thu gọn" : "Xem tất cả \(closed.count) lệnh") { showAll.toggle() }.font(.caption)
             }
             DisclosureGroup("Các loại SL / lý do đóng lệnh") {
                 VStack(alignment: .leading, spacing: 6) {
@@ -217,6 +252,29 @@ struct BotLedgerView: View {
             .font(.caption)
         }
         .botCard()
+    }
+
+    /// The period picked, as [from, to) in time.
+    private var periodRange: (from: Date, to: Date) {
+        let cal = Calendar.current, today = cal.startOfDay(for: Date())
+        switch period {
+        case .today: return (today, Date().addingTimeInterval(60))
+        case .yesterday: return (cal.date(byAdding: .day, value: -1, to: today) ?? today.addingTimeInterval(-86400), today)
+        case .week: return (Date().addingTimeInterval(-7 * 86400), Date().addingTimeInterval(60))
+        case .custom:
+            let a = cal.startOfDay(for: min(customFrom, customTo)), b = cal.startOfDay(for: max(customFrom, customTo))
+            return (a, cal.date(byAdding: .day, value: 1, to: b) ?? b.addingTimeInterval(86400))
+        }
+    }
+
+    /// The period's closed trades: from the server (any length of time), else the bot's recent ones filtered.
+    private func closedTrades(_ book: BotBook) -> [BotBook.Closed] {
+        if let periodTrades { return periodTrades }
+        let r = periodRange
+        return book.history.filter { t in
+            guard let c = t.closeTime else { return false }
+            return c >= r.from.timeIntervalSince1970 && c < r.to.timeIntervalSince1970
+        }
     }
 
     private func tile(_ title: String, _ value: String, _ color: Color) -> some View {
@@ -270,9 +328,10 @@ struct BotLedgerView: View {
         if let data = try? await client.send(prefix + "/mt5/trading", timeout: 20) {
             account = try? JSONDecoder().decode(BotAccount.self, from: data)
         }
+        await loadPeriod(client, prefix: prefix)
         guard let symbol = book?.symbol, !symbol.isEmpty else { return }
         do {
-            let path = "\(prefix)/mt5/candles?symbol=\(RemoteBotClient.queryValue(symbol))&interval=\(tf)&count=90"
+            let path = "\(prefix)/mt5/candles?symbol=\(RemoteBotClient.queryValue(symbol))&interval=\(tf)&count=400"
             chart = try JSONDecoder().decode(BotChartData.self, from: try await client.send(path, timeout: 20))
             chartError = nil
         } catch let e as RemoteBotClient.ServerError {
@@ -282,7 +341,37 @@ struct BotLedgerView: View {
         }
     }
 
+    /// The period's closed trades from the server (server 8.6+): again when the period changes, else every 30 s.
+    private func loadPeriod(_ client: RemoteBotClient, prefix: String) async {
+        let r = periodRange
+        // Today / 7 days roll on with the clock: read again every 30 s; days picked: when they change.
+        let key = "\(prefix)|\(period.rawValue)" + (period == .custom ? "|\(Int(r.from.timeIntervalSince1970))|\(Int(r.to.timeIntervalSince1970))" : "")
+        guard key != periodKey || Date().timeIntervalSince(periodAt) > 30 else { return }
+        struct Response: Decodable { var trades: [ServerBot.Trade] }
+        let path = "\(prefix)/gridbot/history?from=\(Int(r.from.timeIntervalSince1970))&to=\(Int(r.to.timeIntervalSince1970))"
+        if let data = try? await client.send(path, timeout: 30), let response = try? JSONDecoder().decode(Response.self, from: data) {
+            periodTrades = ServerBot.closed(response.trades)
+        } else {
+            periodTrades = nil  // an older server: the bot's recent trades, filtered here
+        }
+        periodKey = key
+        periodAt = Date()
+    }
+
     static func money(_ v: Double) -> String { String(format: "%@%.2f$", v >= 0 ? "+" : "−", abs(v)) }
+}
+
+/// The time "Lệnh đã đóng" covers.
+enum BotPeriod: String, CaseIterable {
+    case today, yesterday, week, custom
+    var label: String {
+        switch self {
+        case .today: return "Hôm nay"
+        case .yesterday: return "Hôm qua"
+        case .week: return "7 ngày"
+        case .custom: return "Tuỳ chọn"
+        }
+    }
 }
 
 private extension View {
@@ -361,10 +450,61 @@ struct BotChartData: Decodable {
 struct BotChartView: View {
     var data: BotChartData
     var positions: [BotBook.Open]
+    /// Candles across the chart (two-finger pinch to zoom) and how many of the newest are scrolled past (drag
+    /// sideways to look back); a double tap puts both back.
+    @State private var visible = 90
+    @State private var shift = 0
+    @State private var pinchFrom: Int?
+    @State private var dragFrom: Int?
+
+    private var all: [[Double]] { data.candles.filter { $0.count >= 5 } }
 
     var body: some View {
+        GeometryReader { geo in
+            chart
+                .contentShape(Rectangle())
+                .gesture(
+                    MagnificationGesture()
+                        .onChanged { scale in
+                            let from = pinchFrom ?? visible
+                            pinchFrom = from
+                            visible = min(max(Int((Double(from) / max(Double(scale), 0.05)).rounded()), 15), max(15, all.count))
+                            shift = min(shift, max(0, all.count - visible))
+                        }
+                        .onEnded { _ in pinchFrom = nil }
+                )
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 10)
+                        .onChanged { g in
+                            guard abs(g.translation.width) > abs(g.translation.height) else { return }
+                            let from = dragFrom ?? shift
+                            dragFrom = from
+                            let step = max(1, (geo.size.width - 62) / CGFloat(max(visible, 1)))
+                            shift = min(max(from + Int((g.translation.width / step).rounded()), 0), max(0, all.count - visible))
+                        }
+                        .onEnded { _ in dragFrom = nil }
+                )
+                .onTapGesture(count: 2) { visible = 90; shift = 0 }
+                .overlay(alignment: .topLeading) {
+                    if shift > 0 {
+                        Button { shift = 0 } label: {
+                            Label("Về nến mới nhất", systemImage: "arrow.right.to.line").font(.caption2.bold())
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Capsule().fill(Color(.systemBackground).opacity(0.9)))
+                        }
+                        .buttonStyle(.plain)
+                        .padding(4)
+                    }
+                }
+        }
+    }
+
+    private var chart: some View {
         Canvas { ctx, size in
-            let rows = data.candles.filter { $0.count >= 5 }
+            let candles = all
+            let count = min(max(visible, 15), candles.count)
+            let back = min(shift, max(0, candles.count - count))
+            let rows = Array(candles[max(0, candles.count - back - count)..<(candles.count - back)])
             guard rows.count > 1 else { return }
             let digits = max(0, min(data.digits ?? 2, 5))
             let axisW: CGFloat = 62, timeH: CGFloat = 16
@@ -523,11 +663,15 @@ struct ServerBot: Decodable {
                     BotBook.Open(id: i, side: p.side ?? "", lots: p.lots, entry: p.entry, profit: p.profit ?? 0,
                                  why: p.why, stop: p.trail ?? p.stop, stopKind: p.trail != nil ? "trailing" : p.stopKind, openTime: p.openTime)
                 },
-                history: (history ?? []).enumerated().map { i, t in
-                    BotBook.Closed(id: i, side: t.side ?? "", lots: t.lots, entry: t.entry, exit: t.exit, closeTime: t.closeTime, profit: t.profit ?? 0,
-                                   reason: t.reason, why: t.why, stopKind: t.stopKind)
-                },
+                history: Self.closed(history ?? []),
                 error: error)
+    }
+
+    static func closed(_ trades: [Trade]) -> [BotBook.Closed] {
+        trades.enumerated().map { i, t in
+            BotBook.Closed(id: i, side: t.side ?? "", lots: t.lots, entry: t.entry, exit: t.exit, closeTime: t.closeTime, profit: t.profit ?? 0,
+                           reason: t.reason, why: t.why, stopKind: t.stopKind)
+        }
     }
 }
 

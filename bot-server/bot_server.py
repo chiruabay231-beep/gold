@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "8.5"
+VERSION = "8.6"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2651,9 +2651,11 @@ def trade_breakdown(trades):
     return out
 
 
-def magic_history(mt5, magic, since, limit=200):
-    """A bot's closed trades on MT5 (its magic number), newest first: side, entry → exit, times (UTC), profit."""
-    deals = mt5.history_deals_get(since + Mt5.offset_seconds - 60, now() + Mt5.offset_seconds + 86400) or ()
+def magic_history(mt5, magic, since, limit=200, until=None):
+    """A bot's closed trades on MT5 (its magic number), newest first: side, entry → exit, times (UTC), profit.
+    The entries are read from a week before `since`, so a trade opened before it still has its entry price."""
+    end = (until if until else now()) + Mt5.offset_seconds + 86400
+    deals = mt5.history_deals_get(since + Mt5.offset_seconds - 7 * 86400, end) or ()
     opened, out = {}, []
     for d in deals:
         if getattr(d, "magic", 0) == magic and d.entry == mt5.DEAL_ENTRY_IN:
@@ -2662,6 +2664,9 @@ def magic_history(mt5, magic, since, limit=200):
         if getattr(d, "magic", 0) != magic or d.entry != mt5.DEAL_ENTRY_OUT:
             continue
         i = opened.get(d.position_id)
+        closed_at = float(d.time) - Mt5.offset_seconds
+        if closed_at < since or (until and closed_at > until):
+            continue
         out.append({"id": int(d.position_id), "symbol": d.symbol, "side": "long" if d.type == mt5.DEAL_TYPE_SELL else "short", "lots": d.volume,
                     "entry": i.price if i else None, "openTime": float(i.time) - Mt5.offset_seconds if i else None,
                     "exit": d.price, "closeTime": float(d.time) - Mt5.offset_seconds, "reason": deal_reason(mt5, d),
@@ -4308,6 +4313,25 @@ class GridBot(TickBot):
                     self._open(mt5, symbol, info, tick, long, f"nhồi {'dương' if c.get('addMode') == 'with' else 'âm'} lớp {len(ps) + 1}", grid_lot(c, len(ps), factor), stop,
                                "khoá lời nhồi" if self.locked(c, layer) else "SL rổ")
 
+    def history_between(self, since, until):
+        """Closed trades between two times (UTC seconds), newest first, with why each opened and its SL's kind:
+        the app's "Lệnh đã đóng" for today / yesterday / a week / days picked."""
+        c = self.cfg
+        if c.get("paper"):
+            with self.lock:
+                rows = [h for h in self.paper["history"] if since <= float(h.get("closeTime") or 0) <= until]
+        else:
+            with Mt5.lock:
+                mt5 = Mt5.connect(self.server.config["mt5"])
+                rows = magic_history(mt5, self.MAGIC, since, limit=3000, until=until)
+            with self.lock:
+                for h in rows:
+                    n = self.notes.get(str(h.get("id"))) or {}
+                    h.setdefault("why", n.get("why"))
+                    if h.get("reason") == "SL trên sàn" and n.get("stopKind"):
+                        h["stopKind"] = n["stopKind"]
+        return {"ok": True, "paper": bool(c.get("paper")), "trades": rows[:3000]}
+
     def _news_events(self):
         """This week's calendar for the news guard: the server's cached feed, fetched again in the background every
         10 minutes (never inside the bot's loop, which holds MT5)."""
@@ -5625,6 +5649,9 @@ def make_handler(server):
                     return self._send(200, server.tickbot.status())
                 if path == "/gridbot":
                     return self._send(200, server.gridbot.status())
+                if path == "/gridbot/history":
+                    return self._send(200, server.gridbot.history_between(float((params.get("from") or ["0"])[0]),
+                                                                          float((params.get("to") or [str(now())])[0])))
                 if path == "/webacct":
                     return self._send(200, server.web_account.status())
                 if path == "/bots":
