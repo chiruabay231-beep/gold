@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "8.4"
+VERSION = "8.5"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2843,7 +2843,8 @@ class StopBot:
         try:
             with Mt5.lock:
                 mt5 = Mt5.connect(self.server.config["mt5"])
-                symbol = c["symbol"] or None
+                # The account's own name for it (XAUUSD → XAUUSDm on an Exness Standard / demo account).
+                symbol = (Mt5.find_symbol(mt5, c["symbol"]) or c["symbol"]) if c["symbol"] else None
                 for o in self._mine(mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()):
                     orders.append({"ticket": int(o.ticket), "symbol": o.symbol, "side": "long" if o.type == mt5.ORDER_TYPE_BUY_STOP else "short",
                                    "lots": o.volume_current, "entry": o.price_open, "stop": o.sl or None, "target": o.tp or None})
@@ -3166,7 +3167,8 @@ class SRBot:
         try:
             with Mt5.lock:
                 mt5 = Mt5.connect(self.server.config["mt5"])
-                symbol = c["symbol"] or None
+                # The account's own name for it (XAUUSD → XAUUSDm on an Exness Standard / demo account).
+                symbol = (Mt5.find_symbol(mt5, c["symbol"]) or c["symbol"]) if c["symbol"] else None
                 for p in self._mine(mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()):
                     positions.append({"ticket": int(p.ticket), "symbol": p.symbol, "side": "long" if p.type == mt5.POSITION_TYPE_BUY else "short",
                                       "lots": p.volume, "entry": p.price_open, "stop": p.sl or None, "target": p.tp or None,
@@ -3538,7 +3540,8 @@ class TickBot:
         try:
             with Mt5.lock:
                 mt5 = Mt5.connect(self.server.config["mt5"])
-                symbol = c["symbol"] or None
+                # The account's own name for it (XAUUSD → XAUUSDm on an Exness Standard / demo account).
+                symbol = (Mt5.find_symbol(mt5, c["symbol"]) or c["symbol"]) if c["symbol"] else None
                 for p in self._mine(mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()):
                     positions.append({"ticket": int(p.ticket), "symbol": p.symbol, "side": "long" if p.type == mt5.POSITION_TYPE_BUY else "short",
                                       "lots": p.volume, "entry": p.price_open, "stop": float(p.sl) or None, "target": float(p.tp) or None,
