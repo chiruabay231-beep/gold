@@ -5675,8 +5675,10 @@
     },
 
     async loadCandles() {
-      // Replay keeps its moment across timeframes: the end of the bar shown last.
-      const replayTime = this.replay ? this.bars[this.replay.idx].time + TF_SECONDS[this.replayInterval || this.interval] - 1 : null;
+      // Replay keeps its moment across timeframes: the end of the bar shown last (or the moment a bigger
+      // timeframe's bar was cut at). The old timeframe's bars build the new one's bar still forming then.
+      const replayTime = this.replay ? this.replayNow() : null;
+      const oldBars = this.replay ? this.bars : null;
       this.replayInterval = this.interval;
       document.querySelectorAll("#tfButtons button").forEach((b) => b.classList.toggle("on", b.dataset.tf === this.interval));
       const more = $("tfMore");
@@ -5693,6 +5695,8 @@
       this.noOlder = false;
       this.secFeed = null;
       const token = (this.loadToken = (this.loadToken || 0) + 1);
+      // No replay step on bars half switched to the new timeframe.
+      this.replayLoading = this.replay ? token : null;
       this.applyChartStyle();
       if (this.chart2) this.chart2.applyOptions({ timeScale: { secondsVisible: isSecTF(this.interval) } });
       // Another symbol: the old one's quote and price range must not linger on it.
@@ -5738,9 +5742,8 @@
           this.replayGap = false;
           if (this.bars[0].time > replayTime) await this.replayWindow(replayTime, token);
           if (token !== this.loadToken) return;
-          let i = this.bars.length - 1;
-          while (i > 0 && this.bars[i].time > replayTime) i--;
-          this.replay.idx = Math.max(1, Math.min(i, this.bars.length - 2));
+          this.replayOnto(replayTime, oldBars);
+          this.replayLoading = null;
           this.applyReplay(true);
         } else {
           this.showFresh(bars);
@@ -5752,6 +5755,7 @@
         this.startTicks(token);
       } catch (e) {
         if (token !== this.loadToken) return;
+        this.replayLoading = null;
         const market = binanceMarket(this.owner ? this.symbol : "XAUUSD");
         if (market) await this.loadBinance(market);
         else this.showNoBars(token, plain((e || failure || {}).message || ""));
@@ -6000,7 +6004,7 @@
         if (!older.length) { this.noOlder = true; return; }
         const range = this.chart.timeScale().getVisibleLogicalRange();
         this.bars = older.concat(this.bars);
-        if (this.replay) this.replay.idx += older.length;
+        if (this.replay) { this.replay.idx += older.length; if (this.replay.forming) this.replay.forming.idx += older.length; }
         if (quiet) return;
         this.series.setData(this.viewBars().map(shown));
         if (range) this.chart.timeScale().setVisibleLogicalRange({ from: range.from + older.length, to: range.to + older.length });
@@ -7114,6 +7118,46 @@
 
     viewBars() { return this.replay ? this.bars.slice(0, this.replay.idx + 1) : this.bars; },
 
+    /** The replay's moment: the end of the last bar shown, or where its still-forming bar was cut. */
+    replayNow() {
+      const r = this.replay;
+      if (!r) return null;
+      if (r.forming && r.forming.idx === r.idx) return r.forming.now;
+      return this.bars[r.idx].time + TF_SECONDS[this.replayInterval || this.interval] - 1;
+    },
+
+    /** Puts the replay on this timeframe's bars at moment `now` (`old`: the previous timeframe's bars). The bar
+     *  open at `now` is shown only as far as it had gone then (built from the old bars, as TradingView does),
+     *  never with its later prices; the next step completes it. */
+    replayOnto(now, old) {
+      const r = this.replay, sec = TF_SECONDS[this.interval] || 60, bars = this.bars;
+      r.forming = null;
+      let i = bars.length - 1;
+      while (i > 0 && bars[i].time > now) i--;
+      if (bars[i].time + sec - 1 > now) {
+        const open = bars[i].time;
+        const part = (old || []).filter((b) => b.time >= open && b.time <= now);
+        const rest = (old || []).filter((b) => b.time > now && b.time < open + sec);
+        const merge = (xs, t) => ({ time: t, open: xs[0].open, high: Math.max(...xs.map((b) => b.high)), low: Math.min(...xs.map((b) => b.low)),
+          close: xs[xs.length - 1].close, volume: xs.reduce((a, b) => a + (b.volume || 0), 0) });
+        if (part.length && part[0].time === open) {
+          r.forming = { idx: i, now, full: bars[i], rest: rest.length ? merge(rest, open) : null };
+          bars[i] = merge(part, open);
+        } else {
+          i = Math.max(1, i - 1);  // no smaller bars for it: the last bar closed by then
+        }
+      }
+      r.idx = Math.max(1, Math.min(i, bars.length - 2));
+      if (r.forming && r.forming.idx !== r.idx) { bars[r.forming.idx] = r.forming.full; r.forming = null; }
+    },
+
+    /** The still-forming bar back to its whole self (stepping on, leaving replay, picking again). */
+    replayUnform() {
+      const f = this.replay && this.replay.forming;
+      if (f) { this.bars[f.idx] = f.full; this.replay.forming = null; }
+      return f;
+    },
+
     startReplayPick() {
       if (this.replay) { this.exitReplay(); return; }
       this.replayPicking = true;
@@ -7125,6 +7169,7 @@
       if (!this.bars.length) return;
       this.replayPicking = false;
       const prev = this.replay;
+      if (prev) this.replayUnform();
       this.replay = {
         idx: Math.max(10, Math.min(this.bars.length - 2, i)), playing: false, timer: null,
         speed: (prev && prev.speed) || +(store.get("aurum.rspeed") || 1),
@@ -7156,7 +7201,20 @@
 
     replayStep() {
       const r = this.replay;
-      if (!r) return;
+      if (!r || this.replayLoading) return;
+      if (r.forming && r.forming.idx === r.idx) {
+        // The bar cut at the replay moment: the rest of it now (its stops / targets on the part still to come).
+        const f = this.replayUnform();
+        this.series.update(shown(f.full));
+        this.replayFill(f.rest || f.full);
+        this.updateMascotMoods();
+        this.computeICT();
+        this.updateFlow();
+        this.syncLines();
+        this.renderReplayBar();
+        this.redraw();
+        return;
+      }
       if (this.replayGap && r.idx >= this.bars.length - 60) this.replayExtend();
       if (r.idx >= this.bars.length - 1) {
         if (this.replayGap) return; // the next bars are on their way
@@ -7192,7 +7250,7 @@
     },
 
     exitReplay() {
-      if (this.replay) clearInterval(this.replay.timer);
+      if (this.replay) { clearInterval(this.replay.timer); this.replayUnform(); }
       // Bars of a window in the past: today's again.
       if (this.replayGap) { this.replayGap = false; this.replay = null; this.replayPicking = false; this.renderReplayBar(); this.updateTouchAction(); this.loadCandles(); return; }
       this.replay = null;
@@ -10717,7 +10775,7 @@
 
     /** The related market up to the replay moment; drawn on the second chart when it is shown. */
     showCmp(full) {
-      const until = this.replay ? this.bars[this.replay.idx].time + TF_SECONDS[this.interval] - 1 : Infinity;
+      const until = this.replay ? this.replayNow() : Infinity;
       // A replay further back than the compared market's loaded bars: fetch them around the replayed bar.
       if (this.replay) this.cmpCover(until);
       const view = (this.cmpBars || []).filter((b) => b.time <= until);
