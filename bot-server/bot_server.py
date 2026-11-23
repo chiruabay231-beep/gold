@@ -13,6 +13,7 @@ Run:  python bot_server.py            (reads config.json next to this file)
 """
 
 import collections
+import gzip
 import hashlib
 import hmac
 import json
@@ -33,7 +34,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "9.1"
+VERSION = "9.2"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -5803,9 +5804,19 @@ def make_handler(server):
             self.send_header("Access-Control-Max-Age", "600")
 
         def _send(self, code, payload):
-            data = json.dumps(payload, ensure_ascii=False).encode()
+            self._send_bytes(code, json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode())
+
+        def _send_bytes(self, code, data):
+            # Compressed when the browser / app accepts it (they all do): the JSON shrinks 5–10 times, which
+            # keeps a tunnel's monthly data (ngrok's free plan: 1 GB) far from its limit.
+            zipped = len(data) > 1024 and "gzip" in (self.headers.get("Accept-Encoding") or "")
+            if zipped:
+                data = gzip.compress(data, compresslevel=5)
             self.send_response(code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            if zipped:
+                self.send_header("Content-Encoding", "gzip")
+                self.send_header("Vary", "Accept-Encoding")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self._cors()
@@ -5899,13 +5910,7 @@ def make_handler(server):
                 code, data = e.code, e.read()
             except Exception:
                 return self._send(503, {"ok": False, "error": "Tài khoản riêng của bot chưa chạy (đang khởi động hoặc đang tắt)"})
-            self.send_response(code)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
-            self._cors()
-            self.end_headers()
-            self.wfile.write(data)
+            self._send_bytes(code, data)
 
         def do_GET(self):
             path, _, query = self.path.partition("?")

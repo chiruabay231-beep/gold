@@ -4,8 +4,12 @@
 #   irm https://raw.githubusercontent.com/chiruabay231-beep/gold/claude/ios-backtest-custom-indicators-jptyoz/bot-server/doctor.ps1 | iex
 # Check and restart the server + its tunnel (PowerShell "Run as Administrator"):
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/chiruabay231-beep/gold/claude/ios-backtest-custom-indicators-jptyoz/bot-server/doctor.ps1))) -Fix
+# Leave ngrok for Cloudflare's free tunnel (no data limit; the address changes on each start, the website and the
+# app find it by the server's password), then restart:
+#   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/chiruabay231-beep/gold/claude/ios-backtest-custom-indicators-jptyoz/bot-server/doctor.ps1))) -Cloudflare
 
-param([switch]$Fix, [string]$Dir = "C:\GoldBot")
+param([switch]$Fix, [switch]$Cloudflare, [string]$Dir = "C:\GoldBot")
+if ($Cloudflare) { $Fix = $true }
 
 $ErrorActionPreference = "SilentlyContinue"
 function Ok($t) { Write-Host "✅ $t" -ForegroundColor Green }
@@ -77,6 +81,19 @@ if (-not $Fix) {
     return
 }
 
+if ($Cloudflare) {
+    # ngrok's token and domain out of the settings (kept aside in ngrok.backup.json to go back later).
+    $path = Join-Path $Dir "config.json"
+    $c = Get-Content $path -Raw | ConvertFrom-Json
+    if ($c.ngrok_token) {
+        [pscustomobject]@{ ngrok_token = $c.ngrok_token; ngrok_domain = $c.ngrok_domain } | ConvertTo-Json | Set-Content (Join-Path $Dir "ngrok.backup.json") -Encoding UTF8
+        $c.PSObject.Properties.Remove("ngrok_token"); $c.PSObject.Properties.Remove("ngrok_domain")
+        $c | ConvertTo-Json -Depth 8 | Set-Content $path -Encoding UTF8
+    }
+    $domain = ""
+    Ok "Chuyển sang đường hầm Cloudflare (miễn phí, không giới hạn dung lượng)"
+}
+
 Write-Host ""
 Write-Host "==================== KHỞI ĐỘNG LẠI ====================" -ForegroundColor Cyan
 Stop-ScheduledTask -TaskName "GoldBot"
@@ -93,6 +110,22 @@ foreach ($i in 1..12) {
     try { $null = Invoke-RestMethod -Uri "http://127.0.0.1:$port/ping" -TimeoutSec 3; $ok = $true; break } catch {}
 }
 if ($ok) { Ok "Máy chủ đã chạy lại" } else { Bad "Máy chủ chưa lên sau 1 phút: xem crash.log ở trên" }
+if ($Cloudflare) {
+    # Cloudflare gives a new address each start: wait for it, then try it from outside.
+    $url = ""
+    foreach ($i in 1..18) {
+        Start-Sleep -Seconds 5
+        $url = (Get-Content (Join-Path $Dir "tunnel.txt") -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($url -and $url -like "*trycloudflare.com*") { break }
+    }
+    if ($url) {
+        Start-Sleep -Seconds 10
+        try {
+            $r = Invoke-WebRequest -Uri "$url/ping" -TimeoutSec 15 -UseBasicParsing
+            if ($r.Content -match "gold-bot") { Ok "Đường hầm Cloudflare chạy: $url — mở lại web / app, đăng nhập bằng mật khẩu máy chủ (tự tìm địa chỉ mới)" }
+        } catch { Bad "Có địa chỉ $url nhưng chưa vào được: chờ 1–2 phút rồi mở web / app" }
+    } else { Bad "Chưa có địa chỉ Cloudflare sau 90 giây: xem tunnel.log (chạy lệnh kiểm tra)" }
+}
 if ($domain) {
     Start-Sleep -Seconds 10
     try {

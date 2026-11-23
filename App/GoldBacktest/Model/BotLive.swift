@@ -3,7 +3,7 @@ import Observation
 import SwiftUI
 
 /// The grid bot's numbers kept current the whole time the app runs, not only while its tab is open: its account's
-/// balance, equity and each open position's P/L every 2 s, the bot's state, positions and trades every 8 s.
+/// balance, equity and each open position's P/L every 3 s, the bot's state, positions and trades every 15 s.
 /// The Bot tab reads it (so it opens already up to date) and the tab's badge shows the open P/L.
 @MainActor
 @Observable
@@ -44,7 +44,7 @@ final class BotLive {
         defer { running = false }
         while !Task.isCancelled {
             await refresh()
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
     }
 
@@ -53,7 +53,7 @@ final class BotLive {
             error = "Chưa nối máy chủ: bấm \"Kết nối máy chủ\" bên dưới"
             return
         }
-        if force || ledger == nil || Date().timeIntervalSince(ledgerAt) >= 8 {
+        if force || ledger == nil || Date().timeIntervalSince(ledgerAt) >= 15 {
             do {
                 ledger = try JSONDecoder().decode(BotLedger.self, from: try await client.send("/bots", timeout: 30))
                 ledgerAt = Date()
