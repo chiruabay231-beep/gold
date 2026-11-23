@@ -42,7 +42,7 @@ try {
 # 3. Internet, the tunnel's process and its address from outside.
 if (Test-NetConnection "ngrok.com" -Port 443 -InformationLevel Quiet) { Ok "Có Internet" } else { Bad "Không ra được Internet (mạng của máy ảo / Mac)"; $problems += "net" }
 $tunnel = Get-Process ngrok, cloudflared
-if ($tunnel) { Ok "Đường hầm đang chạy ($($tunnel.ProcessName -join ', '))" } else { Bad "Đường hầm (ngrok) KHÔNG chạy"; $problems += "tunnel" }
+if ($tunnel) { Ok "Đường hầm đang chạy ($($tunnel.ProcessName -join ', '))" } else { Bad "Đường hầm (ngrok / cloudflared) KHÔNG chạy"; $problems += "tunnel" }
 # The public address: ngrok's fixed domain, else the one the server got (Cloudflare's changes on each start).
 $public = if ($domain) { "https://$domain" } else { (Get-Content (Join-Path $Dir "tunnel.txt") -ErrorAction SilentlyContinue | Select-Object -First 1) }
 if ($public) {
@@ -71,7 +71,7 @@ Write-Host "==================== KẾT LUẬN ====================" -ForegroundC
 if (-not $problems.Count) { Ok "Mọi thứ đều chạy. Web / app vẫn không vào được: tắt hẳn rồi mở lại, hoặc đăng nhập lại bằng mật khẩu máy chủ." }
 if ($problems -contains "net") { Bad "Máy ảo mất mạng: trong VMware → Virtual Machine → Network Adapter → chọn lại 'Share with my Mac', hoặc khởi động lại máy ảo." }
 if ($problems -contains "server" -or $problems -contains "local" -or $problems -contains "task") { Bad "Máy chủ bot đã dừng → chạy lệnh có -Fix để khởi động lại." }
-if (($problems -contains "tunnel" -or $problems -contains "public") -and -not ($problems -contains "local")) { Bad "Máy chủ chạy nhưng đường hầm ngrok đứt → chạy lệnh có -Fix để nối lại." }
+if (($problems -contains "tunnel" -or $problems -contains "public") -and -not ($problems -contains "local")) { Bad "Máy chủ chạy nhưng đường hầm đứt → chạy lệnh có -Fix (ngrok) hoặc -Cloudflare để nối lại." }
 if ($problems -contains "mt5") { Bad "MT5 chưa mở: mở MT5 (bot tự mở lại khi máy chủ khởi động)." }
 
 if (-not $Fix) {
@@ -94,6 +94,15 @@ if ($Cloudflare) {
     }
     $domain = ""
     Ok "Chuyển sang đường hầm Cloudflare (miễn phí, không giới hạn dung lượng)"
+    # A virtual machine's own DNS (VMware / Parallels NAT) often answers Cloudflare's SRV lookup with one region
+    # only ("expected at least 2 Cloudflare Regions ... SRV only returned 1") and cloudflared stops: public DNS instead.
+    Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | ForEach-Object {
+        Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses ("1.1.1.1", "8.8.8.8")
+    }
+    Clear-DnsClientCache
+    $srv = Resolve-DnsName -Type SRV "_v2-origintunneld._tcp.argotunnel.com" -ErrorAction SilentlyContinue
+    if (($srv | Where-Object { $_.Type -eq "SRV" }).Count -ge 2) { Ok "DNS 1.1.1.1 / 8.8.8.8: Cloudflare trả đủ các vùng" }
+    else { Bad "DNS đã đổi sang 1.1.1.1 / 8.8.8.8 nhưng Cloudflare vẫn trả thiếu vùng: mạng của Mac / modem có thể đang chặn" }
 }
 
 Write-Host ""
