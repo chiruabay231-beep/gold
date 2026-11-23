@@ -296,7 +296,13 @@ private struct MovableBarOffset: ViewModifier {
         _y = AppStorage(wrappedValue: 0, "bar.\(key).y")
     }
 
-    func body(content: Content) -> some View { content.offset(x: x, y: y) }
+    func body(content: Content) -> some View {
+        content.offset(x: x, y: y)
+            // Out of the way of the chart's magnifying lens while a drawing is dragged.
+            .opacity(ChartLoupe.shared.active ? 0 : 1)
+            .allowsHitTesting(!ChartLoupe.shared.active)
+            .animation(.easeOut(duration: 0.12), value: ChartLoupe.shared.active)
+    }
 }
 
 /// A short line drawn in a line style, for the style menu.

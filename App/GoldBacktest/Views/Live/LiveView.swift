@@ -1182,6 +1182,8 @@ struct LiveView: View {
                     activeTool = nil
                 }
                 .padding(.leading, 6 + axisInset)
+                .opacity(ChartLoupe.shared.active ? 0 : 1)
+                .allowsHitTesting(!ChartLoupe.shared.active)
             }
         }
         .overlay(alignment: .topLeading) {
@@ -1201,6 +1203,7 @@ struct LiveView: View {
                     .padding(.trailing, axisLeading ? 6 : 72)
                     .padding(.top, 40)
                     .allowsHitTesting(false)
+                    .opacity(ChartLoupe.shared.active ? 0 : 1)
             }
         }
         .overlay(alignment: .bottom) {

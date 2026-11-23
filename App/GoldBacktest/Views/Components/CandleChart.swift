@@ -1,4 +1,5 @@
 import SwiftUI
+import Observation
 import UIKit
 import BacktestKit
 
@@ -411,6 +412,8 @@ struct CandleChart: View {
     var body: some View {
         chartBody
             .onChange(of: activeLineGroup) { _, group in onActiveLineGroup?(group) }
+            // While the lens shows, the bars floating over the chart step aside (they would cover it).
+            .onChange(of: loupePoint != nil) { _, on in ChartLoupe.shared.active = on }
     }
 
     private var chartBody: some View {
@@ -1222,7 +1225,7 @@ struct CandleChart: View {
     /// The magnifying lens: the chart around `focus` drawn again 2.2 times bigger in a rounded box in the top-left
     /// corner of the plot (the top-right one when the finger is there), a red dot on the point under the finger.
     private func drawLoupe(in context: inout GraphicsContext, layout: Layout, now: Date, focus: CGPoint) {
-        let side: CGFloat = 124, zoom: CGFloat = 2.2, pad: CGFloat = 8
+        let side: CGFloat = 100, zoom: CGFloat = 2.2, pad: CGFloat = 8
         var box = CGRect(x: layout.plot.minX + pad, y: layout.plot.minY + pad, width: side, height: side)
         if box.insetBy(dx: -28, dy: -28).contains(focus) { box.origin.x = layout.axisX - side - pad }
         let shape = Path(roundedRect: box, cornerRadius: 12)
@@ -1236,7 +1239,7 @@ struct CandleChart: View {
         magnified.scaleBy(x: zoom, y: zoom)
         magnified.translateBy(x: -focus.x, y: -focus.y)
         draw(in: &magnified, layout: layout, now: now, lens: true)
-        context.stroke(shape, with: .color(theme.text.opacity(0.5)), lineWidth: 1.2)
+        context.stroke(shape, with: .color(Color.accentColor.opacity(0.9)), lineWidth: 1.6)
         // The point under the finger: a red ring with a dark centre, and faint cross hairs through it.
         let c = CGPoint(x: box.midX, y: box.midY)
         var cross = Path()
@@ -2890,4 +2893,13 @@ extension CandleChart {
         chart.notes = notes.map { var n = $0; n.color = StandOut.line(n.color, on: bg); return n }
         return chart
     }
+}
+
+/// Whether the chart's magnifying lens is showing (a finger dragging a drawing): the toolbars floating over the
+/// chart hide meanwhile so the lens is never covered.
+@MainActor
+@Observable
+final class ChartLoupe {
+    static let shared = ChartLoupe()
+    var active = false
 }
