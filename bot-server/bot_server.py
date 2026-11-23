@@ -34,7 +34,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "9.3"
+VERSION = "9.4"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -5029,10 +5029,14 @@ class WebAccount:
         mt5 = dict(cfg.get("mt5") or {})
         if os.path.normcase(exe) != os.path.normcase(clone):
             # An MT5 the owner opened and logged in to themselves: attached as it is (its own login, not ours).
-            for k in ("login", "password", "server"):
-                mt5.pop(k, None)
+            # The demo login saved for the copy is kept aside, not lost (it comes back with the copy).
+            creds = {k: mt5.pop(k) for k in ("login", "password", "server") if mt5.get(k)}
+            if creds.get("login"):
+                mt5["cloneCreds"] = creds
             mt5.update({"path": exe, "portable": False})
         else:
+            if not mt5.get("login") and (mt5.get("cloneCreds") or {}).get("login"):
+                mt5.update(mt5.pop("cloneCreds"))
             mt5.update({"path": exe, "portable": True})
         self.exe = exe
         for k in ("max_lots", "deviation"):
@@ -5088,6 +5092,11 @@ class WebAccount:
     def _pick_terminal(self):
         """The bot's MT5: one the owner opened (an MT5 running besides the chart's and the bot's own copy, e.g. a
         second MT5 installed and logged in to a demo account), else the copy. None when the chart's is unknown."""
+        # The MT5 the bot's demo account was last on stays the bot's (after a restart, a reinstall or with another
+        # MT5 open), so the demo account is never swapped for whatever else is running.
+        kept = self.cfg.get("terminal")
+        if kept and os.path.exists(kept):
+            return kept
         main = self._main_exe()
         if not main:
             return None
@@ -5095,6 +5104,18 @@ class WebAccount:
         norm = lambda x: os.path.normcase(os.path.abspath(x))  # noqa: E731
         others = [x for x in self._running_terminals() if norm(x) not in (norm(main), norm(clone))]
         return others[0] if others else clone
+
+    def _remember_demo(self):
+        """Once the bot's MT5 is on a demo account: that terminal and login kept for good (see _pick_terminal)."""
+        try:
+            t = self._local("/mt5/trading", timeout=15)
+        except Exception:
+            return
+        exe = getattr(self, "exe", "")
+        if t.get("login") and t.get("mode") == "demo" and exe and (self.cfg.get("terminal") != exe or self.cfg.get("demoLogin") != t["login"]):
+            self.cfg.update(terminal=exe, demoLogin=t["login"])
+            self.server.save_config()
+            self.server.log(f"🖥️ Tài khoản demo của bot #{t['login']} được ghi nhớ (giữ sau khi khởi động lại / cài lại)")
 
     def _spawn(self):
         try:
@@ -5126,6 +5147,8 @@ class WebAccount:
         turn = 0
         while self.cfg.get("enabled"):
             try:
+                if turn % 4 == 2 and self.process is not None:
+                    self._remember_demo()
                 if turn % 4 == 0:
                     # About every minute: which MT5 the bot's server should use (an MT5 the owner opened wins).
                     pick = self._pick_terminal()
