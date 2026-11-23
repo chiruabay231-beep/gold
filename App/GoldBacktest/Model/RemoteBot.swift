@@ -378,7 +378,10 @@ struct RemoteBotClient {
             var symbol: String?
         }
         let s = Self.queryValue(symbol)
-        var path = "/mt5/candles?symbol=\(s)&interval=\(interval.rawValue)&count=\(count)"
+        // Second bars (15s, 30s…): built by the server from MT5's own ticks (server 8.7+).
+        var path = interval.isSeconds
+            ? "/mt5/secbars?symbol=\(s)&sec=\(Int(interval.seconds))&count=\(min(count, 2000))"
+            : "/mt5/candles?symbol=\(s)&interval=\(interval.rawValue)&count=\(count)"
         if let before { path += "&before=\(Int(before.timeIntervalSince1970))" }
         let response = try JSONDecoder().decode(Response.self, from: await request(path, timeout: 15))
         let candles = response.candles.compactMap { r -> Candle? in

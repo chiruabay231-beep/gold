@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "8.6"
+VERSION = "8.7"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -1356,6 +1356,56 @@ class Mt5Account:
             last = (bid, ask)
             out.append([int(r["time_msc"]) - int(offset * 1000), bid, ask])
         return {"ok": True, "symbol": symbol, "digits": getattr(info, "digits", 2), "from": start, "to": end, "ticks": out}
+
+    def second_candles(self, symbol, sec, count, before=None):
+        """Second bars (5s, 10s, 15s, 30s…) built from MT5's own ticks (bid), which MT5 does not keep as bars:
+        the chart's 15s / 30s on the broker's price. The newest `count` bars up to now (or before `before`);
+        while the market is closed, the ones up to its last tick. A quiet second gets a flat bar (not over a
+        longer pause, e.g. the market's break)."""
+        import datetime
+        sec = int(sec)
+        if sec not in (1, 2, 3, 5, 10, 15, 20, 30):
+            raise ValueError("Khung giây: 1, 2, 3, 5, 10, 15, 20 hoặc 30 giây")
+        count = max(10, min(int(count), 2000))
+        span = min(count * sec, 6 * 3600)
+        utc = datetime.timezone.utc
+        with Mt5.lock:
+            mt5 = self._mt5()
+            symbol = Mt5.need_symbol(mt5, symbol)
+            offset = Mt5.detect_offset(symbol)
+            tick = mt5.symbol_info_tick(symbol)
+            end = float(before) if before else now() + 1
+            if tick is not None and tick.time and not before:
+                end = min(end, float(tick.time) - offset + 1) if now() - (float(tick.time) - offset) > 600 else end
+            rows = mt5.copy_ticks_range(symbol, datetime.datetime.fromtimestamp(end - span + offset, tz=utc),
+                                        datetime.datetime.fromtimestamp(end + offset, tz=utc), mt5.COPY_TICKS_INFO)
+            info = mt5.symbol_info(symbol)
+        bars = []
+        for r in rows if rows is not None else ():
+            bid = float(r["bid"])
+            if not bid:
+                continue
+            t = int(r["time_msc"]) / 1000.0 - offset
+            if before and t >= float(before):
+                continue
+            start = float(int(t // sec) * sec)
+            if bars and bars[-1][0] == start:
+                b = bars[-1]
+                b[2] = max(b[2], bid); b[3] = min(b[3], bid); b[4] = bid; b[5] += 1
+            elif not bars or start > bars[-1][0]:
+                if bars and start - bars[-1][0] <= 120 * sec:
+                    # A quiet second or two: flat bars at the last price (as a chart's time axis expects).
+                    last = bars[-1][4]
+                    k = bars[-1][0] + sec
+                    while k < start:
+                        bars.append([k, last, last, last, last, 0])
+                        k += sec
+                bars.append([start, bid, bid, bid, bid, 1])
+        return {"ok": True, "symbol": symbol, "candles": bars[-count:], "seconds": sec,
+                "bid": tick.bid if tick else None, "ask": tick.ask if tick else None,
+                "digits": info.digits if info else None,
+                "contractSize": info.trade_contract_size if info else None,
+                "description": info.description if info else ""}
 
     def candles(self, symbol, interval, count, before=None):
         if interval not in MT5_TIMEFRAMES:
@@ -5688,6 +5738,13 @@ def make_handler(server):
                 if path == "/mt5/ticks":
                     return self._send(200, server.mt5_account.ticks((params.get("symbol") or [""])[0],
                                                                     (params.get("from") or ["0"])[0], (params.get("to") or ["0"])[0]))
+                if path == "/mt5/secbars":
+                    symbol = (params.get("symbol") or [""])[0]
+                    if not symbol:
+                        raise ValueError("Thiếu mã")
+                    return self._send(200, server.mt5_account.second_candles(
+                        symbol, (params.get("sec") or ["15"])[0], (params.get("count") or ["500"])[0],
+                        (params.get("before") or [None])[0]))
                 if path == "/mt5/candles":
                     symbol = (params.get("symbol") or [""])[0]
                     if not symbol:

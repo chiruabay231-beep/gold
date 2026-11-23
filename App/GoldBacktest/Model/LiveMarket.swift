@@ -361,8 +361,8 @@ final class LiveMarket {
                     .map(\.candle)
             case .mt5:
                 guard let client = RemoteBotSettings.client() else { return [] }
-                // Second bars come from Binance trades; there is no older history to fetch.
-                if interval.isSeconds { return [] }
+                // Second bars from Binance trades (a server before 8.7) have no older history to fetch.
+                if interval.isSeconds, noSecondBars { return [] }
                 older = try await client.mt5Candles(symbol: symbol, interval: interval, count: count, before: first.time)
             }
         } catch {
@@ -440,13 +440,21 @@ final class LiveMarket {
                     guard let client = RemoteBotSettings.client() else {
                         throw RemoteBotClient.ServerError(message: "Chưa kết nối máy chủ VPS (Giao dịch → Đăng nhập)")
                     }
-                    if interval.isSeconds {
+                    if interval.isSeconds, noSecondBars {
+                        // A server before 8.7: second bars from Binance, moved onto the broker's price.
                         try await loadSecondsFromBinance(client)
                         failures = 0
                         try await stream()
                         continue
                     }
-                    let first = try await client.mt5History(symbol: symbol, interval: interval, count: 1000)
+                    // Second bars come from the server too, built from MT5's own ticks (the broker's price).
+                    let first: (candles: [Candle], bid: Double?, ask: Double?, symbol: String)
+                    do {
+                        first = try await client.mt5History(symbol: symbol, interval: interval, count: interval.isSeconds ? 600 : 1000)
+                    } catch let failure as RemoteBotClient.ServerError where failure.code == 404 && interval.isSeconds {
+                        noSecondBars = true
+                        continue
+                    }
                     // This account calls the market by another name (XAUUSD ↔ XAUUSDm, GOLD…): switch to it,
                     // so prices, orders and position lines all use the account's own symbol.
                     if first.symbol != symbol, !first.symbol.isEmpty {
@@ -457,7 +465,7 @@ final class LiveMarket {
                     // A stretch missing in the middle: MT5 hands a symbol just opened its old cached bars
                     // while it fetches the rest; ask again shortly (up to 3 times).
                     var tries = 0
-                    while tries < 3, Self.hole(in: history, seconds: interval.seconds) {
+                    while tries < 3, !interval.isSeconds, Self.hole(in: history, seconds: interval.seconds) {
                         tries += 1
                         try await Task.sleep(nanoseconds: 1_200_000_000)
                         history = try await client.mt5Candles(symbol: symbol, interval: interval, count: 1000)
@@ -499,6 +507,9 @@ final class LiveMarket {
         }
         return nil
     }
+
+    /// The server has no second bars of its own (before 8.7): they come from Binance then.
+    @ObservationIgnored private var noSecondBars = false
 
     /// The Binance market the bars come from while an MT5 chart shows second bars.
     @ObservationIgnored private var feed: (symbol: String, market: BinanceClient.Market)?
@@ -713,7 +724,8 @@ final class LiveMarket {
         if let last = buffer.candles.last {
             let start = CandleAggregator.bucket(time, seconds: interval.seconds)
             let gap = start.timeIntervalSince(last.time)
-            if gap >= 0, gap <= interval.seconds {
+            // Second bars: a tick after a quiet stretch starts the next bar after the gap (filled flat).
+            if gap >= 0, gap <= interval.seconds || (interval.isSeconds && gap <= 120 * interval.seconds) {
                 var working = pendingBuffer ?? buffer
                 let update = working.apply(trade: TradeTick(time: time, price: tick.bid, quantity: 0), seconds: interval.seconds)
                 if update == .appended || Date().timeIntervalSince(lastPublish) > 0.15 {

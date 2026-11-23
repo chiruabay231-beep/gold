@@ -5619,6 +5619,10 @@
 
     exnessPath(count, before) {
       const extra = before ? `&before=${before}` : "";
+      // Second bars (15s, 30s…): built by the server from MT5's own ticks (server 8.7+).
+      if (this.owner && isSecTF(this.interval) && !this.noSecBars) {
+        return `/mt5/secbars?symbol=${encodeURIComponent(this.symbol)}&sec=${TF_SECONDS[this.interval]}&count=${Math.min(2000, count)}${extra}`;
+      }
       return this.owner
         ? `/mt5/candles?symbol=${encodeURIComponent(this.symbol)}&interval=${this.interval}&count=${count}${extra}`
         : `/member/candles?interval=${this.interval}&count=${count}${extra}`;
@@ -5702,7 +5706,8 @@
       // Another symbol: the old one's quote and price range must not linger on it.
       const symKey = this.owner ? this.symbol : "member";
       if (symKey !== this.loadedSymbol) { this.bid = this.ask = null; this.loadedSymbol = symKey; }
-      if (isSecTF(this.interval)) return this.loadSeconds(token);
+      // Seconds: the owner's from MT5's ticks (the broker's own price), a member's (or an older server's) from Binance.
+      if (isSecTF(this.interval) && (!this.owner || this.noSecBars)) return this.loadSeconds(token);
       let failure = null;
       try {
         if (this.owner) await this.ownerSymbol();
@@ -5719,7 +5724,7 @@
             bars = this.toBars(data.candles || []);
             failure = bars.length < 5 ? new Error("MT5 chưa có nến cho mã này") : null;
             // A stretch missing in the middle: MT5 is still fetching it; ask again shortly.
-            if (!failure && this.owner && attempt < 3 && barsHole(bars, TF_SECONDS[this.interval] || 60)) failure = new Error("MT5 đang tải nến");
+            if (!failure && this.owner && attempt < 3 && !isSecTF(this.interval) && barsHole(bars, TF_SECONDS[this.interval] || 60)) failure = new Error("MT5 đang tải nến");
           } catch (e) { failure = e; if (e instanceof Unreachable) break; }
           if (token !== this.loadToken) return;
           if (!failure) break;
@@ -5756,6 +5761,8 @@
       } catch (e) {
         if (token !== this.loadToken) return;
         this.replayLoading = null;
+        // A server before 8.7 has no second bars from MT5: Binance's as before.
+        if (isSecTF(this.interval) && this.owner && !this.noSecBars && (e || failure || {}).status === 404) { this.noSecBars = true; return this.loadSeconds(token); }
         const market = binanceMarket(this.owner ? this.symbol : "XAUUSD");
         if (market) await this.loadBinance(market);
         else this.showNoBars(token, plain((e || failure || {}).message || ""));
@@ -5833,7 +5840,8 @@
       if (start === last.time) {
         last.high = Math.max(last.high, t.bid); last.low = Math.min(last.low, t.bid); last.close = t.bid;
         draw(last);
-      } else if (start === last.time + sec) {
+      } else if (start === last.time + sec || (sec < 60 && start > last.time && start - last.time < 600)) {
+        // Second bars: a quiet second has no bar, so the next one may come after a gap.
         const b = { time: start, open: t.bid, high: t.bid, low: t.bid, close: t.bid, volume: 0 };
         bars.push(b);
         draw(b);
