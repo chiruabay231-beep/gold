@@ -34,7 +34,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "9.2"
+VERSION = "9.3"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2578,10 +2578,15 @@ class Tunnel:
             # HTTP/2 over TCP 443 by default: QUIC (UDP) often fails behind a virtual machine's network (VMware,
             # Parallels) or a home router, and cloudflared then quits a few seconds after getting its address.
             protocol = str(self.server.config.get("tunnel_protocol") or "http2")
+            args = [self._binary(), "tunnel", "--no-autoupdate", "--protocol", protocol]
+            if self.server.config.get("tunnel_edge"):
+                # Cloudflare's edge named outright: cloudflared skips its SRV lookup, which a virtual machine's NAT DNS
+                # (VMware, Parallels) answers with one region only — no need to change the machine's DNS.
+                for host in ("region1.v2.argotunnel.com:7844", "region2.v2.argotunnel.com:7844"):
+                    args += ["--edge", host]
+            args += ["--url", f"http://127.0.0.1:{port}"]
             try:
-                self.process = subprocess.Popen(
-                    [self._binary(), "tunnel", "--no-autoupdate", "--protocol", protocol, "--url", f"http://127.0.0.1:{port}"],
-                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
+                self.process = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
             except FileNotFoundError:
                 self.error = "Không tìm thấy cloudflared"
                 return
@@ -2621,6 +2626,17 @@ class Tunnel:
                 pass
             lived = time.time() - started
             self.url = ""
+            if not self.server.config.get("tunnel_edge") and any("SRV only returned" in x or "Cloudflare Regions" in x for x in lines[-30:]):
+                # This machine's DNS cannot give Cloudflare's regions: name them outright from now on (kept, so
+                # no quick tunnel is asked for in vain again — trycloudflare.com limits how often).
+                self.server.config["tunnel_edge"] = True
+                self.server.save_config()
+                self.server.log("🌐 DNS của máy không trả đủ vùng Cloudflare: dùng thẳng địa chỉ Cloudflare (không cần đổi DNS)")
+                time.sleep(5)
+                continue
+            if self.server.config.get("tunnel_edge") and any("flag provided but not defined" in x and "edge" in x for x in lines[-30:]):
+                self.server.config["tunnel_edge"] = False  # a cloudflared without the option
+                self.server.save_config()
             failures = failures + 1 if lived < 60 else 0
             self.error = "Tunnel bị ngắt, đang kết nối lại"
             if any("status 429" in x or "Too Many Requests" in x for x in lines[-20:]):

@@ -4,12 +4,19 @@
 #   irm https://raw.githubusercontent.com/chiruabay231-beep/gold/claude/ios-backtest-custom-indicators-jptyoz/bot-server/doctor.ps1 | iex
 # Check and restart the server + its tunnel (PowerShell "Run as Administrator"):
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/chiruabay231-beep/gold/claude/ios-backtest-custom-indicators-jptyoz/bot-server/doctor.ps1))) -Fix
+# Windows' DNS back to automatic: add -ResetDns (with -Cloudflare or -Fix it restarts too).
 # Leave ngrok for Cloudflare's free tunnel (no data limit; the address changes on each start, the website and the
 # app find it by the server's password), then restart:
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/chiruabay231-beep/gold/claude/ios-backtest-custom-indicators-jptyoz/bot-server/doctor.ps1))) -Cloudflare
 
-param([switch]$Fix, [switch]$Cloudflare, [string]$Dir = "C:\GoldBot")
+param([switch]$Fix, [switch]$Cloudflare, [switch]$ResetDns, [string]$Dir = "C:\GoldBot")
 if ($Cloudflare) { $Fix = $true }
+if ($ResetDns) {
+    # Windows' DNS back to automatic (what the network gives), as before 1.1.1.1 / 8.8.8.8 were set.
+    Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | ForEach-Object { Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ResetServerAddresses }
+    Clear-DnsClientCache
+    Write-Host "✅ DNS của Windows đã về mặc định (tự động)" -ForegroundColor Green
+}
 
 $ErrorActionPreference = "SilentlyContinue"
 function Ok($t) { Write-Host "✅ $t" -ForegroundColor Green }
@@ -94,15 +101,10 @@ if ($Cloudflare) {
     }
     $domain = ""
     Ok "Chuyển sang đường hầm Cloudflare (miễn phí, không giới hạn dung lượng)"
-    # A virtual machine's own DNS (VMware / Parallels NAT) often answers Cloudflare's SRV lookup with one region
-    # only ("expected at least 2 Cloudflare Regions ... SRV only returned 1") and cloudflared stops: public DNS instead.
-    Get-NetAdapter | Where-Object { $_.Status -eq "Up" } | ForEach-Object {
-        Set-DnsClientServerAddress -InterfaceIndex $_.ifIndex -ServerAddresses ("1.1.1.1", "8.8.8.8")
-    }
-    Clear-DnsClientCache
-    $srv = Resolve-DnsName -Type SRV "_v2-origintunneld._tcp.argotunnel.com" -ErrorAction SilentlyContinue
-    if (($srv | Where-Object { $_.Type -eq "SRV" }).Count -ge 2) { Ok "DNS 1.1.1.1 / 8.8.8.8: Cloudflare trả đủ các vùng" }
-    else { Bad "DNS đã đổi sang 1.1.1.1 / 8.8.8.8 nhưng Cloudflare vẫn trả thiếu vùng: mạng của Mac / modem có thể đang chặn" }
+    # The machine's DNS is left as it is: the server names Cloudflare's edge itself when that DNS cannot.
+    $c2 = Get-Content $path -Raw | ConvertFrom-Json
+    $c2 | Add-Member -NotePropertyName tunnel_edge -NotePropertyValue $true -Force
+    $c2 | ConvertTo-Json -Depth 8 | Set-Content $path -Encoding UTF8
 }
 
 Write-Host ""
