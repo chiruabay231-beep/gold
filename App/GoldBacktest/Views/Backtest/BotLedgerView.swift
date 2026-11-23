@@ -4,11 +4,11 @@ import SwiftUI
 /// positions' entry lines, its numbers, open positions and closed trades. Read only: the bot runs 24/7 on the
 /// server, set up and switched on / off on the website.
 struct BotLedgerView: View {
-    @State private var ledger: BotLedger?
-    @State private var error: String?
-    /// The bot's own account (the second MT5, an Exness demo while it is tested) first when there is one.
-    @State private var showOwn = true
-    @State private var account: BotAccount?
+    /// Kept current the whole time the app runs (BotLive): the tab opens up to date and moves live.
+    private var live: BotLive { BotLive.shared }
+    private var ledger: BotLedger? { live.ledger }
+    private var error: String? { live.error }
+    private var account: BotAccount? { live.account }
     @State private var chart: BotChartData?
     @State private var chartError: String?
     @AppStorage("bot.chartTf") private var tf = "1m"
@@ -21,8 +21,8 @@ struct BotLedgerView: View {
     @State private var periodKey = ""
     @State private var periodAt = Date.distantPast
 
-    private var useOwn: Bool { showOwn && ledger?.own != nil }
-    private var book: BotBook? { ((useOwn ? ledger?.own?.books : ledger?.books) ?? []).first }
+    private var useOwn: Bool { live.useOwn }
+    private var book: BotBook? { live.book }
 
     var body: some View {
         ScrollView {
@@ -32,12 +32,12 @@ struct BotLedgerView: View {
                         .frame(maxWidth: .infinity, alignment: .leading).botCard()
                 }
                 if ledger?.own != nil {
-                    Picker("Tài khoản", selection: $showOwn) {
+                    Picker("Tài khoản", selection: Binding(get: { live.showOwn }, set: { live.showOwn = $0 })) {
                         Text("MT5 thứ 2 (bot)").tag(true)
                         Text("Tài khoản chart").tag(false)
                     }
                     .pickerStyle(.segmented)
-                    .onChange(of: showOwn) { _, _ in chart = nil; account = nil; Task { await load() } }
+                    .onChange(of: live.showOwn) { _, _ in chart = nil; live.account = nil; Task { await live.refresh(force: true); await load() } }
                 }
                 if let book {
                     header(book)
@@ -74,7 +74,7 @@ struct BotLedgerView: View {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
             }
         }
-        .refreshable { await load() }
+        .refreshable { await live.refresh(force: true); await load() }
     }
 
     // MARK: Cards
@@ -308,26 +308,10 @@ struct BotLedgerView: View {
     // MARK: Data
 
     private func load() async {
-        guard let client = RemoteBotSettings.client() else {
-            error = "Chưa nối máy chủ: bấm \"Kết nối máy chủ\" bên dưới"
-            return
-        }
-        do {
-            let data = try await client.send("/bots", timeout: 30)
-            ledger = try JSONDecoder().decode(BotLedger.self, from: data)
-            error = nil
-        } catch let e as RemoteBotClient.ServerError {
-            error = e.message
-            return
-        } catch {
-            self.error = error.localizedDescription
-            return
-        }
-        // The account and market the bot trades: its second MT5 (through the main server) or the chart's.
-        let prefix = useOwn ? "/acct2" : ""
-        if let data = try? await client.send(prefix + "/mt5/trading", timeout: 20) {
-            account = try? JSONDecoder().decode(BotAccount.self, from: data)
-        }
+        // The bot and its account come from BotLive (every 2 s / 8 s); here its chart and closed trades.
+        if live.ledger == nil { await live.refresh(force: true) }
+        guard let client = RemoteBotSettings.client() else { return }
+        let prefix = live.prefix
         await loadPeriod(client, prefix: prefix)
         guard let symbol = book?.symbol, !symbol.isEmpty else { return }
         do {
@@ -430,11 +414,13 @@ enum BotReason {
 
 /// The MT5 account (/mt5/trading): who, demo or real, its money.
 struct BotAccount: Decodable {
+    struct Position: Decodable { var ticket: Int?; var profit: Double? }
     var login: Int?
     var server: String?
     var mode: String?
     var balance: Double?
     var equity: Double?
+    var positions: [Position]?
 }
 
 /// The bot's market (/mt5/candles): bars [time, open, high, low, close, volume], the quote and digits.
@@ -642,6 +628,7 @@ struct ServerBot: Decodable {
     struct Position: Decodable {
         var side: String?; var lots: Double?; var entry: Double?; var profit: Double?
         var why: String?; var stop: Double?; var trail: Double?; var stopKind: String?; var openTime: Double?
+        var ticket: Int?
     }
     struct Trade: Decodable {
         var side: String?; var lots: Double?; var entry: Double?; var exit: Double?; var closeTime: Double?; var profit: Double?
@@ -661,7 +648,8 @@ struct ServerBot: Decodable {
                 balance: paper?.balance,
                 positions: (positions ?? []).enumerated().map { i, p in
                     BotBook.Open(id: i, side: p.side ?? "", lots: p.lots, entry: p.entry, profit: p.profit ?? 0,
-                                 why: p.why, stop: p.trail ?? p.stop, stopKind: p.trail != nil ? "trailing" : p.stopKind, openTime: p.openTime)
+                                 why: p.why, stop: p.trail ?? p.stop, stopKind: p.trail != nil ? "trailing" : p.stopKind, openTime: p.openTime,
+                                 ticket: p.ticket)
                 },
                 history: Self.closed(history ?? []),
                 error: error)
@@ -701,6 +689,7 @@ struct BotBook: Identifiable {
         var id: Int; var side: String; var lots: Double?; var entry: Double?; var profit: Double
         /// Why it opened (the bot's signal / layer), its SL price and which SL that is.
         var why: String? = nil; var stop: Double? = nil; var stopKind: String? = nil; var openTime: Double? = nil
+        var ticket: Int? = nil
     }
     struct Closed: Identifiable {
         var id: Int; var side: String; var lots: Double?; var entry: Double?; var exit: Double?; var closeTime: Double?; var profit: Double

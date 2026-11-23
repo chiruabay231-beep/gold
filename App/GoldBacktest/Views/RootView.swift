@@ -42,6 +42,7 @@ struct RootView: View {
                 // The owner: the bots on the VPS, their trades and profit at a glance.
                 NavigationStack { BotLedgerView() }
                     .tabItem { Label("Bot", systemImage: "cpu") }
+                    .badge(BotLive.shared.badge)
                     .tag(AppTab.bot)
             }
             if memberFeed.allows(.news) {
@@ -55,6 +56,8 @@ struct RootView: View {
         .sheet(isPresented: $store.showIndicators) { NavigationStack { IndicatorListView() } }
         // Watches gold for sudden moves and their news while the app runs.
         .task { await news.monitor() }
+        // The bot's account and open P/L kept current all the time (the Bot tab and its badge), owner only.
+        .task(id: member) { if !member { await BotLive.shared.run() } }
         .alert("Lỗi", isPresented: Binding(
             get: { store.lastError != nil },
             set: { if !$0 { store.lastError = nil } })
