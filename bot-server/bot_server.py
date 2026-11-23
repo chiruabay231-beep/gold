@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "9.0"
+VERSION = "9.1"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2550,6 +2550,19 @@ class Tunnel:
                 continue
             failures = failures + 1 if time.time() - started < 60 else 0
             self.error = "Đường hầm ngrok bị ngắt, đang kết nối lại"
+            if any("ERR_NGROK_334" in x for x in lines):
+                # The domain is held by another ngrok: one left behind on this machine is stopped; one elsewhere
+                # (another computer, the Mac) must be stopped by the owner (dashboard.ngrok.com → Agents).
+                mine = self.process.pid if self.process else None
+                if IS_WINDOWS:
+                    subprocess.run(["taskkill", "/IM", "ngrok.exe", "/F", "/FI", f"PID ne {mine}"], capture_output=True,
+                                   creationflags=NO_WINDOW)
+                self.error = ("Domain ngrok đang bị một ngrok khác giữ (ERR_NGROK_334): vào dashboard.ngrok.com → Agents "
+                              "dừng agent kia (máy khác / Mac), máy chủ tự nối lại")
+                if failures in (1, 5):
+                    self.server.log("🌐 " + self.error, notify=True)
+                time.sleep(30)
+                continue
             if failures in (3, 10):
                 self.server.log(f"🌐 Đường hầm ngrok không chạy được ({failures} lần) — xem {own('tunnel.log')}")
             time.sleep(min(300, 15 * max(1, failures) ** 2))
