@@ -1248,12 +1248,12 @@
     return [];
   }
 
-  function gridSignal(c, bid, candle, sup, res, move, extra) {
-    // Each filter that is on votes for the sides it allows; "all": a side needs every vote, "two": at least two
-    // (all when fewer are on) and more than the other side.
+  function gridSignal(c, bid, candle, sup, res, move, extra, m1) {
+    // Each filter that is on votes for the sides it allows; "all": a side needs every vote, "two" / "three": at
+    // least two / three (all when fewer are on) and more than the other side. As the server's grid_signal.
     const votes = { long: 0, short: 0 };
-    let used = 0;
-    const vote = (ok) => { used++; ok.forEach((x) => votes[x]++); };
+    let used = 0, levels = null;
+    const vote = (ok, level) => { used++; ok.forEach((x) => votes[x]++); if (level) { levels = levels || new Set(); ok.forEach((x) => levels.add(x)); } };
     if (c.sigCandle) {
       const side = candle ? candleBias({ biasMinBody: c.sigBody ?? 50 }, candle.o, candle.h, candle.l, candle.c).side : null;
       vote(side ? [side] : []);
@@ -1262,20 +1262,27 @@
       const z = c.srZone ?? 1, ok = new Set();
       if (sup != null && res != null) {
         if (c.sigSr === "bounce") { if (bid >= sup - z && bid <= sup + z) ok.add("long"); if (bid >= res - z && bid <= res + z) ok.add("short"); }
-        else if (c.sigSr === "break") { if (bid > res && bid <= res + z) ok.add("long"); if (bid >= sup - z && bid < sup) ok.add("short"); }
+        else if (c.sigSr === "break") {
+          if (c.breakClose && m1) { if (m1.close > m1.pres && bid > m1.pres) ok.add("long"); if (m1.close < m1.psup && bid < m1.psup) ok.add("short"); }
+          else { if (bid > res && bid <= res + z) ok.add("long"); if (bid >= sup - z && bid < sup) ok.add("short"); }
+        }
+        else if (c.breakClose && m1 && m1.close > m1.pres) ok.add("long");
+        else if (c.breakClose && m1 && m1.close < m1.psup) ok.add("short");
         else if ((bid >= sup - z && bid <= sup + z) || (bid >= res - z && bid <= res + z)) { ok.add("long"); ok.add("short"); }
       }
-      vote([...ok]);
+      vote([...ok], true);
     }
     if (c.sigTick) {
       const ok = [];
       if (move != null) { if (move >= c.tickMove - 1e-9) ok.push("long"); if (move <= -c.tickMove + 1e-9) ok.push("short"); }
       vote(ok);
     }
-    Object.values(extra || {}).forEach((ok) => vote(ok));
+    Object.entries(extra || {}).forEach(([name, ok]) => vote(ok, name === "swing" || name === "zone"));
     if (!used) return null;
-    const need = (c.sigNeed || "all") === "all" ? used : Math.min(2, used);
-    const good = ["long", "short"].filter((x) => votes[x] >= need && votes[x] > votes[x === "long" ? "short" : "long"]);
+    const need = (c.sigNeed || "all") === "all" ? used : Math.min(c.sigNeed === "three" ? 3 : 2, used);
+    let good = ["long", "short"].filter((x) => votes[x] >= need && votes[x] > votes[x === "long" ? "short" : "long"]);
+    // A level-type filter (cản / đỉnh-đáy / FVG-OB) must be among the side's votes.
+    if (c.mustLevel && levels) good = good.filter((x) => levels.has(x));
     return good.length === 1 ? good[0] : null;
   }
 
@@ -1314,6 +1321,10 @@
     // and the bid's move over the last tickSec seconds.
     const sig = c.entry === "signal", ssec = TF_SECONDS[c.sigTf] || 60;
     let sCur = null, sPrev = null, mCur = null, m1 = [], sup = null, res = null, back = 0, signals = 0;
+    // "Chống vào lệnh sai": the range before the newest M1 bar and its close (breakClose / noChase), the M1
+    // ATR(14) (slAtr), each basket's SL distance, and how many signals the middle-of-range rule turned down.
+    let m1Info = null, atrBars = [], atr = null, chases = 0;
+    const bsl = { long: null, short: null };
     // Swings / FVG / OB: the closed structTf candles (the last structBars), the votes worked out on each new one.
     const useStruct = sig && (c.sigSwing || (c.sigZone && c.sigZone !== "off") || c.levelGuard), xsec = TF_SECONDS[c.structTf] || 60;
     let xCur = null, xBars = [], extra = {}, xLevels = null, blocks = 0;
@@ -1324,7 +1335,8 @@
     const slLevel = (ps, long, peak) => {
       if (!ps.length) return null;
       const e = ps.map((p) => p.entry).sort((a, b) => a - b);
-      let level = c.sl > 0 ? (long ? e[e.length - 1] - c.sl : e[0] + c.sl) : null;
+      const slv = bsl[long ? "long" : "short"] ?? c.sl;
+      let level = slv > 0 ? (long ? e[e.length - 1] - slv : e[0] + slv) : null;
       if (locked(ps)) {
         const lots = ps.reduce((a, p) => a + p.lots, 0), avg = ps.reduce((a, p) => a + p.entry * p.lots, 0) / lots;
         let lock = long ? Math.max(e[e.length - 2], avg) : Math.min(e[1], avg);
@@ -1370,9 +1382,14 @@
         else { sCur.h = Math.max(sCur.h, bid); sCur.l = Math.min(sCur.l, bid); sCur.c = bid; }
         const mt = Math.floor(t / 60) * 60;
         if (!mCur || mCur.t !== mt) {
-          if (mCur) { m1.push(mCur); if (m1.length > (c.srBars || 30)) m1.shift(); sup = Math.min(...m1.map((b) => b.l)); res = Math.max(...m1.map((b) => b.h)); }
-          mCur = { t: mt, h: bid, l: bid };
-        } else { mCur.h = Math.max(mCur.h, bid); mCur.l = Math.min(mCur.l, bid); }
+          if (mCur) {
+            m1Info = m1.length ? { close: mCur.c, psup: Math.min(...m1.map((b) => b.l)), pres: Math.max(...m1.map((b) => b.h)) } : null;
+            m1.push(mCur); if (m1.length > (c.srBars || 30)) m1.shift(); sup = Math.min(...m1.map((b) => b.l)); res = Math.max(...m1.map((b) => b.h));
+            atrBars.push(mCur); if (atrBars.length > 15) atrBars.shift();
+            if (atrBars.length === 15) { let sum = 0; for (let i = 1; i < 15; i++) { const p = atrBars[i - 1].c, x = atrBars[i]; sum += Math.max(x.h - x.l, Math.abs(x.h - p), Math.abs(x.l - p)); } atr = sum / 14; }
+          }
+          mCur = { t: mt, o: bid, h: bid, l: bid, c: bid };
+        } else { mCur.h = Math.max(mCur.h, bid); mCur.l = Math.min(mCur.l, bid); mCur.c = bid; }
         while (back + 1 < ticks.length && ticks[back + 1][0] / 1000 <= t - (c.tickSec || 10)) back++;
         if (ticks[back][0] / 1000 <= t - (c.tickSec || 10)) move = bid - ticks[back][1];
       }
@@ -1409,7 +1426,12 @@
           if (hit || (c.slMoney > 0 && sum <= -c.slMoney + 1e-9)) {
             const lock = hit && locked(ps);
             ps.forEach((p) => out(p, bid, ask, lock ? "lock" : "sl", t)); book = book.filter((p) => p.side !== side);
-            if (lock) locks++; else { sls++; sidePause[side] = t + (c.cooldownMin || 0) * 60; }
+            if (lock) locks++;
+            else {
+              sls++; sidePause[side] = t + (c.cooldownMin || 0) * 60;
+              // Both sides rest after a stop (no turning round at once).
+              if (c.restBoth > 0) { sidePause.long = Math.max(sidePause.long, t + c.restBoth * 60); sidePause.short = Math.max(sidePause.short, t + c.restBoth * 60); }
+            }
             closed = true; continue;
           }
           if (c.tpMoney > 0 && sum >= c.tpMoney - 1e-9) {
@@ -1424,8 +1446,14 @@
       }
       if (t < pauseUntil) continue;
       if (!c.noSpread && c.maxSpread > 0 && ask - bid > c.maxSpread) continue;
-      let signal = sig ? gridSignal(c, bid, sPrev, m1.length ? sup : null, m1.length ? res : null, move, useStruct ? extra : null) : null;
+      let signal = sig ? gridSignal(c, bid, sPrev, m1.length ? sup : null, m1.length ? res : null, move, useStruct ? extra : null, m1Info) : null;
       if (signal && c.levelGuard) { const b = levelBlock(c, xLevels, bid); if (b && b[0] === signal) { signal = null; blocks++; } }
+      if (signal && c.noChase && m1.length && res > sup) {
+        // No buy in the middle / top of the M1 range (no sell in the middle / bottom) unless a candle closed past it.
+        const pos = (bid - sup) / (res - sup), edge = (c.chaseZone ?? 30) / 100;
+        const up = m1Info && m1Info.close > m1Info.pres, down = m1Info && m1Info.close < m1Info.psup;
+        if ((signal === "long" && pos > edge && !up) || (signal === "short" && pos < 1 - edge && !down)) { signal = null; chases++; }
+      }
       // Wait waitSec after the candle closed, then only if price holds over (a buy) / under (a sell) its close.
       if (signal && c.waitSec > 0 && sPrev) {
         if (t - sCur.t < c.waitSec) signal = null;
@@ -1461,14 +1489,20 @@
         if (!add) continue;
         placed++;
         const lot = gridLot(c, ps.length, factor);
-        book.push({ side, entry: price, lots: lot, layer: ps.length + 1, stop: ps.length ? slLevel(ps.concat([{ entry: price, lots: lot }]), long, bpeak[side]) : (c.sl > 0 ? (long ? price - c.sl : price + c.sl) : null), target: null, openTime: t });
+        if (!ps.length) {
+          // The basket's SL distance: the fixed sl, at least slAtr × the M1 ATR(14) when that is on.
+          let dist = c.sl > 0 ? c.sl : 0;
+          if (c.slAtr > 0 && atr) dist = Math.max(dist, c.slAtr * atr);
+          bsl[side] = dist > 0 ? Math.round(dist * 100) / 100 : null;
+        }
+        book.push({ side, entry: price, lots: lot, layer: ps.length + 1, stop: ps.length ? slLevel(ps.concat([{ entry: price, lots: lot }]), long, bpeak[side]) : (bsl[side] ? (long ? price - bsl[side] : price + bsl[side]) : null), target: null, openTime: t });
         maxLevel = Math.max(maxLevel, ps.length + 1);
       }
       const lots = book.reduce((a, p) => a + p.lots, 0);
       if (lots > maxLots) maxLots = lots;
     }
     if (book.length && ticks.length) { const [ms, bid, ask] = ticks[ticks.length - 1]; book.forEach((p) => out(p, bid, c.noSpread ? bid : ask, "end", ms / 1000)); }
-    return { placed, trades, grid: { cycles, stops, sls, trails, flips, guards, blocks, locks, signals, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
+    return { placed, trades, grid: { cycles, stops, sls, trails, flips, guards, blocks, chases, locks, signals, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
   }
 
   /** Bars as a path of prices for the grid bot when no ticks are loaded: open → low → high → close on a
@@ -4308,7 +4342,7 @@
         basketStop: 60, cooldownMin: 60, sl: 0, slMoney: 0, bias: "off", biasTf: "5m", biasMinBody: 50, biasLotMult: 2,
         entry: "signal", sigCandle: true, sigTf: "1m", sigBody: 50, sigSr: "auto", sigNeed: "two", trailOn: false, trailStart: 1, trailDist: 0.5,
         addMode: "with", pyramidLock: true, flipClose: true, waitSec: 15, levelGuard: true, levelRoom: 1.5,
-        nyGuard: true, nyFrom: "08:15", nyTo: "10:30", newsGuard: true, newsBefore: 15, newsAfter: 15, guardAction: "pause", sigSwing: false, swingK: 3, swingZone: 0.5, sigZone: "off", structTf: "1m", structBars: 120, srBars: 30, srZone: 1, sigTick: true, tickSec: 10, tickMove: 0.3, confirmAdd: true, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
+        nyGuard: true, nyFrom: "08:15", nyTo: "10:30", newsGuard: true, newsBefore: 15, newsAfter: 15, guardAction: "pause", sigSwing: false, swingK: 3, swingZone: 0.5, sigZone: "off", structTf: "1m", structBars: 120, srBars: 30, srZone: 1, sigTick: true, tickSec: 10, tickMove: 0.3, confirmAdd: true, mustLevel: false, breakClose: false, noChase: false, chaseZone: 30, restBoth: 0, slAtr: 0, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
       const v = (id) => ($(id) ? $(id).value : null);
       if ($("gbSymbol")) {
         Object.assign(c, {
@@ -4327,6 +4361,8 @@
           sigSr: v("gbSigSr"), sigNeed: v("gbSigNeed"), srBars: Math.max(5, Math.min(500, Math.round(num(v("gbSrBars")) || 30))), srZone: Math.max(0.01, num(v("gbSrZone")) || 1),
           sigTick: $("gbSigTick").checked, tickSec: Math.max(1, Math.min(300, num(v("gbTickSec")) || 10)), tickMove: Math.max(0.01, num(v("gbTickMove")) || 0.3),
           confirmAdd: $("gbConfirm").checked,
+          mustLevel: $("gbMustLevel").checked, breakClose: $("gbBreakClose").checked, noChase: $("gbNoChase").checked,
+          chaseZone: Math.max(5, Math.min(50, num(v("gbChaseZone")) ?? 30)), restBoth: Math.max(0, num(v("gbRestBoth")) ?? 0), slAtr: Math.max(0, num(v("gbSlAtr")) ?? 0),
           maxSpread: num(v("gbSpread")) ?? 0.5, noSpread: $("gbNoSpread").checked,
           simSpread: $("gbAcct").value === "real" ? -1 : (num(v("gbSimSpread")) ?? 0.1), commission: $("gbAcct").value === "real" ? 0 : (num(v("gbComm")) || 0),
         });
@@ -4426,7 +4462,7 @@
             <div class="fields three">
               <label>Cản = đỉnh / đáy của (số nến M1 vừa đóng)<input id="gbSrBars" inputmode="numeric" value="${c.srBars ?? 30}"></label>
               <label>Vùng quanh cản (giá)<input id="gbSrZone" inputmode="decimal" value="${c.srZone ?? 1}"></label>
-              <label>Cần bao nhiêu bộ lọc đồng ý<select id="gbSigNeed">${opt([["two", "Ít nhất 2 bộ lọc (vào lệnh nhiều hơn)"], ["all", "Tất cả bộ lọc đang bật (chặt, ít lệnh)"]], c.sigNeed || "all")}</select></label>
+              <label>Cần bao nhiêu bộ lọc đồng ý<select id="gbSigNeed">${opt([["two", "Ít nhất 2 bộ lọc (vào lệnh nhiều hơn)"], ["three", "Ít nhất 3 bộ lọc (vừa phải)"], ["all", "Tất cả bộ lọc đang bật (chặt, ít lệnh)"]], c.sigNeed || "all")}</select></label>
             </div>
             <label class="check"><input type="checkbox" id="gbSigTick" ${c.sigTick !== false ? "checked" : ""}> <b>Tick</b>: giá vừa chạy đủ mạnh theo chiều đó</label>
             <div class="fields three">
@@ -4438,6 +4474,18 @@
             <div class="fields three">
               <label>Coi là "sát" đỉnh / đáy khi cách (giá)<input id="gbLevelRoom" inputmode="decimal" value="${c.levelRoom ?? 1.5}"></label>
               <label class="grow2">&nbsp;<span class="muted small">Đỉnh / đáy lấy theo khung và số nến ở mục "Đỉnh đáy + nến đảo chiều" bên dưới (mặc định M1, 3 nến mỗi bên). Nên bật cả bộ lọc Đỉnh đáy để bot MUA khi giá phản ứng ở đáy / BÁN khi phản ứng ở đỉnh, và khi nến phá qua.</span></label>
+            </div>
+            <div class="guard-box anti-box">
+              <b>🛡 Chống vào lệnh sai</b> <span class="muted small">— mỗi mục bật / tắt riêng; tắt hết = như trước</span>
+              <label class="check"><input type="checkbox" id="gbMustLevel" ${c.mustLevel ? "checked" : ""}> <b>Bắt buộc có cản / đỉnh-đáy / FVG-OB đồng ý</b>: nến + tick cùng chiều thôi là chưa đủ (hay vào đuổi giữa vùng)</label>
+              <label class="check"><input type="checkbox" id="gbBreakClose" ${c.breakClose ? "checked" : ""}> <b>"Phá" phải có nến 1m ĐÓNG qua cản</b>: chỉ râu nến chọc qua thì chưa tính là phá</label>
+              <label class="check"><input type="checkbox" id="gbNoChase" ${c.noChase ? "checked" : ""}> <b>Không mua đuổi / bán đuổi giữa vùng</b>: MUA chỉ ở phần dưới của vùng cản M1, BÁN chỉ ở phần trên (trừ khi nến đã đóng phá ra ngoài)</label>
+              <div class="fields three">
+                <label>Mép vùng được vào (% chiều cao vùng)<input id="gbChaseZone" inputmode="decimal" value="${c.chaseZone ?? 30}"></label>
+                <label>Sau SL: nghỉ CẢ 2 bên (phút, 0 = tắt)<input id="gbRestBoth" inputmode="decimal" value="${c.restBoth ?? 0}"></label>
+                <label>SL theo độ dao động: × ATR 1m (0 = tắt)<input id="gbSlAtr" inputmode="decimal" value="${c.slAtr ?? 0}"></label>
+              </div>
+              <p class="muted small">SL theo dao động: SL rổ = lớn hơn giữa "SL rổ" ở trên và (hệ số × ATR 14 nến 1m) lúc mở rổ — thị trường giật mạnh thì SL tự rộng ra, không bị quét bởi nhiễu. Nghỉ cả 2 bên: sau một lần SL, bot không quay đầu vào lệnh ngược ngay (hay gặp khi giá đi ngang).</p>
             </div>
             <label class="check"><input type="checkbox" id="gbSwing" ${c.sigSwing ? "checked" : ""}> <b>Đỉnh đáy + nến đảo chiều</b>: bot tự tìm đỉnh / đáy cũ; khi giá về đó và đóng một cây <b>pin bar</b> hoặc <b>nến nhấn chìm</b> đảo chiều → MUA ở đáy, BÁN ở đỉnh</label>
             <div class="fields three">
@@ -4609,6 +4657,7 @@
       else if (s.kind === "wait" && s.gate === "level") txt = s.blocked === "short"
         ? `có tín hiệu BÁN nhưng giá đang <b>sát đáy ${fmt(s.level, this.digitsFor(cfg.symbol))}</b> — chờ <b>nến nhấn chìm phá xuống</b> mới BÁN, hoặc phản ứng tăng để MUA`
         : `có tín hiệu MUA nhưng giá đang <b>sát đỉnh ${fmt(s.level, this.digitsFor(cfg.symbol))}</b> — chờ <b>nến nhấn chìm phá lên</b> mới MUA, hoặc phản ứng giảm để BÁN`;
+      else if (s.kind === "wait" && s.gate === "chase") txt = `có tín hiệu nhưng giá đang ở <b>${s.chase ?? "?"}%</b> chiều cao vùng cản M1 — <b>không vào đuổi giữa vùng</b>, chờ giá về mép vùng hoặc nến đóng phá ra ngoài`;
       else if (s.kind === "wait" && s.gate === "notHeld") txt = `có tín hiệu nhưng giá <b class="neg">không giữ được</b> giá đóng nến ${fmt(s.close, this.digitsFor(cfg.symbol))} sau ${cfg.waitSec}s — bỏ qua, chờ tiếp`;
       else if (s.kind === "wait") {
         const p = s.parts || {};

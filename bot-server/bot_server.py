@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "8.8"
+VERSION = "8.9"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3650,6 +3650,14 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    # On MT5 only a DEMO account while the bot is being tested: refused on a real one, and turned off
                    # if the account it trades becomes a real one (the chart's account logged in to a real one).
                    "demoOnly": True,
+                   # "Chống vào lệnh sai" — each on its own (all off = as before):
+                   #   mustLevel: a side needs a level-type filter (cản / đỉnh-đáy / FVG-OB) among its votes;
+                   #   breakClose: "phá" a level only once an M1 candle has CLOSED past the range before it;
+                   #   noChase + chaseZone: no buy / sell in the middle of the M1 range: a buy only in its lower
+                   #                        chaseZone % (or after a close above it), a sell only in its upper one;
+                   #   restBoth: minutes BOTH sides rest after any basket stop (SL rổ) — no turning round at once;
+                   #   slAtr: the basket's SL at least slAtr × the M1 ATR(14) (0 = the fixed sl only).
+                   "mustLevel": False, "breakClose": False, "noChase": False, "chaseZone": 30.0, "restBoth": 0.0, "slAtr": 0.0,
                    "multiplier": 1.5, "maxLevels": 6, "maxLot": 0.5, "tpMoney": 1.0, "basketStop": 60.0,
                    "cooldownMin": 60.0,
                    # Stop for each basket: price this far against its first entry (on MT5 also the positions' own SL
@@ -3916,19 +3924,31 @@ def zone_vote(c, bars):
     return set(), None
 
 
-def grid_signal(c, bid, candle, sup, res, move, detail=None, extra=None):
+def m1_atr(bars):
+    """ATR(14) of M1 bars [(open, high, low, close)…], oldest first; None with too few."""
+    if len(bars) < 15:
+        return None
+    rows = bars[-15:]
+    tr = [max(h - l, abs(h - rows[i][3]), abs(l - rows[i][3])) for i, (_, h, l, _) in enumerate(rows[1:])]
+    return sum(tr) / len(tr)
+
+
+def grid_signal(c, bid, candle, sup, res, move, detail=None, extra=None, m1=None):
     """The side the grid bot's signal entry allows now. Each filter that is on votes for the sides it allows; with
     `sigNeed` "all" a side needs every filter's vote, with "two" at least two (all of them when fewer are on) and more
     votes than the other side. None when no side qualifies or no filter is on. `candle` = the last closed sigTf candle
     (open, high, low, close), `sup` / `res` = the M1 support / resistance, `move` = the bid's move over the last
     tickSec seconds. The website's gridSignal follows the same rules."""
     votes, used = {"long": 0, "short": 0}, 0
+    levels = None  # the sides a level-type filter votes for (None: no such filter on)
 
     def vote(name, ok):
-        nonlocal used
+        nonlocal used, levels
         used += 1
         for x in ok:
             votes[x] += 1
+        if name in ("sr", "swing", "zone"):
+            levels = (levels or set()) | set(ok)
         if detail is not None:
             detail[name] = sorted(ok)
 
@@ -3944,10 +3964,21 @@ def grid_signal(c, bid, candle, sup, res, move, detail=None, extra=None):
                 if res - z <= bid <= res + z:
                     ok.add("short")
             elif c["sigSr"] == "break":
-                if res < bid <= res + z:
-                    ok.add("long")
-                if sup - z <= bid < sup:
-                    ok.add("short")
+                if c.get("breakClose") and m1:
+                    # A break only once an M1 candle closed past the range before it (price still beyond it).
+                    if m1["close"] > m1["pres"] and bid > m1["pres"]:
+                        ok.add("long")
+                    if m1["close"] < m1["psup"] and bid < m1["psup"]:
+                        ok.add("short")
+                else:
+                    if res < bid <= res + z:
+                        ok.add("long")
+                    if sup - z <= bid < sup:
+                        ok.add("short")
+            elif c.get("breakClose") and m1 and m1["close"] > m1["pres"]:
+                ok = {"long"}   # "auto": a close above the range: a break up only
+            elif c.get("breakClose") and m1 and m1["close"] < m1["psup"]:
+                ok = {"short"}
             elif sup - z <= bid <= sup + z or res - z <= bid <= res + z:
                 # "auto": price at a level; the candle and the ticks say whether it breaks or bounces.
                 ok = {"long", "short"}
@@ -3964,8 +3995,11 @@ def grid_signal(c, bid, candle, sup, res, move, detail=None, extra=None):
         vote(name, ok)
     if not used:
         return None
-    need = used if c.get("sigNeed", "all") == "all" else min(2, used)
+    need = used if c.get("sigNeed", "all") == "all" else min(3 if c.get("sigNeed") == "three" else 2, used)
     good = [x for x in ("long", "short") if votes[x] >= need and votes[x] > votes["short" if x == "long" else "long"]]
+    if c.get("mustLevel") and levels is not None:
+        # A level-type filter (cản / đỉnh-đáy / FVG-OB) must be among the side's votes.
+        good = [x for x in good if x in levels]
     return good[0] if len(good) == 1 else None
 
 
@@ -3998,6 +4032,18 @@ class GridBot(TickBot):
         self.pause_until = 0.0
         self.side_pause = {}
         self.cycles = 0
+
+    def _sl_dist(self, c):
+        """The new basket's SL distance: the fixed sl, at least slAtr × the M1 ATR(14) when that is on."""
+        d, k, a = float(c.get("sl", 0) or 0), float(c.get("slAtr", 0) or 0), getattr(self, "atr", None)
+        if k > 0 and a:
+            d = max(d, k * a)
+        return round(d, 2) if d > 0 else 0.0
+
+    def _side_cfg(self, c, side):
+        """The settings with the SL distance this side's basket opened with (an SL by volatility keeps it)."""
+        d = (getattr(self, "basket_sl", None) or {}).get(side)
+        return dict(c, sl=d) if d else c
 
     @staticmethod
     def _real_account(mt5):
@@ -4074,10 +4120,18 @@ class GridBot(TickBot):
             parts.append(f"nến {c['sigTf']} {'tăng' if side == 'long' else 'giảm'} {abs(round(sg['candle'][1] * 100))}%")
         if c.get("sigSr", "off") != "off" and sg.get("sup") is not None:
             bid = (getattr(self, "bids", None) or [(0, 0, "")])[-1][1]
-            at_sup = abs(bid - sg["sup"]) <= abs(bid - sg["res"])
-            lv = sg["sup"] if at_sup else sg["res"]
-            how = "bật" if (side == "long") == at_sup else "phá"
-            parts.append(f"{how} {'hỗ trợ' if at_sup else 'kháng cự'} {fmt(lv)}")
+            z = float(c.get("srZone", 1.0))
+            if side == "long" and bid > sg["res"]:
+                parts.append(f"phá kháng cự {fmt(sg['res'])}")
+            elif side == "short" and bid < sg["sup"]:
+                parts.append(f"phá hỗ trợ {fmt(sg['sup'])}")
+            elif side == "long" and abs(bid - sg["sup"]) <= z:
+                parts.append(f"bật hỗ trợ {fmt(sg['sup'])}")
+            elif side == "short" and abs(bid - sg["res"]) <= z:
+                parts.append(f"bật kháng cự {fmt(sg['res'])}")
+            else:
+                # Neither at nor past a level: where price stands in the M1 range.
+                parts.append(f"giữa vùng (cách hỗ trợ {bid - sg['sup']:.2f} · kháng cự {sg['res'] - bid:.2f})")
         if c.get("sigTick") and sg.get("move") is not None:
             parts.append(f"tick {sg['move']:+.2f}/{c['tickSec']:g}s")
         if c.get("sigSwing") and sg.get("swingLevel") is not None:
@@ -4105,7 +4159,8 @@ class GridBot(TickBot):
                           ("sigSwing", bool), ("swingK", int), ("swingZone", float), ("sigZone", str), ("structTf", str), ("structBars", int),
                           ("addMode", str), ("flipClose", bool), ("waitSec", float), ("levelGuard", bool), ("levelRoom", float), ("pyramidLock", bool),
                           ("nyGuard", bool), ("nyFrom", str), ("nyTo", str), ("newsGuard", bool), ("newsBefore", float),
-                          ("newsAfter", float), ("guardAction", str), ("paper", bool), ("noSpread", bool)):
+                          ("newsAfter", float), ("guardAction", str), ("paper", bool), ("noSpread", bool),
+                          ("mustLevel", bool), ("breakClose", bool), ("noChase", bool), ("chaseZone", float), ("restBoth", float), ("slAtr", float)):
             if key in body:
                 c[key] = cast(body[key])
         if c["direction"] not in ("both", "long", "short"):
@@ -4135,7 +4190,10 @@ class GridBot(TickBot):
             raise ValueError("Khung nến tín hiệu không hợp lệ (1m – 1h)")
         if c["sigSr"] not in ("off", "auto", "bounce", "break"):
             raise ValueError("Kiểu cản không hợp lệ")
-        if c["sigNeed"] not in ("all", "two"):
+        c["chaseZone"] = max(5.0, min(50.0, float(c.get("chaseZone", 30))))
+        c["restBoth"] = max(0.0, min(240.0, float(c.get("restBoth", 0))))
+        c["slAtr"] = max(0.0, min(10.0, float(c.get("slAtr", 0))))
+        if c["sigNeed"] not in ("all", "two", "three"):
             raise ValueError("Số bộ lọc cần đồng ý không hợp lệ")
         c["sigBody"] = max(0.0, min(100.0, c["sigBody"]))
         c["srBars"] = max(5, min(500, c["srBars"]))
@@ -4225,13 +4283,18 @@ class GridBot(TickBot):
         bpeak = getattr(self, "bpeak", None)
         if bpeak is None:
             bpeak = self.bpeak = {}
+        bsl = getattr(self, "basket_sl", None)
+        if bsl is None:
+            bsl = self.basket_sl = {}
         for side in ("long", "short"):
             ps = [p for p in book if p["side"] == side]
             px = tick.bid if side == "long" else tick.ask
             bpeak[side] = None if not ps else px if bpeak.get(side) is None else (max(bpeak[side], px) if side == "long" else min(bpeak[side], px))
+            if not ps:
+                bsl.pop(side, None)
         for side in ("long", "short"):
             ps = [p for p in book if p["side"] == side]
-            level = self.sl_level(c, ps, side == "long", bpeak.get(side))
+            level = self.sl_level(self._side_cfg(c, side), ps, side == "long", bpeak.get(side))
             hit = level is not None and (tick.bid <= level + 1e-9 if side == "long" else tick.ask >= level - 1e-9)
             if ps and (hit or (c.get("slMoney", 0) > 0 and pnl(ps) <= -c["slMoney"] + 1e-9)):
                 loss = pnl(ps)
@@ -4243,7 +4306,14 @@ class GridBot(TickBot):
                     self.event(f"khoá lời nhồi: chạm SL chung (lớp trước / giá vốn / trailing), đóng rổ {'MUA' if side == 'long' else 'BÁN'} {len(ps)} lệnh · {money(loss)}")
                 else:
                     pauses[side] = time.time() + c["cooldownMin"] * 60
-                    self.event(f"SL rổ {'MUA' if side == 'long' else 'BÁN'} {len(ps)} lệnh · {money(loss)} · bên này nghỉ {c['cooldownMin']:g} phút", notify=True)
+                    both = float(c.get("restBoth", 0) or 0)
+                    if both > 0:
+                        # No turning round at once: both sides rest (a stop in a choppy range is often followed by
+                        # the opposite signal at the worst place).
+                        for sd in ("long", "short"):
+                            pauses[sd] = max(pauses.get(sd, 0), time.time() + both * 60)
+                    self.event(f"SL rổ {'MUA' if side == 'long' else 'BÁN'} {len(ps)} lệnh · {money(loss)} · "
+                               + (f"cả 2 bên nghỉ {both:g} phút" if both > 0 else f"bên này nghỉ {c['cooldownMin']:g} phút"), notify=True)
                 closed = True
                 continue
             if ps and c["tpMoney"] > 0 and pnl(ps) >= c["tpMoney"] - 1e-9:
@@ -4278,10 +4348,19 @@ class GridBot(TickBot):
                 r = rates[-1]
                 candle, bar_t = (float(r["open"]), float(r["high"]), float(r["low"]), float(r["close"])), float(r["time"])
             sup = res = None
-            if c.get("sigSr", "off") != "off":
-                bars = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 1, int(c["srBars"]))
-                if bars is not None and len(bars):
-                    sup, res = float(min(b["low"] for b in bars)), float(max(b["high"] for b in bars))
+            m1info, atr = None, None
+            if c.get("sigSr", "off") != "off" or c.get("noChase") or c.get("breakClose") or float(c.get("slAtr", 0)) > 0:
+                # The last srBars closed M1 bars (support / resistance) and, one more back, the range before the
+                # newest bar (did it CLOSE past it?), and the M1 ATR(14) for an SL by volatility.
+                n = int(c["srBars"])
+                bars = mt5.copy_rates_from_pos(symbol, mt5.TIMEFRAME_M1, 1, max(n, 15) + 1)
+                if bars is not None and len(bars) > 1:
+                    rows = [(float(b["open"]), float(b["high"]), float(b["low"]), float(b["close"])) for b in bars]
+                    win, prev = rows[-n:], rows[-n - 1:-1]
+                    sup, res = min(r[2] for r in win), max(r[1] for r in win)
+                    m1info = {"close": rows[-1][3], "psup": min(r[2] for r in prev), "pres": max(r[1] for r in prev)}
+                    atr = m1_atr(rows)
+            self.atr = atr
             extra, struct = {}, {}
             if c.get("sigSwing") or c.get("sigZone", "off") != "off" or c.get("levelGuard"):
                 # Swings and FVG / OB of the closed structTf candles, worked out again only on a new candle.
@@ -4299,11 +4378,19 @@ class GridBot(TickBot):
                     if struct.get(name) is not None:
                         extra[name] = struct[name][0]
             parts = {}
-            signal = grid_signal(c, float(tick.bid), candle, sup, res, move, parts, extra)
-            gate, wait_left, level = None, 0.0, None
+            signal = grid_signal(c, float(tick.bid), candle, sup, res, move, parts, extra, m1info)
+            gate, wait_left, level, chase = None, 0.0, None, None
             block = level_block(c, struct.get("levels"), float(tick.bid)) if c.get("levelGuard") else None
             if block and signal == block[0]:
                 gate, level, signal = "level", block[1], None
+            if signal and c.get("noChase") and sup is not None and res is not None and res - sup > 0:
+                # No buy in the middle / top of the M1 range (no sell in the middle / bottom) unless a candle closed
+                # past it: a buy in its lower chaseZone %, a sell in its upper one.
+                pos, edge = (float(tick.bid) - sup) / (res - sup), float(c.get("chaseZone", 30)) / 100
+                up = m1info is not None and m1info["close"] > m1info["pres"]
+                down = m1info is not None and m1info["close"] < m1info["psup"]
+                if (signal == "long" and pos > edge and not up) or (signal == "short" and pos < 1 - edge and not down):
+                    gate, chase, signal = "chase", round(pos * 100), None
             if float(c.get("waitSec", 0)) > 0 and bar_t is not None:
                 # Seconds since that candle closed, on the broker's clock (the tick's and the bars' times are both).
                 since = float(tick.time) - (bar_t + SECONDS_OF[c["sigTf"]])
@@ -4313,7 +4400,7 @@ class GridBot(TickBot):
                     gate, signal = "notHeld", None
             if block:
                 level = block[1]
-            self.signal = {"gate": gate, "level": level, "blocked": block[0] if block else None, "waitLeft": wait_left, "close": candle[3] if candle else None, "side": signal, "candle": candle_bias(c, *candle, min_body=float(c["sigBody"])) if candle else None,
+            self.signal = {"gate": gate, "level": level, "chase": chase, "atr": None if atr is None else round(atr, 3), "blocked": block[0] if block else None, "waitLeft": wait_left, "close": candle[3] if candle else None, "side": signal, "candle": candle_bias(c, *candle, min_body=float(c["sigBody"])) if candle else None,
                            "sup": sup, "res": res, "move": None if move is None else round(move, 3), "time": now(), "parts": parts,
                            "swingLevel": (struct.get("swing") or (None, None))[1], "zone": (struct.get("zone") or (None, None))[1]}
         strong = None
@@ -4341,7 +4428,7 @@ class GridBot(TickBot):
         elif c.get("entry") == "signal":
             self.state = {"kind": "wait" if not signal else "open", "side": signal, "parts": self.signal.get("parts", {}), "sidePause": rest,
                           "gate": self.signal.get("gate"), "waitLeft": self.signal.get("waitLeft"), "close": self.signal.get("close"),
-                          "level": self.signal.get("level"), "blocked": self.signal.get("blocked")}
+                          "level": self.signal.get("level"), "blocked": self.signal.get("blocked"), "chase": self.signal.get("chase")}
         else:
             self.state = {"kind": "open", "sidePause": rest}
         for side in ("long", "short"):
@@ -4356,7 +4443,10 @@ class GridBot(TickBot):
                 if c.get("bias") == "only" and strong != side and c.get("entry") != "signal":
                     continue  # no basket against (or without) the candle's push
                 factor = float(c["biasLotMult"]) if c.get("bias") == "more" and strong == side else 1.0
-                stop = (price - c["sl"] if long else price + c["sl"]) if c.get("sl") else None
+                dist = self._sl_dist(c)
+                stop = (price - dist if long else price + dist) if dist else None
+                if dist:
+                    self.basket_sl[side] = dist
                 why = "mở rổ" + (f" · lực nến {'MUA' if long else 'BÁN'} {abs(self.bias['body'])}%" if strong == side else "")
                 if c.get("entry") == "signal":
                     why = "mở rổ theo tín hiệu" + self._signal_why(c, side)
@@ -4375,7 +4465,7 @@ class GridBot(TickBot):
                     first = min(ps, key=lambda p: p["openTime"])
                     factor = max(1.0, round(float(first["lots"]) / float(c["lots"]), 2))
                     layer = ps + [{"entry": price, "lots": grid_lot(c, len(ps), factor)}]
-                    stop = self.sl_level(c, layer, long, (getattr(self, "bpeak", None) or {}).get(side))
+                    stop = self.sl_level(self._side_cfg(c, side), layer, long, (getattr(self, "bpeak", None) or {}).get(side))
                     self._open(mt5, symbol, info, tick, long, f"nhồi {'dương' if c.get('addMode') == 'with' else 'âm'} lớp {len(ps) + 1}", grid_lot(c, len(ps), factor), stop,
                                "khoá lời nhồi" if self.locked(c, layer) else "SL rổ")
 
