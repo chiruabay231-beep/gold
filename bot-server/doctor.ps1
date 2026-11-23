@@ -43,12 +43,14 @@ try {
 if (Test-NetConnection "ngrok.com" -Port 443 -InformationLevel Quiet) { Ok "Có Internet" } else { Bad "Không ra được Internet (mạng của máy ảo / Mac)"; $problems += "net" }
 $tunnel = Get-Process ngrok, cloudflared
 if ($tunnel) { Ok "Đường hầm đang chạy ($($tunnel.ProcessName -join ', '))" } else { Bad "Đường hầm (ngrok) KHÔNG chạy"; $problems += "tunnel" }
-if ($domain) {
+# The public address: ngrok's fixed domain, else the one the server got (Cloudflare's changes on each start).
+$public = if ($domain) { "https://$domain" } else { (Get-Content (Join-Path $Dir "tunnel.txt") -ErrorAction SilentlyContinue | Select-Object -First 1) }
+if ($public) {
     try {
-        $r = Invoke-WebRequest -Uri "https://$domain/ping" -Headers @{ "ngrok-skip-browser-warning" = "1" } -TimeoutSec 10 -UseBasicParsing
-        if ($r.Content -match "gold-bot") { Ok "Từ Internet vào được: https://$domain" } else { Bad "https://$domain trả lời lạ"; $problems += "public" }
-    } catch { Bad "Từ Internet KHÔNG vào được https://$domain ($($_.Exception.Message))"; $problems += "public" }
-}
+        $r = Invoke-WebRequest -Uri "$public/ping" -Headers @{ "ngrok-skip-browser-warning" = "1" } -TimeoutSec 15 -UseBasicParsing
+        if ($r.Content -match "gold-bot") { Ok "Từ Internet vào được: $public" } else { Bad "$public trả lời lạ"; $problems += "public" }
+    } catch { Bad "Từ Internet KHÔNG vào được $public ($($_.Exception.Message))"; $problems += "public" }
+} else { Bad "Máy chủ chưa có địa chỉ Internet"; $problems += "public" }
 
 # 4. MT5.
 $mt5 = Get-Process terminal64
@@ -60,7 +62,7 @@ foreach ($name in @("server.log", "crash.log", "tunnel.log")) {
     if (Test-Path $p) {
         Write-Host ""
         Write-Host "--- $name (cuối) ---" -ForegroundColor Cyan
-        Get-Content $p -Tail 8 | ForEach-Object { if ($token) { $_.Replace($token, "***") } else { $_ } } | ForEach-Object { Info $_ }
+        Get-Content $p -Tail 8 -Encoding UTF8 | ForEach-Object { if ($token) { $_.Replace($token, "***") } else { $_ } } | ForEach-Object { Info $_ }
     }
 }
 
