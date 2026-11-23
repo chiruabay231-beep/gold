@@ -257,9 +257,9 @@ struct RemoteBotClient {
         }
         switch code {
         case 401: throw ServerError(message: isMember ? "Mã mời không đúng" : "Sai mật khẩu máy chủ", code: 401)
-        // Cloudflare answers but nothing behind this address (bot down or tunnel gone).
-        case 502, 530: throw Unreachable(code: code)
-        default: throw ServerError(message: "Máy chủ trả lỗi \(code)")
+        // Not the bot server answering but the tunnel's own error page (Cloudflare 502 / 530, ngrok's ERR_NGROK_…:
+        // endpoint offline, monthly data used up…): the server has moved, look its new address up.
+        default: throw Unreachable(code: code)
         }
     }
 

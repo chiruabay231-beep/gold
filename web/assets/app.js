@@ -124,13 +124,17 @@
       throw new Unreachable("offline");
     }
     if (res.status === 502 || res.status === 530) throw new Unreachable(String(res.status));
-    const data = await res.json().catch(() => ({}));
+    const data = await res.json().catch(() => null);
+    // Not JSON: the tunnel's own error page (ngrok's ERR_NGROK_… — endpoint offline, monthly data used up —,
+    // Cloudflare's), not the bot server: it has moved, its new address is looked up.
+    if (data === null && !res.ok && res.status !== 401) throw new Unreachable(String(res.status));
+    if (data === null && !res.ok) { const err = new Error("Sai mã hoặc mật khẩu"); err.status = 401; throw err; }
     if (!res.ok) {
       const err = new Error(res.status === 401 ? "Sai mã hoặc mật khẩu" : (data.error || "Lỗi " + res.status));
       err.status = res.status;
       throw err;
     }
-    return data;
+    return data ?? {};
   }
 
   const num = (v) => (v === "" || v == null || isNaN(+v) ? null : +v);
