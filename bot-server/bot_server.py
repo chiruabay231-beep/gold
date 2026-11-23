@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "8.9"
+VERSION = "9.0"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -2431,6 +2431,44 @@ class Tunnel:
         self.process = None
         self.error = ""
         threading.Thread(target=self._run, daemon=True).start()
+        if not INSTANCE:
+            threading.Thread(target=self._watch, daemon=True).start()
+
+    def _watch(self):
+        """Every minute the server calls itself through its public address; three failures in a row (the tunnel's
+        process alive but its connection dead, e.g. after the network dropped) and the tunnel is started again."""
+        fails = 0
+        while True:
+            time.sleep(60)
+            url = self.url
+            if not url:
+                fails = 0
+                continue
+            try:
+                req = urllib.request.Request(url.rstrip("/") + "/ping", headers={"ngrok-skip-browser-warning": "1",
+                                                                                  "User-Agent": "gold-bot/" + VERSION})
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    ok = b"gold-bot" in r.read(200)
+            except Exception:
+                ok = False
+            fails = 0 if ok else fails + 1
+            if fails < 3:
+                continue
+            fails = 0
+            self.server.log("🌐 Địa chỉ máy chủ không vào được từ Internet 3 phút liền: khởi động lại đường hầm")
+            proc = self.process
+            try:
+                if proc is not None and proc.poll() is None:
+                    proc.terminate()  # its loop starts it again
+                else:
+                    pid = int(open(own("tunnel.pid")).read().strip())  # an adopted one (kept across an update)
+                    if pid_alive(pid):
+                        if IS_WINDOWS:
+                            subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True, creationflags=NO_WINDOW)
+                        else:
+                            os.kill(pid, 15)
+            except (OSError, ValueError):
+                pass
 
     def _binary(self):
         configured = self.server.config.get("cloudflared")
