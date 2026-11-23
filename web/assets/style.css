@@ -1328,3 +1328,18 @@ html[data-theme="light"] .fav-bar .fav-sep { background: linear-gradient(180deg,
 .own-fold .own-dot { width: 8px; height: 8px; border-radius: 50%; background: #c2c6cf; flex: none; }
 .own-fold .own-dot.on { background: #14b88a; box-shadow: 0 0 0 3px rgba(20, 184, 138, .18); }
 #blAcct .bl-m5 .m5-view { margin: 8px 0 10px; }
+
+/* Spread: demo ↔ real. */
+.spread-panel .sp-now { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0; }
+.spread-panel .sp-now div { padding: 8px 10px; border-radius: 9px; background: var(--card2, rgba(0,0,0,.04)); }
+.spread-panel .sp-now span { display: block; font-size: 11px; color: var(--muted, #6b7280); }
+.spread-panel .sp-now b { font-size: 16px; font-variant-numeric: tabular-nums; }
+.spread-panel .sp-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0; font-variant-numeric: tabular-nums; }
+.spread-panel .sp-table th, .spread-panel .sp-table td { padding: 5px 6px; border-bottom: 1px solid var(--line, #e5e7eb); text-align: right; vertical-align: top; }
+.spread-panel .sp-table th:first-child, .spread-panel .sp-table td:first-child { text-align: left; }
+.spread-panel .sp-hours summary { cursor: pointer; font-size: 13px; font-weight: 600; margin: 6px 0; }
+.spread-panel .sp-calc { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line, #e5e7eb); }
+.spread-panel .sp-steps { font-size: 13px; line-height: 1.6; padding-left: 18px; }
+.spread-panel .sp-verdict { padding: 8px 10px; border-radius: 9px; font-size: 13px; }
+.spread-panel .sp-verdict.ok { background: rgba(20,184,138,.1); }
+.spread-panel .sp-verdict.bad { background: rgba(240,69,90,.1); }

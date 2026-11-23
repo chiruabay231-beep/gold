@@ -33,7 +33,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "8.7"
+VERSION = "8.8"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -1356,6 +1356,22 @@ class Mt5Account:
             last = (bid, ask)
             out.append([int(r["time_msc"]) - int(offset * 1000), bid, ask])
         return {"ok": True, "symbol": symbol, "digits": getattr(info, "digits", 2), "from": start, "to": end, "ticks": out}
+
+    def quote(self, symbol):
+        """The symbol's bid / ask now on this server's MT5 account, with who the account is (for comparing two)."""
+        with Mt5.lock:
+            mt5 = self._mt5()
+            own = Mt5.find_symbol(mt5, symbol) or symbol
+            t = mt5.symbol_info_tick(own)
+            info = mt5.symbol_info(own)
+            a = mt5.account_info()
+        if t is None or not t.bid or not t.ask:
+            raise ValueError(f"Chưa có giá {own}")
+        return {"ok": True, "symbol": own, "bid": t.bid, "ask": t.ask, "spread": round(t.ask - t.bid, 5),
+                "time": float(t.time) - Mt5.offset_seconds, "digits": info.digits if info else 2,
+                "contractSize": info.trade_contract_size if info else contract_size(own),
+                "login": a.login if a else None, "server": a.server if a else "",
+                "mode": ({mt5.ACCOUNT_TRADE_MODE_DEMO: "demo", mt5.ACCOUNT_TRADE_MODE_REAL: "real"}.get(a.trade_mode, "contest")) if a else ""}
 
     def second_candles(self, symbol, sec, count, before=None):
         """Second bars (5s, 10s, 15s, 30s…) built from MT5's own ticks (bid), which MT5 does not keep as bars:
@@ -5016,6 +5032,97 @@ class WebAccount:
         return self.status()
 
 
+SPREAD_SAMPLES_PATH = os.path.join(HERE, "spread_samples.json")
+
+
+class SpreadMonitor:
+    """Demo or real, which spread: every 2 s the bot's symbol's spread on the chart's account (this server's MT5)
+    and on the bot's account (the second MT5), kept 48 hours (saved every 10 minutes, so a restart keeps them).
+    The website works out from it what the bot would pay more (or less) on the other account."""
+
+    EVERY, KEEP = 2.0, 48 * 3600
+
+    def __init__(self, server):
+        self.server = server
+        self.lock = threading.Lock()
+        saved = read_json(SPREAD_SAMPLES_PATH, None) or {}
+        self.samples = collections.deque((tuple(x) for x in saved.get("samples", []) if len(x) == 3), maxlen=int(self.KEEP / self.EVERY))
+        self.accounts = saved.get("accounts") or {}
+        self.saved_at = time.time()
+        self.error = ""
+        if not INSTANCE:
+            threading.Thread(target=self._loop, daemon=True).start()
+
+    def symbol(self):
+        return (self.server.config.get("gridbot") or {}).get("symbol") or "XAUUSD"
+
+    def _loop(self):
+        while True:
+            time.sleep(self.EVERY)
+            if not (self.server.web_account.cfg.get("enabled")):
+                continue
+            sym, main, bot = self.symbol(), None, None
+            try:
+                q = self.server.mt5_account.quote(sym)
+                main = q["spread"]
+                self.accounts["chart"] = {k: q.get(k) for k in ("symbol", "login", "server", "mode", "contractSize", "digits")}
+            except Exception as e:
+                self.error = f"tài khoản chart: {e}"
+            try:
+                q = self.server.web_account._local("/mt5/quote?symbol=" + urllib.parse.quote(sym), timeout=3)
+                bot = q.get("spread")
+                self.accounts["bot"] = {k: q.get(k) for k in ("symbol", "login", "server", "mode", "contractSize", "digits")}
+            except Exception as e:
+                self.error = f"tài khoản bot: {e}"
+            if main is None and bot is None:
+                continue
+            if main is not None and bot is not None:
+                self.error = ""
+            with self.lock:
+                self.samples.append((round(time.time(), 1), main, bot))
+            if time.time() - self.saved_at > 600:
+                self.saved_at = time.time()
+                with self.lock:
+                    data = {"accounts": self.accounts, "samples": list(self.samples)}
+                try:
+                    write_json(SPREAD_SAMPLES_PATH, data)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _summary(xs):
+        if not xs:
+            return None
+        xs = sorted(xs)
+        pick = lambda q: xs[min(len(xs) - 1, int(q * (len(xs) - 1) + 0.5))]  # noqa: E731
+        return {"n": len(xs), "avg": round(sum(xs) / len(xs), 4), "median": round(pick(0.5), 4), "p90": round(pick(0.9), 4),
+                "p99": round(pick(0.99), 4), "max": round(xs[-1], 4), "min": round(xs[0], 4),
+                "over30": round(sum(1 for x in xs if x > 0.30 + 1e-9) / len(xs) * 100, 1)}
+
+    def stats(self, hours=24):
+        since = time.time() - float(hours) * 3600
+        with self.lock:
+            rows = [r for r in self.samples if r[0] >= since]
+        both = [r for r in rows if r[1] is not None and r[2] is not None]
+        by_hour = []
+        for h in range(24):
+            # Vietnam time (UTC+7), as the website shows the day.
+            hs = [r for r in rows if int(((r[0] + 7 * 3600) % 86400) // 3600) == h]
+            c, b = [r[1] for r in hs if r[1] is not None], [r[2] for r in hs if r[2] is not None]
+            by_hour.append({"hour": h, "chart": round(sum(c) / len(c), 4) if c else None, "bot": round(sum(b) / len(b), 4) if b else None,
+                            "chartMax": round(max(c), 4) if c else None, "botMax": round(max(b), 4) if b else None})
+        last = rows[-1] if rows else None
+        return {"ok": True, "symbol": self.symbol(), "hours": hours, "every": self.EVERY, "accounts": self.accounts,
+                "running": bool(self.server.web_account.cfg.get("enabled")), "error": self.error,
+                "from": rows[0][0] if rows else None, "to": last[0] if last else None,
+                "now": {"chart": last[1], "bot": last[2], "time": last[0]} if last else None,
+                "chart": self._summary([r[1] for r in rows if r[1] is not None]),
+                "bot": self._summary([r[2] for r in rows if r[2] is not None]),
+                # Over the same seconds: how much wider the chart's (real) spread is than the bot's (demo).
+                "diff": self._summary([r[1] - r[2] for r in both]),
+                "byHour": by_hour}
+
+
 class BotServer:
     def __init__(self):
         self.lock = threading.RLock()
@@ -5053,6 +5160,7 @@ class BotServer:
         self.tickbot = TickBot(self)
         self.gridbot = GridBot(self)
         self.web_account = WebAccount(self)
+        self.spreads = SpreadMonitor(self)
         self.telegram = Telegram(self)
         self.tunnel = Tunnel(self) if self.config.get("tunnel") else None
         threading.Thread(target=self._relay_loop, daemon=True).start()
@@ -5738,6 +5846,10 @@ def make_handler(server):
                 if path == "/mt5/ticks":
                     return self._send(200, server.mt5_account.ticks((params.get("symbol") or [""])[0],
                                                                     (params.get("from") or ["0"])[0], (params.get("to") or ["0"])[0]))
+                if path == "/mt5/quote":
+                    return self._send(200, server.mt5_account.quote((params.get("symbol") or ["XAUUSD"])[0]))
+                if path == "/spread/stats":
+                    return self._send(200, server.spreads.stats(float((params.get("hours") or ["24"])[0])))
                 if path == "/mt5/secbars":
                     symbol = (params.get("symbol") or [""])[0]
                     if not symbol:

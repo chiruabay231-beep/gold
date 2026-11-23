@@ -3005,7 +3005,7 @@
       if (t === "autobot") {
         this.applyBotHub();
         // One bot now: the grid ("nhồi lệnh") bot; its own account box at the top, refreshed every 15 s.
-        if (first || !this.ownAt || Date.now() - this.ownAt > 15000) { this.ownAt = Date.now(); this.renderOwnAccount(); }
+        if (first || !this.ownAt || Date.now() - this.ownAt > 15000) { this.ownAt = Date.now(); this.renderOwnAccount(); this.renderSpreadPanel(); }
         if (!$("stopBtPanel").firstChild) this.renderStopBt();
         this.loadGridBot(first).then(() => this.applyBotHub());
       }
@@ -5181,6 +5181,71 @@
         const r = await act(e.currentTarget, () => this.mainCall("/webacct", { enabled: on }), on ? "Đang bật MT5 thứ 2 (lần đầu sao chép MT5, vài phút)…" : "Đã tắt MT5 thứ 2");
         if (r) { this.ownHtml = ""; this.renderOwnAccount(); }
       };
+    },
+
+    /** "Spread demo ↔ thật": the bot's symbol's spread on both accounts (the server samples them every 2 s, 48 h
+     *  kept), by hour, and what the bot's demo results would become on the real account, worked out step by step. */
+    async renderSpreadPanel() {
+      const box = $("spreadPanel");
+      if (!box) return;
+      let st = null, problem = "";
+      try { st = await this.mainCall(`/spread/stats?hours=${store.get("aurum.spHours") || 24}`); }
+      catch (e) { problem = e.status === 404 ? "Cập nhật máy chủ lên bản 8.8 để so sánh spread." : plain(e.message); }
+      if (!st) { box.innerHTML = `<h3>📊 Spread: demo ↔ thật</h3><p class="muted small">${esc(problem)}</p>`; return; }
+      const acc = st.accounts || {}, real = acc.chart || {}, demo = acc.bot || {};
+      const C = +(demo.contractSize || real.contractSize || 100), d = Math.min(3, real.digits ?? 2);
+      const f = (x) => (x == null ? "–" : (+x).toFixed(d));
+      const nm = (a, fb) => (a.login ? `#${esc(String(a.login))} · ${esc(a.symbol || "")} · ${a.mode === "real" ? "THẬT" : a.mode === "demo" ? "demo" : esc(a.mode || "")}` : fb);
+      const hours = ((st.to || 0) - (st.from || 0)) / 3600;
+      const row = (k, a, b, diff) => `<tr><td>${k}</td><td>${f(a)}</td><td>${f(b)}</td><td class="${diff > 0.0005 ? "neg" : diff < -0.0005 ? "pos" : ""}">${diff == null ? "–" : (diff > 0 ? "+" : "") + (+diff).toFixed(d)}</td></tr>`;
+      const R = st.chart || {}, D = st.bot || {};
+      // The bot's demo trades (its last 7 days on the account it runs on).
+      const h = ((this.gridStatus && this.gridStatus.history) || []).filter((x) => x.closeTime);
+      const days = new Set(h.map((x) => new Date((x.closeTime + 7 * 3600) * 1000).toISOString().slice(0, 10))).size || 1;
+      const L = h.length ? h.reduce((a, x) => a + (+x.lots || 0), 0) / h.length : 0.01;
+      const net = h.reduce((a, x) => a + (+x.profit || 0), 0), N = h.length / days, P = net / days;
+      const delta = st.diff ? st.diff.avg : (R.avg != null && D.avg != null ? R.avg - D.avg : 0);
+      const K = num(store.get("aurum.spComm")) ?? 0, S = num(store.get("aurum.spSlip")) ?? 0;
+      const E = (delta + S) * C * L + K * L, realDay = P - E * N, realTrade = h.length ? net / h.length - E : null;
+      const hourRows = (st.byHour || []).filter((x) => x.chart != null || x.bot != null);
+      const thin = hours < 6;
+      box.innerHTML = `<div class="panel-head"><h3>📊 Spread: demo ↔ thật</h3>
+          <select id="spHours" class="btn-small">${[[6, "6 giờ"], [24, "24 giờ"], [48, "48 giờ"]].map(([v, n]) => `<option value="${v}" ${+(store.get("aurum.spHours") || 24) === v ? "selected" : ""}>${n}</option>`).join("")}</select></div>
+        <p class="muted small">Máy chủ ghi spread <b>${esc(st.symbol)}</b> của 2 tài khoản <b>mỗi ${st.every || 2} giây cùng lúc</b> (giữ 48 giờ) — đúng giá bot phải trả khi vào lệnh (mua ở Ask, bán ở Bid).
+          Đã ghi được <b>${hours.toFixed(1)} giờ</b>${st.running ? "" : " · <b class='neg'>đang dừng: bật tài khoản bot để ghi</b>"}.${st.error ? ` <span class="neg">${esc(st.error)}</span>` : ""}</p>
+        ${st.now ? `<div class="sp-now"><div><span>Thật bây giờ</span><b>${f(st.now.chart)}</b></div><div><span>Demo bây giờ</span><b>${f(st.now.bot)}</b></div><div><span>Chênh</span><b class="${st.now.chart - st.now.bot > 0 ? "neg" : "pos"}">${st.now.chart != null && st.now.bot != null ? (st.now.chart - st.now.bot > 0 ? "+" : "") + (st.now.chart - st.now.bot).toFixed(d) : "–"}</b></div></div>` : ""}
+        <table class="sp-table"><thead><tr><th></th><th>Thật<br><span class="muted small">${nm(real, "tài khoản chart")}</span></th><th>Demo (bot)<br><span class="muted small">${nm(demo, "tài khoản bot")}</span></th><th>Thật − demo</th></tr></thead><tbody>
+          ${row("Trung bình", R.avg, D.avg, R.avg != null && D.avg != null ? R.avg - D.avg : null)}
+          ${row("Thường gặp (trung vị)", R.median, D.median, R.median != null && D.median != null ? R.median - D.median : null)}
+          ${row("90% thời gian ≤", R.p90, D.p90, R.p90 != null && D.p90 != null ? R.p90 - D.p90 : null)}
+          ${row("99% thời gian ≤", R.p99, D.p99, R.p99 != null && D.p99 != null ? R.p99 - D.p99 : null)}
+          ${row("Cao nhất", R.max, D.max, R.max != null && D.max != null ? R.max - D.max : null)}
+          <tr><td>Thời gian spread &gt; 0.30</td><td>${R.over30 ?? "–"}%</td><td>${D.over30 ?? "–"}%</td><td></td></tr>
+        </tbody></table>
+        <p class="small">${R.p90 != null && D.p90 != null ? (Math.abs(R.p90 - R.median) < Math.abs(D.p90 - D.median) - 0.005 ? "→ Spread <b>tài khoản thật ổn định hơn</b> (ít giãn hơn) demo." : Math.abs(D.p90 - D.median) < Math.abs(R.p90 - R.median) - 0.005 ? "→ Spread <b>demo ổn định hơn</b> tài khoản thật (thật giãn nhiều hơn)." : "→ Độ ổn định spread hai tài khoản <b>gần như nhau</b>.") : ""}
+          ${real.symbol && demo.symbol && real.symbol !== demo.symbol ? ` <b class="neg">Hai tài khoản khác mã (${esc(real.symbol)} ↔ ${esc(demo.symbol)}): có thể khác LOẠI tài khoản (Standard / Raw / Zero…) → phí khác nhau; nên test bằng demo cùng loại với tài khoản thật.</b>` : ""}</p>
+        ${hourRows.length ? `<details class="sp-hours"><summary>Theo giờ trong ngày (giờ VN)</summary><table class="sp-table"><thead><tr><th>Giờ</th><th>Thật TB</th><th>Demo TB</th><th>Chênh</th><th>Thật cao nhất</th></tr></thead><tbody>
+          ${hourRows.map((x) => `<tr><td>${String(x.hour).padStart(2, "0")}h</td><td>${f(x.chart)}</td><td>${f(x.bot)}</td><td class="${x.chart - x.bot > 0.02 ? "neg" : ""}">${x.chart != null && x.bot != null ? (x.chart - x.bot > 0 ? "+" : "") + (x.chart - x.bot).toFixed(d) : "–"}</td><td class="${x.chartMax > 0.5 ? "neg" : ""}">${f(x.chartMax)}</td></tr>`).join("")}
+        </tbody></table></details>` : ""}
+        <div class="sp-calc">
+          <h4>🧮 Nếu bot chạy tài khoản thật</h4>
+          <div class="fields three">
+            <label>Phí tài khoản thật ($/lot, khứ hồi)<input id="spComm" inputmode="decimal" value="${K}" placeholder="Standard: 0 · Raw/Zero: xem Exness"></label>
+            <label>Trượt giá giả định mỗi lệnh (giá)<input id="spSlip" inputmode="decimal" value="${S}" placeholder="VD 0.02"></label>
+            <label>Hợp đồng (oz / lot)<input value="${C}" disabled></label>
+          </div>
+          ${h.length ? `<ol class="sp-steps">
+            <li>Bot trên demo (${h.length} lệnh, ${days} ngày có lệnh): lot TB <b>L = ${L.toFixed(3)}</b>, <b>N = ${N.toFixed(1)}</b> lệnh/ngày, lời/lỗ <b>P = ${signed(P)}</b>/ngày (${signed(net / h.length)}/lệnh).</li>
+            <li>Spread thật hơn demo trung bình <b>Δ = ${(delta > 0 ? "+" : "") + delta.toFixed(d)}</b> giá${K ? `, phí <b>K = ${K}$</b>/lot` : ""}${S ? `, trượt giá <b>S = ${S}</b>` : ""}.</li>
+            <li>Tốn thêm mỗi lệnh: <b>E</b> = (Δ + S) × ${C} × L + K × L = (${delta.toFixed(d)} + ${S}) × ${C} × ${L.toFixed(3)} + ${K} × ${L.toFixed(3)} = <b class="${E > 0 ? "neg" : "pos"}">${signed(E)}</b>.</li>
+            <li>Mỗi ngày trên tài khoản thật ≈ P − E × N = ${signed(P)} − ${signed(E)} × ${N.toFixed(1)} = <b class="${realDay >= 0 ? "pos" : "neg"}">${signed(realDay)}</b>/ngày (≈ ${signed(realTrade)}/lệnh).</li>
+          </ol>
+          <p class="sp-verdict ${realDay >= 0 ? "ok" : "bad"}">${realDay >= 0 ? "✅ Theo số đo được, bot <b>vẫn có lời</b> nếu chạy tài khoản thật cùng cách vào lệnh." : "❌ Theo số đo được, bot <b>sẽ lỗ</b> trên tài khoản thật: phần lời trên demo không đủ bù chi phí cao hơn."}
+            ${thin ? " <b>Mới ghi chưa tới 6 giờ: chờ thêm (nhất là qua phiên Âu, Mỹ và giờ tin) cho chắc.</b>" : ""}
+            Chưa tính: trượt giá thật khi tin mạnh (đặt S để thử), phí qua đêm, và khác biệt khớp lệnh.</p>` : '<p class="muted small">Bot chưa có lệnh đã đóng để tính.</p>'}
+        </div>`;
+      $("spHours").onchange = (e) => { store.set("aurum.spHours", e.target.value); this.renderSpreadPanel(); };
+      ["spComm", "spSlip"].forEach((id) => { const el = $(id); el.onchange = () => { store.set("aurum." + id, el.value.trim()); this.renderSpreadPanel(); }; });
     },
 
     /** The second copy's own MT5 login (for the bots): who is logged in there, and a form to log in. */
