@@ -2520,12 +2520,20 @@ class Tunnel:
                     f.write(str(self.process.pid))  # kept across an update, as cloudflared (see _adopt)
             except OSError:
                 pass
-            lines, started = [], time.time()
+            lines, started, written = [], time.time(), 0.0
             for raw in self.process.stdout:
                 line = raw.decode("utf-8", "replace")
                 # Never the token in a log.
                 lines.append(line.rstrip().replace(token, "***") if token else line.rstrip())
                 del lines[:-200]
+                if time.time() - written > 5:
+                    # tunnel.log as it goes (not only once ngrok stops): what doctor.ps1 shows is today's.
+                    written = time.time()
+                    try:
+                        with open(own("tunnel.log"), "w", encoding="utf-8") as f:
+                            f.write("\n".join(lines))
+                    except OSError:
+                        pass
                 match = re.search(r"url=(https://[^\s\"]+)", line)
                 if match and "started tunnel" in line and match.group(1) != self.url:
                     self.url, self.error, failures = match.group(1).rstrip("/"), "", 0
