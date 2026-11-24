@@ -8573,6 +8573,7 @@
         } else {
           if (tool === "rectangle" || tool === "trendLine") html += `<div class="fr"><span class="grow">Kéo dài</span>${k.selI("extend", [["none", "Đừng mở rộng"], ["left", "Sang trái"], ["right", "Sang phải"], ["both", "Cả hai phía"]])}</div>`;
           html += lineRow(tool === "rectangle" || tool === "ellipse" ? "Đường viền" : "Đường");
+          if (tool === "rectangle") html += `<div class="fr">${k.chk("noBorder")}<span class="grow">Bỏ viền — chỉ để hình nền (vùng)</span></div>`;
           if (tool === "rectangle" || tool === "trendLine") html += `<div class="fr">${k.chk("mid")}<span class="grow">Đường trung bình</span>${k.sw("midColor")}${k.selI("midStyle", styles)}</div>`;
           if (D.tools[tool].labels) html += fontRow("Nhãn");
           if (D.hasFill(tool)) html += fillRow();

@@ -542,6 +542,12 @@
             d.pts[1].t = t; d.pts[2].t = t;
           } else d.pts[g.handle].p = pt.p;
           this.constrain(d, g.handle === 3 ? 1 : g.handle);
+        } else if (pt && d.tool === "rectangle" && g.handle >= 2) {
+          // The other corners and the sides' middles: each moves only the edge(s) it sits on.
+          const [a, b] = d.pts, hnd = g.handle;
+          if (hnd === 2) { b.t = pt.t; a.p = pt.p; } else if (hnd === 3) { a.t = pt.t; b.p = pt.p; }
+          else if (hnd === 4) a.p = pt.p; else if (hnd === 5) b.p = pt.p;
+          else if (hnd === 6) a.t = pt.t; else if (hnd === 7) b.t = pt.t;
         } else if (pt) { d.pts[g.handle] = pt; this.constrain(d, g.handle); }
       } else if (g.kind === "move" && g.anchor) {
         const now = this.point(x, y, false);
@@ -743,6 +749,12 @@
     handles(d, pts) {
       if (d.tool === "brush") return [];
       if (isPos(d.tool) && pts.length >= 3) return [pts[0], pts[1], [pts[1][0], pts[2][1]], [pts[1][0], pts[0][1]]];
+      if (d.tool === "rectangle" && pts.length >= 2) {
+        // As Topstep / TradingView: the 4 corners (0, 1 the drawn points, 2, 3 the other two) and the middle of
+        // each side (4 top / 5 bottom move one price, 6 left / 7 right one time), so one side is dragged alone.
+        const [a, b] = pts, mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2;
+        return [a, b, [b[0], a[1]], [a[0], b[1]], [mx, a[1]], [mx, b[1]], [a[0], my], [b[0], my]];
+      }
       return pts;
     }
 
@@ -907,12 +919,15 @@
         if (d.id === this.selected || d === this.pending || (this.multi && this.multi.has(d.id))) {
           // Handles: a soft halo, then a ring in the drawing's colour on the chart's background.
           const light = document.documentElement.dataset.theme === "light";
-          this.handles(d, pts).forEach(([a, b]) => {
+          this.handles(d, pts).forEach(([a, b], i) => {
             g.setLineDash([]);
             g.fillStyle = alpha(d.color, 0.18);
             g.beginPath(); g.arc(a, b, 8, 0, Math.PI * 2); g.fill();
             g.fillStyle = light ? "#ffffff" : "#0b0f17"; g.strokeStyle = d.color; g.lineWidth = 2;
-            g.beginPath(); g.arc(a, b, 4.5, 0, Math.PI * 2); g.fill(); g.stroke();
+            g.beginPath();
+            // A rectangle's side handles are small squares (its corners round), as on Topstep.
+            if (d.tool === "rectangle" && i >= 4 && g.roundRect) g.roundRect(a - 4.5, b - 4.5, 9, 9, 2); else g.arc(a, b, 4.5, 0, Math.PI * 2);
+            g.fill(); g.stroke();
           });
         }
         g.restore();
@@ -1083,7 +1098,8 @@
           if (d.extend === "left" || d.extend === "both") l = 0;
           if (d.extend === "right" || d.extend === "both") r = w;
           if (d.fill) { g.fillStyle = alpha(d.fillColor, d.fillOpacity / 100); g.fillRect(l, t, r - l, b - t); }
-          g.strokeRect(px(l), px(t), Math.round(r - l), Math.round(b - t));
+          // "Bỏ viền": the fill only (a zone), no outline.
+          if (!d.noBorder || !d.fill) g.strokeRect(px(l), px(t), Math.round(r - l), Math.round(b - t));
           if (d.mid) { g.strokeStyle = d.midColor; g.setLineDash(DASH[d.midStyle]); lineTo([[l, (t + b) / 2], [r, (t + b) / 2]]); }
           caption(l, t, r, b);
           break;
