@@ -4151,6 +4151,7 @@
           ${(() => { const rb = +store.get("aurum.rebate") || 0; if (!rb) return ""; const lots = h.reduce((a, x) => a + (+x.lots || 0), 0), got = lots * rb;
             return stat("Backcom ước tính", `${signed(got)} · ${lots.toFixed(2)} lot`, "pos") + stat("Ròng sau backcom", signed(net + got), net + got >= 0 ? "pos" : "neg"); })()}
         </div>
+        ${(() => { const since = +((this.botStatusFor().config || {}).statsSince || 0); return since ? `<p class="muted small">↺ Lịch sử và thống kê tính từ <b>${new Date(since * 1000).toLocaleString("vi-VN", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</b> (lần bắt đầu lại / nạp lại tài khoản gần nhất)</p>` : ""; })()}
         ${h.length > 1 ? `<div class="eq-wrap"><svg class="bt-eq" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts}" fill="none" stroke="${net >= 0 ? "var(--up)" : "var(--down)"}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg><div class="eq-line" hidden></div><div class="eq-dot" hidden></div><div class="eq-tip" hidden></div></div>` : ""}
         ${this.botWhy(h)}${store.get("aurum.hubBot") === "grid" ? this.gridAdvice(h) : ""}
         ${this.botBreakdown(this.botStatusFor().breakdown)}
@@ -4589,6 +4590,7 @@
           <div class="grid-risk" id="gbRisk"></div>
           <div class="row-btns">
             ${!st ? "" : c.running ? '<button class="btn btn-ghost" id="gbStopBtn">■ Tắt bot</button><button class="btn btn-ghost" id="gbSave">Lưu cài đặt</button>' : `<button class="btn btn-gold" id="gbStart">▶ Bật bot nhồi lệnh ${c.paper ? "(ẢO · giá Exness)" : "trên MT5"}</button>`}
+            ${st && st.config && !st.config.paper ? `<button class="btn btn-ghost" id="gbRestart" type="button" title="Lịch sử và thống kê tính lại từ bây giờ">↺ Bắt đầu lại</button>` : ""}
             ${st && (st.positions || []).length ? `<button class="btn btn-ghost" id="gbCloseAll" type="button">✕ Đóng hết ${st.positions.length} lệnh ${runPaper ? "ảo " : ""}của bot</button>` : ""}
             ${st && c.paper ? '<button class="btn btn-ghost" id="gbReset">Đặt lại tài khoản ảo</button>' : ""}
           </div>
@@ -4657,6 +4659,12 @@
       };
       if (stop) stop.onclick = (e) => send(e.currentTarget, { running: false }, "Đã tắt bot (lệnh đang mở giữ nguyên)");
       if (save) save.onclick = (e) => send(e.currentTarget, {}, "Đã lưu");
+      const restart = $("gbRestart");
+      if (restart) restart.onclick = async (e) => {
+        if (!confirm("Bắt đầu lại từ đầu? Lịch sử lệnh, thống kê, đường lãi/lỗ và thời gian nghỉ của bot tính lại từ bây giờ (lệnh trên MT5 không bị đóng). Bot cũng tự bắt đầu lại khi tài khoản được nạp / đặt lại số dư hoặc đổi tài khoản.")) return;
+        const r = await act(e.currentTarget, () => this.botCall("/gridbot", { restart: true }), "Đã bắt đầu lại từ đầu");
+        if (r) { this.gridStatus = r; this.renderGridBot(r, ""); }
+      };
       const closeAll = $("gbCloseAll");
       // Off, the bot leaves its positions open (their P/L still moves): this closes them now.
       // The book the list shows (virtual or MT5, as the server runs it), whatever mode is picked in the form.

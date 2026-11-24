@@ -34,7 +34,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "9.5"
+VERSION = "9.6"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3701,10 +3701,13 @@ class TickBot:
                         stats["trades"] += 1
                         stats["wins"] += 1 if pnl > 0 else 0
                         stats["profit"] += pnl
-                history = magic_history(mt5, self.MAGIC, now() - 7 * 86400)
+                # "Bắt đầu lại": nothing before the restart point (a reset / refilled / new account) is counted.
+                floor = float(self.cfg.get("statsSince") or 0)
+                history = magic_history(mt5, self.MAGIC, max(now() - 7 * 86400, floor))
                 # The statistics over 30 days, read again once a minute.
-                if time.time() - getattr(self, "bd_at", 0) > 60:
-                    self.bd_at, self.bd = time.time(), trade_breakdown(magic_history(mt5, self.MAGIC, now() - 30 * 86400, limit=5000))
+                if time.time() - getattr(self, "bd_at", 0) > 60 or getattr(self, "bd_floor", None) != floor:
+                    self.bd_floor = floor
+                    self.bd_at, self.bd = time.time(), trade_breakdown(magic_history(mt5, self.MAGIC, max(now() - 30 * 86400, floor), limit=5000))
         except Exception as e:
             c["statusError"] = str(e)
         with self.lock:
@@ -3741,6 +3744,10 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    #   dayLossStop: no new basket for the rest of the day (Vietnam time) once the day's closed
                    #                trades plus the open ones are this many dollars down.
                    "skipHours": "", "trendTf": "off", "trendBars": 3, "dayLossStop": 0.0,
+                   # "Bắt đầu lại": trades before this time (UTC seconds) are left out of the history and statistics;
+                   # set by the button, and by itself when the account's balance is refilled / reset (a balance deal,
+                   # e.g. after it was blown) or the bot's account changes (statsLogin).
+                   "statsSince": 0.0, "statsLogin": 0,
                    "multiplier": 1.5, "maxLevels": 6, "maxLot": 0.5, "tpMoney": 1.0, "basketStop": 60.0,
                    "cooldownMin": 60.0,
                    # Stop for each basket: price this far against its first entry (on MT5 also the positions' own SL
@@ -4174,8 +4181,50 @@ class GridBot(TickBot):
         a = mt5.account_info()
         return a if a is not None and a.trade_mode == mt5.ACCOUNT_TRADE_MODE_REAL else None
 
+    def restart(self, why):
+        """"Bắt đầu lại": the history and statistics from now on, and the bot's own rests and counters cleared."""
+        c = self.cfg
+        c["statsSince"] = now()
+        self.pause_until, self.side_pause, self.cycles = 0.0, {}, 0
+        for k in ("basket_sl", "bpeak", "peaks", "day_stopped", "day_at", "bd_at"):
+            if hasattr(self, k):
+                delattr(self, k)
+        self.server.save_config()
+        self.event(f"BẮT ĐẦU LẠI ({why}): lịch sử và thống kê tính từ bây giờ", notify=True)
+
+    def _auto_restart(self):
+        """Once a minute: a balance deal newer than the restart point (the account refilled or its balance reset,
+        e.g. after it was blown) or another account → start again from then."""
+        c = self.cfg
+        if c.get("paper") or time.time() - getattr(self, "auto_at", 0) < 60:
+            return
+        self.auto_at = time.time()
+        try:
+            with Mt5.lock:
+                mt5 = Mt5.connect(self.server.config["mt5"])
+                a = mt5.account_info()
+                deals = mt5.history_deals_get(now() - 30 * 86400 + Mt5.offset_seconds, now() + Mt5.offset_seconds + 86400) or ()
+                kind = getattr(mt5, "DEAL_TYPE_BALANCE", 2)
+                last = max((float(d.time) - Mt5.offset_seconds for d in deals if d.type == kind), default=0.0)
+        except Exception:
+            return
+        if a is not None and a.login:
+            if not c.get("statsLogin"):
+                c["statsLogin"] = int(a.login)
+                self.server.save_config()
+            elif int(c["statsLogin"]) != int(a.login):
+                c["statsLogin"] = int(a.login)
+                return self.restart(f"tài khoản mới #{a.login}")
+        if last > float(c.get("statsSince") or 0) + 1 and float(c.get("statsSince") or 0) > 0:
+            return self.restart("tài khoản vừa nạp / đặt lại số dư")
+        if not c.get("statsSince") and last:
+            c["statsSince"] = last  # the first time: from the account's last deposit
+            self.server.save_config()
+
     def settings(self, body):
         c = self.cfg
+        if body.get("restart"):
+            self.restart("bấm Bắt đầu lại")
         if body.get("running") and not c["running"] and not body.get("paper", c["paper"]) and c.get("demoOnly", True):
             with Mt5.lock:
                 a = self._real_account(Mt5.connect(self.server.config["mt5"]))
@@ -4629,6 +4678,7 @@ class GridBot(TickBot):
         """Closed trades between two times (UTC seconds), newest first, with why each opened and its SL's kind:
         the app's "Lệnh đã đóng" for today / yesterday / a week / days picked."""
         c = self.cfg
+        since = max(float(since), float(c.get("statsSince") or 0))
         if c.get("paper"):
             with self.lock:
                 rows = [h for h in self.paper["history"] if since <= float(h.get("closeTime") or 0) <= until]
@@ -4716,6 +4766,7 @@ class GridBot(TickBot):
         return closed
 
     def status(self):
+        self._auto_restart()
         st = super().status()
         cfg = st.get("config") or {}
         levels = [grid_lot(cfg, i) for i in range(int(cfg.get("maxLevels", 1)))] if cfg.get("maxLot") else []
