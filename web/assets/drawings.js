@@ -439,6 +439,12 @@
       const touch = e.pointerType !== "mouse";
       this.lastEvent = e;
       this.clearMulti();
+      // "Thêm chữ" on the picked line / rectangle: a tap there types its text right on the chart.
+      const at = this.addAt;
+      if (!this.tool && at && at.id === this.selected && Math.hypot(x - at.x, y - at.y) <= at.r) {
+        const d = this.list.find((x2) => x2.id === at.id);
+        if (d && !d.locked && !this.lockAll) { this.inlineText(d, at); return true; }
+      }
       if (this.tool) {
         const spec = TOOLS[this.tool];
         const pt = this.point(x, y, this.snapMode(e));
@@ -813,6 +819,60 @@
 
     /* ----- painting ----- */
 
+    /** Where a picked line / rectangle takes its text (the middle of the line, the middle of the box), with a faint
+     *  "Thêm chữ" there while it has none (as TradingView's "Add text"); remembered for a tap (see down). */
+    paintAddText(g, d, pts, w) {
+      this.addAt = null;
+      const TEXTABLE = { trendLine: 1, arrow: 1, trendRay: 1, horizontalLine: 1, horizontalRay: 1, rectangle: 1 };
+      if (!TEXTABLE[d.tool] || !pts.length) return;
+      const [p0, p1] = pts;
+      let m, ang = 0;
+      if (d.tool === "horizontalLine") m = [w / 2, p0[1]];
+      else if (d.tool === "horizontalRay") m = [(p0[0] + w) / 2, p0[1]];
+      else if (d.tool === "rectangle") m = [(p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2];
+      else {
+        const [L, R] = p0[0] <= p1[0] ? [p0, p1] : [p1, p0];
+        m = [(L[0] + R[0]) / 2, (L[1] + R[1]) / 2];
+        ang = Math.atan2(R[1] - L[1], R[0] - L[0]);
+      }
+      g.save();
+      g.font = this.font(d);
+      const label = "Thêm chữ", tw = g.measureText(d.text || label).width;
+      this.addAt = { id: d.id, x: m[0], y: m[1], r: Math.max(18, tw / 2 + 8), ang };
+      if (!d.text) {
+        g.translate(m[0], m[1]); g.rotate(ang);
+        g.textAlign = "center"; g.textBaseline = "middle";
+        const light = document.documentElement.dataset.theme === "light";
+        g.lineWidth = 4; g.strokeStyle = light ? "rgba(255,255,255,0.9)" : "rgba(11,15,23,0.9)"; g.lineJoin = "round";
+        g.strokeText(label, 0, 0);
+        g.fillStyle = "#e0596a";
+        g.fillText(label, 0, 0);
+      }
+      g.restore();
+    }
+
+    /** The text typed right on the chart over the picked drawing: Enter or tapping away keeps it, Esc leaves it. */
+    inlineText(d, at) {
+      const el = this.host.chart && this.host.chart.chartElement ? this.host.chart.chartElement() : null;
+      if (!el) { if (this.host.onEdit) this.host.onEdit(d, false); return; }
+      const r = el.getBoundingClientRect(), inp = document.createElement("input");
+      inp.value = d.text || ""; inp.placeholder = "Nhập chữ…";
+      inp.setAttribute("enterkeyhint", "done");
+      Object.assign(inp.style, { position: "fixed", left: r.left + at.x + "px", top: r.top + at.y + "px", transform: `translate(-50%, -50%) rotate(${at.ang || 0}rad)`,
+        zIndex: 9999, font: this.font(d), color: d.textColor || d.color || "#2962ff", background: "rgba(255,255,255,0.97)", border: "1px solid #2962ff",
+        borderRadius: "6px", padding: "3px 8px", minWidth: "140px", textAlign: "center", outline: "none", boxShadow: "0 4px 14px rgba(0,0,0,.25)" });
+      document.body.appendChild(inp);
+      setTimeout(() => { inp.focus(); inp.select(); }, 0);
+      const done = (keep) => {
+        if (!inp.isConnected) return;
+        if (keep && inp.value.trim() !== (d.text || "")) { d.text = inp.value.trim(); this.save(); this.host.onChange(); }
+        inp.remove();
+        this.update();
+      };
+      inp.addEventListener("keydown", (ev) => { ev.stopPropagation(); if (ev.key === "Enter") done(true); else if (ev.key === "Escape") done(false); });
+      inp.addEventListener("blur", () => done(true));
+    }
+
     paint(g, w, h) {
       const shown = this.hidden ? [] : this.list.filter((d) => this.shownNow(d));
       const all = this.pending ? shown.concat([this.pending]) : shown;
@@ -828,6 +888,7 @@
         g.save();
         try { this.paintOne(g, d, pts, w, h); } catch { /* skip a broken drawing */ }
         g.restore();
+        if (d.id === this.selected && d !== this.pending && !d.rot) { try { this.paintAddText(g, d, pts, w); } catch { /* none */ } }
         if (d.id === this.selected && d !== this.pending && !d.locked && !this.lockAll) {
           // The rotate knob over the drawing, joined to it by a thin stem; its angle under it once turned.
           const k = this.knob(d, pts), light = document.documentElement.dataset.theme === "light";
