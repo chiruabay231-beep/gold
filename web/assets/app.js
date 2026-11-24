@@ -1871,7 +1871,7 @@
 
   function defaultChartStyle() {
     return { theme: "dark", up: "#14b88a", down: "#f0455a", wickUp: "#14b88a", wickDown: "#f0455a", border: true, borderV: 2, borderUp: "#14b88a", borderDown: "#f0455a",
-      customBg: false, bg: "#050506", bgType: "theme", bg2: "#2a3550", bgImgOpacity: 35, vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
+      customBg: false, bg: "#050506", bgType: "theme", bg2: "#2a3550", bgImgOpacity: 35, bgBType: "same", bgB: "#0b1220", bgB2: "#1f2a44", vGrid: true, hGrid: true, grid: "#1a2233", crosshairMagnet: false, seconds: false,
       askLine: true, bidColor: "#f0455a", askColor: "#2b6bf3", pop: false, popV: 2, tfRing: true, ringColor: "#4068f6" };
   }
   /* Candles that stand out: a colour too close to the background is pushed away from it (lighter on a dark or
@@ -8810,6 +8810,10 @@
           ${st.bgType === "image" ? `<div class="fr"><span class="grow">Ảnh nền</span><label class="btn btn-ghost btn-small bg-pick">${store.get("aurum.chartBgImg") ? "Đổi ảnh…" : "Chọn ảnh…"}<input type="file" accept="image/*" data-bgimg hidden></label>${store.get("aurum.chartBgImg") ? '<button type="button" class="btn btn-ghost btn-small" data-bgdel>Xoá ảnh</button>' : ""}</div>
             <div class="fr"><span class="grow">Độ rõ của ảnh</span><input type="range" min="5" max="100" step="5" data-p="bgImgOpacity" data-t="num" value="${st.bgImgOpacity}" class="op"><span class="op-v">${st.bgImgOpacity}%</span></div>
             <p class="fp-note">Ảnh phủ kín chart, nằm dưới nến. Kéo thanh để ảnh mờ hơn hoặc rõ hơn; ô màu là màu lót dưới ảnh.</p>` : ""}
+          <div class="fp-sec">Biểu đồ mã thứ 2 (bố cục 2 mã)</div>
+          <div class="fr"><span class="grow">Hình nền</span><select data-p="bgBType" data-t="str" data-redraw>${[["same", "Giống biểu đồ chính"], ["solid", "Solid (một màu)"], ["gradient", "Gradient"]].map(([v, n]) => `<option value="${v}" ${(st.bgBType || "same") === v ? "selected" : ""}>${n}</option>`).join("")}</select>
+            ${st.bgBType === "solid" || st.bgBType === "gradient" ? k.sw("bgB") : ""}${st.bgBType === "gradient" ? k.sw("bgB2") : ""}</div>
+          <div class="fp-sec">Lưới</div>
           <div class="fr">${k.chk("vGrid")}<span class="grow">Lưới dọc</span>${k.sw("grid")}</div>
           <div class="fr">${k.chk("hGrid")}<span>Lưới ngang</span></div>
           <div class="fr">${k.chk("crosshairMagnet")}<span>Con trỏ bắt vào nến</span></div>
@@ -8857,8 +8861,11 @@
     /** The picture under every chart of the page (behind the see-through chart), at the chosen strength. */
     applyChartBgImage(on, base) {
       const url = on ? store.get("aurum.chartBgImg") : null;
+      const own2 = (this.chartStyle.bgBType || "same") !== "same";
       document.querySelectorAll(".chart-wrap").forEach((wrap) => {
         let el = wrap.querySelector(":scope > .chart-bg-img");
+        // The second symbol's chart with a background of its own: no picture under it.
+        if (own2 && wrap.querySelector("#chart2")) { if (el) el.remove(); wrap.style.backgroundColor = ""; return; }
         if (!url) { if (el) el.remove(); wrap.style.backgroundColor = ""; return; }
         if (!el) { el = document.createElement("div"); el.className = "chart-bg-img"; wrap.insertBefore(el, wrap.firstChild); }
         if (el.dataset.src !== String(url.length)) { el.style.backgroundImage = `url("${url}")`; el.dataset.src = String(url.length); }
@@ -9000,8 +9007,16 @@
       this.series.applyOptions(candles);
       this.applyChartType();
       if (this.chart2) {
+        // The second symbol's chart (2-symbol layouts): its own background when set, else the main chart's.
+        const bType = st.bgBType || "same";
+        // Its axis text dark on a light colour, light on a dark one (whatever the website's theme).
+        const lum = (hex) => { const n = parseInt(String(hex || "#000000").slice(1, 7), 16); return ((n >> 16) * 0.299 + ((n >> 8) & 255) * 0.587 + (n & 255) * 0.114) / 255; };
+        const text2 = lum(st.bgB) > 0.6 ? "#000000" : "#f1f4f9";
+        const layout2 = bType === "solid" ? Object.assign(axisFont(st.bgB, light), { textColor: text2, background: { type: "solid", color: st.bgB } })
+          : bType === "gradient" ? Object.assign(axisFont(st.bgB, light), { textColor: text2, background: { type: "gradient", topColor: st.bgB, bottomColor: st.bgB2 || st.bgB } })
+          : layoutOf();
         this.chart2.applyOptions({
-          layout: layoutOf(),
+          layout: layout2,
           grid: { vertLines: { color: grid, visible: st.vGrid }, horzLines: { color: grid, visible: st.hGrid } },
           rightPriceScale: { borderColor: light ? "#d6dae1" : "#1e1e23" }, timeScale: { borderColor: light ? "#d6dae1" : "#1e1e23" },
         });
