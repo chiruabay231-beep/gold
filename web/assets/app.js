@@ -1290,6 +1290,25 @@
     return good.length === 1 ? good[0] : null;
   }
 
+  /** "06:00-09:00, 22:00-02:00" (Vietnam time) → [[360, 540], [1320, 120]] minutes; null when not valid. As the server's skip_windows. */
+  function skipWindows(spec) {
+    const out = [];
+    for (const part of String(spec || "").replace(/;/g, ",").split(",").map((x) => x.trim()).filter(Boolean)) {
+      const m = part.match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/);
+      if (!m) return null;
+      const a = +m[1] * 60 + +m[2], b = +m[3] * 60 + +m[4];
+      if (a > 1439 || b > 1440) return null;
+      out.push([a, b]);
+    }
+    return out;
+  }
+
+  /** Whether UTC time `ts` is inside one of the skipHours windows (Vietnam time), as the server's skip_now. */
+  function skipNow(spec, ts) {
+    const vn = ts + 7 * 3600, mins = (((vn % 86400) + 86400) % 86400) / 60;
+    return (skipWindows(spec) || []).some(([a, b]) => (a < b ? mins >= a && mins < b : mins >= a || mins < b));
+  }
+
   /** New York's offset from UTC (−4 summer time, −5 winter), as the server's ny_offset_hours. */
   function nyOffsetHours(ts) {
     const y = new Date(ts * 1000).getUTCFullYear();
@@ -1329,6 +1348,10 @@
     // ATR(14) (slAtr), each basket's SL distance, and how many signals the middle-of-range rule turned down.
     let m1Info = null, atrBars = [], atr = null, chases = 0;
     const bsl = { long: null, short: null };
+    // "Bảo vệ tài khoản": the bigger timeframe's closes (trendTf), each Vietnam day's closed P/L (dayLossStop).
+    const useTrend = sig && c.trendTf && c.trendTf !== "off", tsec2 = TF_SECONDS[c.trendTf] || 900;
+    let tCur = null, tCloses = [], trend = null, trendBlocks = 0, skips = 0, dayStops = 0;
+    const dayPnl = {}, vnDay = (t) => Math.floor((t + 7 * 3600) / 86400), skipW = c.skipHours ? skipWindows(c.skipHours) || [] : [];
     // Swings / FVG / OB: the closed structTf candles (the last structBars), the votes worked out on each new one.
     const useStruct = sig && (c.sigSwing || (c.sigZone && c.sigZone !== "off") || c.levelGuard), xsec = TF_SECONDS[c.structTf] || 60;
     let xCur = null, xBars = [], extra = {}, xLevels = null, blocks = 0;
@@ -1354,7 +1377,11 @@
     };
     const bpeak = { long: null, short: null };
     const pv = (p, bid, ask) => value(p.side, p.entry, p.side === "long" ? bid : ask, p.lots);
-    const out = (p, bid, ask, reason, t) => trades.push(Object.assign({}, p, { exit: p.side === "long" ? bid : ask, reason, closeTime: t, profit: pv(p, bid, ask) }));
+    const out = (p, bid, ask, reason, t) => {
+      const profit = pv(p, bid, ask);
+      dayPnl[vnDay(t)] = (dayPnl[vnDay(t)] || 0) + profit;
+      trades.push(Object.assign({}, p, { exit: p.side === "long" ? bid : ask, reason, closeTime: t, profit }));
+    };
     for (const [ms, bid0, ask0] of ticks) {
       const t = ms / 1000, bid = bid0, ask = c.noSpread ? bid0 : ask0;
       if (useBias) {
@@ -1366,6 +1393,19 @@
         } else { cur.h = Math.max(cur.h, bid); cur.l = Math.min(cur.l, bid); cur.c = bid; }
       }
       let move = null;
+      if (useTrend) {
+        const tt = Math.floor(t / tsec2) * tsec2;
+        if (!tCur || tCur.t !== tt) {
+          if (tCur) {
+            if (tt - tCur.t !== tsec2) tCloses = []; // a gap (weekend): start again
+            tCloses.push(tCur.c);
+            if (tCloses.length > (c.trendBars || 3) + 1) tCloses.shift();
+            const n = c.trendBars || 3;
+            trend = tCloses.length > n ? (tCloses[tCloses.length - 1] > tCloses[0] ? "long" : tCloses[tCloses.length - 1] < tCloses[0] ? "short" : null) : null;
+          }
+          tCur = { t: tt, c: bid };
+        } else tCur.c = bid;
+      }
       if (useStruct) {
         const xt = Math.floor(t / xsec) * xsec;
         if (!xCur || xCur.t !== xt) {
@@ -1449,9 +1489,18 @@
         continue;
       }
       if (t < pauseUntil) continue;
+      if (skipW.length) {
+        const mins = ((((t + 7 * 3600) % 86400) + 86400) % 86400) / 60;
+        if (skipW.some(([a, b]) => (a < b ? mins >= a && mins < b : mins >= a || mins < b))) { skips++; continue; }
+      }
+      if (c.dayLossStop > 0) {
+        const day = (dayPnl[vnDay(t)] || 0) + book.reduce((x, p) => x + pv(p, bid, ask), 0);
+        if (day <= -c.dayLossStop + 1e-9) { if (dayPnl._stopped !== vnDay(t)) { dayPnl._stopped = vnDay(t); dayStops++; } continue; }
+      }
       if (!c.noSpread && c.maxSpread > 0 && ask - bid > c.maxSpread) continue;
       let signal = sig ? gridSignal(c, bid, sPrev, m1.length ? sup : null, m1.length ? res : null, move, useStruct ? extra : null, m1Info) : null;
       if (signal && c.levelGuard) { const b = levelBlock(c, xLevels, bid); if (b && b[0] === signal) { signal = null; blocks++; } }
+      if (signal && useTrend && trend && signal !== trend) { signal = null; trendBlocks++; }
       if (signal && c.noChase && m1.length && res > sup) {
         // No buy in the middle / top of the M1 range (no sell in the middle / bottom) unless a candle closed past it.
         const pos = (bid - sup) / (res - sup), edge = (c.chaseZone ?? 30) / 100;
@@ -1506,7 +1555,7 @@
       if (lots > maxLots) maxLots = lots;
     }
     if (book.length && ticks.length) { const [ms, bid, ask] = ticks[ticks.length - 1]; book.forEach((p) => out(p, bid, c.noSpread ? bid : ask, "end", ms / 1000)); }
-    return { placed, trades, grid: { cycles, stops, sls, trails, flips, guards, blocks, chases, locks, signals, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
+    return { placed, trades, grid: { cycles, stops, sls, trails, flips, guards, blocks, chases, trendBlocks, skips, dayStops, locks, signals, maxFloat, maxLevel, maxLots: Math.round(maxLots * 100) / 100 } };
   }
 
   /** Bars as a path of prices for the grid bot when no ticks are loaded: open → low → high → close on a
@@ -4346,7 +4395,7 @@
         basketStop: 60, cooldownMin: 60, sl: 0, slMoney: 0, bias: "off", biasTf: "5m", biasMinBody: 50, biasLotMult: 2,
         entry: "signal", sigCandle: true, sigTf: "1m", sigBody: 50, sigSr: "auto", sigNeed: "two", trailOn: false, trailStart: 1, trailDist: 0.5,
         addMode: "with", pyramidLock: true, flipClose: true, waitSec: 15, levelGuard: true, levelRoom: 1.5,
-        nyGuard: true, nyFrom: "08:15", nyTo: "10:30", newsGuard: true, newsBefore: 15, newsAfter: 15, guardAction: "pause", sigSwing: false, swingK: 3, swingZone: 0.5, sigZone: "off", structTf: "1m", structBars: 120, srBars: 30, srZone: 1, sigTick: true, tickSec: 10, tickMove: 0.3, confirmAdd: true, mustLevel: false, breakClose: false, noChase: false, chaseZone: 30, restBoth: 0, slAtr: 0, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
+        nyGuard: true, nyFrom: "08:15", nyTo: "10:30", newsGuard: true, newsBefore: 15, newsAfter: 15, guardAction: "pause", sigSwing: false, swingK: 3, swingZone: 0.5, sigZone: "off", structTf: "1m", structBars: 120, srBars: 30, srZone: 1, sigTick: true, tickSec: 10, tickMove: 0.3, confirmAdd: true, mustLevel: false, breakClose: false, noChase: false, chaseZone: 30, restBoth: 0, slAtr: 0, skipHours: "", trendTf: "off", trendBars: 3, dayLossStop: 0, maxSpread: 0.5, noSpread: false, simSpread: -1, commission: 0 }, (this.gridStatus && this.gridStatus.config) || {});
       const v = (id) => ($(id) ? $(id).value : null);
       if ($("gbSymbol")) {
         Object.assign(c, {
@@ -4367,6 +4416,7 @@
           confirmAdd: $("gbConfirm").checked,
           mustLevel: $("gbMustLevel").checked, breakClose: $("gbBreakClose").checked, noChase: $("gbNoChase").checked,
           chaseZone: Math.max(5, Math.min(50, num(v("gbChaseZone")) ?? 30)), restBoth: Math.max(0, num(v("gbRestBoth")) ?? 0), slAtr: Math.max(0, num(v("gbSlAtr")) ?? 0),
+          skipHours: (v("gbSkipHours") || "").trim(), trendTf: v("gbTrendTf") || "off", trendBars: Math.max(1, Math.min(50, Math.round(num(v("gbTrendBars")) || 3))), dayLossStop: Math.max(0, num(v("gbDayLoss")) ?? 0),
           maxSpread: num(v("gbSpread")) ?? 0.5, noSpread: $("gbNoSpread").checked,
           simSpread: $("gbAcct").value === "real" ? -1 : (num(v("gbSimSpread")) ?? 0.1), commission: $("gbAcct").value === "real" ? 0 : (num(v("gbComm")) || 0),
         });
@@ -4488,6 +4538,16 @@
                 <label>Mép vùng được vào (% chiều cao vùng)<input id="gbChaseZone" inputmode="decimal" value="${c.chaseZone ?? 30}"></label>
                 <label>Sau SL: nghỉ CẢ 2 bên (phút, 0 = tắt)<input id="gbRestBoth" inputmode="decimal" value="${c.restBoth ?? 0}"></label>
                 <label>SL theo độ dao động: × ATR 1m (0 = tắt)<input id="gbSlAtr" inputmode="decimal" value="${c.slAtr ?? 0}"></label>
+              </div>
+              <b>🧯 Bảo vệ tài khoản</b>
+              <div class="fields three">
+                <label>Giờ không vào lệnh (giờ VN, VD 06:00-09:00, 13:00-14:00)<input id="gbSkipHours" value="${esc(c.skipHours || "")}" placeholder="để trống = tắt"></label>
+                <label>Chỉ vào theo xu hướng khung<select id="gbTrendTf">${opt([["off", "Tắt"], ["5m", "5m"], ["15m", "15m"], ["30m", "30m"], ["1h", "1h"]], c.trendTf || "off")}</select></label>
+                <label>Xu hướng = giá so với (số nến khung đó)<input id="gbTrendBars" inputmode="numeric" value="${c.trendBars ?? 3}"></label>
+              </div>
+              <div class="fields three">
+                <label>Lỗ trong ngày tới ($) thì nghỉ tới hết ngày (0 = tắt)<input id="gbDayLoss" inputmode="decimal" value="${c.dayLossStop ?? 0}"></label>
+                <label class="grow2">&nbsp;<span class="muted small">Xu hướng: chỉ MUA khi giá đóng nến khung lớn cao hơn N nến trước, chỉ BÁN khi thấp hơn (không dùng EMA). Lỗ trong ngày: tính cả lệnh đã đóng và đang mở, theo ngày giờ Việt Nam; lệnh đang mở vẫn giữ SL / chốt rổ.</span></label>
               </div>
               <p class="muted small">SL theo dao động: SL rổ = lớn hơn giữa "SL rổ" ở trên và (hệ số × ATR 14 nến 1m) lúc mở rổ — thị trường giật mạnh thì SL tự rộng ra, không bị quét bởi nhiễu. Nghỉ cả 2 bên: sau một lần SL, bot không quay đầu vào lệnh ngược ngay (hay gặp khi giá đi ngang).</p>
             </div>
@@ -4661,6 +4721,7 @@
       else if (s.kind === "wait" && s.gate === "level") txt = s.blocked === "short"
         ? `có tín hiệu BÁN nhưng giá đang <b>sát đáy ${fmt(s.level, this.digitsFor(cfg.symbol))}</b> — chờ <b>nến nhấn chìm phá xuống</b> mới BÁN, hoặc phản ứng tăng để MUA`
         : `có tín hiệu MUA nhưng giá đang <b>sát đỉnh ${fmt(s.level, this.digitsFor(cfg.symbol))}</b> — chờ <b>nến nhấn chìm phá lên</b> mới MUA, hoặc phản ứng giảm để BÁN`;
+      else if (s.kind === "wait" && s.gate === "trend") txt = `có tín hiệu nhưng <b>ngược xu hướng khung ${esc(cfg.trendTf || "")}</b> (đang ${s.trend === "long" ? '<b class="pos">tăng</b>' : '<b class="neg">giảm</b>'}) — chỉ vào theo xu hướng`;
       else if (s.kind === "wait" && s.gate === "chase") txt = `có tín hiệu nhưng giá đang ở <b>${s.chase ?? "?"}%</b> chiều cao vùng cản M1 — <b>không vào đuổi giữa vùng</b>, chờ giá về mép vùng hoặc nến đóng phá ra ngoài`;
       else if (s.kind === "wait" && s.gate === "notHeld") txt = `có tín hiệu nhưng giá <b class="neg">không giữ được</b> giá đóng nến ${fmt(s.close, this.digitsFor(cfg.symbol))} sau ${cfg.waitSec}s — bỏ qua, chờ tiếp`;
       else if (s.kind === "wait") {

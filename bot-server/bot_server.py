@@ -34,7 +34,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "9.4"
+VERSION = "9.5"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3734,6 +3734,13 @@ DEFAULT_GRIDBOT = {"running": False, "symbol": "", "direction": "both", "lots": 
                    #   restBoth: minutes BOTH sides rest after any basket stop (SL rổ) — no turning round at once;
                    #   slAtr: the basket's SL at least slAtr × the M1 ATR(14) (0 = the fixed sl only).
                    "mustLevel": False, "breakClose": False, "noChase": False, "chaseZone": 30.0, "restBoth": 0.0, "slAtr": 0.0,
+                   # "Bảo vệ tài khoản" — each on its own (empty / off / 0 = as before):
+                   #   skipHours: Vietnam-time windows with no new basket, e.g. "06:00-09:00, 22:00-23:30";
+                   #   trendTf + trendBars: a basket only the way the bigger timeframe went over its last trendBars
+                   #                        closed bars (close now vs then);
+                   #   dayLossStop: no new basket for the rest of the day (Vietnam time) once the day's closed
+                   #                trades plus the open ones are this many dollars down.
+                   "skipHours": "", "trendTf": "off", "trendBars": 3, "dayLossStop": 0.0,
                    "multiplier": 1.5, "maxLevels": 6, "maxLot": 0.5, "tpMoney": 1.0, "basketStop": 60.0,
                    "cooldownMin": 60.0,
                    # Stop for each basket: price this far against its first entry (on MT5 also the positions' own SL
@@ -3806,6 +3813,33 @@ def hhmm(text):
     """"08:15" → minutes after midnight."""
     h, _, m = str(text).partition(":")
     return max(0, min(1439, int(h or 0) * 60 + int(m or 0)))
+
+
+def skip_windows(spec):
+    """"06:00-09:00, 22:00-23:30" → [(360, 540), (1320, 1410)] in minutes of the day; None when not valid."""
+    out = []
+    for part in [x.strip() for x in str(spec or "").replace(";", ",").split(",") if x.strip()]:
+        m = re.fullmatch(r"(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})", part)
+        if not m:
+            return None
+        a, b = int(m[1]) * 60 + int(m[2]), int(m[3]) * 60 + int(m[4])
+        if a > 1439 or b > 1440:
+            return None
+        out.append((a, b))
+    return out
+
+
+def skip_now(spec, ts):
+    """The skipHours window (Vietnam time) `ts` is in: (its text, the UTC time it ends), else None. A window may
+    run past midnight (22:00-02:00)."""
+    vn = ts + 7 * 3600
+    mins, day0 = (vn % 86400) / 60, vn - vn % 86400
+    for a, b in skip_windows(spec) or ():
+        inside = a <= mins < b if a < b else (mins >= a or mins < b)
+        if inside:
+            end = day0 + b * 60 if (a < b or mins < b) else day0 + 86400 + b * 60
+            return f"{a // 60:02d}:{a % 60:02d}-{b // 60:02d}:{b % 60:02d}", end - 7 * 3600
+    return None
 
 
 def grid_guard(c, ts, events):
@@ -4109,6 +4143,19 @@ class GridBot(TickBot):
         self.side_pause = {}
         self.cycles = 0
 
+    def _day_pnl(self, mt5, c):
+        """Today's (Vietnam time) closed trades' P/L, read again at most every 30 s."""
+        vn = time.time() + 7 * 3600
+        since = vn - vn % 86400 - 7 * 3600
+        if time.time() - getattr(self, "day_at", 0) < 30 and getattr(self, "day_since", None) == since:
+            return self.day_closed
+        if c["paper"]:
+            closed = sum(float(h.get("profit") or 0) for h in self.paper["history"] if float(h.get("closeTime") or 0) >= since)
+        else:
+            closed = sum(float(h.get("profit") or 0) for h in magic_history(mt5, self.MAGIC, since, limit=5000))
+        self.day_at, self.day_since, self.day_closed = time.time(), since, closed
+        return closed
+
     def _sl_dist(self, c):
         """The new basket's SL distance: the fixed sl, at least slAtr × the M1 ATR(14) when that is on."""
         d, k, a = float(c.get("sl", 0) or 0), float(c.get("slAtr", 0) or 0), getattr(self, "atr", None)
@@ -4236,7 +4283,8 @@ class GridBot(TickBot):
                           ("addMode", str), ("flipClose", bool), ("waitSec", float), ("levelGuard", bool), ("levelRoom", float), ("pyramidLock", bool),
                           ("nyGuard", bool), ("nyFrom", str), ("nyTo", str), ("newsGuard", bool), ("newsBefore", float),
                           ("newsAfter", float), ("guardAction", str), ("paper", bool), ("noSpread", bool),
-                          ("mustLevel", bool), ("breakClose", bool), ("noChase", bool), ("chaseZone", float), ("restBoth", float), ("slAtr", float)):
+                          ("mustLevel", bool), ("breakClose", bool), ("noChase", bool), ("chaseZone", float), ("restBoth", float), ("slAtr", float),
+                          ("skipHours", str), ("trendTf", str), ("trendBars", int), ("dayLossStop", float)):
             if key in body:
                 c[key] = cast(body[key])
         if c["direction"] not in ("both", "long", "short"):
@@ -4266,6 +4314,12 @@ class GridBot(TickBot):
             raise ValueError("Khung nến tín hiệu không hợp lệ (1m – 1h)")
         if c["sigSr"] not in ("off", "auto", "bounce", "break"):
             raise ValueError("Kiểu cản không hợp lệ")
+        if skip_windows(c.get("skipHours", "")) is None:
+            raise ValueError("Giờ không vào lệnh phải dạng HH:MM-HH:MM, cách nhau bằng dấu phẩy (giờ Việt Nam)")
+        if c.get("trendTf", "off") != "off" and c["trendTf"] not in SECONDS_OF:
+            raise ValueError("Khung xu hướng không hợp lệ (1m – 1h)")
+        c["trendBars"] = max(1, min(50, int(c.get("trendBars", 3))))
+        c["dayLossStop"] = max(0.0, float(c.get("dayLossStop", 0)))
         c["chaseZone"] = max(5.0, min(50.0, float(c.get("chaseZone", 30))))
         c["restBoth"] = max(0.0, min(240.0, float(c.get("restBoth", 0))))
         c["slAtr"] = max(0.0, min(10.0, float(c.get("slAtr", 0))))
@@ -4410,6 +4464,21 @@ class GridBot(TickBot):
                 self.event(f"{guard[0]}: đóng hết {len(book)} lệnh trước giờ mạnh · {money(loss)}", notify=True)
             self.state = {"kind": "guard", "why": guard[0], "until": guard[1], "holding": len(book) if c.get("guardAction") != "close" else 0}
             return
+        skip = skip_now(c.get("skipHours", ""), time.time()) if c.get("skipHours") else None
+        if skip:
+            # A time of day set to sit out (no new basket; the open ones keep their stops and targets).
+            self.state = {"kind": "guard", "why": f"giờ không vào lệnh {skip[0]}", "until": skip[1], "holding": len(book)}
+            return
+        if float(c.get("dayLossStop", 0) or 0) > 0:
+            day = self._day_pnl(mt5, c) + total
+            if day <= -float(c["dayLossStop"]) + 1e-9:
+                vn = time.time() + 7 * 3600
+                until = vn - vn % 86400 + 86400 - 7 * 3600
+                if getattr(self, "day_stopped", 0) != until:
+                    self.day_stopped = until
+                    self.event(f"lỗ trong ngày {money(day)} chạm mức dừng −{float(c['dayLossStop']):g}$: không vào lệnh mới tới hết ngày", notify=True)
+                self.state = {"kind": "pause", "until": until, "why": f"lỗ trong ngày {money(day)}"}
+                return
         if time.time() < getattr(self, "pause_until", 0):
             self.state = {"kind": "pause", "until": self.pause_until, "why": "cắt lỗ chung"}
             return
@@ -4459,6 +4528,16 @@ class GridBot(TickBot):
             block = level_block(c, struct.get("levels"), float(tick.bid)) if c.get("levelGuard") else None
             if block and signal == block[0]:
                 gate, level, signal = "level", block[1], None
+            trend = None
+            if c.get("trendTf", "off") != "off":
+                # The bigger timeframe's way: its last closed bar's close against the one trendBars before it.
+                n = int(c.get("trendBars", 3))
+                tr = mt5.copy_rates_from_pos(symbol, getattr(mt5, "TIMEFRAME_" + MT5_TIMEFRAMES[c["trendTf"]]), 1, n + 1)
+                if tr is not None and len(tr) > n:
+                    d = float(tr[-1]["close"]) - float(tr[0]["close"])
+                    trend = "long" if d > 0 else "short" if d < 0 else None
+                if signal and trend and signal != trend:
+                    gate, signal = "trend", None
             if signal and c.get("noChase") and sup is not None and res is not None and res - sup > 0:
                 # No buy in the middle / top of the M1 range (no sell in the middle / bottom) unless a candle closed
                 # past it: a buy in its lower chaseZone %, a sell in its upper one.
@@ -4476,7 +4555,7 @@ class GridBot(TickBot):
                     gate, signal = "notHeld", None
             if block:
                 level = block[1]
-            self.signal = {"gate": gate, "level": level, "chase": chase, "atr": None if atr is None else round(atr, 3), "blocked": block[0] if block else None, "waitLeft": wait_left, "close": candle[3] if candle else None, "side": signal, "candle": candle_bias(c, *candle, min_body=float(c["sigBody"])) if candle else None,
+            self.signal = {"gate": gate, "level": level, "chase": chase, "trend": trend, "atr": None if atr is None else round(atr, 3), "blocked": block[0] if block else None, "waitLeft": wait_left, "close": candle[3] if candle else None, "side": signal, "candle": candle_bias(c, *candle, min_body=float(c["sigBody"])) if candle else None,
                            "sup": sup, "res": res, "move": None if move is None else round(move, 3), "time": now(), "parts": parts,
                            "swingLevel": (struct.get("swing") or (None, None))[1], "zone": (struct.get("zone") or (None, None))[1]}
         strong = None
@@ -4504,7 +4583,8 @@ class GridBot(TickBot):
         elif c.get("entry") == "signal":
             self.state = {"kind": "wait" if not signal else "open", "side": signal, "parts": self.signal.get("parts", {}), "sidePause": rest,
                           "gate": self.signal.get("gate"), "waitLeft": self.signal.get("waitLeft"), "close": self.signal.get("close"),
-                          "level": self.signal.get("level"), "blocked": self.signal.get("blocked"), "chase": self.signal.get("chase")}
+                          "level": self.signal.get("level"), "blocked": self.signal.get("blocked"), "chase": self.signal.get("chase"),
+                          "trend": self.signal.get("trend")}
         else:
             self.state = {"kind": "open", "sidePause": rest}
         for side in ("long", "short"):
