@@ -6074,10 +6074,19 @@
     },
 
     /** New bars (another timeframe or symbol), shown from the newest one. */
+    /** A comfortable zoom for this chart's width: about 100 bars across (not a crowd of tiny candles). */
+    comfortSpacing(el) {
+      const w = (el || $("chart")).clientWidth || 800;
+      return Math.max(5, Math.min(12, Math.round(w / 100)));
+    },
+
     showFresh(bars) {
       // At once, before and after the new data: the old timeframe's scroll would otherwise land on the
       // first bars and start a fetch of older ones that keeps it there.
       const ts = this.chart.timeScale();
+      // The first load of the page: a comfortable zoom (later loads keep the zoom picked by hand).
+      if (!this.zoomSet) { this.zoomSet = true; ts.applyOptions({ barSpacing: this.comfortSpacing() }); }
+      this.chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.12, bottom: 0.12 } });
       ts.scrollToPosition(8, false);
       this.olderHold = performance.now() + 800;
       // The price scale follows the new bars (a hand-set range would keep the old symbol's prices).
@@ -7009,9 +7018,10 @@
 
     resetChart() {
       const ts = this.chart.timeScale();
-      ts.applyOptions({ barSpacing: $("chart").clientWidth < 500 ? 4 : 6, rightOffset: 8 });
       ts.resetTimeScale();
-      this.chart.priceScale("right").applyOptions({ autoScale: true });
+      ts.applyOptions({ barSpacing: this.comfortSpacing(), rightOffset: 8 });
+      // The candles in the middle of the chart, a little room above and below.
+      this.chart.priceScale("right").applyOptions({ autoScale: true, scaleMargins: { top: 0.12, bottom: 0.12 } });
       ts.scrollToRealTime();
     },
 
@@ -9162,6 +9172,9 @@
           list = outs.map((o, i) => {
             const scaleId = def.overlay ? (o.bottom ? "vol_" + x.id : "right") : "osc_" + x.id;
             const base = { priceScaleId: scaleId, priceLineVisible: false, lastValueVisible: !def.overlay || i === 0, title: i === 0 ? this.studyLabel(x) : "" };
+            // An indicator drawn over the candles (EMA 200…) does not stretch the price scale: the candles fill the
+            // chart, an indicator far away runs off its edge instead of squeezing them into a corner.
+            if (def.overlay && scaleId === "right") base.autoscaleInfoProvider = () => null;
             const series = o.kind === "hist"
               ? this.chart.addHistogramSeries(Object.assign(base, { priceFormat: o.bottom ? { type: "volume" } : { type: "price", precision: 2, minMove: 0.01 }, lastValueVisible: !o.bottom }))
               : this.chart.addLineSeries(Object.assign(base, { color: o.color, lineWidth: o.width || 1.5, crosshairMarkerVisible: false }));
@@ -10796,7 +10809,7 @@
         menu.querySelectorAll("button").forEach((b) => (b.onclick = () => {
           this.closeMenu();
           const k = b.dataset.k;
-          if (k === "reset") { const ts = this.chart2.timeScale(); ts.resetTimeScale(); this.chart2.priceScale("right").applyOptions({ autoScale: true }); ts.scrollToRealTime(); }
+          if (k === "reset") { const ts = this.chart2.timeScale(); ts.resetTimeScale(); ts.applyOptions({ barSpacing: this.comfortSpacing($("chart2")), rightOffset: 8 }); this.chart2.priceScale("right").applyOptions({ autoScale: true, scaleMargins: { top: 0.12, bottom: 0.12 } }); ts.scrollToRealTime(); }
           if (k === "tools") this.drawSheet();
           if (k === "drawSettings") this.drawingSettings(this.drawings2.current);
           if (k === "drawDel" && this.drawings2.current) this.drawings2.remove(this.drawings2.current.id);
