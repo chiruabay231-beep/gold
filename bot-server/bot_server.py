@@ -34,7 +34,7 @@ import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "9.6"
+VERSION = "9.7"
 RELEASE_ZIP = "https://github.com/chiruabay231-beep/gold/releases/download/bot-latest/gold-bot-windows.zip"
 # Exit code that tells run.ps1 to restart at once and keep the tunnel (same address).
 UPDATE_EXIT_CODE = 3
@@ -3660,7 +3660,8 @@ class TickBot:
         except Exception as e:
             c["statusError"] = str(e)
             positions = [dict(p, profit=0.0) for p in self.paper["positions"]]
-        hist = self.paper["history"]
+        floor = float(c.get("statsSince") or 0)
+        hist = [h for h in self.paper["history"] if float(h.get("closeTime") or 0) >= floor] if floor else self.paper["history"]
         stats = {"trades": len(hist), "wins": sum(1 for h in hist if h["profit"] > 0), "profit": round(sum(h["profit"] for h in hist), 2)}
         price = None
         try:
@@ -4185,6 +4186,21 @@ class GridBot(TickBot):
         """"Bắt đầu lại": the history and statistics from now on, and the bot's own rests and counters cleared."""
         c = self.cfg
         c["statsSince"] = now()
+        # The money it starts again with (the account's balance now), for "P/L since".
+        bal = None
+        try:
+            if c.get("paper"):
+                bal = self.paper["balance"]
+                with self.lock:
+                    self.paper["history"] = []
+                    self._save_paper()
+            else:
+                with Mt5.lock:
+                    a = Mt5.connect(self.server.config["mt5"]).account_info()
+                bal = a.balance if a else None
+        except Exception:
+            pass
+        c["statsStartBalance"] = bal
         self.pause_until, self.side_pause, self.cycles = 0.0, {}, 0
         for k in ("basket_sl", "bpeak", "peaks", "day_stopped", "day_at", "bd_at"):
             if hasattr(self, k):
