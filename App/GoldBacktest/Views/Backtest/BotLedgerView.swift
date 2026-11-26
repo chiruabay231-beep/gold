@@ -13,6 +13,7 @@ struct BotLedgerView: View {
     @State private var chartError: String?
     @AppStorage("bot.chartTf") private var tf = "1m"
     @State private var showAll = false
+    @State private var showStats = true
     /// "Lệnh đã đóng" for a period: today, yesterday, the last 7 days or days picked (read from the server).
     @State private var period = BotPeriod.today
     @State private var customFrom = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-6 * 86400)
@@ -44,6 +45,7 @@ struct BotLedgerView: View {
                     chartCard(book)
                     stats(book)
                     if !book.positions.isEmpty { positions(book) }
+                    analysis(book)
                     history(book)
                 } else if ledger != nil {
                     Text("Bot nhồi lệnh chưa được cài trên máy chủ: chỉnh và bật ở web (tab Bot).")
@@ -122,7 +124,7 @@ struct BotLedgerView: View {
             }
             if let chart, chart.candles.count > 1 {
                 BotChartView(data: chart, positions: book.positions).frame(height: 260)
-                Text("Chụm / mở 2 ngón để zoom · kéo ngang xem nến cũ · chạm 2 lần về mặc định")
+                Text("Chụm / mở 2 ngón để zoom · kéo ngang xem nến cũ · kéo dọc trục giá để giãn / co nến · chạm 2 lần về mặc định")
                     .font(.caption2).foregroundColor(.secondary)
             } else if let chartError {
                 Text(chartError).font(.caption).foregroundColor(.orange).frame(height: 60)
@@ -148,6 +150,22 @@ struct BotLedgerView: View {
             tile(book.paper ? "Số dư ảo / Equity" : "Balance / Equity",
                  balance.map { String(format: "%.2f", $0) + (equity.map { String(format: " / %.2f", $0) } ?? "") } ?? "–", .primary)
         }
+    }
+
+    // MARK: Statistics (as the website's, compact): over the period picked for "Lệnh đã đóng"
+
+    private func analysis(_ book: BotBook) -> some View {
+        let tr = closedTrades(book).sorted { ($0.closeTime ?? 0) < ($1.closeTime ?? 0) }
+        return DisclosureGroup(isExpanded: $showStats) {
+            if tr.isEmpty {
+                Text("Chưa có lệnh đã đóng trong khoảng này").font(.caption).foregroundColor(.secondary).padding(.top, 4)
+            } else {
+                BotStatsView(trades: tr).padding(.top, 6)
+            }
+        } label: {
+            Text("📊 Thống kê · \(period.label.lowercased())").font(.subheadline.bold()).foregroundColor(.primary)
+        }
+        .botCard()
     }
 
     private func positions(_ book: BotBook) -> some View {
@@ -345,6 +363,140 @@ struct BotLedgerView: View {
     static func money(_ v: Double) -> String { String(format: "%@%.2f$", v >= 0 ? "+" : "−", abs(v)) }
 }
 
+/// The grid bot's numbers over some closed trades: profit factor, expectancy, drawdown, why many wins can still
+/// lose (average win against average loss, the win rate needed), and by session, side, exit and hour (Vietnam time).
+struct BotStatsView: View {
+    var trades: [BotBook.Closed]
+
+    private struct Row: Identifiable { var id: String; var name: String; var n: Int; var wins: Int; var pl: Double }
+
+    var body: some View {
+        let wins = trades.filter { $0.profit > 0 }, losses = trades.filter { $0.profit < 0 }
+        let gp = wins.reduce(0) { $0 + $1.profit }, gl = -losses.reduce(0) { $0 + $1.profit }
+        let net = gp - gl, n = Double(trades.count)
+        let avgW = wins.isEmpty ? 0 : gp / Double(wins.count), avgL = losses.isEmpty ? 0 : gl / Double(losses.count)
+        let winRate = Double(wins.count) / max(n, 1) * 100
+        let need = avgW + avgL > 0 ? avgL / (avgW + avgL) * 100 : 0
+        var cum = 0.0, peak = 0.0, dd = 0.0
+        for t in trades { cum += t.profit; peak = max(peak, cum); dd = min(dd, cum - peak) }
+        let hours = Self.byHour(trades)
+        return VStack(alignment: .leading, spacing: 10) {
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                cell("Profit factor", gl > 0 ? String(format: "%.2f", gp / gl) : (gp > 0 ? "∞" : "–"), gl > 0 && gp / gl < 1 ? .red : .green)
+                cell("Kỳ vọng mỗi lệnh", BotLedgerView.money(net / max(n, 1)), net >= 0 ? .green : .red)
+                cell("Sụt giảm lớn nhất", BotLedgerView.money(dd), dd < 0 ? .red : .secondary)
+                cell("Cần thắng ≥ \(Int(need.rounded()))%", "đang \(Int(winRate.rounded()))%", winRate >= need ? .green : .red)
+            }
+            HStack(spacing: 12) {
+                Text("Lời TB ").font(.caption).foregroundColor(.secondary) + Text(BotLedgerView.money(avgW)).font(.caption.bold()).foregroundColor(.green)
+                Text("Lỗ TB ").font(.caption).foregroundColor(.secondary) + Text(BotLedgerView.money(-avgL)).font(.caption.bold()).foregroundColor(.red)
+            }
+            if avgW > 0, avgL > 0, winRate < need {
+                Text("Mỗi lệnh thua mất ≈ \(String(format: "%.1f", avgL / avgW)) lần một lệnh thắng → phải thắng trên \(Int(need.rounded()))% mới hoà vốn; đang \(Int(winRate.rounded()))% nên vẫn lỗ.")
+                    .font(.caption2).foregroundColor(.orange)
+            }
+            section("Theo phiên (giờ VN)", rows: Self.bySession(trades))
+            section("Theo chiều", rows: Self.group(trades) { $0.side == "long" ? "BUY" : "SELL" })
+            section("Theo cách đóng lệnh", rows: Self.group(trades) { BotReason.close($0.reason, kind: $0.stopKind).label })
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Theo giờ trong ngày").font(.caption.bold())
+                HourBars(values: hours).frame(height: 54)
+                let worst = hours.enumerated().filter { $0.element < 0 }.sorted { $0.element < $1.element }.prefix(3)
+                if !worst.isEmpty {
+                    Text("Giờ lỗ nhiều nhất: " + worst.map { "\($0.offset)h \(BotLedgerView.money($0.element))" }.joined(separator: ", "))
+                        .font(.caption2).foregroundColor(.red)
+                }
+            }
+            if trades.count < 100 {
+                Text("Mới \(trades.count) lệnh: chạy thêm vài ngày (qua phiên Mỹ và ngày có tin) để số liệu đáng tin hơn.")
+                    .font(.caption2).foregroundColor(.secondary)
+            }
+        }
+    }
+
+    private func cell(_ title: String, _ value: String, _ color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.caption2).foregroundColor(.secondary).lineLimit(1)
+            Text(value).font(.subheadline.bold()).foregroundColor(color).monospacedDigit().lineLimit(1).minimumScaleFactor(0.7)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color(.tertiarySystemGroupedBackground)))
+    }
+
+    private func section(_ title: String, rows: [Row]) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.caption.bold())
+            ForEach(rows) { r in
+                HStack {
+                    Text(r.name).font(.caption)
+                    Spacer()
+                    Text("\(r.n) lệnh · \(r.n > 0 ? Int((Double(r.wins) / Double(r.n) * 100).rounded()) : 0)%").font(.caption2).foregroundColor(.secondary).monospacedDigit()
+                    Text(BotLedgerView.money(r.pl)).font(.caption.bold()).foregroundColor(r.pl >= 0 ? .green : .red).monospacedDigit()
+                        .frame(width: 70, alignment: .trailing)
+                }
+            }
+        }
+    }
+
+    /// Vietnam time (UTC+7) hour of a close, as a fraction (19.5 = 19:30).
+    private static func vnHour(_ t: Double) -> Double { ((t + 7 * 3600).truncatingRemainder(dividingBy: 86400)) / 3600 }
+
+    private static func group(_ trades: [BotBook.Closed], _ key: (BotBook.Closed) -> String) -> [Row] {
+        var out: [String: Row] = [:]
+        for t in trades {
+            let k = key(t)
+            var r = out[k] ?? Row(id: k, name: k, n: 0, wins: 0, pl: 0)
+            r.n += 1; r.wins += t.profit > 0 ? 1 : 0; r.pl += t.profit
+            out[k] = r
+        }
+        return out.values.sorted { $0.pl < $1.pl }
+    }
+
+    private static func bySession(_ trades: [BotBook.Closed]) -> [Row] {
+        let names = ["Á (06:00–14:00)", "Âu (14:00–19:30)", "Mỹ (19:30–04:00)", "Đêm (04:00–06:00)"]
+        var rows = names.map { Row(id: $0, name: $0, n: 0, wins: 0, pl: 0) }
+        for t in trades {
+            guard let c = t.closeTime else { continue }
+            let h = vnHour(c)
+            let i = h >= 6 && h < 14 ? 0 : h >= 14 && h < 19.5 ? 1 : (h >= 19.5 || h < 4) ? 2 : 3
+            rows[i].n += 1; rows[i].wins += t.profit > 0 ? 1 : 0; rows[i].pl += t.profit
+        }
+        return rows.filter { $0.n > 0 }
+    }
+
+    private static func byHour(_ trades: [BotBook.Closed]) -> [Double] {
+        var out = Array(repeating: 0.0, count: 24)
+        for t in trades { if let c = t.closeTime { out[Int(vnHour(c)) % 24] += t.profit } }
+        return out
+    }
+}
+
+/// 24 bars, one an hour (Vietnam time): green up for a profit, red down for a loss.
+private struct HourBars: View {
+    var values: [Double]
+
+    var body: some View {
+        Canvas { ctx, size in
+            let top = values.map { abs($0) }.max() ?? 0
+            guard top > 0 else { return }
+            let labelH: CGFloat = 12, h = size.height - labelH, mid = h / 2
+            let w = size.width / CGFloat(values.count)
+            var zero = Path(); zero.move(to: CGPoint(x: 0, y: mid)); zero.addLine(to: CGPoint(x: size.width, y: mid))
+            ctx.stroke(zero, with: .color(.secondary.opacity(0.3)), lineWidth: 0.5)
+            for (i, v) in values.enumerated() where v != 0 {
+                let bh = max(1, CGFloat(abs(v) / top) * (mid - 2))
+                let rect = CGRect(x: CGFloat(i) * w + 1, y: v > 0 ? mid - bh : mid, width: max(1, w - 2), height: bh)
+                ctx.fill(Path(roundedRect: rect, cornerRadius: 1.5), with: .color(v > 0 ? .green : .red))
+            }
+            for i in stride(from: 0, to: values.count, by: 6) {
+                ctx.draw(Text("\(i)h").font(.system(size: 8)).foregroundColor(.secondary),
+                         at: CGPoint(x: CGFloat(i) * w + w / 2, y: size.height - labelH / 2), anchor: .center)
+            }
+        }
+    }
+}
+
 /// The time "Lệnh đã đóng" covers.
 enum BotPeriod: String, CaseIterable {
     case today, yesterday, week, custom
@@ -442,6 +594,9 @@ struct BotChartView: View {
     @State private var shift = 0
     @State private var pinchFrom: Int?
     @State private var dragFrom: Int?
+    /// How much the price scale is stretched (drag the price axis up to stretch the candles, down to squeeze).
+    @State private var yScale = 1.0
+    @State private var scaleFrom: Double?
 
     private var all: [[Double]] { data.candles.filter { $0.count >= 5 } }
 
@@ -470,7 +625,23 @@ struct BotChartView: View {
                         }
                         .onEnded { _ in dragFrom = nil }
                 )
-                .onTapGesture(count: 2) { visible = 90; shift = 0 }
+                .onTapGesture(count: 2) { visible = 90; shift = 0; yScale = 1 }
+                .overlay(alignment: .trailing) {
+                    // The price axis: drag up / down to stretch / squeeze the candles (as TradingView's price scale).
+                    Color.clear
+                        .frame(width: 62)
+                        .contentShape(Rectangle())
+                        .highPriorityGesture(
+                            DragGesture(minimumDistance: 2)
+                                .onChanged { g in
+                                    let from = scaleFrom ?? yScale
+                                    scaleFrom = from
+                                    yScale = min(max(from * exp(-Double(g.translation.height) / 120), 0.3), 8)
+                                }
+                                .onEnded { _ in scaleFrom = nil }
+                        )
+                        .onTapGesture(count: 2) { yScale = 1 }
+                }
                 .overlay(alignment: .topLeading) {
                     if shift > 0 {
                         Button { shift = 0 } label: {
@@ -503,6 +674,11 @@ struct BotChartView: View {
             if let b = data.bid { lo = min(lo, b); hi = max(hi, b) }
             let pad = max((hi - lo) * 0.06, 1e-6)
             lo -= pad; hi += pad
+            if yScale != 1 {
+                // Stretched / squeezed around the middle by the price axis drag.
+                let mid = (lo + hi) / 2, half = (hi - lo) / 2 / yScale
+                lo = mid - half; hi = mid + half
+            }
             func y(_ v: Double) -> CGFloat { plot.minY + CGFloat((hi - v) / (hi - lo)) * plot.height }
             func price(_ v: Double) -> String { String(format: "%.\(digits)f", v) }
             let grid = Color.secondary.opacity(0.15)
@@ -516,12 +692,16 @@ struct BotChartView: View {
             // Candles.
             let step = plot.width / CGFloat(rows.count), bw = max(1, step * 0.65)
             let up = Color(red: 0.08, green: 0.72, blue: 0.54), down = Color(red: 0.94, green: 0.27, blue: 0.35)
-            for (i, r) in rows.enumerated() {
-                let x = CGFloat(i) * step + step / 2, color = r[4] >= r[1] ? up : down
-                var wick = Path(); wick.move(to: CGPoint(x: x, y: y(r[2]))); wick.addLine(to: CGPoint(x: x, y: y(r[3])))
-                ctx.stroke(wick, with: .color(color), lineWidth: 1)
-                let top = y(max(r[1], r[4])), bottom = y(min(r[1], r[4]))
-                ctx.fill(Path(CGRect(x: x - bw / 2, y: top, width: bw, height: max(1, bottom - top))), with: .color(color))
+            ctx.drawLayer { layer in
+                // Candles stretched past the plot (price axis dragged) are cut at its edges.
+                layer.clip(to: Path(plot))
+                for (i, r) in rows.enumerated() {
+                    let x = CGFloat(i) * step + step / 2, color = r[4] >= r[1] ? up : down
+                    var wick = Path(); wick.move(to: CGPoint(x: x, y: y(r[2]))); wick.addLine(to: CGPoint(x: x, y: y(r[3])))
+                    layer.stroke(wick, with: .color(color), lineWidth: 1)
+                    let top = y(max(r[1], r[4])), bottom = y(min(r[1], r[4]))
+                    layer.fill(Path(CGRect(x: x - bw / 2, y: top, width: bw, height: max(1, bottom - top))), with: .color(color))
+                }
             }
             // A few times along the bottom.
             let f = DateFormatter(); f.dateFormat = "HH:mm"
