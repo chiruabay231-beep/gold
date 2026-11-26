@@ -593,6 +593,7 @@ struct BotChartView: View {
     @State private var visible = 90
     @State private var shift = 0
     @State private var pinchFrom: Int?
+    @State private var pinchAnchor: (fromRight: Double, frac: Double)?
     @State private var dragFrom: Int?
     /// How much the price scale is stretched (drag the price axis up to stretch the candles, down to squeeze).
     @State private var yScale = 1.0
@@ -605,14 +606,22 @@ struct BotChartView: View {
             chart
                 .contentShape(Rectangle())
                 .gesture(
-                    MagnificationGesture()
-                        .onChanged { scale in
+                    MagnifyGesture()
+                        .onChanged { value in
                             let from = pinchFrom ?? visible
+                            if pinchFrom == nil {
+                                // The candle under the fingers stays under them (counted from the right edge).
+                                let frac = min(max(Double(value.startLocation.x / max(geo.size.width - 62, 1)), 0), 1)
+                                pinchAnchor = (Double(shift) + (1 - frac) * Double(visible), frac)
+                            }
                             pinchFrom = from
-                            visible = min(max(Int((Double(from) / max(Double(scale), 0.05)).rounded()), 15), max(15, all.count))
-                            shift = min(shift, max(0, all.count - visible))
+                            visible = min(max(Int((Double(from) / max(Double(value.magnification), 0.05)).rounded()), 15), max(15, all.count))
+                            if let a = pinchAnchor {
+                                shift = Int((a.fromRight - (1 - a.frac) * Double(visible)).rounded())
+                            }
+                            shift = min(max(shift, 0), max(0, all.count - visible))
                         }
-                        .onEnded { _ in pinchFrom = nil }
+                        .onEnded { _ in pinchFrom = nil; pinchAnchor = nil }
                 )
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 10)

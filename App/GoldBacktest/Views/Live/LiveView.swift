@@ -58,7 +58,9 @@ struct LiveView: View {
     @State private var replaySummary: String?
     @AppStorage("live.showTradeButtons") private var tradeButtonsSetting = true
     /// Timeframes shown in the row under the price; the rest are in the ▾ picker.
-    @AppStorage("live.favoriteIntervals") private var favoriteIntervalsText = "1m,5m,15m,1h,4h,1D"
+    @AppStorage("live.favoriteIntervals") private var favoriteIntervalsText = "15s,30s,1m,5m,15m,30m,1h,4h,1D"
+    /// Once: 15s, 30s and 30m added to a row saved before they were in it (as on the website).
+    @AppStorage("live.favoriteIntervalsV2") private var favoriteIntervalsV2 = false
     @State private var showIntervalPicker = false
     @State private var showIndicatorSheet = false
     @State private var showMoreSheet = false
@@ -176,6 +178,12 @@ struct LiveView: View {
         .background(theme.background.ignoresSafeArea())
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
+            if !favoriteIntervalsV2 {
+                favoriteIntervalsV2 = true
+                var favorites = favoriteIntervals
+                favorites.formUnion([.s15, .s30, .m30])
+                favoriteIntervalsText = LiveMarket.intervals.filter { favorites.contains($0) }.map(Self.label).joined(separator: ",")
+            }
             UIApplication.shared.isIdleTimerDisabled = keepAwake
             market.start(store: store)
             // Strategy signals only run while the bot is on.

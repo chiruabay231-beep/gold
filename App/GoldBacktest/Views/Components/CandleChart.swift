@@ -372,6 +372,8 @@ struct CandleChart: View {
     @State private var panStartOffset: Double = 0
     @State private var dragStartRange: ClosedRange<Double>?
     @State private var zoomStartCount: Double?
+    /// The bar under the fingers when a pinch began and where across the chart it was (0 left … 1 right).
+    @State private var zoomAnchor: (index: Double, frac: Double)?
     @State private var crosshair: CGPoint?
     @State private var pressEndedAt = Date.distantPast
     @State private var pendingPoints: [ChartPoint] = []
@@ -475,7 +477,7 @@ struct CandleChart: View {
             .modifier(ChartGestures(enabled: interactive) { content in
                 content
                     .simultaneousGesture(dragGesture(layout: layout))
-                    .simultaneousGesture(zoomGesture)
+                    .simultaneousGesture(zoomGesture(layout: layout))
                     .simultaneousGesture(crosshairGesture)
                     .simultaneousGesture(SpatialTapGesture(count: 2).onEnded { value in
                         // Double tap on the price axis: back to auto-fit.
@@ -2630,17 +2632,32 @@ struct CandleChart: View {
         return s.low...s.high
     }
 
-    private var zoomGesture: some Gesture {
+    private func zoomGesture(layout: Layout) -> some Gesture {
         MagnifyGesture()
             .onChanged { value in
                 if dragMode == .priceLine { cancelLineDrag() }
-                if zoomStartCount == nil { stopFling(); zoomStartCount = vp.visibleCount }
-                let count = (zoomStartCount ?? 80) / Double(max(value.magnification, 0.1))
                 let total = candles.count
-                moveView { $0.visibleCount = min(max(count, 15), Double(max(total + 10, 30)), 600) }
+                if zoomStartCount == nil {
+                    stopFling()
+                    zoomStartCount = vp.visibleCount
+                    // The candle under the fingers stays under them (as TradingView), instead of the zoom pulling
+                    // everything towards the right edge.
+                    let x = chartLocation(value.startLocation, layout: layout).x - layout.plot.minX
+                    let frac = min(max(Double(x / max(layout.plot.width, 1)), 0), 1)
+                    zoomAnchor = (vp.bounds(total: total).start + frac * vp.visibleCount, frac)
+                }
+                let count = min(max((zoomStartCount ?? 80) / Double(max(value.magnification, 0.1)), 15), Double(max(total + 10, 30)), 600)
+                moveView { v in
+                    v.visibleCount = count
+                    if let a = zoomAnchor {
+                        let end = a.index - a.frac * count + count
+                        v.rightOffset = max(0, Double(total) + v.rightPadding - end)
+                    }
+                }
             }
             .onEnded { _ in
                 zoomStartCount = nil
+                zoomAnchor = nil
                 settleView()
             }
     }
