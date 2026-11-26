@@ -185,9 +185,11 @@ final class LiveMarket {
         comparisonTask?.cancel()
         comparisonCandles = []
         comparisonError = nil
-        guard let target, target != symbol, !interval.isSeconds else {
+        // Second bars to compare: from the server's MT5 ticks (8.7+); Binance / OANDA have none to fetch.
+        let noSeconds = interval.isSeconds && (source != .mt5 || noSecondBars)
+        guard let target, target != symbol, !noSeconds else {
             comparisonSymbol = nil
-            if target != nil, interval.isSeconds { comparisonError = "So sánh không dùng cho khung giây" }
+            if target != nil, noSeconds { comparisonError = "So sánh khung giây cần nguồn MT5 (máy chủ 8.7 trở lên)" }
             return
         }
         comparisonSymbol = target

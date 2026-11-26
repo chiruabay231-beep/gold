@@ -1,4 +1,5 @@
 import SwiftUI
+import BacktestKit
 
 /// The grid ("nhồi lệnh") bot on the server, compact: its state and account, a chart of its market with the open
 /// positions' entry lines, its numbers, open positions and closed trades. Read only: the bot runs 24/7 on the
@@ -14,6 +15,8 @@ struct BotLedgerView: View {
     @AppStorage("bot.chartTf") private var tf = "1m"
     @State private var showAll = false
     @State private var showStats = true
+    /// A finger on the bot's chart: the page does not scroll meanwhile.
+    @State private var chartTouch = false
     /// "Lệnh đã đóng" for a period: today, yesterday, the last 7 days or days picked (read from the server).
     @State private var period = BotPeriod.today
     @State private var customFrom = Calendar.current.startOfDay(for: Date()).addingTimeInterval(-6 * 86400)
@@ -68,6 +71,7 @@ struct BotLedgerView: View {
             .padding(.horizontal)
             .padding(.vertical, 8)
         }
+        .scrollDisabled(chartTouch)
         .background(Color(.systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("Bot nhồi lệnh")
         .task {
@@ -123,8 +127,14 @@ struct BotLedgerView: View {
                 .onChange(of: tf) { _, _ in chart = nil; Task { await load() } }
             }
             if let chart, chart.candles.count > 1 {
-                BotChartView(data: chart, positions: book.positions).frame(height: 260)
-                Text("Chụm / mở 2 ngón để zoom · kéo ngang xem nến cũ · kéo dọc trục giá để giãn / co nến · chạm 2 lần về mặc định")
+                BotLiveChart(data: chart, positions: book.positions, seconds: Self.seconds(tf))
+                    .id(tf)
+                    .frame(height: 300)
+                    // A finger on the chart drags the chart, not the page.
+                    .simultaneousGesture(DragGesture(minimumDistance: 0)
+                        .onChanged { _ in if !chartTouch { chartTouch = true } }
+                        .onEnded { _ in chartTouch = false })
+                Text("Như chart chính: kéo 1 ngón để di chuyển · chụm 2 ngón để zoom · kéo trục giá để giãn / co · giữ để đặt lại")
                     .font(.caption2).foregroundColor(.secondary)
             } else if let chartError {
                 Text(chartError).font(.caption).foregroundColor(.orange).frame(height: 60)
@@ -361,6 +371,57 @@ struct BotLedgerView: View {
     }
 
     static func money(_ v: Double) -> String { String(format: "%@%.2f$", v >= 0 ? "+" : "−", abs(v)) }
+
+    static func seconds(_ tf: String) -> TimeInterval {
+        switch tf { case "5m": return 300; case "15m": return 900; case "1h": return 3600; default: return 60 }
+    }
+}
+
+/// The bot's chart drawn by the Live tab's own chart (one finger drags, two pinch, the price axis stretches, a long
+/// press resets — all as on the Live chart), with each running position's entry (a dot where it opened, a
+/// "BUY 0.01 | +1.25" pill) and its SL dashed with its kind.
+struct BotLiveChart: View {
+    var data: BotChartData
+    var positions: [BotBook.Open]
+    var seconds: TimeInterval
+    @AppStorage("live.theme") private var themeName = "tradingView"
+    @AppStorage(ChartBackground.key) private var chartBackgroundJSON = ""
+    @State private var viewport = ChartViewport()
+
+    var body: some View {
+        let bars = data.candles.compactMap { r -> Candle? in
+            guard r.count >= 5 else { return nil }
+            return Candle(time: Date(timeIntervalSince1970: r[0]), open: r[1], high: r[2], low: r[3], close: r[4],
+                          volume: r.count > 5 ? r[5] : 0)
+        }
+        let theme = (themeName == "binance" ? ChartTheme.binance : .tradingView).with(background: ChartBackground.decode(chartBackgroundJSON))
+        return CandleChart(candles: bars,
+                           showVolume: false,
+                           countdownInterval: seconds,
+                           theme: theme,
+                           askPrice: data.ask,
+                           priceLines: lines(bars),
+                           priceDecimals: data.digits,
+                           viewport: $viewport)
+    }
+
+    private func lines(_ bars: [Candle]) -> [ChartPriceLine] {
+        var out: [ChartPriceLine] = []
+        for (i, p) in positions.enumerated() {
+            guard let e = p.entry else { continue }
+            let long = p.side == "long"
+            let at = p.openTime.flatMap { t in bars.lastIndex { $0.time.timeIntervalSince1970 <= t } }
+            out.append(ChartPriceLine(id: "bot|\(i)|e", price: e, color: long ? .blue : .red,
+                                      label: "\(long ? "BUY" : "SELL") \(p.lots.map { String(format: "%g", $0) } ?? "")",
+                                      draggable: false, value: String(format: "%+.2f", p.profit),
+                                      valueColor: p.profit >= 0 ? .green : .red, markerIndex: at, entryStyle: true))
+            if let sl = p.stop {
+                let kind = BotReason.close(p.stopKind ?? "SL rổ", kind: nil)
+                out.append(ChartPriceLine(id: "bot|\(i)|sl", price: sl, color: kind.color, label: kind.label, dash: [4, 3], draggable: false))
+            }
+        }
+        return out
+    }
 }
 
 /// The grid bot's numbers over some closed trades: profit factor, expectancy, drawdown, why many wins can still
