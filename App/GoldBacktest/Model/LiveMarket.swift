@@ -514,10 +514,14 @@ final class LiveMarket {
                     if let bid = first.bid, let ask = first.ask, bid > 0, ask >= bid { setQuote(bid: bid, ask: ask) }
                     // A stretch missing in the middle: MT5 hands a symbol just opened its old cached bars
                     // while it fetches the rest; ask again shortly (up to 3 times).
+                    // The same stretch twice is the market closed then (a holiday): kept, not asked about again.
                     var tries = 0
-                    while tries < 3, !interval.isSeconds, Self.hole(in: history, seconds: interval.seconds) {
+                    var lastHole: (after: Double, before: Double)?
+                    while tries < 3, !interval.isSeconds, let hole = Self.holeRange(in: history, seconds: interval.seconds) {
+                        if let lastHole, lastHole == hole { Self.realGaps.append([hole.after, hole.before]); break }
+                        lastHole = hole
                         tries += 1
-                        try await Task.sleep(nanoseconds: 800_000_000)
+                        try await Task.sleep(nanoseconds: 700_000_000)
                         history = try await client.mt5Candles(symbol: symbol, interval: interval, count: 1000)
                         guard !Task.isCancelled else { return }
                         buffer = LiveCandleBuffer(candles: history, maxCount: LiveMarket.maxBars)
@@ -707,23 +711,36 @@ final class LiveMarket {
     /// A hole in the bars while the market trades: a gap over 3 h (and 3 bars) with no weekend day in it.
     /// Only the last 24 hours are looked at: that is where a symbol just opened misses bars, and further
     /// back holidays (an early close) look like holes and made 1h charts load again and again.
-    static func hole(in bars: [Candle], seconds: Double) -> Bool {
-        guard bars.count > 1, let newest = bars.last?.time else { return false }
+    /// Gaps found twice in a row (a holiday's closed market, e.g. Thanksgiving): no longer taken for MT5 still
+    /// fetching, so the chart does not wait on them again (kept on the phone, the newest 20).
+    static var realGaps: [[Double]] {
+        get { (UserDefaults.standard.array(forKey: "live.realGaps") as? [[Double]]) ?? [] }
+        set { UserDefaults.standard.set(Array(newValue.suffix(20)), forKey: "live.realGaps") }
+    }
+
+    static func hole(in bars: [Candle], seconds: Double) -> Bool { holeRange(in: bars, seconds: seconds) != nil }
+
+    static func holeRange(in bars: [Candle], seconds: Double) -> (after: Double, before: Double)? {
+        guard bars.count > 1, let newest = bars.last?.time else { return nil }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!
         let since = newest.addingTimeInterval(-86_400)
+        let known = realGaps
         for i in max(1, bars.count - 1500)..<bars.count where bars[i - 1].time >= since {
             let a = bars[i - 1].time, b = bars[i].time
             guard b.timeIntervalSince(a) > max(seconds * 3, 10_800) else { continue }
+            let x = a.timeIntervalSince1970, y = b.timeIntervalSince1970
+            // A closed market seen before (on any timeframe: the stretches overlap).
+            if known.contains(where: { $0.count == 2 && x < $0[1] && y > $0[0] }) { continue }
             var t = a, weekend = false
             while t <= b, !weekend {
                 let day = calendar.component(.weekday, from: t)   // 1 = Sunday, 7 = Saturday
                 weekend = day == 1 || day == 7
                 t = t.addingTimeInterval(3 * 3600)
             }
-            if !weekend { return true }
+            if !weekend { return (x, y) }
         }
-        return false
+        return nil
     }
 
     /// How many of the newest bars a poll reads: 3 normally, every bar since the last poll after the app

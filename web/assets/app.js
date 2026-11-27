@@ -907,6 +907,16 @@
 
   /** A hole in the bars while the market trades: a gap over 3 h (and 3 bars) without a weekend day in it.
    *  MT5 can hand a symbol just opened its old cached bars before the missing stretch is downloaded. */
+  /** Gaps found twice in a row (a holiday's closed market, e.g. Thanksgiving): no longer taken for MT5
+   *  still fetching, so the chart does not wait on them again (kept across page loads, the newest 20). */
+  const realGaps = (() => { try { return JSON.parse(localStorage.getItem("aurum.realGaps") || "[]"); } catch { return []; } })();
+  function rememberGap(h) {
+    if (!h) return;
+    realGaps.push([h.after, h.before]);
+    while (realGaps.length > 20) realGaps.shift();
+    try { localStorage.setItem("aurum.realGaps", JSON.stringify(realGaps)); } catch { /* full */ }
+  }
+
   function barsHole(bars, sec) {
     // Only the last 24 hours: further back holidays (an early close) look like holes and made 1h charts
     // load again and again.
@@ -914,6 +924,8 @@
     for (let i = Math.max(1, bars.length - 1500); i < bars.length; i++) {
       const a = bars[i - 1].time, b = bars[i].time;
       if (a < since || b - a <= Math.max(sec * 3, 10800)) continue;
+      // A closed market seen before (on any timeframe: the stretches overlap).
+      if (realGaps.some(([x, y]) => a < y && b > x)) continue;
       let weekend = false;
       for (let t = a; t <= b && !weekend; t += 3 * 3600) { const d = new Date(t * 1000).getUTCDay(); weekend = d === 0 || d === 6; }
       if (!weekend) return { after: a, before: b };
@@ -5911,19 +5923,22 @@
       try {
         if (this.owner) await this.ownerSymbol();
         // A symbol just added to MT5 has no bars until the terminal fetches its history: ask again a few times.
-        let data = null, bars = [];
+        let data = null, bars = [], lastHole = null;
         for (let attempt = 0; attempt < (this.owner ? 4 : 1); attempt++) {
           if (attempt) {
             $("chartSource").textContent = `· đang tải nến ${this.symbol} từ MT5…`;
-            await new Promise((r) => setTimeout(r, 1200));
+            await new Promise((r) => setTimeout(r, lastHole ? 700 : 1200));
             if (token !== this.loadToken) return;
           }
           try {
             data = await this.call(this.exnessPath(this.historyCount()));
             bars = this.toBars(data.candles || []);
             failure = bars.length < 5 ? new Error("MT5 chưa có nến cho mã này") : null;
-            // A stretch missing in the middle: MT5 is still fetching it; ask again shortly.
-            if (!failure && this.owner && attempt < 3 && !isSecTF(this.interval) && barsHole(bars, TF_SECONDS[this.interval] || 60)) failure = new Error("MT5 đang tải nến");
+            // A stretch missing in the middle: MT5 is still fetching it; ask again shortly. The same stretch
+            // twice is the market closed then (a holiday): kept as it is, and not asked about again.
+            const hole = !failure && this.owner && attempt < 3 && !isSecTF(this.interval) ? barsHole(bars, TF_SECONDS[this.interval] || 60) : null;
+            if (hole && lastHole && hole.after === lastHole.after && hole.before === lastHole.before) rememberGap(hole);
+            else if (hole) { lastHole = hole; failure = new Error("MT5 đang tải nến"); }
           } catch (e) { failure = e; if (e instanceof Unreachable) break; }
           if (token !== this.loadToken) return;
           if (!failure) break;
