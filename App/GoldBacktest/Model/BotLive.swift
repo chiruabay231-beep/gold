@@ -38,10 +38,12 @@ final class BotLive {
     }
 
     /// Runs until the app's tabs go away; a second call while it runs returns at once.
-    func run() async {
+    /// `delay`: on opening the app the Live chart's bars go to the server first, the bot's numbers a moment after.
+    func run(delay: Double = 0) async {
         guard !running else { return }
         running = true
         defer { running = false }
+        if delay > 0 { try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
         while !Task.isCancelled {
             await refresh()
             try? await Task.sleep(nanoseconds: 3_000_000_000)

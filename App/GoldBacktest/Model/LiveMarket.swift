@@ -241,6 +241,45 @@ final class LiveMarket {
            Self.intervals.contains(interval) {
             self.interval = interval
         }
+        showCachedBars()
+    }
+
+    // MARK: - Bars kept from the last time
+
+    /// The chart's last bars of each market / timeframe, kept on the phone: on opening the app (or switching back to
+    /// a timeframe) they show at once, then the server's fresh bars replace them a moment later.
+    private var cacheKey: String { "\(source.rawValue)|\(symbol)|\(interval.rawValue)" }
+
+    private static func cacheURL(_ key: String) -> URL? {
+        guard let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("livebars", isDirectory: true) else { return nil }
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let name = key.map { $0.isLetter || $0.isNumber ? String($0) : "_" }.joined()
+        return dir.appendingPathComponent(name + ".json")
+    }
+
+    /// The bars kept for the chart's market, put up while the fresh ones load (none older than 3 days).
+    private func showCachedBars() {
+        guard buffer.candles.isEmpty, let url = Self.cacheURL(cacheKey),
+              let data = try? Data(contentsOf: url),
+              let rows = try? JSONDecoder().decode([[Double]].self, from: data),
+              let newest = rows.last?.first, Date().timeIntervalSince1970 - newest < 3 * 86_400 else { return }
+        let bars = rows.compactMap { r -> Candle? in
+            guard r.count >= 6 else { return nil }
+            return Candle(time: Date(timeIntervalSince1970: r[0]), open: r[1], high: r[2], low: r[3], close: r[4], volume: r[5])
+        }
+        buffer = LiveCandleBuffer(candles: bars, maxCount: LiveMarket.maxBars)
+        lastBarClosed = false
+    }
+
+    /// Keeps the newest 1000 bars of the chart for next time (written off the main thread).
+    private func saveCachedBars() {
+        guard let url = Self.cacheURL(cacheKey) else { return }
+        let rows = buffer.candles.suffix(1000).map { [$0.time.timeIntervalSince1970, $0.open, $0.high, $0.low, $0.close, $0.volume] }
+        guard rows.count > 20 else { return }
+        Task.detached(priority: .utility) {
+            if let data = try? JSONEncoder().encode(rows) { try? data.write(to: url, options: .atomic) }
+        }
     }
 
     /// Candles whose bar has finished; strategies only ever see these.
@@ -257,6 +296,7 @@ final class LiveMarket {
     }
 
     func stop() {
+        if task != nil { saveCachedBars() }
         task?.cancel()
         task = nil
         quoteTask?.cancel()
@@ -393,6 +433,7 @@ final class LiveMarket {
         rawQuote = nil
         let store = self.store
         stop()
+        showCachedBars()
         if let store { start(store: store) }
     }
 
@@ -421,6 +462,7 @@ final class LiveMarket {
                     lastBarClosed = false
                     ticker = try? await BinanceClient.withFallback(market: market) { try await $0.fetchTicker(symbol: symbol) }
                     rescan(alert: false)
+                    saveCachedBars()
                     failures = 0
                     try await stream()
                 case .oanda:
@@ -435,6 +477,7 @@ final class LiveMarket {
                     lastBarClosed = history.last?.complete ?? false
                     ticker = try? await client.fetchTicker(instrument: symbol)
                     rescan(alert: false)
+                    saveCachedBars()
                     failures = 0
                     try await poll(client)
                 case .mt5:
@@ -464,19 +507,24 @@ final class LiveMarket {
                         return
                     }
                     var history = first.candles
+                    // On the chart at once, also when a hole is fixed below.
+                    buffer = LiveCandleBuffer(candles: history, maxCount: LiveMarket.maxBars)
+                    lastBarClosed = false
+                    ticker = nil
+                    if let bid = first.bid, let ask = first.ask, bid > 0, ask >= bid { setQuote(bid: bid, ask: ask) }
                     // A stretch missing in the middle: MT5 hands a symbol just opened its old cached bars
                     // while it fetches the rest; ask again shortly (up to 3 times).
                     var tries = 0
                     while tries < 3, !interval.isSeconds, Self.hole(in: history, seconds: interval.seconds) {
                         tries += 1
-                        try await Task.sleep(nanoseconds: 1_200_000_000)
+                        try await Task.sleep(nanoseconds: 800_000_000)
                         history = try await client.mt5Candles(symbol: symbol, interval: interval, count: 1000)
+                        guard !Task.isCancelled else { return }
+                        buffer = LiveCandleBuffer(candles: history, maxCount: LiveMarket.maxBars)
                     }
                     guard !Task.isCancelled else { return }
-                    buffer = LiveCandleBuffer(candles: history, maxCount: LiveMarket.maxBars)
-                    lastBarClosed = false
-                    ticker = nil
                     rescan(alert: false)
+                    saveCachedBars()
                     failures = 0
                     try await pollMT5(client)
                 }

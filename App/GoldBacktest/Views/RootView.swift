@@ -57,7 +57,7 @@ struct RootView: View {
         // Watches gold for sudden moves and their news while the app runs.
         .task { await news.monitor() }
         // The bot's account and open P/L kept current all the time (the Bot tab and its badge), owner only.
-        .task(id: member) { if !member { await BotLive.shared.run() } }
+        .task(id: member) { if !member { await BotLive.shared.run(delay: store.selectedTab == .bot ? 0 : 2.5) } }
         .alert("Lỗi", isPresented: Binding(
             get: { store.lastError != nil },
             set: { if !$0 { store.lastError = nil } })

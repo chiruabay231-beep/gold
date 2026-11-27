@@ -816,6 +816,9 @@ actor URLRelay {
     static let base = "https://ntfy.sh"
 
     private var lastLookup: [String: Date] = [:]
+    /// The lookup under way (requests failing together wait for that one) and the address it found.
+    private var inflight: [String: Task<URL?, Never>] = [:]
+    private var found: [String: URL] = [:]
 
     static func sha256(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -854,9 +857,17 @@ actor URLRelay {
     /// (also saved, so later requests go there). At most one lookup every 20 s.
     func newAddress(password: String, current: URL) async -> URL? {
         let (topic, member) = Self.topic(password: password)
-        if let last = lastLookup[topic], Date().timeIntervalSince(last) < 20 { return nil }
+        let other = { (url: URL?) -> URL? in url.flatMap { $0.absoluteString != current.absoluteString ? $0 : nil } }
+        // Several requests failing at once (the app opening on an old address): one lookup, all use its answer.
+        if let task = inflight[topic] { return other(await task.value) }
+        if let last = lastLookup[topic], Date().timeIntervalSince(last) < 20 { return other(found[topic]) }
         lastLookup[topic] = Date()
-        guard let address = await latest(topic: topic), address.absoluteString != current.absoluteString else { return nil }
+        let task = Task { await self.latest(topic: topic) }
+        inflight[topic] = task
+        let looked = await task.value
+        inflight[topic] = nil
+        if let looked { found[topic] = looked }
+        guard let address = other(looked) else { return nil }
         await MainActor.run {
             if member { MemberSettings.url = address.absoluteString } else { RemoteBotSettings.url = address.absoluteString }
         }
